@@ -5,7 +5,11 @@
 use super::*;
 
 fn graph(text: &str) -> Map<String, Value> {
-    serde_json::from_str::<Value>(text).unwrap().as_object().unwrap().clone()
+    serde_json::from_str::<Value>(text)
+        .unwrap()
+        .as_object()
+        .unwrap()
+        .clone()
 }
 
 /// 经典 KSampler 图：steps / cfg / seed / 正负提示词 / 尺寸全都在。
@@ -31,7 +35,10 @@ fn classic_ksampler_graph() {
     assert_eq!(parsed.seed, Some(12345));
     assert_eq!(parsed.sampler.as_deref(), Some("euler"));
     assert_eq!(parsed.scheduler.as_deref(), Some("normal"));
-    assert_eq!((parsed.width, parsed.height, parsed.batch), (Some(1024), Some(1536), Some(2)));
+    assert_eq!(
+        (parsed.width, parsed.height, parsed.batch),
+        (Some(1024), Some(1536), Some(2))
+    );
     assert_eq!(parsed.kind, "IMAGE");
     // 标题线索取的是保存节点的文件名前缀（去掉目录）
     assert_eq!(parsed.title_hint.as_deref(), Some("t2i"));
@@ -81,8 +88,17 @@ fn rgthree_lora_loader_stack_is_recognized() {
         }"#,
     )));
     assert_eq!(
-        parsed.loras.iter().map(|l| l.name.as_str()).collect::<Vec<_>>(),
-        vec!["KNP_000003000.safetensors", "twinbox_late.safetensors", "fajyobore.safetensors", "hiten.safetensors"],
+        parsed
+            .loras
+            .iter()
+            .map(|l| l.name.as_str())
+            .collect::<Vec<_>>(),
+        vec![
+            "KNP_000003000.safetensors",
+            "twinbox_late.safetensors",
+            "fajyobore.safetensors",
+            "hiten.safetensors"
+        ],
         "四个槽位都要收，顺序按槽位顺序"
     );
     assert!(
@@ -117,11 +133,18 @@ fn power_lora_loader_nested_objects_are_recognized() {
         }"#,
     )));
     assert_eq!(
-        parsed.loras.iter().map(|l| l.name.as_str()).collect::<Vec<_>>(),
+        parsed
+            .loras
+            .iter()
+            .map(|l| l.name.as_str())
+            .collect::<Vec<_>>(),
         vec!["KNPV3_1.safetensors", "anime style.safetensors"],
         "嵌套对象里的名字要收、目录要剥掉、关闭的槽位不要"
     );
-    assert_eq!(parsed.loras.iter().map(|l| l.weight).collect::<Vec<_>>(), vec![1.0, 0.6]);
+    assert_eq!(
+        parsed.loras.iter().map(|l| l.weight).collect::<Vec<_>>(),
+        vec![1.0, 0.6]
+    );
 }
 
 /// 栈式加载器（WAS 那类）：名字在 `lora_stack` 指向的**另一个节点**里。
@@ -147,11 +170,18 @@ fn lora_stack_references_and_numbered_slots_are_recognized() {
         }"#,
     )));
     assert_eq!(
-        parsed.loras.iter().map(|l| l.name.as_str()).collect::<Vec<_>>(),
+        parsed
+            .loras
+            .iter()
+            .map(|l| l.name.as_str())
+            .collect::<Vec<_>>(),
         vec!["a.safetensors", "b.safetensors"],
         "栈里的两个名字都要收；空白槽位与 lora_strength 不许占位"
     );
-    assert_eq!(parsed.loras.iter().map(|l| l.weight).collect::<Vec<_>>(), vec![0.6, 0.4]);
+    assert_eq!(
+        parsed.loras.iter().map(|l| l.weight).collect::<Vec<_>>(),
+        vec![0.6, 0.4]
+    );
 }
 
 /// 视频 / 音频类型：`SaveVideo` → VIDEO；纯音频图 → AUDIO；两种都有 → MIXED。
@@ -190,10 +220,18 @@ fn custom_sampler_chain_reads_sigmas_and_guider() {
           "9": {"class_type":"CLIPTextEncode","inputs":{"text":"blurry"}}
         }"#,
     )));
-    assert_eq!(parsed.seed, Some(999), "seed 从 RandomNoise 节点读（采样器自己没有）");
+    assert_eq!(
+        parsed.seed,
+        Some(999),
+        "seed 从 RandomNoise 节点读（采样器自己没有）"
+    );
     assert_eq!(parsed.cfg, Some(2.5), "cfg 从 Guider 读");
     assert_eq!(parsed.steps, Some(6), "steps 从 Scheduler 读");
-    assert_eq!(parsed.sampler.as_deref(), Some("dpmpp_2m"), "采样器名从 KSamplerSelect 读");
+    assert_eq!(
+        parsed.sampler.as_deref(),
+        Some("dpmpp_2m"),
+        "采样器名从 KSamplerSelect 读"
+    );
     assert_eq!(parsed.scheduler.as_deref(), Some("sgm_uniform"));
     assert_eq!(parsed.positive, "maid cafe");
     assert_eq!(parsed.negative.as_deref(), Some("blurry"));
@@ -255,11 +293,21 @@ fn anima_style_graph_from_the_real_library() {
     assert_eq!(parsed.seed, Some(935571105263085));
     assert_eq!(parsed.sampler.as_deref(), Some("er_sde"));
     assert_eq!(parsed.scheduler.as_deref(), Some("simple"));
-    assert_eq!((parsed.width, parsed.height, parsed.batch), (Some(1024), Some(1024), Some(1)));
+    assert_eq!(
+        (parsed.width, parsed.height, parsed.batch),
+        (Some(1024), Some(1024), Some(1))
+    );
     // 顺着 model 链收集 LoRA（113 在 1 之前、1 又在 111 之前 —— 文档顺序决定先后）
     assert_eq!(
-        parsed.loras.iter().map(|l| l.name.as_str()).collect::<Vec<_>>(),
-        vec!["anima-aesthetic-improvement-v1.1.safetensors", "allmm style-step00003000.safetensors"]
+        parsed
+            .loras
+            .iter()
+            .map(|l| l.name.as_str())
+            .collect::<Vec<_>>(),
+        vec![
+            "anima-aesthetic-improvement-v1.1.safetensors",
+            "allmm style-step00003000.safetensors"
+        ]
     );
     assert_eq!(
         parsed.checkpoint.as_deref(),
@@ -285,9 +333,17 @@ fn node_references_accept_numeric_ids() {
           "5":  {"class_type":"EmptyLatentImage","inputs":{"width":512,"height":512}}
         }"#,
     )));
-    assert_eq!(numeric.negative.as_deref(), Some("bad hands"), "数字 id 的 negative 引用");
+    assert_eq!(
+        numeric.negative.as_deref(),
+        Some("bad hands"),
+        "数字 id 的 negative 引用"
+    );
     assert_eq!(numeric.positive, "a cat");
-    assert_eq!(numeric.checkpoint.as_deref(), Some("m.safetensors"), "数字 id 的 model 引用");
+    assert_eq!(
+        numeric.checkpoint.as_deref(),
+        Some("m.safetensors"),
+        "数字 id 的 model 引用"
+    );
     assert_eq!(numeric.width, Some(512), "数字 id 的 latent_image 引用");
 
     let strings = parse(Some(&graph(
@@ -359,7 +415,10 @@ fn linked_text_does_not_take_text_generate_system_prompt() {
           "5": {"class_type":"EmptyLatentImage","inputs":{"width":896,"height":1344,"batch_size":1}}
         }"#,
     )));
-    assert_eq!(parsed.positive, "", "system_prompt 是扩写指令，不是要画的正文");
+    assert_eq!(
+        parsed.positive, "",
+        "system_prompt 是扩写指令，不是要画的正文"
+    );
 }
 
 /// 负向同理：`KSampler.negative → CLIPTextEncode.text → PrimitiveStringMultiline.value`。
@@ -539,12 +598,22 @@ fn extra_cap_matches_kotlin_exactly() {
     }
     nodes.push('}');
     let parsed = parse(Some(&graph(&nodes)));
-    assert_eq!(parsed.extra.len(), 61, "Kotlin 的 break 在 push 之后 → 最多 61");
+    assert_eq!(
+        parsed.extra.len(),
+        61,
+        "Kotlin 的 break 在 push 之后 → 最多 61"
+    );
     assert_eq!(parsed.extra[0].0, "Node0.a");
     // 少量节点时不会有上限，且每个节点末尾都带一条 `__node_id`
     let small = parse(Some(&graph(
         r#"{"1":{"class_type":"KSampler","inputs":{"steps":1,"cfg":1,"denoise":0.5}}}"#,
     )));
-    assert!(small.extra.iter().any(|(k, v)| k == "KSampler.__node_id" && v == "1"));
-    assert!(small.extra.iter().any(|(k, v)| k == "KSampler.denoise" && v == "0.5"));
+    assert!(small
+        .extra
+        .iter()
+        .any(|(k, v)| k == "KSampler.__node_id" && v == "1"));
+    assert!(small
+        .extra
+        .iter()
+        .any(|(k, v)| k == "KSampler.denoise" && v == "0.5"));
 }

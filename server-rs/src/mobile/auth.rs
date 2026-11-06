@@ -152,9 +152,11 @@ impl Default for AuthFile {
 /// 那不是"库坏了"，是"还没配过"。
 pub fn load(conn: &Connection) -> AuthFile {
     let raw: Option<String> = conn
-        .query_row("SELECT v FROM app_settings WHERE k = ?1", params![SETTINGS_KEY], |row| {
-            row.get::<_, Option<String>>(0)
-        })
+        .query_row(
+            "SELECT v FROM app_settings WHERE k = ?1",
+            params![SETTINGS_KEY],
+            |row| row.get::<_, Option<String>>(0),
+        )
         .ok()
         .flatten();
     raw.and_then(|text| serde_json::from_str::<AuthFile>(&text).ok())
@@ -211,7 +213,11 @@ pub fn is_loopback(remote: Option<IpAddr>) -> bool {
         Some(ip) => match ip {
             IpAddr::V4(v4) => v4.is_loopback(),
             IpAddr::V6(v6) => {
-                v6.is_loopback() || v6.to_ipv4_mapped().map(|v4| v4.is_loopback()).unwrap_or(false)
+                v6.is_loopback()
+                    || v6
+                        .to_ipv4_mapped()
+                        .map(|v4| v4.is_loopback())
+                        .unwrap_or(false)
             }
         },
         // **拿不到来源地址 = 不当成本机**（保守）。三条既有 e2e 走的是 `enabled=false`
@@ -265,7 +271,13 @@ pub fn grant_of(file: &AuthFile, token: &str) -> Option<Grant> {
 /// * `path`：请求路径
 /// * `remote`：来源地址（`None` = 拿不到，按非回环处理）
 /// * `token`：请求头里的令牌
-pub fn decide(path: &str, method: &str, remote: Option<IpAddr>, token: Option<&str>, file: &AuthFile) -> Verdict {
+pub fn decide(
+    path: &str,
+    method: &str,
+    remote: Option<IpAddr>,
+    token: Option<&str>,
+    file: &AuthFile,
+) -> Verdict {
     // ① 两条匿名端点：它们本来就是给未配对设备用的（内部限速 + 5 次作废）
     if path == PAIR_REQUEST_PATH || path == PAIR_CLAIM_PATH {
         return Verdict::Allow(Grant::Loopback);
@@ -281,10 +293,21 @@ pub fn decide(path: &str, method: &str, remote: Option<IpAddr>, token: Option<&s
     if path == CREDENTIALS_PATH {
         let upload = method.eq_ignore_ascii_case("PUT") || method.eq_ignore_ascii_case("POST");
         return match token.and_then(|t| grant_of(file, t)) {
-            Some(Grant::Device { id, allow_credentials, allow_credentials_upload })
-                if if upload { allow_credentials_upload } else { allow_credentials } =>
+            Some(Grant::Device {
+                id,
+                allow_credentials,
+                allow_credentials_upload,
+            }) if if upload {
+                allow_credentials_upload
+            } else {
+                allow_credentials
+            } =>
             {
-                Verdict::Allow(Grant::Device { id, allow_credentials, allow_credentials_upload })
+                Verdict::Allow(Grant::Device {
+                    id,
+                    allow_credentials,
+                    allow_credentials_upload,
+                })
             }
             Some(_) => Verdict::Forbidden(if upload {
                 "这台设备没有被允许修改密钥".into()
@@ -356,7 +379,10 @@ fn prune(list: &mut Vec<Session>, unix: u64) {
 }
 
 fn now_unix() -> u64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
 }
 
 fn iso_now() -> String {
@@ -416,7 +442,9 @@ fn os_random(buf: &mut [u8]) -> Result<(), String> {
 pub(crate) fn random_bytes(len: usize) -> Result<Vec<u8>, ApiError> {
     let mut buf = vec![0u8; len];
     os_random(&mut buf).map_err(|e| {
-        ApiError::internal(format!("系统的随机数发生器不可用（{e}）：拒绝生成可预测的令牌"))
+        ApiError::internal(format!(
+            "系统的随机数发生器不可用（{e}）：拒绝生成可预测的令牌"
+        ))
     })?;
     Ok(buf)
 }
@@ -428,7 +456,10 @@ pub fn random_token() -> Result<String, ApiError> {
 
 /// 16 字节 → 32 位十六进制（配对会话 id；**它不是 ticket**，纪律 ③）。
 fn random_hex_id() -> Result<String, ApiError> {
-    Ok(random_bytes(16)?.iter().map(|b| format!("{b:02x}")).collect())
+    Ok(random_bytes(16)?
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect())
 }
 
 const B64URL: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
@@ -437,7 +468,11 @@ const B64STD: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz
 fn base64_with(alphabet: &[u8; 64], bytes: &[u8], pad: bool) -> String {
     let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
     for chunk in bytes.chunks(3) {
-        let b = [chunk[0], *chunk.get(1).unwrap_or(&0), *chunk.get(2).unwrap_or(&0)];
+        let b = [
+            chunk[0],
+            *chunk.get(1).unwrap_or(&0),
+            *chunk.get(2).unwrap_or(&0),
+        ];
         let n = ((b[0] as u32) << 16) | ((b[1] as u32) << 8) | b[2] as u32;
         out.push(alphabet[(n >> 18) as usize & 63] as char);
         out.push(alphabet[(n >> 12) as usize & 63] as char);
@@ -581,8 +616,14 @@ mod dpapi {
 
     pub fn unprotect(sealed: &[u8]) -> Result<Vec<u8>, String> {
         let mut buf = sealed.to_vec();
-        let input = DataBlob { cb_data: buf.len() as u32, pb_data: buf.as_mut_ptr() };
-        let mut out = DataBlob { cb_data: 0, pb_data: std::ptr::null_mut() };
+        let input = DataBlob {
+            cb_data: buf.len() as u32,
+            pb_data: buf.as_mut_ptr(),
+        };
+        let mut out = DataBlob {
+            cb_data: 0,
+            pb_data: std::ptr::null_mut(),
+        };
         let ok = unsafe {
             CryptUnprotectData(
                 &input,
@@ -600,7 +641,8 @@ mod dpapi {
                     .to_string(),
             );
         }
-        let plain = unsafe { std::slice::from_raw_parts(out.pb_data, out.cb_data as usize).to_vec() };
+        let plain =
+            unsafe { std::slice::from_raw_parts(out.pb_data, out.cb_data as usize).to_vec() };
         unsafe { LocalFree(out.pb_data as *mut c_void) };
         Ok(plain)
     }
@@ -612,8 +654,14 @@ mod dpapi {
     /// 而 DPAPI 的作用域就藏在这三个参数里，改一个就是"换台机器/换个用户解不开"。
     pub fn protect(plain: &[u8]) -> Result<Vec<u8>, String> {
         let mut buf = plain.to_vec();
-        let input = DataBlob { cb_data: buf.len() as u32, pb_data: buf.as_mut_ptr() };
-        let mut out = DataBlob { cb_data: 0, pb_data: std::ptr::null_mut() };
+        let input = DataBlob {
+            cb_data: buf.len() as u32,
+            pb_data: buf.as_mut_ptr(),
+        };
+        let mut out = DataBlob {
+            cb_data: 0,
+            pb_data: std::ptr::null_mut(),
+        };
         let ok = unsafe {
             CryptProtectData(
                 &input,
@@ -628,7 +676,8 @@ mod dpapi {
         if ok == 0 {
             return Err("DPAPI 加密失败".to_string());
         }
-        let sealed = unsafe { std::slice::from_raw_parts(out.pb_data, out.cb_data as usize).to_vec() };
+        let sealed =
+            unsafe { std::slice::from_raw_parts(out.pb_data, out.cb_data as usize).to_vec() };
         unsafe { LocalFree(out.pb_data as *mut c_void) };
         Ok(sealed)
     }
@@ -676,7 +725,11 @@ pub fn resolve_credential(state: &AppState, reference: &str) -> Result<String, A
     let from_env = std::env::var(reference)
         .ok()
         .filter(|v| !v.is_empty())
-        .or_else(|| std::env::var(format!("COMFYHUB_CRED_{reference}")).ok().filter(|v| !v.is_empty()));
+        .or_else(|| {
+            std::env::var(format!("COMFYHUB_CRED_{reference}"))
+                .ok()
+                .filter(|v| !v.is_empty())
+        });
     if let Some(value) = from_env {
         return Ok(value);
     }
@@ -691,11 +744,12 @@ pub fn resolve_credential(state: &AppState, reference: &str) -> Result<String, A
         .and_then(Value::as_str)
         .ok_or_else(|| ApiError::not_found(format!("桌面上没有配置凭据 {reference}")))?;
 
-    let blob = base64_decode(sealed).map_err(|e| ApiError::internal(format!("凭据密文不是合法 base64：{e}")))?;
-    let plain = unprotect_secret(&blob).map_err(|e| {
-        ApiError::ai("MISSING_CREDENTIAL", format!("凭据 {reference} {e}"))
-    })?;
-    String::from_utf8(plain).map_err(|_| ApiError::internal(format!("凭据 {reference} 解密后不是 UTF-8")))
+    let blob = base64_decode(sealed)
+        .map_err(|e| ApiError::internal(format!("凭据密文不是合法 base64：{e}")))?;
+    let plain = unprotect_secret(&blob)
+        .map_err(|e| ApiError::ai("MISSING_CREDENTIAL", format!("凭据 {reference} {e}")))?;
+    String::from_utf8(plain)
+        .map_err(|_| ApiError::internal(format!("凭据 {reference} 解密后不是 UTF-8")))
 }
 
 // ---------------------------------------------------------------------------
@@ -728,7 +782,9 @@ fn require_loopback(remote: Option<IpAddr>, what: &str) -> Result<(), ApiError> 
     if is_loopback(remote) {
         Ok(())
     } else {
-        Err(ApiError::forbidden(format!("{what} 只允许在本机（127.0.0.1）调用")))
+        Err(ApiError::forbidden(format!(
+            "{what} 只允许在本机（127.0.0.1）调用"
+        )))
     }
 }
 
@@ -743,7 +799,10 @@ pub async fn gate(State(state): State<AppState>, req: Request, next: Next) -> Re
     let path = req.uri().path().to_string();
     // 方法要传下去：凭据端点 GET（读）与 PUT（写）是**两个不同的开关**（§14.1）
     let method = req.method().as_str().to_string();
-    let remote = req.extensions().get::<ConnectInfo<SocketAddr>>().map(|info| info.0.ip());
+    let remote = req
+        .extensions()
+        .get::<ConnectInfo<SocketAddr>>()
+        .map(|info| info.0.ip());
     let token = header_token(req.headers());
 
     // 快路径：两条匿名端点与回环请求**根本不读库**（闸门关着时所有请求都走这里）
@@ -753,7 +812,15 @@ pub async fn gate(State(state): State<AppState>, req: Request, next: Next) -> Re
     }
 
     let verdict = state
-        .with(|conn| Ok(decide(&path, &method, remote, token.as_deref(), &load(conn))))
+        .with(|conn| {
+            Ok(decide(
+                &path,
+                &method,
+                remote,
+                token.as_deref(),
+                &load(conn),
+            ))
+        })
         // 读状态失败（库锁中毒等）：按**最保守**的一侧处理 —— 401 而不是放行
         .unwrap_or_else(|e| Verdict::Unauthorized(format!("读取配对状态失败：{}", e.human())));
     match verdict {
@@ -768,7 +835,9 @@ pub async fn gate(State(state): State<AppState>, req: Request, next: Next) -> Re
 
 /// 记一笔"这台设备刚刚活跃过"（**只在内存**，由 `GET /api/auth` 顺手落库）。
 fn note_seen(grant: &Grant, remote: Option<IpAddr>) {
-    let Grant::Device { id, .. } = grant else { return };
+    let Grant::Device { id, .. } = grant else {
+        return;
+    };
     let Some(ip) = remote else { return };
     if let Ok(mut state) = sessions().lock() {
         state.seen.insert(id.clone(), (iso_now(), ip.to_string()));
@@ -786,7 +855,10 @@ pub fn router() -> axum::Router<AppState> {
         .route("/api/auth/rotate", post(rotate))
         .route("/api/auth/devices", get(list_devices))
         .route("/api/auth/devices/{id}/revoke", post(revoke_device))
-        .route("/api/auth/devices/{id}/credentials", post(set_device_credentials))
+        .route(
+            "/api/auth/devices/{id}/credentials",
+            post(set_device_credentials),
+        )
         .route("/api/auth/pair/start", post(pair_start))
         .route("/api/auth/pair/request", post(pair_request))
         .route("/api/auth/pair/pending", get(pair_pending))
@@ -813,7 +885,10 @@ fn device_json(device: &DeviceRecord) -> Value {
     if let Some(v) = device.last_ip.as_ref() {
         obj.insert("lastIp".into(), Value::String(v.clone()));
     }
-    obj.insert("allowCredentials".into(), Value::Bool(device.allow_credentials));
+    obj.insert(
+        "allowCredentials".into(),
+        Value::Bool(device.allow_credentials),
+    );
     // 与上面那条**分开报**：读和写是两个开关（§14.1）。
     // ⚠ 旧后端没有这个键，客户端把「缺键」当 false —— 但那与"用户没开"是两件事，
     // 所以手机侧要据**键在不在**提示"这台后端还不支持上行密钥"（见 pairing-design §14.5）。
@@ -828,7 +903,10 @@ fn device_json(device: &DeviceRecord) -> Value {
 fn pending_json(session: &Session, unix: u64) -> Value {
     let mut obj = Map::new();
     obj.insert("requestId".into(), Value::String(session.id.clone()));
-    obj.insert("code".into(), Value::String(code_for(&session.secret, unix)));
+    obj.insert(
+        "code".into(),
+        Value::String(code_for(&session.secret, unix)),
+    );
     obj.insert(
         "codeExpiresAt".into(),
         Value::String(iso_at(code_expires_at(unix))),
@@ -838,7 +916,10 @@ fn pending_json(session: &Session, unix: u64) -> Value {
         obj.insert("ip".into(), Value::String(ip.clone()));
     }
     if !session.device_name.is_empty() {
-        obj.insert("deviceName".into(), Value::String(session.device_name.clone()));
+        obj.insert(
+            "deviceName".into(),
+            Value::String(session.device_name.clone()),
+        );
     }
     Value::Object(obj)
 }
@@ -852,7 +933,9 @@ fn pending_json(session: &Session, unix: u64) -> Value {
 /// 那种"数据其实没错、只是旧了"的显示最容易被当成 bug 去查后端。
 fn flush_seen(file: &mut AuthFile) {
     let drained = {
-        let Ok(mut state) = sessions().lock() else { return };
+        let Ok(mut state) = sessions().lock() else {
+            return;
+        };
         let now = now_unix();
         if now.saturating_sub(state.last_flush) < 30 {
             return;
@@ -1092,8 +1175,14 @@ fn push_session(
 
 /// 配对响应里那三个时间字段（**同一把尺子**，两个端点共用）。
 fn insert_session_times(obj: &mut Map<String, Value>, unix: u64) {
-    obj.insert("expiresAt".into(), Value::String(iso_at(unix + SESSION_TTL_SECS)));
-    obj.insert("codeExpiresAt".into(), Value::String(iso_at(code_expires_at(unix))));
+    obj.insert(
+        "expiresAt".into(),
+        Value::String(iso_at(unix + SESSION_TTL_SECS)),
+    );
+    obj.insert(
+        "codeExpiresAt".into(),
+        Value::String(iso_at(code_expires_at(unix))),
+    );
     obj.insert("serverTime".into(), Value::String(iso_now()));
 }
 
@@ -1129,7 +1218,9 @@ async fn pair_start(
 
 /// 限速：同一个来源地址一分钟内最多举手 [RATE_MAX_PER_MIN] 次 / 兑码 [CLAIM_MAX_PER_MIN] 次。
 fn check_rate(ip: Option<IpAddr>, unix: u64, claim: bool) -> Result<(), ApiError> {
-    let key = ip.map(|v| v.to_string()).unwrap_or_else(|| "unknown".to_string());
+    let key = ip
+        .map(|v| v.to_string())
+        .unwrap_or_else(|| "unknown".to_string());
     let Ok(mut state) = sessions().lock() else {
         return Err(ApiError::internal("配对状态锁已中毒"));
     };
@@ -1157,7 +1248,12 @@ async fn pair_request(
     let unix = now_unix();
     check_rate(remote, unix, false)?;
 
-    let device_id = payload.get("deviceId").and_then(Value::as_str).unwrap_or("").trim().to_string();
+    let device_id = payload
+        .get("deviceId")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_string();
     if device_id.is_empty() {
         return Err(ApiError::bad_request("deviceId 不能为空"));
     }
@@ -1170,7 +1266,13 @@ async fn pair_request(
 
     // 手机举手这条：桌面会把 6 位码显示出来（手机拿不到 `secret` —— 纪律 ③）
     let secret = random_token()?;
-    let id = push_session(unix, &secret, &device_id, &device_name, remote.map(|v| v.to_string()))?;
+    let id = push_session(
+        unix,
+        &secret,
+        &device_id,
+        &device_name,
+        remote.map(|v| v.to_string()),
+    )?;
 
     let mut obj = Map::new();
     obj.insert("requestId".into(), Value::String(id));
@@ -1209,9 +1311,24 @@ async fn pair_claim(
     let unix = now_unix();
     // 兑码也要限速（理由见 CLAIM_MAX_PER_MIN）：只靠"错 5 次作废"挡不住"换一个 ticket 再来 5 次"
     check_rate(remote, unix, true)?;
-    let request_id = payload.get("requestId").and_then(Value::as_str).unwrap_or("").trim().to_string();
-    let ticket = payload.get("ticket").and_then(Value::as_str).unwrap_or("").trim().to_string();
-    let code = payload.get("code").and_then(Value::as_str).unwrap_or("").trim().to_string();
+    let request_id = payload
+        .get("requestId")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    let ticket = payload
+        .get("ticket")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    let code = payload
+        .get("code")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_string();
     if request_id.is_empty() && ticket.is_empty() {
         return Err(ApiError::bad_request("缺少 requestId 或 ticket"));
     }
@@ -1224,7 +1341,10 @@ async fn pair_claim(
         let idx = if !request_id.is_empty() {
             state.list.iter().position(|s| s.id == request_id)
         } else {
-            state.list.iter().position(|s| tokens_equal(&s.secret, &ticket))
+            state
+                .list
+                .iter()
+                .position(|s| tokens_equal(&s.secret, &ticket))
         };
         let Some(idx) = idx else {
             return Err(ApiError::bad_request("配对失败"));
@@ -1236,11 +1356,18 @@ async fn pair_claim(
         }
         let secret = state.list[idx].secret.clone();
         let ok = tokens_equal(&code, &code_for(&secret, unix))
-            || tokens_equal(&code, &code_for(&secret, unix.saturating_sub(CODE_WINDOW_SECS)));
+            || tokens_equal(
+                &code,
+                &code_for(&secret, unix.saturating_sub(CODE_WINDOW_SECS)),
+            );
         if ok {
             state.list[idx].used = true;
             let session = &state.list[idx];
-            (session.device_id.clone(), session.device_name.clone(), session.ip.clone())
+            (
+                session.device_id.clone(),
+                session.device_name.clone(),
+                session.ip.clone(),
+            )
         } else {
             state.list[idx].attempts += 1;
             if state.list[idx].attempts >= MAX_ATTEMPTS {
@@ -1360,7 +1487,10 @@ async fn get_credentials(
     body.insert("credentials".into(), Value::Object(out));
     if !failures.is_empty() {
         // 如实说哪几把没拿到（**不含值**）：手机那边要能告诉用户"这一把还得自己填"
-        body.insert("missing".into(), Value::Array(failures.into_iter().map(Value::String).collect()));
+        body.insert(
+            "missing".into(),
+            Value::Array(failures.into_iter().map(Value::String).collect()),
+        );
     }
     Ok(Json(Value::Object(body)))
 }
@@ -1394,7 +1524,9 @@ async fn put_credentials(
     }
     let (applied, rejected, rev) =
         crate::provider::credentials::apply_upload(&state, &body.credentials, body.rev)?;
-    Ok(Json(crate::provider::credentials::upload_json(&applied, &rejected, rev)))
+    Ok(Json(crate::provider::credentials::upload_json(
+        &applied, &rejected, rev,
+    )))
 }
 
 // ---------------------------------------------------------------------------
@@ -1416,7 +1548,12 @@ fn status_json(file: &AuthFile, unix: u64) -> Value {
     obj.insert("enabled".into(), Value::Bool(file.enabled));
     obj.insert(
         "hasToken".into(),
-        Value::Bool(file.token.as_deref().map(|t| !t.is_empty()).unwrap_or(false)),
+        Value::Bool(
+            file.token
+                .as_deref()
+                .map(|t| !t.is_empty())
+                .unwrap_or(false),
+        ),
     );
     obj.insert("schema".into(), Value::String(file.schema.clone()));
     obj.insert(
@@ -1430,7 +1567,9 @@ fn status_json(file: &AuthFile, unix: u64) -> Value {
 /// 把 [`ApiError`] 的 `status` 借来当 `rusqlite::Error` 的载体 —— `AppState::with`
 /// 的闭包签名要求 `rusqlite::Result`，而随机数失败是"内部的、非 SQL"的错误。
 fn to_sql_err(error: ApiError) -> rusqlite::Error {
-    rusqlite::Error::ToSqlConversionFailure(Box::new(std::io::Error::other(error.human().to_string())))
+    rusqlite::Error::ToSqlConversionFailure(Box::new(std::io::Error::other(
+        error.human().to_string(),
+    )))
 }
 
 // ---------------------------------------------------------------------------

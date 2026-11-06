@@ -87,7 +87,10 @@ impl StoredQuestion {
         let mut out = Map::new();
         out.insert("questionId".into(), Value::String(self.question_id.clone()));
         out.insert("runId".into(), Value::String(self.run_id.clone()));
-        out.insert("conversationId".into(), Value::String(self.conversation_id.clone()));
+        out.insert(
+            "conversationId".into(),
+            Value::String(self.conversation_id.clone()),
+        );
         out.insert("question".into(), Value::String(self.question.clone()));
         out.insert("allowFreeText".into(), Value::Bool(self.allow_free_text));
         out.insert("answered".into(), Value::Bool(self.answer.is_some()));
@@ -136,7 +139,13 @@ impl StoredQuestion {
         if !self.option_indexes.is_empty() {
             out.insert(
                 "optionIndexes".into(),
-                Value::Array(self.option_indexes.iter().copied().map(Value::from).collect()),
+                Value::Array(
+                    self.option_indexes
+                        .iter()
+                        .copied()
+                        .map(Value::from)
+                        .collect(),
+                ),
             );
         }
         Value::Object(out)
@@ -182,17 +191,27 @@ pub struct NewQuestion {
 pub fn row_to_json(row: &Row<'_>) -> rusqlite::Result<Value> {
     let question_id: String = row.get("question_id")?;
     let answer: Option<String> = row.get("answer")?;
-    let option_indexes = parse_int_array(row.get::<_, Option<String>>("option_indexes")?.as_deref());
+    let option_indexes =
+        parse_int_array(row.get::<_, Option<String>>("option_indexes")?.as_deref());
     let mut out = Map::new();
     out.insert("questionId".into(), Value::String(question_id.clone()));
-    out.insert("runId".into(), Value::String(row.get::<_, Option<String>>("run_id")?.unwrap_or_default()));
+    out.insert(
+        "runId".into(),
+        Value::String(row.get::<_, Option<String>>("run_id")?.unwrap_or_default()),
+    );
     out.insert(
         "conversationId".into(),
-        Value::String(row.get::<_, Option<String>>("conversation_id")?.unwrap_or_default()),
+        Value::String(
+            row.get::<_, Option<String>>("conversation_id")?
+                .unwrap_or_default(),
+        ),
     );
     out.insert(
         "question".into(),
-        Value::String(row.get::<_, Option<String>>("question")?.unwrap_or_default()),
+        Value::String(
+            row.get::<_, Option<String>>("question")?
+                .unwrap_or_default(),
+        ),
     );
     out.insert(
         "allowFreeText".into(),
@@ -201,11 +220,18 @@ pub fn row_to_json(row: &Row<'_>) -> rusqlite::Result<Value> {
     out.insert("answered".into(), Value::Bool(answer.is_some()));
     out.insert(
         "options".into(),
-        Value::Array(parse_string_array(row.get::<_, Option<String>>("options_json")?.as_deref())),
+        Value::Array(parse_string_array(
+            row.get::<_, Option<String>>("options_json")?.as_deref(),
+        )),
     );
-    let option_images =
-        parse_string_array(row.get::<_, Option<String>>("option_images_json")?.as_deref());
-    if option_images.iter().any(|v| matches!(v, Value::String(s) if !s.trim().is_empty())) {
+    let option_images = parse_string_array(
+        row.get::<_, Option<String>>("option_images_json")?
+            .as_deref(),
+    );
+    if option_images
+        .iter()
+        .any(|v| matches!(v, Value::String(s) if !s.trim().is_empty()))
+    {
         out.insert("optionImages".into(), Value::Array(option_images));
     }
     if let Some(image_url) = row
@@ -216,10 +242,18 @@ pub fn row_to_json(row: &Row<'_>) -> rusqlite::Result<Value> {
     }
     out.insert(
         "askedAt".into(),
-        Value::from(asked_at_ms(row.get::<_, Option<String>>("asked_at")?.as_deref())),
+        Value::from(asked_at_ms(
+            row.get::<_, Option<String>>("asked_at")?.as_deref(),
+        )),
     );
-    out.insert("index".into(), Value::from(row.get::<_, Option<i64>>("card_index")?.unwrap_or(0)));
-    out.insert("total".into(), Value::from(row.get::<_, Option<i64>>("total")?.unwrap_or(1)));
+    out.insert(
+        "index".into(),
+        Value::from(row.get::<_, Option<i64>>("card_index")?.unwrap_or(0)),
+    );
+    out.insert(
+        "total".into(),
+        Value::from(row.get::<_, Option<i64>>("total")?.unwrap_or(1)),
+    );
     out.insert(
         "groupId".into(),
         Value::String(
@@ -252,14 +286,21 @@ fn row_to_stored(row: &Row<'_>) -> rusqlite::Result<StoredQuestion> {
     Ok(StoredQuestion {
         question_id: row.get("question_id")?,
         run_id: row.get::<_, Option<String>>("run_id")?.unwrap_or_default(),
-        conversation_id: row.get::<_, Option<String>>("conversation_id")?.unwrap_or_default(),
-        group_id: row.get::<_, Option<String>>("group_id")?.unwrap_or_default(),
+        conversation_id: row
+            .get::<_, Option<String>>("conversation_id")?
+            .unwrap_or_default(),
+        group_id: row
+            .get::<_, Option<String>>("group_id")?
+            .unwrap_or_default(),
         index: row.get::<_, Option<i64>>("card_index")?.unwrap_or(0),
         total: row.get::<_, Option<i64>>("total")?.unwrap_or(1),
-        question: row.get::<_, Option<String>>("question")?.unwrap_or_default(),
+        question: row
+            .get::<_, Option<String>>("question")?
+            .unwrap_or_default(),
         options: parse_string_array_str(row.get::<_, Option<String>>("options_json")?.as_deref()),
         option_images: parse_string_array_str(
-            row.get::<_, Option<String>>("option_images_json")?.as_deref(),
+            row.get::<_, Option<String>>("option_images_json")?
+                .as_deref(),
         ),
         image_url: row
             .get::<_, Option<String>>("image_url")?
@@ -359,7 +400,10 @@ pub fn find(state: &AppState, question_id: &str) -> Result<Option<Value>, ApiErr
 }
 
 /// 结构化地读一行（等答案与工具结果用）。
-pub fn find_stored(state: &AppState, question_id: &str) -> Result<Option<StoredQuestion>, ApiError> {
+pub fn find_stored(
+    state: &AppState,
+    question_id: &str,
+) -> Result<Option<StoredQuestion>, ApiError> {
     let question_id = question_id.to_string();
     state.with(move |conn| {
         let mut stmt = conn.prepare(&format!(
@@ -403,7 +447,9 @@ pub fn pending_group_for(state: &AppState, run_id: &str) -> Result<Vec<Value>, A
             )
             .ok()
             .flatten();
-        let Some(group) = group else { return Ok(Vec::new()) };
+        let Some(group) = group else {
+            return Ok(Vec::new());
+        };
         let mut stmt = conn.prepare(&format!(
             "SELECT {COLS} FROM ai_questions
               WHERE run_id = ?1 AND group_id = ?2 AND status = 'pending'
@@ -433,7 +479,10 @@ pub fn find_same_question(
               ORDER BY asked_at",
         )?;
         let rows = stmt.query_map(rusqlite::params![run_id], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?.unwrap_or_default()))
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, Option<String>>(1)?.unwrap_or_default(),
+            ))
         })?;
         for row in rows {
             let (id, text) = row?;
@@ -477,7 +526,11 @@ pub fn record_answer(
 ///
 /// **状态守卫**：只动 `pending` —— 已经 `answered` 的不许被覆盖（用户答完又被收尾抹掉，
 /// 那是"我明明答了它却说没答"）。
-pub fn finalize_if_pending(state: &AppState, question_id: &str, status: &str) -> Result<usize, ApiError> {
+pub fn finalize_if_pending(
+    state: &AppState,
+    question_id: &str,
+    status: &str,
+) -> Result<usize, ApiError> {
     let question_id = question_id.to_string();
     let status = status.to_string();
     state.write(move |tx| {
@@ -561,7 +614,10 @@ pub fn asked_at_ms(raw: Option<&str>) -> i64 {
 }
 
 fn parse_string_array(raw: Option<&str>) -> Vec<Value> {
-    parse_string_array_str(raw).into_iter().map(Value::String).collect()
+    parse_string_array_str(raw)
+        .into_iter()
+        .map(Value::String)
+        .collect()
 }
 
 fn parse_string_array_str(raw: Option<&str>) -> Vec<String> {

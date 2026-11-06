@@ -99,6 +99,7 @@ class WorkflowButton extends StatelessWidget {
 class _WorkflowDialog extends StatefulWidget {
   final String title;
   final Future<String?> Function() load;
+
   /// 打开弹窗的那个页面所属的 messenger
   final ScaffoldMessengerState? messenger;
   final BlueprintDiagnose? blueprint;
@@ -119,10 +120,13 @@ class _WorkflowDialog extends StatefulWidget {
 class _WorkflowDialogState extends State<_WorkflowDialog> {
   bool _loading = true;
   String? _error;
+
   /// 后端返回的完整原文；null 表示这次运行没存工作流
   String? _raw;
+
   /// 实际渲染出来的文本（超大时是截断版）
   String _display = '';
+
   /// 存的是 API 格式节点图（agent / 脚本提交的运行）而不是界面工作流
   bool _apiFormat = false;
 
@@ -237,7 +241,11 @@ class _WorkflowDialogState extends State<_WorkflowDialog> {
       title: Row(
         children: [
           Expanded(
-            child: Text(widget.title, maxLines: 1, overflow: TextOverflow.ellipsis),
+            child: Text(
+              widget.title,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
           ),
           // 「看蓝图」与「复制」放标题栏，正文区就能整块留给工作流
           if (_raw != null && widget.blueprint != null)
@@ -284,7 +292,11 @@ class _WorkflowDialogState extends State<_WorkflowDialog> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(Icons.cloud_off_outlined, size: 46, color: theme.colorScheme.error),
+            Icon(
+              Icons.cloud_off_outlined,
+              size: 46,
+              color: theme.colorScheme.error,
+            ),
             const SizedBox(height: 12),
             SelectableText(
               error,
@@ -307,14 +319,20 @@ class _WorkflowDialogState extends State<_WorkflowDialog> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(Icons.account_tree_outlined, size: 46, color: theme.colorScheme.outline),
+            Icon(
+              Icons.account_tree_outlined,
+              size: 46,
+              color: theme.colorScheme.outline,
+            ),
             const SizedBox(height: 12),
             Text('这次生成没有保存工作流', style: theme.textTheme.titleSmall),
             const SizedBox(height: 8),
             Text(
               '只有 ComfyUI 自动捕获或历史导入的运行会带上工作流，手动新建的提示词没有。',
               textAlign: TextAlign.center,
-              style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.outline),
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.outline,
+              ),
             ),
           ],
         ),
@@ -326,15 +344,21 @@ class _WorkflowDialogState extends State<_WorkflowDialog> {
       children: [
         Row(
           children: [
-            Icon(Icons.info_outline, size: 14, color: theme.colorScheme.outline),
+            Icon(
+              Icons.info_outline,
+              size: 14,
+              color: theme.colorScheme.outline,
+            ),
             const SizedBox(width: 6),
             Expanded(
               child: Text(
                 _apiFormat
                     ? '这是提交给 ComfyUI 的 API 格式节点图（agent / 脚本生图只会留下这份），'
-                        '参数与连接都在里面，存成 .json 拖进 ComfyUI 就能加载'
+                          '参数与连接都在里面，存成 .json 拖进 ComfyUI 就能加载'
                     : '这是 ComfyUI 的工作流 JSON，拖回 ComfyUI 即可复现',
-                style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline),
+                style: theme.textTheme.labelSmall?.copyWith(
+                  color: theme.colorScheme.outline,
+                ),
               ),
             ),
           ],
@@ -345,9 +369,13 @@ class _WorkflowDialogState extends State<_WorkflowDialog> {
             width: double.infinity,
             clipBehavior: Clip.antiAlias,
             decoration: BoxDecoration(
-              color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
+              color: theme.colorScheme.surfaceContainerHighest.withValues(
+                alpha: 0.5,
+              ),
               borderRadius: BorderRadius.circular(10),
-              border: Border.all(color: theme.dividerColor.withValues(alpha: 0.4)),
+              border: Border.all(
+                color: theme.dividerColor.withValues(alpha: 0.4),
+              ),
             ),
             child: SingleChildScrollView(
               padding: const EdgeInsets.all(12),

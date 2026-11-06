@@ -123,7 +123,11 @@ fn parse_args() -> Result<Args, String> {
     // 开关就是走它）时听 `0.0.0.0`：手机在局域网里才有得连（用户 bug 2026-09-28
     // 「手机连接桌面端失败，报 timed out」—— `server.ps1` 以前硬编码 127.0.0.1，
     // 真机连桌面永远超时）。远程访问由配对闸门把关（回环放行、局域网要令牌）。
-    let mut host = if remote_allowed() { "0.0.0.0".to_string() } else { "127.0.0.1".to_string() };
+    let mut host = if remote_allowed() {
+        "0.0.0.0".to_string()
+    } else {
+        "127.0.0.1".to_string()
+    };
     let mut port = DEFAULT_PORT;
 
     let mut it = std::env::args().skip(1);
@@ -167,7 +171,13 @@ fn parse_args() -> Result<Args, String> {
             .map(|root| root.join("storage"))
             .unwrap_or_else(|| PathBuf::from("storage"))
     });
-    Ok(Args { db, storage, host, port, watch_stdin })
+    Ok(Args {
+        db,
+        storage,
+        host,
+        port,
+        watch_stdin,
+    })
 }
 
 /// **"我爸（App）还活着吗"** —— 靠 stdin 这根管道的生死判断。
@@ -233,7 +243,6 @@ async fn main() {
         }
     };
 
-
     // 开库（**必要时建库**）：切流之后 Rust 是唯一的后端，"第一次运行能自己建库"必须成立 ——
     // 以前的版本缺库直接 exit 3（"先让 Kotlin 起一次库"），那在发布包里等于永远起不来。
     let conn = match db::open_or_create(&args.db) {
@@ -279,7 +288,8 @@ async fn main() {
     // ② 还挂着 `pending` 的审批行 → `denied`（内存闸门随进程消失，那些审批
     //    "永远不会有人点"，而 `/api/ai/pending` 会一直把它们列出来）；
     // ③ 还挂着 `pending` 的提问行 → `expired`（同上）。
-    match comfyhub_server_rs::ai::runs::fail_stale_running(&state, "后端重启导致 Run 中断") {
+    match comfyhub_server_rs::ai::runs::fail_stale_running(&state, "后端重启导致 Run 中断")
+    {
         Ok(n) if n > 0 => println!("启动恢复：{n} 个僵死 Run 已标为 failed"),
         Ok(_) => {}
         Err(e) => eprintln!("启动恢复：收尾僵死 Run 失败（{}）", e.human()),
@@ -457,7 +467,10 @@ async fn main() {
             }) {
                 Ok(n) => n,
                 Err(e) => {
-                    eprintln!("[collection] 统计待归并产物失败（不影响使用）：{}", e.human());
+                    eprintln!(
+                        "[collection] 统计待归并产物失败（不影响使用）：{}",
+                        e.human()
+                    );
                     return;
                 }
             };
@@ -470,10 +483,7 @@ async fn main() {
                     // 探针与回填**同一份分桶**，所以回填的返回值恒等于 `pending.1`
                     // （真差了这个数只可能是中途出错，那会走下面的 Err 分支）——
                     // 日志里就不再重复计一个计数器了。
-                    Ok(_) => println!(
-                        "[collection] 存量归并：{} 组 / {} 张",
-                        pending.0, pending.1
-                    ),
+                    Ok(_) => println!("[collection] 存量归并：{} 组 / {} 张", pending.0, pending.1),
                     // 归并失败**不拦启动**：集合只是分组视图，缺了不影响产物本身
                     Err(e) => eprintln!("[collection] 存量归并失败（不影响使用）：{}", e.human()),
                 }
@@ -494,7 +504,10 @@ async fn main() {
                 Ok(n) if n > 0 => println!("[collection] 解散单成员自动集合：{n} 个"),
                 Ok(_) => {}
                 Err(e) => {
-                    eprintln!("[collection] 解散单成员集合失败（不影响使用）：{}", e.human())
+                    eprintln!(
+                        "[collection] 解散单成员集合失败（不影响使用）：{}",
+                        e.human()
+                    )
                 }
             }
         });
@@ -522,7 +535,10 @@ async fn main() {
             (addr, listener)
         }
         Err(error) => {
-            eprintln!("绑定 {}:{} 失败（{error}），回落到系统分配的端口", args.host, requested_port);
+            eprintln!(
+                "绑定 {}:{} 失败（{error}），回落到系统分配的端口",
+                args.host, requested_port
+            );
             fell_back = true;
             match tokio::net::TcpListener::bind(parse_addr(0)).await {
                 Ok(listener) => {
@@ -556,7 +572,10 @@ async fn main() {
     // 脚本（`scripts\api-port.ps1`）、App（`settings_store.dart`）与 ComfyUI 捕获扩展都只读它。
     // ⚠ 这是"把 `server.ps1` 指向 Rust"的硬前提：不写它，App 会对着旧端口等 90 秒。
     // `COMFYHUB_NO_PORT_FILE=1` 只给自己的验收脚本用（跑真库副本时别去覆盖真后端那份记录）。
-    let port_state = if std::env::var("COMFYHUB_NO_PORT_FILE").map(|v| v.trim() == "1").unwrap_or(false) {
+    let port_state = if std::env::var("COMFYHUB_NO_PORT_FILE")
+        .map(|v| v.trim() == "1")
+        .unwrap_or(false)
+    {
         eprintln!("[api-port] COMFYHUB_NO_PORT_FILE=1：跳过写端口文件（自测用）");
         None
     } else {
@@ -566,7 +585,9 @@ async fn main() {
             pid: std::process::id(),
             host: args.host.clone(),
             url: url.clone(),
-            started_at: comfyhub_server_rs::infra::iso_time::from_system_time(std::time::SystemTime::now()),
+            started_at: comfyhub_server_rs::infra::iso_time::from_system_time(
+                std::time::SystemTime::now(),
+            ),
             requested_port,
             fell_back,
         };
@@ -588,25 +609,32 @@ async fn main() {
     //
     // 走**优雅退出**而不是 `std::process::exit`：端口记录 `.run\api.json` 的收尾、
     // 在飞的请求都要走完（`delete_if_owned` 只删自己那一份，见 `api_port_file.rs`）。
-    let mut owner_rx = if args.watch_stdin { Some(spawn_stdin_watchdog()) } else { None };
+    let mut owner_rx = if args.watch_stdin {
+        Some(spawn_stdin_watchdog())
+    } else {
+        None
+    };
 
-    if let Err(e) = axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>())
-        .with_graceful_shutdown(async move {
-            // 没开 watchdog 时这一支永远不完成（`pending`），只剩 Ctrl+C 一条路。
-            let owner = async {
-                match owner_rx.as_mut() {
-                    Some(rx) => {
-                        let _ = rx.recv().await;
-                    }
-                    None => std::future::pending::<()>().await,
+    if let Err(e) = axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(async move {
+        // 没开 watchdog 时这一支永远不完成（`pending`），只剩 Ctrl+C 一条路。
+        let owner = async {
+            match owner_rx.as_mut() {
+                Some(rx) => {
+                    let _ = rx.recv().await;
                 }
-            };
-            tokio::select! {
-                _ = tokio::signal::ctrl_c() => println!("收到停止信号，正在退出"),
-                _ = owner => println!("父进程已退出（stdin 关闭），随之退出"),
+                None => std::future::pending::<()>().await,
             }
-        })
-        .await
+        };
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => println!("收到停止信号，正在退出"),
+            _ = owner => println!("父进程已退出（stdin 关闭），随之退出"),
+        }
+    })
+    .await
     {
         eprintln!("服务异常退出：{e}");
         std::process::exit(6);

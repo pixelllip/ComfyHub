@@ -133,8 +133,7 @@ class _SettingsPageState extends State<SettingsPage> {
                 icon: Icons.smart_toy_outlined,
                 title: 'AI 模型与凭据',
                 subtitle: 'Provider、Base URL、模型能力与 API Key（密钥只写不读）',
-                onTap: () =>
-                    _push(context, const AiProviderSettingsPage()),
+                onTap: () => _push(context, const AiProviderSettingsPage()),
               ),
               const SizedBox(height: 8),
               // 2026-11-05 用户：工具权限与"模型与凭据"**不构成附属关系**，
@@ -218,8 +217,10 @@ class _SettingsPageState extends State<SettingsPage> {
             child: Card(
               clipBehavior: Clip.antiAlias,
               child: ListTile(
-                contentPadding:
-                    const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                contentPadding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 4,
+                ),
                 leading: const Icon(Icons.save_alt),
                 title: const Text('导出全部产物…'),
                 subtitle: const Text(
@@ -241,19 +242,28 @@ class _SettingsPageState extends State<SettingsPage> {
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
         child: Column(
           children: [
-            _statRow(theme, '提示词', '${store.stats.prompts}',
-                '生图 ${store.stats.byKind['IMAGE'] ?? 0} · 生视频 ${store.stats.byKind['VIDEO'] ?? 0} · 生音频 ${store.stats.byKind['AUDIO'] ?? 0}'),
+            _statRow(
+              theme,
+              '提示词',
+              '${store.stats.prompts}',
+              '生图 ${store.stats.byKind['IMAGE'] ?? 0} · 生视频 ${store.stats.byKind['VIDEO'] ?? 0} · 生音频 ${store.stats.byKind['AUDIO'] ?? 0}',
+            ),
             const Divider(height: 20),
-            _statRow(theme, '生成产物', '${store.stats.media}',
-                '图片 ${store.stats.byMediaKind['IMAGE'] ?? 0} · 视频 ${store.stats.byMediaKind['VIDEO'] ?? 0} · 音频 ${store.stats.byMediaKind['AUDIO'] ?? 0}'),
+            _statRow(
+              theme,
+              '生成产物',
+              '${store.stats.media}',
+              '图片 ${store.stats.byMediaKind['IMAGE'] ?? 0} · 视频 ${store.stats.byMediaKind['VIDEO'] ?? 0} · 音频 ${store.stats.byMediaKind['AUDIO'] ?? 0}',
+            ),
             const Divider(height: 20),
             _statRow(theme, '标签', '${store.stats.tags}', null),
             const Divider(height: 20),
             _statRow(
-                theme,
-                '收藏',
-                '${store.stats.favoritePrompts} 提示词 / ${store.stats.favoriteMedia} 产物',
-                null),
+              theme,
+              '收藏',
+              '${store.stats.favoritePrompts} 提示词 / ${store.stats.favoriteMedia} 产物',
+              null,
+            ),
           ],
         ),
       ),
@@ -274,14 +284,16 @@ class _SettingsPageState extends State<SettingsPage> {
             children: [
               Text(
                 value,
-                style: theme.textTheme.titleMedium
-                    ?.copyWith(fontWeight: FontWeight.w700),
+                style: theme.textTheme.titleMedium?.copyWith(
+                  fontWeight: FontWeight.w700,
+                ),
               ),
               if (sub != null && sub.isNotEmpty)
                 Text(
                   sub,
-                  style: theme.textTheme.labelSmall
-                      ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+                  style: theme.textTheme.labelSmall?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
                 ),
             ],
           ),
@@ -329,8 +341,9 @@ class _SettingsPageState extends State<SettingsPage> {
               padding: const EdgeInsets.fromLTRB(8, 4, 8, 8),
               child: Text(
                 '成人内容相关。改完下一次回复立刻生效。',
-                style: theme.textTheme.bodySmall
-                    ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
               ),
             ),
             SettingsSwitchRow(
@@ -347,8 +360,8 @@ class _SettingsPageState extends State<SettingsPage> {
               subtitle: !enabled
                   ? '先开启上面的「NSFW 模式」才有意义。'
                   : (blur
-                      ? '已开启，画廊 / 提示词 / 标签页与 AI 回复里的预览图会模糊'
-                      : '未开启，预览图原样显示。'),
+                        ? '已开启，画廊 / 提示词 / 标签页与 AI 回复里的预览图会模糊'
+                        : '未开启，预览图原样显示。'),
               value: blur,
               // 开关没开时这一项置灰：两个选项的从属关系要一眼看得出来
               onChanged: (busy || !enabled) ? null : (v) => apply(nextBlur: v),
@@ -358,8 +371,9 @@ class _SettingsPageState extends State<SettingsPage> {
                 padding: const EdgeInsets.fromLTRB(16, 4, 16, 0),
                 child: Text(
                   '注入正文版本 ${nsfw.promptVersion}',
-                  style: theme.textTheme.labelSmall
-                      ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+                  style: theme.textTheme.labelSmall?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
                 ),
               ),
             if (nsfw.error != null)
@@ -367,8 +381,9 @@ class _SettingsPageState extends State<SettingsPage> {
                 padding: const EdgeInsets.fromLTRB(16, 6, 16, 0),
                 child: Text(
                   nsfw.error!,
-                  style: theme.textTheme.labelSmall
-                      ?.copyWith(color: theme.colorScheme.error),
+                  style: theme.textTheme.labelSmall?.copyWith(
+                    color: theme.colorScheme.error,
+                  ),
                 ),
               ),
           ],

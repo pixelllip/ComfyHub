@@ -8,11 +8,8 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:viewer/widgets/adaptive_layout.dart';
 
-Widget _box(BuildContext context, int i) => Container(
-      key: ValueKey('box$i'),
-      height: 40,
-      color: Colors.red,
-    );
+Widget _box(BuildContext context, int i) =>
+    Container(key: ValueKey('box$i'), height: 40, color: Colors.red);
 
 Future<void> _pumpList(WidgetTester tester, double width, int count) async {
   tester.view.physicalSize = Size(width, 800);

@@ -93,7 +93,11 @@ pub fn discover_engine(project_root: &Path) -> Option<Engine> {
             continue;
         }
         let pythonw = scripts.join("pythonw.exe");
-        let pythonw = if pythonw.is_file() { pythonw } else { python.clone() };
+        let pythonw = if pythonw.is_file() {
+            pythonw
+        } else {
+            python.clone()
+        };
         let webui_source = find_webui_source(&root, project_root);
         return Some(Engine {
             daemon_pidfile: root.join("output").join("daemon").join("daemon.json"),
@@ -158,7 +162,10 @@ async fn http_json(url: &str, timeout: Duration) -> Result<Value, String> {
     let status = response.status();
     let text = response.text().await.unwrap_or_default();
     if !status.is_success() {
-        return Err(format!("HTTP {status}: {}", text.chars().take(300).collect::<String>()));
+        return Err(format!(
+            "HTTP {status}: {}",
+            text.chars().take(300).collect::<String>()
+        ));
     }
     serde_json::from_str(&text).map_err(|e| format!("返回的不是 JSON：{e}"))
 }
@@ -177,7 +184,10 @@ async fn post_json(url: &str, body: &Value, timeout: Duration) -> Result<Value, 
     let status = response.status();
     let text = response.text().await.unwrap_or_default();
     if !status.is_success() {
-        return Err(format!("HTTP {status}: {}", text.chars().take(300).collect::<String>()));
+        return Err(format!(
+            "HTTP {status}: {}",
+            text.chars().take(300).collect::<String>()
+        ));
     }
     if text.trim().is_empty() {
         return Ok(json!({}));
@@ -252,12 +262,24 @@ pub async fn daemon_state(engine: &Engine, project_root: &Path) -> DaemonState {
         }
     }
     let Some(info) = info else {
-        return DaemonState { up: false, port: None, pid: None, url: None, detail: None };
+        return DaemonState {
+            up: false,
+            port: None,
+            pid: None,
+            url: None,
+            detail: None,
+        };
     };
     let port = info.get("port").and_then(Value::as_u64).map(|p| p as u16);
     let pid = info.get("pid").and_then(Value::as_u64);
     let Some(port) = port else {
-        return DaemonState { up: false, port: None, pid, url: None, detail: None };
+        return DaemonState {
+            up: false,
+            port: None,
+            pid,
+            url: None,
+            detail: None,
+        };
     };
     let url = format!("http://127.0.0.1:{port}");
     match http_json(&format!("{url}/health"), Duration::from_secs(2)).await {
@@ -297,12 +319,22 @@ pub async fn webui_state(project_root: &Path) -> WebUiState {
         .map(str::to_string);
     if port.is_none() {
         // 脚本 / 手动起的默认端口。只作为**探测**，不写回任何真源。
-        if http_json("http://127.0.0.1:8810/api/_env", Duration::from_secs(1)).await.is_ok() {
+        if http_json("http://127.0.0.1:8810/api/_env", Duration::from_secs(1))
+            .await
+            .is_ok()
+        {
             port = Some(8810);
         }
     }
     let Some(port) = port else {
-        return WebUiState { up: false, port: None, pid, url: None, token, detail: None };
+        return WebUiState {
+            up: false,
+            port: None,
+            pid,
+            url: None,
+            token,
+            detail: None,
+        };
     };
     let url = format!("http://127.0.0.1:{port}");
     let probe = match token.as_deref() {
@@ -350,7 +382,9 @@ pub async fn status(project_root: &Path) -> Value {
         problems.push("引擎目录缺 train.py 或 .venv".to_string());
     }
     if engine.webui_package().is_none() {
-        problems.push("没有找到 anima_lora_webui 源码（WebUI 起不来，但守护进程与训练照常）".to_string());
+        problems.push(
+            "没有找到 anima_lora_webui 源码（WebUI 起不来，但守护进程与训练照常）".to_string(),
+        );
     }
     if let Some(detail) = &daemon.detail {
         problems.push(detail.clone());
@@ -446,7 +480,9 @@ fn spawn_hidden(
     }
     let log = std::fs::File::create(log_path)
         .map_err(|e| format!("建不出日志 {}：{e}", log_path.display()))?;
-    let err_log = log.try_clone().map_err(|e| format!("复制日志句柄失败：{e}"))?;
+    let err_log = log
+        .try_clone()
+        .map_err(|e| format!("复制日志句柄失败：{e}"))?;
     let mut command = std::process::Command::new(program);
     command
         .args(args)
@@ -474,10 +510,14 @@ fn spawn_hidden(
 
 /// 起守护进程 + WebUI。已经起来的就不重复起（幂等）。
 pub async fn start(project_root: &Path) -> Result<Value, String> {
-    let engine = discover_engine(project_root)
-        .ok_or_else(|| "没有找到 anima-lora-next 引擎（需要 train.py + .venv\\Scripts\\python.exe）".to_string())?;
+    let engine = discover_engine(project_root).ok_or_else(|| {
+        "没有找到 anima-lora-next 引擎（需要 train.py + .venv\\Scripts\\python.exe）".to_string()
+    })?;
     if !engine.installed() {
-        return Err(format!("引擎没装好：{}（缺 train.py 或 .venv）", engine.root.display()));
+        return Err(format!(
+            "引擎没装好：{}（缺 train.py 或 .venv）",
+            engine.root.display()
+        ));
     }
     let mut actions: Vec<String> = Vec::new();
 
@@ -486,8 +526,14 @@ pub async fn start(project_root: &Path) -> Result<Value, String> {
     if !daemon.up {
         let pidfile = project_root.join(".run").join("anima-daemon.json");
         let envs = vec![
-            ("ANIMA_LORA_ROOT".to_string(), engine.root.display().to_string()),
-            ("ANIMA_DAEMON_PIDFILE".to_string(), pidfile.display().to_string()),
+            (
+                "ANIMA_LORA_ROOT".to_string(),
+                engine.root.display().to_string(),
+            ),
+            (
+                "ANIMA_DAEMON_PIDFILE".to_string(),
+                pidfile.display().to_string(),
+            ),
         ];
         let log = project_root.join(".run").join("train-daemon.log");
         let pid = spawn_hidden(
@@ -508,24 +554,24 @@ pub async fn start(project_root: &Path) -> Result<Value, String> {
             }
         }
         if !up {
-            return Err(format!(
-                "守护进程 20 秒内没起来；日志：{}",
-                log.display()
-            ));
+            return Err(format!("守护进程 20 秒内没起来；日志：{}", log.display()));
         }
     }
 
     // ② WebUI
     let webui = webui_state(project_root).await;
     if !webui.up {
-        let source = engine
-            .webui_package()
-            .ok_or_else(|| "没有找到 anima_lora_webui 源码，WebUI 起不来（守护进程已起，训练仍可用）".to_string())?;
+        let source = engine.webui_package().ok_or_else(|| {
+            "没有找到 anima_lora_webui 源码，WebUI 起不来（守护进程已起，训练仍可用）".to_string()
+        })?;
         let port = free_port()?;
         let token = new_token()?;
         let envs = vec![
             ("PYTHONPATH".to_string(), source.display().to_string()),
-            ("ANIMA_LORA_ROOT".to_string(), engine.root.display().to_string()),
+            (
+                "ANIMA_LORA_ROOT".to_string(),
+                engine.root.display().to_string(),
+            ),
         ];
         let log = project_root.join(".run").join("train-webui.log");
         let args = vec![

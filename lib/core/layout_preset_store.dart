@@ -22,11 +22,11 @@ class LayoutPreset {
   final LayoutSpec spec;
 
   Map<String, Object?> toJson() => <String, Object?>{
-        'id': id,
-        'name': name,
-        'updatedAt': updatedAt.toIso8601String(),
-        'spec': spec.toJson(),
-      };
+    'id': id,
+    'name': name,
+    'updatedAt': updatedAt.toIso8601String(),
+    'spec': spec.toJson(),
+  };
 
   /// 读一份存下来的布局；**坏数据返回 null，绝不抛**。
   ///
@@ -44,7 +44,8 @@ class LayoutPreset {
       name: ((map['name'] as String?) ?? '').trim().isEmpty
           ? '未命名布局'
           : (map['name'] as String).trim(),
-      updatedAt: DateTime.tryParse((map['updatedAt'] as String?) ?? '') ??
+      updatedAt:
+          DateTime.tryParse((map['updatedAt'] as String?) ?? '') ??
           DateTime.fromMillisecondsSinceEpoch(0),
       spec: LayoutSpec.fromJson(Map<String, Object?>.from(specRaw)),
     );

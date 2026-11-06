@@ -28,9 +28,7 @@ class SettingsSwitchRow extends StatelessWidget {
       padding: const EdgeInsets.only(bottom: 8),
       child: SwitchListTile(
         contentPadding: const EdgeInsets.symmetric(horizontal: 4),
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(12),
-        ),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
         value: value,
         onChanged: onChanged,
         title: Text(title),

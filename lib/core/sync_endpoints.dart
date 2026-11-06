@@ -28,19 +28,19 @@ enum SyncEndpointKind { loopback, lan, tailscale, other }
 
 extension SyncEndpointKindLabel on SyncEndpointKind {
   String get label => switch (this) {
-        SyncEndpointKind.loopback => '回环',
-        SyncEndpointKind.lan => '局域网',
-        SyncEndpointKind.tailscale => 'Tailscale',
-        SyncEndpointKind.other => '其他',
-      };
+    SyncEndpointKind.loopback => '回环',
+    SyncEndpointKind.lan => '局域网',
+    SyncEndpointKind.tailscale => 'Tailscale',
+    SyncEndpointKind.other => '其他',
+  };
 
   /// 给用户的一句"这条什么时候用得上"。
   String get hint => switch (this) {
-        SyncEndpointKind.loopback => '同一台机器（模拟器用 10.0.2.2）',
-        SyncEndpointKind.lan => '同一个 Wi-Fi / 网线',
-        SyncEndpointKind.tailscale => '异地（Tailscale 组网里）',
-        SyncEndpointKind.other => '手工填的地址',
-      };
+    SyncEndpointKind.loopback => '同一台机器（模拟器用 10.0.2.2）',
+    SyncEndpointKind.lan => '同一个 Wi-Fi / 网线',
+    SyncEndpointKind.tailscale => '异地（Tailscale 组网里）',
+    SyncEndpointKind.other => '手工填的地址',
+  };
 }
 
 /// 按 IP 形状分类。**只用于显示**，不是连通性判据。
@@ -51,11 +51,15 @@ SyncEndpointKind classifyEndpoint(String url) {
     return SyncEndpointKind.loopback;
   }
   // 模拟器访问宿主机那三个特殊地址，用户视角同样是"本机"
-  if (host == '10.0.2.2' || host == '10.0.3.2') return SyncEndpointKind.loopback;
+  if (host == '10.0.2.2' || host == '10.0.3.2') {
+    return SyncEndpointKind.loopback;
+  }
   final parts = host.split('.');
   if (parts.length != 4) return SyncEndpointKind.other;
   final nums = parts.map(int.tryParse).toList();
-  if (nums.any((n) => n == null || n < 0 || n > 255)) return SyncEndpointKind.other;
+  if (nums.any((n) => n == null || n < 0 || n > 255)) {
+    return SyncEndpointKind.other;
+  }
   final a = nums[0]!;
   final b = nums[1]!;
   if (a == 10 && b == 0 && (nums[2] == 2 || nums[2] == 3) && nums[3] == 2) {
@@ -124,22 +128,32 @@ Future<({List<SyncEndpoint> endpoints, String? note})> discoveredEndpoints(
   if (base.isEmpty) return (endpoints: const <SyncEndpoint>[], note: null);
   final own = client ?? http.Client();
   try {
-    final reply = await own.get(
-      Uri.parse('$base/api/net/urls'),
-      headers: {
-        'Accept': 'application/json',
-        if (token != null && token.isNotEmpty) 'X-ComfyHub-Token': token,
-      },
-    ).timeout(timeout);
+    final reply = await own
+        .get(
+          Uri.parse('$base/api/net/urls'),
+          headers: {
+            'Accept': 'application/json',
+            if (token != null && token.isNotEmpty) 'X-ComfyHub-Token': token,
+          },
+        )
+        .timeout(timeout);
     if (reply.statusCode == 404) {
-      return (endpoints: const <SyncEndpoint>[], note: '这台后端还没有"报告自己地址"的接口（旧版本）');
+      return (
+        endpoints: const <SyncEndpoint>[],
+        note: '这台后端还没有"报告自己地址"的接口（旧版本）',
+      );
     }
     if (reply.statusCode != 200) {
-      return (endpoints: const <SyncEndpoint>[], note: '对面回 HTTP ${reply.statusCode}，没拿到候选地址');
+      return (
+        endpoints: const <SyncEndpoint>[],
+        note: '对面回 HTTP ${reply.statusCode}，没拿到候选地址',
+      );
     }
     final decoded = jsonDecode(reply.body);
     final raw = decoded is Map ? decoded['urls'] : null;
-    if (raw is! List) return (endpoints: const <SyncEndpoint>[], note: '对端回的形状不对（没有 urls 数组）');
+    if (raw is! List) {
+      return (endpoints: const <SyncEndpoint>[], note: '对端回的形状不对（没有 urls 数组）');
+    }
     final out = <SyncEndpoint>[];
     final seen = <String>{};
     for (final item in raw) {
@@ -234,9 +248,9 @@ Future<SyncProbe> probeSyncEndpoint(
   }
   final own = client ?? http.Client();
   Map<String, String> headers() => {
-        'Accept': 'application/json',
-        if (token != null && token.isNotEmpty) 'X-ComfyHub-Token': token,
-      };
+    'Accept': 'application/json',
+    if (token != null && token.isNotEmpty) 'X-ComfyHub-Token': token,
+  };
   try {
     final reply = await own
         .get(Uri.parse('$base/api/health'), headers: headers())
@@ -246,16 +260,20 @@ Future<SyncProbe> probeSyncEndpoint(
         ok: false,
         baseUrl: base,
         elapsedMs: sw.elapsedMilliseconds,
-        error: 'HTTP ${reply.statusCode}：${reply.body.trim().isEmpty ? '（空响应）' : _snippet(reply.body)}',
+        error:
+            'HTTP ${reply.statusCode}：${reply.body.trim().isEmpty ? '（空响应）' : _snippet(reply.body)}',
       );
     }
     final decoded = jsonDecode(reply.body);
-    if (decoded is! Map || decoded['status'] == null || decoded['database'] == null) {
+    if (decoded is! Map ||
+        decoded['status'] == null ||
+        decoded['database'] == null) {
       return SyncProbe(
         ok: false,
         baseUrl: base,
         elapsedMs: sw.elapsedMilliseconds,
-        error: '这个地址回的不是 ComfyHub 后端（/api/health 少了 status / database），${_snippet(reply.body)}',
+        error:
+            '这个地址回的不是 ComfyHub 后端（/api/health 少了 status / database），${_snippet(reply.body)}',
       );
     }
     // 补充信息：manifest 拿不到不算失败（多半是没配对 / 令牌过期）

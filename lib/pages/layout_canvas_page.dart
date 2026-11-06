@@ -122,12 +122,12 @@ class _LayoutCanvasPageState extends State<LayoutCanvasPage> {
   ({String label, int w, int h}) get _preset => kLayoutPresets[_presetIndex];
 
   LayoutSpec get _spec => LayoutSpec(
-        width: _preset.w,
-        height: _preset.h,
-        brief: _brief.text,
-        camera: _camera,
-        regions: List.unmodifiable(_regions),
-      );
+    width: _preset.w,
+    height: _preset.h,
+    brief: _brief.text,
+    camera: _camera,
+    regions: List.unmodifiable(_regions),
+  );
 
   LayoutRegion? get _selected {
     for (final r in _regions) {
@@ -226,7 +226,10 @@ class _LayoutCanvasPageState extends State<LayoutCanvasPage> {
     // 压在手柄上**不改变选中**：否则一按就把选中的框取消掉，紧接着的
     // `onPanStart` 会以为在空白处起拖 —— 于是"想拉大"变成"多出一个框"。
     if (sel != null && _handleAt(sel.rect, local, size) != null) return;
-    final id = _hitTest(_unit(local.dx, size.width), _unit(local.dy, size.height));
+    final id = _hitTest(
+      _unit(local.dx, size.width),
+      _unit(local.dy, size.height),
+    );
     setState(() => _selectedId = id);
   }
 
@@ -235,7 +238,8 @@ class _LayoutCanvasPageState extends State<LayoutCanvasPage> {
     // 后者是"手势被识别出来时"的位置，已经吃掉了约 20px 的判定阈值（slop）。
     // 拿它当起点，拖出来的框会比按下的地方偏右下约 20px —— 用户 2026-11-01 的
     // "不准"有一半是这个（另一半是散文的方位词太粗）。
-    final start = _downUnit ??
+    final start =
+        _downUnit ??
         (_unit(local.dx, size.width), _unit(local.dy, size.height));
     final downLocal = _downLocal ?? local;
 
@@ -266,7 +270,9 @@ class _LayoutCanvasPageState extends State<LayoutCanvasPage> {
 
     // 空白处起拖 = 新建
     final id = 'r${_nextId++}';
-    _regions.add(LayoutRegion(id: id, rect: LayoutRect(start.$1, start.$2, 0, 0)));
+    _regions.add(
+      LayoutRegion(id: id, rect: LayoutRect(start.$1, start.$2, 0, 0)),
+    );
     setState(() => _selectedId = id);
     _mode = _DragMode.create;
     _dragId = id;
@@ -290,10 +296,7 @@ class _LayoutCanvasPageState extends State<LayoutCanvasPage> {
             final top = math.min(start.$2, y);
             final w = math.max((x - start.$1).abs(), 1);
             final h = math.max((y - start.$2).abs(), 1);
-            _replace(
-              id,
-              rect: LayoutRect(left, top, w, h).clampedInside(),
-            );
+            _replace(id, rect: LayoutRect(left, top, w, h).clampedInside());
           }
         case _DragMode.move:
           {
@@ -301,7 +304,9 @@ class _LayoutCanvasPageState extends State<LayoutCanvasPage> {
             if (origin == null) return;
             _replace(
               id,
-              rect: origin.translate(x - start.$1, y - start.$2).clampedInside(),
+              rect: origin
+                  .translate(x - start.$1, y - start.$2)
+                  .clampedInside(),
             );
           }
         case _DragMode.resize:
@@ -360,8 +365,12 @@ class _LayoutCanvasPageState extends State<LayoutCanvasPage> {
         b = t + 20;
       }
     }
-    return LayoutRect(l.round(), t.round(), (r - l).round(), (b - t).round())
-        .clampedInside();
+    return LayoutRect(
+      l.round(),
+      t.round(),
+      (r - l).round(),
+      (b - t).round(),
+    ).clampedInside();
   }
 
   void _onPanEnd() {
@@ -445,7 +454,11 @@ class _LayoutCanvasPageState extends State<LayoutCanvasPage> {
       tooltip: '更多',
       options: const [
         MenuOption(value: 'save', label: '保存布局', icon: Icons.save_outlined),
-        MenuOption(value: 'open', label: '打开布局', icon: Icons.folder_open_outlined),
+        MenuOption(
+          value: 'open',
+          label: '打开布局',
+          icon: Icons.folder_open_outlined,
+        ),
         MenuOption(
           value: 'clear',
           label: '清空画布',
@@ -706,8 +719,9 @@ class _LayoutCanvasPageState extends State<LayoutCanvasPage> {
 
   /// 把一份规格灌回画布（**不** setState；initState 里也用它）。
   void _loadSpec(LayoutSpec spec) {
-    var index =
-        kLayoutPresets.indexWhere((p) => p.w == spec.width && p.h == spec.height);
+    var index = kLayoutPresets.indexWhere(
+      (p) => p.w == spec.width && p.h == spec.height,
+    );
     if (index < 0) {
       // 尺寸不在预设里（老版本存的 / 手改过的 / AI 给的）：按比例找最接近的一档，
       // 坐标是 0~1000 归一的，换档不会错位。
@@ -806,14 +820,19 @@ class _LayoutCanvasPageState extends State<LayoutCanvasPage> {
                     onPanEnd: (_) => _onPanEnd(),
                     child: DecoratedBox(
                       decoration: BoxDecoration(
-                        border: Border.all(color: theme.colorScheme.outlineVariant),
+                        border: Border.all(
+                          color: theme.colorScheme.outlineVariant,
+                        ),
                       ),
                       child: CustomPaint(
                         painter: _BoxPainter(
                           regions: _regions,
                           selectedId: _selectedId,
-                          gridColor: theme.colorScheme.outlineVariant.withValues(alpha: 0.35),
-                          thirdColor: theme.colorScheme.primary.withValues(alpha: 0.28),
+                          gridColor: theme.colorScheme.outlineVariant
+                              .withValues(alpha: 0.35),
+                          thirdColor: theme.colorScheme.primary.withValues(
+                            alpha: 0.28,
+                          ),
                           background: theme.colorScheme.surfaceContainerLowest,
                           textColor: theme.colorScheme.onSurface,
                           surface: theme.colorScheme.surface,
@@ -831,7 +850,10 @@ class _LayoutCanvasPageState extends State<LayoutCanvasPage> {
               top: 0,
               child: IgnorePointer(
                 child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 6,
+                  ),
                   child: Text(
                     '空白处拖动 = 新建框 · 拖框体 = 移动 · 拖四角 / 四边 = 改大小',
                     textAlign: TextAlign.center,
@@ -918,8 +940,9 @@ class _LayoutCanvasPageState extends State<LayoutCanvasPage> {
           children: [
             Text(
               '机位',
-              style: theme.textTheme.labelSmall
-                  ?.copyWith(color: theme.colorScheme.outline),
+              style: theme.textTheme.labelSmall?.copyWith(
+                color: theme.colorScheme.outline,
+              ),
             ),
             for (final c in LayoutCamera.values)
               ChoiceChip(
@@ -936,7 +959,9 @@ class _LayoutCanvasPageState extends State<LayoutCanvasPage> {
             padding: const EdgeInsets.only(top: 6),
             child: Text(
               '在左边空白处拖出一个框，再回来给它起名字。',
-              style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.outline),
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.outline,
+              ),
             ),
           )
         else ...[
@@ -949,7 +974,8 @@ class _LayoutCanvasPageState extends State<LayoutCanvasPage> {
                 ChoiceChip(
                   label: Text('${i + 1}. ${_regions[i].displayName}'),
                   selected: _regions[i].id == _selectedId,
-                  onSelected: (_) => setState(() => _selectedId = _regions[i].id),
+                  onSelected: (_) =>
+                      setState(() => _selectedId = _regions[i].id),
                 ),
             ],
           ),
@@ -979,8 +1005,9 @@ class _LayoutCanvasPageState extends State<LayoutCanvasPage> {
             ),
             Text(
               _aiModel == null ? '译者是工作台当前模型' : '译者是 $_aiModel',
-              style: theme.textTheme.labelSmall
-                  ?.copyWith(color: theme.colorScheme.outline),
+              style: theme.textTheme.labelSmall?.copyWith(
+                color: theme.colorScheme.outline,
+              ),
             ),
           ],
         ),
@@ -1010,7 +1037,9 @@ class _LayoutCanvasPageState extends State<LayoutCanvasPage> {
           '可以直接当提示词文本喂给 MOSS-Image。\n'
           '通用提示词里，模型基本吃得下的是"在哪里"，"占多大"只是形容词，'
           '"镜中是不是同一个人"也只能靠关系字段明说 —— 这两类约束它可能不照做。',
-          style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline),
+          style: theme.textTheme.labelSmall?.copyWith(
+            color: theme.colorScheme.outline,
+          ),
         ),
       ],
     );
@@ -1021,7 +1050,8 @@ class _LayoutCanvasPageState extends State<LayoutCanvasPage> {
     return Container(
       padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
       decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.surfaceContainerHighest.withValues(alpha: 0.35),
+        color: Theme.of(context).colorScheme.surfaceContainerHighest
+            .withValues(alpha: 0.35),
         borderRadius: BorderRadius.circular(12),
       ),
       child: Column(
@@ -1029,7 +1059,10 @@ class _LayoutCanvasPageState extends State<LayoutCanvasPage> {
         children: [
           Row(
             children: [
-              Text('第 $index 个框', style: Theme.of(context).textTheme.labelLarge),
+              Text(
+                '第 $index 个框',
+                style: Theme.of(context).textTheme.labelLarge,
+              ),
               const Spacer(),
               IconButton(
                 tooltip: '删除这个框',
@@ -1083,9 +1116,8 @@ class _LayoutCanvasPageState extends State<LayoutCanvasPage> {
           const SizedBox(height: 12),
           Text(
             '挂在哪个面',
-            style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                  color: Theme.of(context).colorScheme.outline,
-                ),
+            style: Theme.of(context).textTheme.labelSmall
+                ?.copyWith(color: Theme.of(context).colorScheme.outline),
           ),
           const SizedBox(height: 4),
           Wrap(
@@ -1096,8 +1128,7 @@ class _LayoutCanvasPageState extends State<LayoutCanvasPage> {
                 ChoiceChip(
                   label: Text(s.label),
                   selected: r.surface == s,
-                  onSelected: (_) =>
-                      setState(() => _replace(r.id, surface: s)),
+                  onSelected: (_) => setState(() => _replace(r.id, surface: s)),
                 ),
             ],
           ),
@@ -1105,9 +1136,8 @@ class _LayoutCanvasPageState extends State<LayoutCanvasPage> {
             const SizedBox(height: 12),
             Text(
               '与其他框的关系',
-              style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                    color: Theme.of(context).colorScheme.outline,
-                  ),
+              style: Theme.of(context).textTheme.labelSmall
+                  ?.copyWith(color: Theme.of(context).colorScheme.outline),
             ),
             const SizedBox(height: 4),
             Wrap(
@@ -1126,8 +1156,7 @@ class _LayoutCanvasPageState extends State<LayoutCanvasPage> {
                           clearRelation: true,
                         );
                       } else {
-                        final target =
-                            r.relationTo ?? _others(r).first.id;
+                        final target = r.relationTo ?? _others(r).first.id;
                         _replace(r.id, relation: rel, relationTo: target);
                       }
                     }),
@@ -1161,9 +1190,9 @@ class _LayoutCanvasPageState extends State<LayoutCanvasPage> {
               '宽 ${(r.rect.w / 10).toStringAsFixed(1)}% · '
               '高 ${(r.rect.h / 10).toStringAsFixed(1)}%',
               style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                    color: Theme.of(context).colorScheme.outline,
-                    fontFamily: 'monospace',
-                  ),
+                color: Theme.of(context).colorScheme.outline,
+                fontFamily: 'monospace',
+              ),
             ),
           ),
           if (r.kind == LayoutBoxKind.text) ...[
@@ -1184,9 +1213,8 @@ class _LayoutCanvasPageState extends State<LayoutCanvasPage> {
               padding: const EdgeInsets.only(top: 8),
               child: Text(
                 '留白不会进入 MOSS 布局 JSON，只会写进通用提示词。',
-                style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                      color: Theme.of(context).colorScheme.outline,
-                    ),
+                style: Theme.of(context).textTheme.labelSmall
+                    ?.copyWith(color: Theme.of(context).colorScheme.outline),
               ),
             ),
         ],
@@ -1207,7 +1235,11 @@ class _LayoutCanvasPageState extends State<LayoutCanvasPage> {
         children: [
           Row(
             children: [
-              Icon(Icons.info_outline, size: 16, color: theme.colorScheme.onTertiaryContainer),
+              Icon(
+                Icons.info_outline,
+                size: 16,
+                color: theme.colorScheme.onTertiaryContainer,
+              ),
               const SizedBox(width: 6),
               Text(
                 '翻译损失（${warnings.length}）',
@@ -1291,8 +1323,16 @@ class _BoxPainter extends CustomPainter {
       ..color = thirdColor
       ..strokeWidth = 1.2;
     for (final f in [1 / 3, 2 / 3]) {
-      canvas.drawLine(Offset(size.width * f, 0), Offset(size.width * f, size.height), third);
-      canvas.drawLine(Offset(0, size.height * f), Offset(size.width, size.height * f), third);
+      canvas.drawLine(
+        Offset(size.width * f, 0),
+        Offset(size.width * f, size.height),
+        third,
+      );
+      canvas.drawLine(
+        Offset(0, size.height * f),
+        Offset(size.width, size.height * f),
+        third,
+      );
     }
 
     for (var i = 0; i < regions.length; i++) {
@@ -1306,7 +1346,10 @@ class _BoxPainter extends CustomPainter {
         r.rect.h / 1000 * size.height,
       );
 
-      canvas.drawRect(rect, Paint()..color = color.withValues(alpha: selected ? 0.22 : 0.12));
+      canvas.drawRect(
+        rect,
+        Paint()..color = color.withValues(alpha: selected ? 0.22 : 0.12),
+      );
       canvas.drawRect(
         rect,
         Paint()
@@ -1319,11 +1362,20 @@ class _BoxPainter extends CustomPainter {
       final badge = TextPainter(
         text: TextSpan(
           text: '${i + 1}',
-          style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: Colors.white),
+          style: const TextStyle(
+            fontSize: 11,
+            fontWeight: FontWeight.w700,
+            color: Colors.white,
+          ),
         ),
         textDirection: TextDirection.ltr,
       )..layout();
-      final badgeRect = Rect.fromLTWH(rect.left + 4, rect.top + 4, badge.width + 8, badge.height + 2);
+      final badgeRect = Rect.fromLTWH(
+        rect.left + 4,
+        rect.top + 4,
+        badge.width + 8,
+        badge.height + 2,
+      );
       canvas.drawRRect(
         RRect.fromRectAndRadius(badgeRect, const Radius.circular(4)),
         Paint()..color = color,
@@ -1346,7 +1398,10 @@ class _BoxPainter extends CustomPainter {
           maxLines: 1,
           ellipsis: '…',
         )..layout(maxWidth: math.max(rect.width - 12, 10));
-        label.paint(canvas, Offset(rect.left + 6, rect.top + 6 + badge.height + 4));
+        label.paint(
+          canvas,
+          Offset(rect.left + 6, rect.top + 6 + badge.height + 4),
+        );
       }
 
       // 八个缩放手柄（四角 + 四边中点）

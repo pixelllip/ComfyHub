@@ -38,11 +38,15 @@ fn 覆盖参数按原值类型转换() {
 fn 覆盖参数的四种拒绝都是人话() {
     let mut bad_path = Map::new();
     bad_path.insert("3".into(), json!("x"));
-    assert!(WorkflowEdit::apply_overrides(&graph(), &bad_path).unwrap_err().contains("节点id.输入名"));
+    assert!(WorkflowEdit::apply_overrides(&graph(), &bad_path)
+        .unwrap_err()
+        .contains("节点id.输入名"));
 
     let mut no_node = Map::new();
     no_node.insert("99.steps".into(), json!(1));
-    assert!(WorkflowEdit::apply_overrides(&graph(), &no_node).unwrap_err().contains("没有节点 99"));
+    assert!(WorkflowEdit::apply_overrides(&graph(), &no_node)
+        .unwrap_err()
+        .contains("没有节点 99"));
 
     let mut no_input = Map::new();
     no_input.insert("3.nope".into(), json!(1));
@@ -68,7 +72,10 @@ fn 补线允许新输入但要求上游节点存在() {
     let mut connections = Map::new();
     // VAELoader 那边缺的线：节点 5 是空的（转换时被摘过），这里补一个**新输入名**
     let mut with_hole = graph();
-    with_hole["6"]["inputs"].as_object_mut().unwrap().remove("clip");
+    with_hole["6"]["inputs"]
+        .as_object_mut()
+        .unwrap()
+        .remove("clip");
     connections.insert("6.clip".into(), json!(["4", 1]));
     let (patched, applied) = WorkflowEdit::apply_connections(&with_hole, &connections).unwrap();
     assert_eq!(patched["6"]["inputs"]["clip"], json!(["4", 1]));
@@ -81,11 +88,15 @@ fn 补线允许新输入但要求上游节点存在() {
 
     let mut bad_shape = Map::new();
     bad_shape.insert("6.clip".into(), json!(["4"]));
-    assert!(WorkflowEdit::apply_connections(&graph(), &bad_shape).unwrap_err().contains("两个元素"));
+    assert!(WorkflowEdit::apply_connections(&graph(), &bad_shape)
+        .unwrap_err()
+        .contains("两个元素"));
 
     let mut bad_slot = Map::new();
     bad_slot.insert("6.clip".into(), json!(["4", "第一个"]));
-    assert!(WorkflowEdit::apply_connections(&graph(), &bad_slot).unwrap_err().contains("槽位要是整数"));
+    assert!(WorkflowEdit::apply_connections(&graph(), &bad_slot)
+        .unwrap_err()
+        .contains("槽位要是整数"));
 
     // 数字 id 与字符串 id 必须都能用（真库里有 `"negative": [76, 0]` 这种）
     // —— 但**写进图里的引用一律是字符串**：ComfyUI 拿它索引 prompt 字典，数字会 KeyError。
@@ -113,11 +124,22 @@ fn positive_prompt_writes_positive_text_and_removes_text_generate() {
         "30": {"class_type": "SaveImage", "inputs": {"images": ["10", 0]}}
     });
     let (patched, changed, removed) =
-        WorkflowEdit::apply_positive_prompt(&graph, "  A photo of a cat on a windowsill.  ").unwrap();
-    assert_eq!(patched["6"]["inputs"]["text"], "A photo of a cat on a windowsill.");
-    assert_eq!(patched["20"]["inputs"]["text"], "low quality", "negative 一个字都不许动");
+        WorkflowEdit::apply_positive_prompt(&graph, "  A photo of a cat on a windowsill.  ")
+            .unwrap();
+    assert_eq!(
+        patched["6"]["inputs"]["text"],
+        "A photo of a cat on a windowsill."
+    );
+    assert_eq!(
+        patched["20"]["inputs"]["text"], "low quality",
+        "negative 一个字都不许动"
+    );
     assert_eq!(changed, vec!["6.text".to_string()]);
-    assert_eq!(removed, vec!["7".to_string()], "要如实回报从提交图里摘掉了谁");
+    assert_eq!(
+        removed,
+        vec!["7".to_string()],
+        "要如实回报从提交图里摘掉了谁"
+    );
     assert!(
         patched.get("7").is_none(),
         "TextGenerate 必须从提交图里消失（留在图里仍会被整张校验）：{patched}"
@@ -165,7 +187,9 @@ fn positive_prompt_removes_the_whole_switch_and_preview_branch() {
     // 留在图里既不会被执行也不会让校验失败 —— 不为了"干净"去猜它该不该删。
     // 没有悬挂引用：剩下的每个连线都指向还在图里的节点
     for (id, node) in patched.as_object().unwrap() {
-        let Some(inputs) = node.get("inputs").and_then(Value::as_object) else { continue };
+        let Some(inputs) = node.get("inputs").and_then(Value::as_object) else {
+            continue;
+        };
         for (name, value) in inputs {
             if let Some((up, _)) = link_ref(value) {
                 assert!(
@@ -186,9 +210,11 @@ fn positive_prompt_keeps_text_generate_when_removal_would_leave_no_output() {
         "34": {"class_type": "CLIPTextEncode", "inputs": {"text": ["7", 0]}},
         "7": {"class_type": "TextGenerate", "inputs": {"prompt": "一只猫"}}
     });
-    let (patched, _, removed) =
-        WorkflowEdit::apply_positive_prompt(&graph, "最终提示词").unwrap();
-    assert_eq!(patched["34"]["inputs"]["text"], "最终提示词", "正文照样要写进去");
+    let (patched, _, removed) = WorkflowEdit::apply_positive_prompt(&graph, "最终提示词").unwrap();
+    assert_eq!(
+        patched["34"]["inputs"]["text"], "最终提示词",
+        "正文照样要写进去"
+    );
     // 这张图本来就没输出节点（没有 Save/Preview）→ 摘除会让图彻底没法提交，于是不摘。
     assert!(removed.is_empty(), "没有输出时不许摘：{removed:?}");
 }
@@ -207,8 +233,7 @@ fn positive_prompt_follows_basic_guider_conditioning() {
         "34": {"class_type": "CLIPTextEncode", "inputs": {"text": "old", "clip": ["2", 0]}},
         "42": {"class_type": "RandomNoise", "inputs": {"noise_seed": 1}}
     });
-    let (patched, changed, _) =
-        WorkflowEdit::apply_positive_prompt(&graph, "krea prompt").unwrap();
+    let (patched, changed, _) = WorkflowEdit::apply_positive_prompt(&graph, "krea prompt").unwrap();
     assert_eq!(patched["34"]["inputs"]["text"], "krea prompt");
     assert_eq!(changed, vec!["34.text".to_string()]);
 }
@@ -299,7 +324,10 @@ fn 负面能力_只有正面文本编码器不算认负面() {
         "3": { "class_type": "KSampler", "inputs": { "seed": 1, "positive": ["6", 0] } },
         "6": { "class_type": "CLIPTextEncode", "inputs": { "text": "1girl" } }
     });
-    assert_eq!(negative_capability(&only_positive, Some(&info_with_negative())), Some(Vec::new()));
+    assert_eq!(
+        negative_capability(&only_positive, Some(&info_with_negative())),
+        Some(Vec::new())
+    );
 }
 
 #[test]
@@ -313,7 +341,11 @@ fn 负面能力_拿不到_object_info_就回_none_不猜() {
 }
 
 #[test]
-fn 预检_节点类拦_模型文件只警告() {    assert!(preflight_refusal(&graph(), &object_info()).is_none(), "都对就必须放行");
+fn 预检_节点类拦_模型文件只警告() {
+    assert!(
+        preflight_refusal(&graph(), &object_info()).is_none(),
+        "都对就必须放行"
+    );
 
     // ① 实例不认识的节点类 → **拦**（`/object_info` 对节点类是权威的）
     let mut missing_node = graph();
@@ -321,7 +353,10 @@ fn 预检_节点类拦_模型文件只警告() {    assert!(preflight_refusal(&g
     let refusal = preflight_refusal(&missing_node, &object_info()).unwrap();
     assert!(refusal.contains("实例里没有这些节点类"), "{refusal}");
     assert!(refusal.contains("12: Krea2CustomNode"), "{refusal}");
-    assert!(refusal.contains("不要") && refusal.contains("改用户的工作流"), "{refusal}");
+    assert!(
+        refusal.contains("不要") && refusal.contains("改用户的工作流"),
+        "{refusal}"
+    );
 
     // ② 模型文件不在实例的候选里 → **只警告不拦**（见 `preflight_refusal` 的说明：
     //    盘扫还没搬，只按候选判会误拦；e2e-submit 第 4/5 幕就是活证）
@@ -332,25 +367,45 @@ fn 预检_节点类拦_模型文件只警告() {    assert!(preflight_refusal(&g
         "模型文件那一档现在是提示，不许拦"
     );
     let warnings = preflight_warnings(&wrong_model, &object_info());
-    assert_eq!(warnings.len(), 3, "首行 + 一条明细 + 一条动作：{warnings:?}");
+    assert_eq!(
+        warnings.len(),
+        3,
+        "首行 + 一条明细 + 一条动作：{warnings:?}"
+    );
     let joined = warnings.join("\n");
     // ⚠ 这一档的措辞 2026-09-30 由用户自己精简过（去掉了"没有拦""重启 ComfyUI""别去下载"）。
     //   **"先让用户重启实例 / 修模型根、别去下载"那条纪律现在只由工具描述承担**
     //   （`desktop_tools` 里 `comfy_submit` / `comfy_env_report` 的描述 + 系统提示），
     //   所以这里只钉"这条警告本身必须说清的事"：**看不见几个、是哪一个、去哪儿看全**。
-    assert!(joined.contains("看不到 1 个模型文件"), "要说清数量：{joined}");
-    assert!(joined.contains("4.ckpt_name 要 anima-base-v1.0.safetensors"), "{joined}");
-    assert!(joined.contains("comfy_env_report"), "要给下一步去哪儿看全：{joined}");
+    assert!(
+        joined.contains("看不到 1 个模型文件"),
+        "要说清数量：{joined}"
+    );
+    assert!(
+        joined.contains("4.ckpt_name 要 anima-base-v1.0.safetensors"),
+        "{joined}"
+    );
+    assert!(
+        joined.contains("comfy_env_report"),
+        "要给下一步去哪儿看全：{joined}"
+    );
     // 都对的时候没有警告
     assert!(preflight_warnings(&graph(), &object_info()).is_empty());
 
     // ③ 非加载器节点的候选列表**不参与**判定（图片输入那种动态列表会误报）
     let mut with_image = graph();
-    with_image["9"] = json!({ "class_type": "LoadImage", "inputs": { "image": "not-in-list.png" } });
+    with_image["9"] =
+        json!({ "class_type": "LoadImage", "inputs": { "image": "not-in-list.png" } });
     let mut info = object_info();
     info["LoadImage"] = json!({ "input": { "required": { "image": [["a.png"], {}] } } });
-    assert!(preflight_refusal(&with_image, &info).is_none(), "LoadImage 不是 Loader，不判它");
-    assert!(preflight_warnings(&with_image, &info).is_empty(), "也不该警告");
+    assert!(
+        preflight_refusal(&with_image, &info).is_none(),
+        "LoadImage 不是 Loader，不判它"
+    );
+    assert!(
+        preflight_warnings(&with_image, &info).is_empty(),
+        "也不该警告"
+    );
 }
 
 #[test]
@@ -368,15 +423,19 @@ fn 纯前端节点不走实例侧这一档_交给审核那一条说() {
     );
     // 而审核那一档真的会拦它们（否则上面那个 continue 就成了漏网）
     let info = object_info();
-    let report =
-        workflow_audit::audit(frontend.as_object().unwrap(), info.as_object(), None);
+    let report = workflow_audit::audit(frontend.as_object().unwrap(), info.as_object(), None);
     assert!(
         report.blocking_refusal().is_some(),
         "纯前端节点必须由审核拦下：{}",
         report.render()
     );
     // 判据本身（三张表/模式的合取）钉一下
-    for cls in ["Label (rgthree)", "Anything Everywhere", "PreviewImage", "Display Any"] {
+    for cls in [
+        "Label (rgthree)",
+        "Anything Everywhere",
+        "PreviewImage",
+        "Display Any",
+    ] {
         assert!(workflow_audit::is_frontend_only(cls), "{cls}");
     }
     for cls in ["Krea2CustomNode", "KSampler", "CheckpointLoaderSimple"] {
@@ -408,7 +467,11 @@ fn 提交记录的保留窗口与就地更新() {
     }
     let listed = submissions.list(MAX_TRACKED);
     assert_eq!(listed.len(), MAX_TRACKED, "只留最近 {MAX_TRACKED} 条");
-    assert_eq!(listed[0]["promptId"], json!(format!("run-{:03}", MAX_TRACKED + 4)), "新的在前");
+    assert_eq!(
+        listed[0]["promptId"],
+        json!(format!("run-{:03}", MAX_TRACKED + 4)),
+        "新的在前"
+    );
 
     // 同一个 promptId 就地更新，不新增一条
     let before = submissions.list(MAX_TRACKED).len();
@@ -428,7 +491,11 @@ fn 提交记录的保留窗口与就地更新() {
     .to_json();
     updated["promptId"] = json!("run-034");
     submissions.record(updated);
-    assert_eq!(submissions.list(MAX_TRACKED).len(), before, "就地更新不许多一行");
+    assert_eq!(
+        submissions.list(MAX_TRACKED).len(),
+        before,
+        "就地更新不许多一行"
+    );
     let found = submissions.find("run-034").unwrap();
     assert_eq!(found["status"], json!("success"));
     assert_eq!(found["mediaIds"], json!([7, 8]));
@@ -454,15 +521,27 @@ fn 提交记录的形状与_kotlin_的可空约定一致() {
     .to_json();
     let map = queued.as_object().unwrap();
     // 有默认值的键一律出现（Kotlin `encodeDefaults = true`）
-    for key in ["promptId", "submittedBy", "status", "submittedAt", "elapsedMs", "mediaIds"] {
+    for key in [
+        "promptId",
+        "submittedBy",
+        "status",
+        "submittedAt",
+        "elapsedMs",
+        "mediaIds",
+    ] {
         assert!(map.contains_key(key), "{key} 必须出现：{queued}");
     }
     // 可空键为 null 时整键省略（`explicitNulls = false`）
-    for key in ["title", "finishedAt", "capturedPromptId", "error", "message"] {
+    for key in [
+        "title",
+        "finishedAt",
+        "capturedPromptId",
+        "error",
+        "message",
+    ] {
         assert!(!map.contains_key(key), "{key} 不该出现：{queued}");
     }
 }
-
 
 /// `textGenerateSkill` 只改**这一次提交的图**：写进 `TextGenerate.system_prompt` 指向的字符串节点。
 #[test]

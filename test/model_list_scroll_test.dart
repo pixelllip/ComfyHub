@@ -39,7 +39,16 @@ Map<String, dynamic> _model(int i) {
     'reasoning': tall,
     'thinkingEfforts': tall
         ? {
-            for (final e in ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']) e: e,
+            for (final e in [
+              'off',
+              'minimal',
+              'low',
+              'medium',
+              'high',
+              'xhigh',
+              'max',
+            ])
+              e: e,
           }
         : <String, String>{},
     'thinkingFormat': tall ? 'openai' : null,
@@ -49,43 +58,50 @@ Map<String, dynamic> _model(int i) {
 }
 
 MockClient _backend() => MockClient((request) async {
-      final path = request.url.path;
-      Object body;
-      if (path == '/api/ai/providers') {
-        body = [
-          {
-            'id': 'goat',
-            'displayName': 'Command Code Goat',
-            'api': 'openai-completions',
-            'baseURL': 'https://api.commandcode.ai/provider/v1/',
-            'credentialRef': 'GOAT_API_KEY',
-            'endpointTrust': 'public',
-            'enabled': true,
-            'revision': 1,
-            'credential': {'configured': true, 'source': 'managed', 'writable': true},
-          }
-        ];
-      } else if (path == '/api/ai/providers/goat/models') {
-        if (request.method == 'PUT') {
-          modelSaves.add(request.body);
-          body = (jsonDecode(request.body) as Map<String, dynamic>)['models'];
-        } else {
-          body = [for (var i = 0; i < 69; i++) _model(i)];
-        }
-      } else if (path.endsWith('/builtin-catalog')) {
-        body = {
-          'ok': true,
-          'version': '2026-09b',
-          'providerCount': 1,
-          'modelCount': 69,
-          'divergentCount': 0,
-        };
-      } else {
-        body = <Object>[];
-      }
-      return http.Response(jsonEncode(body), 200,
-          headers: {'content-type': 'application/json; charset=utf-8'});
-    });
+  final path = request.url.path;
+  Object body;
+  if (path == '/api/ai/providers') {
+    body = [
+      {
+        'id': 'goat',
+        'displayName': 'Command Code Goat',
+        'api': 'openai-completions',
+        'baseURL': 'https://api.commandcode.ai/provider/v1/',
+        'credentialRef': 'GOAT_API_KEY',
+        'endpointTrust': 'public',
+        'enabled': true,
+        'revision': 1,
+        'credential': {
+          'configured': true,
+          'source': 'managed',
+          'writable': true,
+        },
+      },
+    ];
+  } else if (path == '/api/ai/providers/goat/models') {
+    if (request.method == 'PUT') {
+      modelSaves.add(request.body);
+      body = (jsonDecode(request.body) as Map<String, dynamic>)['models'];
+    } else {
+      body = [for (var i = 0; i < 69; i++) _model(i)];
+    }
+  } else if (path.endsWith('/builtin-catalog')) {
+    body = {
+      'ok': true,
+      'version': '2026-09b',
+      'providerCount': 1,
+      'modelCount': 69,
+      'divergentCount': 0,
+    };
+  } else {
+    body = <Object>[];
+  }
+  return http.Response(
+    jsonEncode(body),
+    200,
+    headers: {'content-type': 'application/json; charset=utf-8'},
+  );
+});
 
 Future<Widget> _page() async {
   SharedPreferences.setMockInitialValues({});
@@ -119,8 +135,9 @@ ScrollPosition _modelListPosition(WidgetTester tester) => tester
     .reduce((a, b) => a.maxScrollExtent >= b.maxScrollExtent ? a : b);
 
 /// 某一行模型的 Finder（用显示名定位，再往上找那一行的 InkWell）。
-Finder _row(String displayName) =>
-    find.ancestor(of: find.text(displayName), matching: find.byType(InkWell)).first;
+Finder _row(String displayName) => find
+    .ancestor(of: find.text(displayName), matching: find.byType(InkWell))
+    .first;
 
 /// 行上的能力图标（tooltip = 模态名）——**只看这一行**：
 /// 别的行也有同样的图标，全局找会误判。
@@ -137,7 +154,8 @@ void main() {
     await _open(tester);
 
     final pos = _modelListPosition(tester);
-    double thumbRatio() => pos.viewportDimension / (pos.maxScrollExtent + pos.viewportDimension);
+    double thumbRatio() =>
+        pos.viewportDimension / (pos.maxScrollExtent + pos.viewportDimension);
 
     final atTop = pos.maxScrollExtent;
     final ratioAtTop = thumbRatio();
@@ -148,8 +166,11 @@ void main() {
       if (target > pos.maxScrollExtent) break;
       pos.jumpTo(target);
       await tester.pump();
-      expect(pos.maxScrollExtent, closeTo(atTop, 0.5),
-          reason: '滚到 $target 时滚动范围不该变（以前会从 3512 涨到 21318）');
+      expect(
+        pos.maxScrollExtent,
+        closeTo(atTop, 0.5),
+        reason: '滚到 $target 时滚动范围不该变（以前会从 3512 涨到 21318）',
+      );
       expect(thumbRatio(), closeTo(ratioAtTop, 0.001));
     }
     pos.jumpTo(pos.maxScrollExtent);
@@ -194,7 +215,12 @@ void main() {
     // （2026-10 起它嵌在某条 Provider 的详情里、默认折叠）。
     await tester.tap(find.widgetWithText(FilterChip, '图片'));
     await tester.pumpAndSettle();
-    await tester.tap(find.descendant(of: find.byType(AlertDialog), matching: find.byType(Switch)));
+    await tester.tap(
+      find.descendant(
+        of: find.byType(AlertDialog),
+        matching: find.byType(Switch),
+      ),
+    );
     await tester.pumpAndSettle();
     await tester.tap(find.widgetWithText(FilterChip, '高'));
     await tester.pumpAndSettle();
@@ -202,7 +228,11 @@ void main() {
     await tester.pumpAndSettle();
 
     // 行上的能力图标跟着变：图片没了、推理来了（这些图标是 hover tooltip）
-    expect(_iconIn(_row('Model 0'), '图片'), findsNothing, reason: '取消勾选的模态要立刻反映到行上');
+    expect(
+      _iconIn(_row('Model 0'), '图片'),
+      findsNothing,
+      reason: '取消勾选的模态要立刻反映到行上',
+    );
     expect(_iconIn(_row('Model 0'), '推理'), findsOneWidget);
 
     await tester.tap(find.text('保存模型目录'));

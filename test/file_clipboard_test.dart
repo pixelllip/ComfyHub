@@ -34,24 +34,24 @@ void main() {
     throwOn = null;
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(_channel, (call) async {
-      calls.add(call);
-      if (throwOn == call.method) {
-        throw PlatformException(code: 'channel-error');
-      }
-      switch (call.method) {
-        case 'hasFiles':
-          return hasFiles;
-        case 'readFiles':
-          return files;
-        case 'writeFiles':
-          return writeOk;
-        case 'hasImage':
-          return hasImage;
-        case 'readImage':
-          return image;
-      }
-      return null;
-    });
+          calls.add(call);
+          if (throwOn == call.method) {
+            throw PlatformException(code: 'channel-error');
+          }
+          switch (call.method) {
+            case 'hasFiles':
+              return hasFiles;
+            case 'readFiles':
+              return files;
+            case 'writeFiles':
+              return writeOk;
+            case 'hasImage':
+              return hasImage;
+            case 'readImage':
+              return image;
+          }
+          return null;
+        });
   });
 
   tearDown(() {
@@ -119,7 +119,10 @@ void main() {
     });
 
     test('readImage：bmp 也原样带回（转 PNG 是调用方的事）', () async {
-      image = {'format': 'bmp', 'bytes': Uint8List.fromList([1, 2, 3, 4])};
+      image = {
+        'format': 'bmp',
+        'bytes': Uint8List.fromList([1, 2, 3, 4]),
+      };
       final got = await FileClipboard.readImage();
       expect(got!.isPng, isFalse);
     });
@@ -134,7 +137,9 @@ void main() {
     });
 
     test('readImage：格式缺失时默认按 png（原生只会给这两种）', () async {
-      image = {'bytes': Uint8List.fromList([1, 2, 3])};
+      image = {
+        'bytes': Uint8List.fromList([1, 2, 3]),
+      };
       final got = await FileClipboard.readImage();
       expect(got!.format, 'png');
     });

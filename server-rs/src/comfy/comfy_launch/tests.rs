@@ -57,9 +57,21 @@ fn plan_reuses_the_desktop_flags_and_adds_the_port() {
 
     let plan = plan_with(&tmp, ws.clone(), 8188, &[], Some(&desktop)).unwrap();
     assert_eq!(plan.port, 8188);
-    assert_eq!(plan.python, ws.join(".venv").join("Scripts").join("python.exe"));
-    assert!(plan.args.contains(&"--extra-model-paths-config".to_string()), "{:?}", plan.args);
-    assert!(plan.args.contains(&yaml.display().to_string()), "{:?}", plan.args);
+    assert_eq!(
+        plan.python,
+        ws.join(".venv").join("Scripts").join("python.exe")
+    );
+    assert!(
+        plan.args
+            .contains(&"--extra-model-paths-config".to_string()),
+        "{:?}",
+        plan.args
+    );
+    assert!(
+        plan.args.contains(&yaml.display().to_string()),
+        "{:?}",
+        plan.args
+    );
     assert!(plan.args.contains(&"--input-directory".to_string()));
     assert!(plan.args.contains(&"--output-directory".to_string()));
     assert_eq!(
@@ -73,7 +85,14 @@ fn plan_reuses_the_desktop_flags_and_adds_the_port() {
     assert!(plan.pid_file.starts_with(&tmp));
 
     // 模型自己带了 --port 就不重复补
-    let explicit = plan_with(&tmp, ws.clone(), 8188, &["--port".into(), "8199".into()], Some(&desktop)).unwrap();
+    let explicit = plan_with(
+        &tmp,
+        ws.clone(),
+        8188,
+        &["--port".into(), "8199".into()],
+        Some(&desktop),
+    )
+    .unwrap();
     assert_eq!(
         explicit.args.iter().filter(|a| *a == "--port").count(),
         1,
@@ -105,10 +124,17 @@ fn explicit_workspace_must_be_runnable() {
     for sub in ["output", "input", "models"] {
         std::fs::create_dir_all(shared.join(sub)).unwrap();
     }
-    assert!(crate::comfy::comfy_dirs::looks_like_comfy(&shared).0, "前提：它算'任何形态'的 ComfyUI");
+    assert!(
+        crate::comfy::comfy_dirs::looks_like_comfy(&shared).0,
+        "前提：它算'任何形态'的 ComfyUI"
+    );
     let err = resolve_workspace(&tmp, None, Some(&shared.display().to_string())).unwrap_err();
     assert_eq!(err.code, "COMFY_NOT_FOUND");
-    assert!(err.message.contains("共享数据根"), "要说清为什么不行：{}", err.message);
+    assert!(
+        err.message.contains("共享数据根"),
+        "要说清为什么不行：{}",
+        err.message
+    );
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
@@ -175,12 +201,18 @@ fn launch_record_remembers_which_input_the_instance_reads() {
         shared.display().to_string(),
         "留档的必须是**实例真正读的那一份**（后写的赢），不是调用方先写的那份"
     );
-    assert!(record["argv"].as_array().unwrap().contains(&json!("--input")));
+    assert!(record["argv"]
+        .as_array()
+        .unwrap()
+        .contains(&json!("--input")));
 
     // 没有留档 / 别的端口 → None（不编一个）
     assert!(read_launch_record(&tmp, 8199).is_none());
     clear_launch_files(&plan.pid_file);
-    assert!(read_launch_record(&tmp, 8188).is_none(), "pid 与留档要成对清掉");
+    assert!(
+        read_launch_record(&tmp, 8188).is_none(),
+        "pid 与留档要成对清掉"
+    );
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
@@ -210,16 +242,32 @@ fn write_gate_refuses_before_spawning_a_crippled_instance() {
     // 工作区写不进 → 拒，而且要说清下一步（视觉上"起不来"和"不许起"必须能分辨）
     let err = ensure_writable(&plan, None, &|p| p != ws).unwrap_err();
     assert_eq!(err.code, "COMFY_WRITE_BLOCKED");
-    assert!(err.message.contains("双击 ComfyUI Desktop"), "要给出下一步：{}", err.message);
-    assert!(err.message.contains("继承"), "要说清是继承来的限制：{}", err.message);
+    assert!(
+        err.message.contains("双击 ComfyUI Desktop"),
+        "要给出下一步：{}",
+        err.message
+    );
+    assert!(
+        err.message.contains("继承"),
+        "要说清是继承来的限制：{}",
+        err.message
+    );
 
     // 产物目录写不进 → 也拒，并点名是哪个目录
     let err = ensure_writable(&plan, Some(&out), &|p| p != out).unwrap_err();
     assert_eq!(err.code, "COMFY_WRITE_BLOCKED");
-    assert!(err.message.contains(&out.display().to_string()), "{}", err.message);
+    assert!(
+        err.message.contains(&out.display().to_string()),
+        "{}",
+        err.message
+    );
 
     // 真实判据在项目内必须为真（项目内写不了的话，整个后端都没法干活了）
     let project = Path::new(env!("CARGO_MANIFEST_DIR")).join("target");
-    assert!(dir_writable(&project), "项目内目录应当写得进：{}", project.display());
+    assert!(
+        dir_writable(&project),
+        "项目内目录应当写得进：{}",
+        project.display()
+    );
     let _ = std::fs::remove_dir_all(&tmp);
 }

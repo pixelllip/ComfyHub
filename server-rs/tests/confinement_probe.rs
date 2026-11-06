@@ -53,10 +53,13 @@ fn 测_本进程_以及它拉起的_工作区外子进程_能不能写工作区�
     println!("探针目录（工作区外）：{}", dir.display());
 
     let me = try_write(&dir, &format!("comfyhub-probe-self-{}", std::process::id()));
-    println!("① 本进程直接写           → {}", match &me {
-        Ok(()) => "写得进".to_string(),
-        Err(why) => format!("写不进：{why}"),
-    });
+    println!(
+        "① 本进程直接写           → {}",
+        match &me {
+            Ok(()) => "写得进".to_string(),
+            Err(why) => format!("写不进：{why}"),
+        }
+    );
 
     let child_name = format!("comfyhub-probe-child-{}", std::process::id());
     let child_target = dir.join(&child_name);
@@ -80,10 +83,15 @@ fn 测_本进程_以及它拉起的_工作区外子进程_能不能写工作区�
     }
 
     // ③ 与结果无关、但值得钉住的那一半：工作区内**一定**写得进（受限会话里也成立）
-    let inside = Path::new(env!("CARGO_MANIFEST_DIR")).join("target").join(".scratch");
+    let inside = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("target")
+        .join(".scratch");
     std::fs::create_dir_all(&inside).unwrap();
-    try_write(&inside, &format!("comfyhub-probe-inside-{}", std::process::id()))
-        .expect("工作区内一定写得进 —— 这一半在任何会话里都成立");
+    try_write(
+        &inside,
+        &format!("comfyhub-probe-inside-{}", std::process::id()),
+    )
+    .expect("工作区内一定写得进 —— 这一半在任何会话里都成立");
     println!("③ 工作区内写             → 写得进（这一半与沙箱档位无关）");
 
     println!(

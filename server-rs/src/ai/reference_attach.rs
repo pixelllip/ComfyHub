@@ -128,11 +128,18 @@ pub fn plan(
                 budget.attached += 1;
                 lines.push(format!(
                     "- {label} · {} · 原图 {}×{} · {}",
-                    if file.is_empty() { prepared.file_name.as_str() } else { file },
+                    if file.is_empty() {
+                        prepared.file_name.as_str()
+                    } else {
+                        file
+                    },
                     prepared.original_width,
                     prepared.original_height,
                     if prepared.resized {
-                        format!("这次附上的是 {}×{} 的等比缩图", prepared.width, prepared.height)
+                        format!(
+                            "这次附上的是 {}×{} 的等比缩图",
+                            prepared.width, prepared.height
+                        )
                     } else {
                         "原尺寸附上".to_string()
                     }
@@ -157,9 +164,7 @@ pub fn plan(
         text.push_str(&skipped.join("；"));
         text.push('）');
     }
-    text.push_str(
-        "\n（看不清细节时按 path 请用户确认或重新附图；不要凭文件名编画面内容。）",
-    );
+    text.push_str("\n（看不清细节时按 path 请用户确认或重新附图；不要凭文件名编画面内容。）");
     Some(Batch { text, images })
 }
 
@@ -197,7 +202,9 @@ fn prepare(path_str: &str) -> Option<Prepared> {
     let height = ((original_height as f64 * scale).round() as u32).max(1);
     let resized = scale < 1.0;
     let rgb = if resized {
-        decoded.resize_exact(width, height, image::imageops::FilterType::Triangle).to_rgb8()
+        decoded
+            .resize_exact(width, height, image::imageops::FilterType::Triangle)
+            .to_rgb8()
     } else {
         decoded.to_rgb8()
     };

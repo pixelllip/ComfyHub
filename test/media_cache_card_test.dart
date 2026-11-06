@@ -89,7 +89,9 @@ void main() {
     expect(button.onPressed, isNull, reason: '还不知道占用多少就不该让人点清理');
   });
 
-  testWidgets('换档位会把 MB 值交出去（512 / 1 GB / 1.5 GB / 2 GB / 4 GB）', (tester) async {
+  testWidgets('换档位会把 MB 值交出去（512 / 1 GB / 1.5 GB / 2 GB / 4 GB）', (
+    tester,
+  ) async {
     int? picked;
     await pumpCard(
       tester,

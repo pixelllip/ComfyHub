@@ -88,92 +88,97 @@ class _TagResultsPageState extends State<TagResultsPage>
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : _error != null
-              ? ErrorState(message: _error!, onRetry: _load)
-              : TabBarView(
-                  controller: _tabs,
-                  children: [
-                    _prompts.isEmpty
-                        ? EmptyState(
-                            icon: Icons.search_off,
-                            title: '没有使用「${widget.tag}」的提示词',
-                          )
-                        : ListView.separated(
-                            padding: const EdgeInsets.all(16),
-                            addAutomaticKeepAlives: false,
-                            itemCount: _prompts.length,
-                            separatorBuilder: (_, _) => const SizedBox(height: 10),
-                            itemBuilder: (context, i) {
-                              final p = _prompts[i];
-                              return Card(
-                                child: ListTile(
-                                  title: Row(
-                                    children: [
-                                      KindBadge(kind: p.kind, compact: true),
-                                      const SizedBox(width: 8),
-                                      Expanded(
-                                        child: Text(
-                                          p.title,
-                                          maxLines: 1,
-                                          overflow: TextOverflow.ellipsis,
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                  subtitle: Padding(
-                                    padding: const EdgeInsets.only(top: 4),
+          ? ErrorState(message: _error!, onRetry: _load)
+          : TabBarView(
+              controller: _tabs,
+              children: [
+                _prompts.isEmpty
+                    ? EmptyState(
+                        icon: Icons.search_off,
+                        title: '没有使用「${widget.tag}」的提示词',
+                      )
+                    : ListView.separated(
+                        padding: const EdgeInsets.all(16),
+                        addAutomaticKeepAlives: false,
+                        itemCount: _prompts.length,
+                        separatorBuilder: (_, _) => const SizedBox(height: 10),
+                        itemBuilder: (context, i) {
+                          final p = _prompts[i];
+                          return Card(
+                            child: ListTile(
+                              title: Row(
+                                children: [
+                                  KindBadge(kind: p.kind, compact: true),
+                                  const SizedBox(width: 8),
+                                  Expanded(
                                     child: Text(
-                                      p.positivePrompt,
-                                      maxLines: 2,
+                                      p.title,
+                                      maxLines: 1,
                                       overflow: TextOverflow.ellipsis,
-                                      style: theme.textTheme.bodySmall,
                                     ),
                                   ),
-                                  trailing: const Icon(Icons.chevron_right),
-                                  onTap: () async {
-                                    await Navigator.of(context).push(
-                                      MaterialPageRoute(
-                                        // 从标签页进来 = 看"这张图/这段词当初怎么配的"，
-                                        // 所以要带生成参数（预设视角才不带）
-                                        builder: (_) => PromptDetailPage(promptId: p.id, showParams: true),
-                                      ),
-                                    );
-                                    await _load();
-                                  },
+                                ],
+                              ),
+                              subtitle: Padding(
+                                padding: const EdgeInsets.only(top: 4),
+                                child: Text(
+                                  p.positivePrompt,
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: theme.textTheme.bodySmall,
                                 ),
-                              );
-                            },
-                          ),
-                    _media.isEmpty
-                        ? EmptyState(
-                            icon: Icons.search_off,
-                            title: '没有使用「${widget.tag}」的产物',
-                          )
-                        : GridView.builder(
-                            padding: const EdgeInsets.all(16),
-                            // 同画廊网格：RepaintBoundary 由 delegate 自动加，
-                            // 这里只关掉用不上的 keep-alive 包装
-                            addAutomaticKeepAlives: false,
-                            gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-                              maxCrossAxisExtent: 240,
-                              crossAxisSpacing: 10,
-                              mainAxisSpacing: 10,
-                              childAspectRatio: 1,
-                            ),
-                            itemCount: _media.length,
-                            itemBuilder: (context, i) => MediaThumb(
-                              media: _media[i],
+                              ),
+                              trailing: const Icon(Icons.chevron_right),
                               onTap: () async {
                                 await Navigator.of(context).push(
                                   MaterialPageRoute(
-                                    builder: (_) => MediaDetailPage(mediaId: _media[i].id),
+                                    // 从标签页进来 = 看"这张图/这段词当初怎么配的"，
+                                    // 所以要带生成参数（预设视角才不带）
+                                    builder: (_) => PromptDetailPage(
+                                      promptId: p.id,
+                                      showParams: true,
+                                    ),
                                   ),
                                 );
                                 await _load();
                               },
                             ),
-                          ),
-                  ],
-                ),
+                          );
+                        },
+                      ),
+                _media.isEmpty
+                    ? EmptyState(
+                        icon: Icons.search_off,
+                        title: '没有使用「${widget.tag}」的产物',
+                      )
+                    : GridView.builder(
+                        padding: const EdgeInsets.all(16),
+                        // 同画廊网格：RepaintBoundary 由 delegate 自动加，
+                        // 这里只关掉用不上的 keep-alive 包装
+                        addAutomaticKeepAlives: false,
+                        gridDelegate:
+                            const SliverGridDelegateWithMaxCrossAxisExtent(
+                              maxCrossAxisExtent: 240,
+                              crossAxisSpacing: 10,
+                              mainAxisSpacing: 10,
+                              childAspectRatio: 1,
+                            ),
+                        itemCount: _media.length,
+                        itemBuilder: (context, i) => MediaThumb(
+                          media: _media[i],
+                          onTap: () async {
+                            await Navigator.of(context).push(
+                              MaterialPageRoute(
+                                builder: (_) =>
+                                    MediaDetailPage(mediaId: _media[i].id),
+                              ),
+                            );
+                            await _load();
+                          },
+                        ),
+                      ),
+              ],
+            ),
     );
   }
 }

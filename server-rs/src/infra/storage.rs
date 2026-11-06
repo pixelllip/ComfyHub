@@ -137,7 +137,11 @@ pub fn usage(root: &Path, storage: &Path, db_path: &Path) -> Usage {
     push("thumbs", "产物缩略图", storage.join("thumbs"));
     push("aiAttachments", "对话附件", storage.join("ai-attachments"));
     push("aiThumbs", "附件缩略图", storage.join("ai-thumbs"));
-    push("aiData", "AI 数据（Skills / 记忆 / MCP 运行时）", storage.join("ai"));
+    push(
+        "aiData",
+        "AI 数据（Skills / 记忆 / MCP 运行时）",
+        storage.join("ai"),
+    );
     push("run", "运行日志与端口记录", root.join(".run"));
 
     let total_bytes = dirs.iter().map(|d| d.bytes).sum();
@@ -212,7 +216,10 @@ pub fn scan_orphans(
     storage: &Path,
     now: SystemTime,
 ) -> Result<OrphanScan, String> {
-    let media = load_set(conn, "SELECT stored_name FROM media_assets WHERE stored_name IS NOT NULL")?;
+    let media = load_set(
+        conn,
+        "SELECT stored_name FROM media_assets WHERE stored_name IS NOT NULL",
+    )?;
     let media_ids = load_set(conn, "SELECT CAST(id AS TEXT) FROM media_assets")?;
     let attachments = load_set(conn, "SELECT stored_name FROM ai_attachments")?;
     let attachment_ids = load_set(conn, "SELECT id FROM ai_attachments")?;
@@ -221,38 +228,44 @@ pub fn scan_orphans(
     let mut count = 0u64;
     let mut bytes = 0u64;
 
-    let mut collect = |kind: &'static str, dir: &Path, referenced: &HashSet<String>, strip_ext: bool| {
-        for (name, size, mtime) in flat_files(dir) {
-            if now.duration_since(mtime).unwrap_or_default() < GRACE {
-                continue; // 刚写过的，先当成"还在写"
+    let mut collect =
+        |kind: &'static str, dir: &Path, referenced: &HashSet<String>, strip_ext: bool| {
+            for (name, size, mtime) in flat_files(dir) {
+                if now.duration_since(mtime).unwrap_or_default() < GRACE {
+                    continue; // 刚写过的，先当成"还在写"
+                }
+                let key = if strip_ext {
+                    Path::new(&name)
+                        .file_stem()
+                        .map(|s| s.to_string_lossy().to_string())
+                        .unwrap_or_else(|| name.clone())
+                } else {
+                    name.clone()
+                };
+                if referenced.contains(&key) {
+                    continue;
+                }
+                count += 1;
+                bytes += size;
+                if items.len() < MAX_LIST {
+                    items.push(Orphan {
+                        kind,
+                        name,
+                        bytes: size,
+                        modified_at: crate::infra::iso_time::from_system_time(mtime),
+                    });
+                }
             }
-            let key = if strip_ext {
-                Path::new(&name)
-                    .file_stem()
-                    .map(|s| s.to_string_lossy().to_string())
-                    .unwrap_or_else(|| name.clone())
-            } else {
-                name.clone()
-            };
-            if referenced.contains(&key) {
-                continue;
-            }
-            count += 1;
-            bytes += size;
-            if items.len() < MAX_LIST {
-                items.push(Orphan {
-                    kind,
-                    name,
-                    bytes: size,
-                    modified_at: crate::infra::iso_time::from_system_time(mtime),
-                });
-            }
-        }
-    };
+        };
 
     collect("media", &storage.join("media"), &media, false);
     collect("thumb", &storage.join("thumbs"), &media_ids, true);
-    collect("attachment", &storage.join("ai-attachments"), &attachments, false);
+    collect(
+        "attachment",
+        &storage.join("ai-attachments"),
+        &attachments,
+        false,
+    );
     collect(
         "attachmentThumb",
         &storage.join("ai-thumbs"),

@@ -89,7 +89,11 @@ pub fn ensure_tag(
     }
     let normalized = take_chars(&normalize_tag(&display), 96);
     let existing: Option<i64> = conn
-        .query_row("SELECT id FROM tags WHERE normalized = ?1", params![normalized], |row| row.get(0))
+        .query_row(
+            "SELECT id FROM tags WHERE normalized = ?1",
+            params![normalized],
+            |row| row.get(0),
+        )
         .optional()?;
     if let Some(id) = existing {
         return Ok(Some(id));
@@ -154,7 +158,11 @@ pub fn refresh_use_counts(conn: &Connection) -> Result<(), WriteError> {
     Ok(())
 }
 
-pub fn add_prompt_tags(conn: &Connection, prompt_id: i64, names: &[String]) -> Result<(), WriteError> {
+pub fn add_prompt_tags(
+    conn: &Connection,
+    prompt_id: i64,
+    names: &[String],
+) -> Result<(), WriteError> {
     let mut seen: Vec<i64> = Vec::new();
     for name in names {
         if let Some(id) = ensure_tag(conn, name, None, None)? {
@@ -172,8 +180,15 @@ pub fn add_prompt_tags(conn: &Connection, prompt_id: i64, names: &[String]) -> R
     Ok(())
 }
 
-pub fn replace_prompt_tags(conn: &Connection, prompt_id: i64, names: &[String]) -> Result<(), WriteError> {
-    conn.execute("DELETE FROM prompt_tags WHERE prompt_id = ?1", params![prompt_id])?;
+pub fn replace_prompt_tags(
+    conn: &Connection,
+    prompt_id: i64,
+    names: &[String],
+) -> Result<(), WriteError> {
+    conn.execute(
+        "DELETE FROM prompt_tags WHERE prompt_id = ?1",
+        params![prompt_id],
+    )?;
     add_prompt_tags(conn, prompt_id, names)
 }
 
@@ -336,7 +351,11 @@ pub fn delete_prompt(conn: &Connection, id: i64) -> Result<bool, WriteError> {
 }
 
 /// 复制一条（标题加「 副本」后缀，收藏状态不复制 —— 与 Kotlin 一致）。
-pub fn duplicate_prompt(conn: &Connection, id: i64, source: &PromptWithTags) -> Result<i64, WriteError> {
+pub fn duplicate_prompt(
+    conn: &Connection,
+    id: i64,
+    source: &PromptWithTags,
+) -> Result<i64, WriteError> {
     let input = PromptInput {
         title: format!("{} 副本", source.prompt.title),
         kind: source.prompt.kind.clone(),
@@ -347,7 +366,10 @@ pub fn duplicate_prompt(conn: &Connection, id: i64, source: &PromptWithTags) -> 
             .prompt
             .loras
             .iter()
-            .map(|l| LoraRefInput { name: l.name.clone(), weight: l.weight })
+            .map(|l| LoraRefInput {
+                name: l.name.clone(),
+                weight: l.weight,
+            })
             .collect(),
         sampler: source.prompt.sampler.clone(),
         scheduler: source.prompt.scheduler.clone(),
@@ -391,8 +413,15 @@ pub fn in_tx<T>(
     crate::infra::db::tx_immediate(conn, f)
 }
 /// 设置产物的标签（整体替换；与 Kotlin `TagRepo.setMediaTags` 同义）。
-pub fn add_media_tags(conn: &Connection, media_id: i64, names: &[String]) -> Result<(), WriteError> {
-    conn.execute("DELETE FROM media_tags WHERE media_id = ?1", params![media_id])?;
+pub fn add_media_tags(
+    conn: &Connection,
+    media_id: i64,
+    names: &[String],
+) -> Result<(), WriteError> {
+    conn.execute(
+        "DELETE FROM media_tags WHERE media_id = ?1",
+        params![media_id],
+    )?;
     let mut seen: Vec<i64> = Vec::new();
     for name in names {
         if let Some(id) = ensure_tag(conn, name, None, None)? {

@@ -4,13 +4,16 @@
 
 use super::common::*;
 
-
 #[tokio::test]
 async fn capture_workflows_lists_files_with_the_same_keys() {
     let (state, _dir) = state_with_workflow_files();
     let (status, body) = get_json(router_for(state), "/api/capture/workflows").await;
     assert_eq!(status, StatusCode::OK, "body={body}");
-    assert_eq!(keys(&body), vec!["count", "dirs", "files", "hint", "total"], "少一个键 = 界面上少一块内容");
+    assert_eq!(
+        keys(&body),
+        vec!["count", "dirs", "files", "hint", "total"],
+        "少一个键 = 界面上少一块内容"
+    );
     // 只列真的能用的：坏 JSON 不列（列了 AI 会白跑一趟 comfy_load_workflow）
     assert_eq!(body["total"], 1, "body={body}");
     let file = &body["files"][0];
@@ -18,7 +21,15 @@ async fn capture_workflows_lists_files_with_the_same_keys() {
     file_keys.sort();
     assert_eq!(
         file_keys,
-        vec!["bytes", "format", "inLibrary", "modifiedAt", "name", "path", "promptId"],
+        vec![
+            "bytes",
+            "format",
+            "inLibrary",
+            "modifiedAt",
+            "name",
+            "path",
+            "promptId"
+        ],
         "file 的键集合"
     );
     assert_eq!(file["name"], "krea2_hd.json");
@@ -26,7 +37,10 @@ async fn capture_workflows_lists_files_with_the_same_keys() {
     // `file:<sha256>` 是**同一把钥匙**：在库里就得如实说，并且给出可以直接提交的 promptId
     assert_eq!(file["inLibrary"], true);
     assert_eq!(file["promptId"], 10);
-    assert!(!body["dirs"].as_array().unwrap().is_empty(), "三份来源里的项目内 comfyui 必须被认出来");
+    assert!(
+        !body["dirs"].as_array().unwrap().is_empty(),
+        "三份来源里的项目内 comfyui 必须被认出来"
+    );
 }
 
 #[tokio::test]
@@ -34,7 +48,11 @@ async fn capture_workflows_query_filters_by_file_name() {
     let (state, _dir) = state_with_workflow_files();
     let (_, hit) = get_json(router_for(state.clone()), "/api/capture/workflows?q=KREA2").await;
     assert_eq!(hit["count"], 1, "query 是文件名的**不区分大小写**子串");
-    let (_, miss) = get_json(router_for(state), "/api/capture/workflows?q=%E6%B2%A1%E6%9C%89").await;
+    let (_, miss) = get_json(
+        router_for(state),
+        "/api/capture/workflows?q=%E6%B2%A1%E6%9C%89",
+    )
+    .await;
     assert_eq!(miss["count"], 0);
     // 没命中时要说清楚"共有几份、可以不带 query 再列一次"，而不是干巴巴一个空数组
     assert!(miss["message"].as_str().unwrap().contains("文件名匹配"));
@@ -53,14 +71,21 @@ async fn capture_locate_reports_the_home_and_never_writes_on_its_own() {
         "与 Kotlin `ComfyLocation` 同形（`configuredOutputDir` / `note` 是 null → 键不出现）"
     );
     // 夹具把 ComfyUI 摆在项目根下的 `comfyui`（源码形态：main.py + comfy/）
-    assert_eq!(body["home"].as_str().unwrap(), home.to_string_lossy(), "body={body}");
+    assert_eq!(
+        body["home"].as_str().unwrap(),
+        home.to_string_lossy(),
+        "body={body}"
+    );
     assert_eq!(
         body["outputDir"].as_str().unwrap(),
         home.join("output").to_string_lossy(),
         "输出目录 = <home>\\output（还没跑过 ComfyUI 也照样给）"
     );
     assert!(
-        !body.as_object().unwrap().contains_key("configuredOutputDir"),
+        !body
+            .as_object()
+            .unwrap()
+            .contains_key("configuredOutputDir"),
         "没配过就是 null → 这个键不出现，也不编一个：{body}"
     );
     // 候选里记了"项目内的 comfyui 目录"这一条，且带判定依据（用户排错要看）
@@ -113,13 +138,22 @@ async fn locate_apply_validates_the_dir_and_then_persists_it() {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "body={saved}");
-    assert_eq!(saved["outputDir"].as_str().unwrap(), output.to_string_lossy());
+    assert_eq!(
+        saved["outputDir"].as_str().unwrap(),
+        output.to_string_lossy()
+    );
     let (_, config) = get_json(router_for(state.clone()), "/api/capture/config").await;
-    assert_eq!(config["outputDir"].as_str().unwrap(), output.to_string_lossy());
+    assert_eq!(
+        config["outputDir"].as_str().unwrap(),
+        output.to_string_lossy()
+    );
 
     // 配上之后 locate 就"就按这个用"（尊重用户配置，不再探）
     let (_, again) = get_json(router_for(state), "/api/capture/locate").await;
-    assert_eq!(again["configuredOutputDir"].as_str().unwrap(), output.to_string_lossy());
+    assert_eq!(
+        again["configuredOutputDir"].as_str().unwrap(),
+        output.to_string_lossy()
+    );
     assert!(again["source"].as_str().unwrap().contains("已经配置过了"));
     assert_eq!(again["home"].as_str().unwrap(), home.to_string_lossy());
 }
@@ -134,10 +168,20 @@ async fn capture_config_round_trips_and_normalizes() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(
         keys(&body),
-        vec!["autoTag", "comfyUrl", "downloadFallback", "enabled", "maxPerPoll", "pollSeconds"],
+        vec![
+            "autoTag",
+            "comfyUrl",
+            "downloadFallback",
+            "enabled",
+            "maxPerPoll",
+            "pollSeconds"
+        ],
         "没配过输出目录 → `outputDir` 这个键**根本不出现**（Kotlin 实测形状）：{body}"
     );
-    assert_eq!(body["comfyUrl"], "http://127.0.0.1:8188", "库里没配过就是环境默认值");
+    assert_eq!(
+        body["comfyUrl"], "http://127.0.0.1:8188",
+        "库里没配过就是环境默认值"
+    );
     assert_eq!(body["autoTag"], "ComfyUI");
     assert_eq!(body["pollSeconds"], 4);
 
@@ -163,7 +207,10 @@ async fn capture_config_round_trips_and_normalizes() {
         !saved.as_object().unwrap().contains_key("outputDir"),
         "空白目录归一化成 NULL → 键不出现（Kotlin `explicitNulls = false`）：{saved}"
     );
-    assert_eq!(saved["pollSeconds"], 600, "夹到上限：轮询太快会把 ComfyUI 问崩");
+    assert_eq!(
+        saved["pollSeconds"], 600,
+        "夹到上限：轮询太快会把 ComfyUI 问崩"
+    );
     assert_eq!(saved["maxPerPoll"], 1);
     assert!(!saved["comfyUrl"].as_str().unwrap().ends_with('/'));
 
@@ -189,16 +236,28 @@ async fn workflow_endpoints_distinguish_404_from_204() {
     let state = state();
     // 夹具里 id=10 有 workflow_json、id=11 没有
     let response = router_for(state.clone())
-        .oneshot(Request::builder().uri("/api/prompts/10/workflow").body(Body::empty()).unwrap())
+        .oneshot(
+            Request::builder()
+                .uri("/api/prompts/10/workflow")
+                .body(Body::empty())
+                .unwrap(),
+        )
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
-    assert_eq!(response.headers().get("content-type").unwrap(), "application/json");
+    assert_eq!(
+        response.headers().get("content-type").unwrap(),
+        "application/json"
+    );
     let bytes = response.into_body().collect().await.unwrap().to_bytes();
     assert_eq!(&bytes[..], br#"{"nodes":[]}"#, "原文直出，不重新序列化");
 
     let (status, _) = get_json(router_for(state.clone()), "/api/prompts/11/workflow").await;
-    assert_eq!(status, StatusCode::NO_CONTENT, "有这条提示词但没有工作流 → 204（不是 404）");
+    assert_eq!(
+        status,
+        StatusCode::NO_CONTENT,
+        "有这条提示词但没有工作流 → 204（不是 404）"
+    );
 
     let (status, body) = get_json(router_for(state.clone()), "/api/prompts/9999/workflow").await;
     assert_eq!(status, StatusCode::NOT_FOUND, "提示词不存在才是 404");
@@ -207,12 +266,20 @@ async fn workflow_endpoints_distinguish_404_from_204() {
     // 产物侧同一套语义
     state
         .with(|conn| {
-            conn.execute("UPDATE media_assets SET workflow_json = '{\"a\":1}' WHERE id = 100", [])
-                .map(|_| ())
+            conn.execute(
+                "UPDATE media_assets SET workflow_json = '{\"a\":1}' WHERE id = 100",
+                [],
+            )
+            .map(|_| ())
         })
         .unwrap();
     let response = router_for(state.clone())
-        .oneshot(Request::builder().uri("/api/media/100/workflow").body(Body::empty()).unwrap())
+        .oneshot(
+            Request::builder()
+                .uri("/api/media/100/workflow")
+                .body(Body::empty())
+                .unwrap(),
+        )
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
@@ -241,7 +308,11 @@ async fn api_graph_distinguishes_404_from_204_from_200() {
     // ③ 来源指向一次**没有 raw** 的捕获 → 还是 204（"这条跑不了"，而不是"没这条提示词"）
     state
         .with(|conn| {
-            conn.execute("UPDATE prompts SET source_ref = 'run:gone' WHERE id = 11", []).map(|_| ())
+            conn.execute(
+                "UPDATE prompts SET source_ref = 'run:gone' WHERE id = 11",
+                [],
+            )
+            .map(|_| ())
         })
         .unwrap();
     let (status, _) = get_json(router_for(state.clone()), "/api/prompts/11/api-graph").await;
@@ -250,9 +321,16 @@ async fn api_graph_distinguishes_404_from_204_from_200() {
     // ④ raw 是脏数据（解析不了）也只回 204 —— **绝不猜着转换**
     state
         .with(|conn| {
-            conn.execute("UPDATE capture_runs SET raw = '{not json' WHERE run_key = 'run:abc'", [])
-                .map(|_| ())?;
-            conn.execute("UPDATE prompts SET source_ref = 'run:abc' WHERE id = 11", []).map(|_| ())
+            conn.execute(
+                "UPDATE capture_runs SET raw = '{not json' WHERE run_key = 'run:abc'",
+                [],
+            )
+            .map(|_| ())?;
+            conn.execute(
+                "UPDATE prompts SET source_ref = 'run:abc' WHERE id = 11",
+                [],
+            )
+            .map(|_| ())
         })
         .unwrap();
     let (status, _) = get_json(router_for(state.clone()), "/api/prompts/11/api-graph").await;
@@ -287,14 +365,28 @@ async fn capture_poll_endpoint_returns_the_kotlin_shape() {
         ..Default::default()
     };
     comfyhub_server_rs::comfy::capture::save_capture_config(&state, config).unwrap();
-    let (status, body) = send_json(router_for(state.clone()), "POST", "/api/capture/poll", serde_json::json!({})).await;
+    let (status, body) = send_json(
+        router_for(state.clone()),
+        "POST",
+        "/api/capture/poll",
+        serde_json::json!({}),
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "{body}");
-    assert_eq!(keys(&body), vec!["checked", "message", "newMedia", "newRuns", "ok"]);
+    assert_eq!(
+        keys(&body),
+        vec!["checked", "message", "newMedia", "newRuns", "ok"]
+    );
     assert_eq!(body["ok"], false);
-    assert!(body["message"].as_str().unwrap().contains("连不上 ComfyUI"), "{body}");
+    assert!(
+        body["message"].as_str().unwrap().contains("连不上 ComfyUI"),
+        "{body}"
+    );
 
     // 工具层是**同一个实现**（别再写一份）
-    let out = call_tool(&state, "comfy_sync_history", serde_json::json!({})).await.unwrap();
+    let out = call_tool(&state, "comfy_sync_history", serde_json::json!({}))
+        .await
+        .unwrap();
     assert_eq!(out.payload["ok"], false);
     assert!(out.content.contains("连不上 ComfyUI"), "{}", out.content);
 

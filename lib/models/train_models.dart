@@ -38,7 +38,8 @@ class TrainEngineStatus {
         (json['webui'] as Map?)?.cast<String, dynamic>() ?? const {},
       ),
       projects: (json['projects'] as num?)?.toInt() ?? 0,
-      problems: (json['problems'] as List?)
+      problems:
+          (json['problems'] as List?)
               ?.map((e) => e.toString())
               .toList(growable: false) ??
           const [],

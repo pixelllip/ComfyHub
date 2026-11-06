@@ -4,7 +4,6 @@
 
 use super::common::*;
 
-
 /// 一次完整的流式 Run：正文逐字到达、有序块按序落库、usage 与终态都对。
 #[tokio::test]
 async fn executor_streams_a_reply_and_persists_parts_in_order() {
@@ -29,7 +28,11 @@ async fn executor_streams_a_reply_and_persists_parts_in_order() {
     assert!(run["completedAt"].is_string());
 
     // 助手消息：正文是**三段拼起来的**，状态 complete
-    let (_, messages) = get_json(router_for(state.clone()), "/api/ai/conversations/conv-0/messages").await;
+    let (_, messages) = get_json(
+        router_for(state.clone()),
+        "/api/ai/conversations/conv-0/messages",
+    )
+    .await;
     let assistant = messages
         .as_array()
         .unwrap()
@@ -38,7 +41,10 @@ async fn executor_streams_a_reply_and_persists_parts_in_order() {
         .unwrap();
     assert_eq!(assistant["text"], "你好呀", "三段增量拼成完整正文");
     assert_eq!(assistant["status"], "complete");
-    assert_eq!(assistant["providerResponseId"], "chatcmpl-1", "上游给的响应 id 要记下来");
+    assert_eq!(
+        assistant["providerResponseId"], "chatcmpl-1",
+        "上游给的响应 id 要记下来"
+    );
     // usage 落库/下发的是**契约的四个字段**（归一化在 `upstream::TokenUsage`）：
     // 假网关给的是 OpenAI 那套嵌套明细，**缓存命中与思考一个都不许丢** ——
     // 它们曾经在归一化时被整批丢掉，于是界面上那行「缓存命中」在桌面上从未出现过。
@@ -90,8 +96,8 @@ async fn executor_streams_a_reply_and_persists_parts_in_order() {
     assert_eq!(types.last().unwrap(), "run.completed");
     let seqs = state
         .with(|conn| {
-            let mut stmt = conn
-                .prepare("SELECT seq FROM ai_run_events WHERE run_id = ?1 ORDER BY seq")?;
+            let mut stmt =
+                conn.prepare("SELECT seq FROM ai_run_events WHERE run_id = ?1 ORDER BY seq")?;
             let rows = stmt
                 .query_map(rusqlite::params![run_id], |row| row.get::<_, i64>(0))?
                 .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -131,7 +137,11 @@ async fn executor_keeps_what_was_already_said_when_the_stream_breaks() {
     assert!(run["errorCode"].is_string());
 
     // ★ 这一条就是 R6：**已经说出去的两段话必须还在**（正文 + 有序块都得有）
-    let (_, messages) = get_json(router_for(state.clone()), "/api/ai/conversations/conv-0/messages").await;
+    let (_, messages) = get_json(
+        router_for(state.clone()),
+        "/api/ai/conversations/conv-0/messages",
+    )
+    .await;
     let assistant = messages
         .as_array()
         .unwrap()
@@ -139,10 +149,15 @@ async fn executor_keeps_what_was_already_said_when_the_stream_breaks() {
         .find(|m| m["id"] == assistant_id.as_str())
         .unwrap();
     assert_eq!(assistant["status"], "failed");
-    assert_eq!(assistant["text"], "你好", "断流前已经说出去的话不许丢（R6）：{assistant}");
+    assert_eq!(
+        assistant["text"], "你好",
+        "断流前已经说出去的话不许丢（R6）：{assistant}"
+    );
     let parts = assistant["parts"].as_array().unwrap();
     assert!(
-        parts.iter().any(|p| p["type"] == "text" && p["text"] == "你好"),
+        parts
+            .iter()
+            .any(|p| p["type"] == "text" && p["text"] == "你好"),
         "正文必须**同时**落进有序块（前端在 parts 非空时只渲染 parts）：{assistant}"
     );
     assert!(
@@ -180,21 +195,32 @@ async fn executor_runs_a_tool_round_trip_and_orders_the_parts() {
     assert_eq!(run["status"], "completed", "{run}");
 
     // 有序块：**工具卡在前、工具结果在中、两轮正文按顺序**
-    let (_, messages) = get_json(router_for(state.clone()), "/api/ai/conversations/conv-0/messages").await;
+    let (_, messages) = get_json(
+        router_for(state.clone()),
+        "/api/ai/conversations/conv-0/messages",
+    )
+    .await;
     let assistant = messages
         .as_array()
         .unwrap()
         .iter()
         .find(|m| m["id"] == assistant_id.as_str())
         .unwrap();
-    assert_eq!(assistant["text"], "工具用完了", "最终正文是**第二轮**的：{assistant}");
+    assert_eq!(
+        assistant["text"], "工具用完了",
+        "最终正文是**第二轮**的：{assistant}"
+    );
     let kinds: Vec<&str> = assistant["parts"]
         .as_array()
         .unwrap()
         .iter()
         .map(|p| p["type"].as_str().unwrap())
         .collect();
-    assert_eq!(kinds, vec!["tool_call", "tool_result", "text"], "块顺序 = 事情发生的顺序");
+    assert_eq!(
+        kinds,
+        vec!["tool_call", "tool_result", "text"],
+        "块顺序 = 事情发生的顺序"
+    );
     assert_eq!(assistant["parts"][0]["jsonPayload"]["name"], "list_skills");
     assert_eq!(assistant["parts"][0]["toolCallId"], "call_1");
     // ⚠ 参数是**模型给的原文**（字符串），不是解析后的对象 —— Dart 侧 `map['arguments']`
@@ -203,7 +229,10 @@ async fn executor_runs_a_tool_round_trip_and_orders_the_parts() {
     assert_eq!(assistant["parts"][1]["toolCallId"], "call_1");
     // `list_skills` 的结果是 JSON 文本（含 count / skills）
     assert!(
-        assistant["parts"][1]["text"].as_str().unwrap().contains("skills"),
+        assistant["parts"][1]["text"]
+            .as_str()
+            .unwrap()
+            .contains("skills"),
         "工具结果要落进块里（R6）：{assistant}"
     );
     // 结果块的 payload 键集合**就是历史回放的契约**（Kotlin `HarnessRunner:762`）：
@@ -244,7 +273,10 @@ async fn executor_runs_a_tool_round_trip_and_orders_the_parts() {
         })
         .unwrap();
     let completed: serde_json::Value = serde_json::from_str(&completed).unwrap();
-    assert_eq!(keys(&completed), vec!["callId", "elapsedMs", "name", "preview", "result"]);
+    assert_eq!(
+        keys(&completed),
+        vec!["callId", "elapsedMs", "name", "preview", "result"]
+    );
 
     // 审计表里留了痕
     let calls = comfyhub_server_rs::ai::runs::list_tool_calls(&state, &run_id).unwrap();
@@ -271,7 +303,10 @@ async fn responses_run_echoes_each_round_reasoning_or_the_upstream_400s() {
     // 只换协议：夹具那条 provider 是 `openai-completions`，这条 Bug 只出在 responses 上
     state
         .write(|tx| {
-            tx.execute("UPDATE ai_providers SET api = 'openai-responses' WHERE id = 'goat'", [])?;
+            tx.execute(
+                "UPDATE ai_providers SET api = 'openai-responses' WHERE id = 'goat'",
+                [],
+            )?;
             Ok(())
         })
         .unwrap();
@@ -291,12 +326,24 @@ async fn responses_run_echoes_each_round_reasoning_or_the_upstream_400s() {
         bodies[0]
     );
     let second = &bodies[1];
-    assert!(second.contains(r#""type":"reasoning""#), "第二轮必须带 reasoning 项：{second}");
-    assert!(second.contains(r#""type":"reasoning_text""#), "内容块是 reasoning_text：{second}");
-    assert!(second.contains("先看看技能"), "回传的是**这一轮**的思维链原文：{second}");
+    assert!(
+        second.contains(r#""type":"reasoning""#),
+        "第二轮必须带 reasoning 项：{second}"
+    );
+    assert!(
+        second.contains(r#""type":"reasoning_text""#),
+        "内容块是 reasoning_text：{second}"
+    );
+    assert!(
+        second.contains("先看看技能"),
+        "回传的是**这一轮**的思维链原文：{second}"
+    );
     let reasoning_at = second.find(r#""type":"reasoning""#).unwrap();
     let call_at = second.find(r#""type":"function_call""#).unwrap();
-    assert!(reasoning_at < call_at, "reasoning 项要排在同一轮 function_call 之前：{second}");
+    assert!(
+        reasoning_at < call_at,
+        "reasoning 项要排在同一轮 function_call 之前：{second}"
+    );
     // 调用 id 的**一致性**才是上游要的：无状态 API 靠它把 `function_call` 与
     // `function_call_output` 配起来（两个条目我们都发，所以自洽）。
     // ⚠ 目前取的是参数分片里的 `item_id`（`output_item.added` 里的真 `call_id` 会被它盖掉，
@@ -309,7 +356,11 @@ async fn responses_run_echoes_each_round_reasoning_or_the_upstream_400s() {
     );
 
     // 界面上：思考落成块、顺序 = 事情发生的顺序，而且**正文里没有思考**（R6）
-    let (_, messages) = get_json(router_for(state.clone()), "/api/ai/conversations/conv-0/messages").await;
+    let (_, messages) = get_json(
+        router_for(state.clone()),
+        "/api/ai/conversations/conv-0/messages",
+    )
+    .await;
     let assistant = messages
         .as_array()
         .unwrap()
@@ -327,7 +378,11 @@ async fn responses_run_echoes_each_round_reasoning_or_the_upstream_400s() {
         .iter()
         .map(|p| p["type"].as_str().unwrap())
         .collect();
-    assert_eq!(kinds, vec!["reasoning", "tool_call", "tool_result", "text"], "{assistant}");
+    assert_eq!(
+        kinds,
+        vec!["reasoning", "tool_call", "tool_result", "text"],
+        "{assistant}"
+    );
     assert_eq!(assistant["parts"][0]["text"], "先看看技能");
 
     gateway.abort();
@@ -340,11 +395,15 @@ async fn approval_gate_opens_before_the_user_can_click() {
     // 用 `remember`（只写本机那份长期记忆文件、**不出网**）：它出厂是 ALLOW，
     // 这里用**逐工具覆盖**把它变成 ASK。这样这一条测的纯粹是闸门 ——
     // 用 `civitai_search` 那种要出网的工具会让用例因为网络抖动而红。
-    let (base_url, gateway) = fake_tool_gateway("remember", r#"{"content":"用户偏好 4:3 画幅"}"#).await;
+    let (base_url, gateway) =
+        fake_tool_gateway("remember", r#"{"content":"用户偏好 4:3 画幅"}"#).await;
     let state = state();
     seed_provider_and_model(&state);
     point_at_gateway(&state, &base_url);
-    set_policy(&state, serde_json::json!({ "permissionMode": "ask", "overrides": { "remember": "ask" } }));
+    set_policy(
+        &state,
+        serde_json::json!({ "permissionMode": "ask", "overrides": { "remember": "ask" } }),
+    );
 
     let (_, body) = send_json(
         router_for(state.clone()),
@@ -380,7 +439,10 @@ async fn approval_gate_opens_before_the_user_can_click() {
         accepted = result["accepted"].as_bool().unwrap_or(false);
         break;
     }
-    assert!(accepted, "手快那一下**必须**被接受（否则用户只能等超时）——R8");
+    assert!(
+        accepted,
+        "手快那一下**必须**被接受（否则用户只能等超时）——R8"
+    );
 
     // 再点一次：没有 pending 行可改了 → `accepted:false`（那不是错误）
     let (status, again) = send_json(
@@ -402,7 +464,11 @@ async fn approval_gate_opens_before_the_user_can_click() {
     // 顺手把 `status` 也写成 `approved`（或让两列互相顶替）会让原地更新匹配不上，
     // 同一次调用在库里变成两行，而 `/api/ai/pending` 又会把它当成"还在等人批"。
     let calls = comfyhub_server_rs::ai::runs::list_tool_calls(&state, &run_id).unwrap();
-    assert_eq!(calls.len(), 1, "同一次调用只许一行（两列分开记，不是插新行）：{calls:?}");
+    assert_eq!(
+        calls.len(),
+        1,
+        "同一次调用只许一行（两列分开记，不是插新行）：{calls:?}"
+    );
     assert_eq!(calls[0]["approval"], "approved");
     assert_eq!(calls[0]["status"], "ok");
 
@@ -416,7 +482,10 @@ async fn approval_gate_opens_before_the_user_can_click() {
         .iter()
         .position(|t| t == "tool.started")
         .unwrap_or_else(|| panic!("批准之后要发 tool.started：{types:?}"));
-    assert!(requested < started, "顺序反了（先暴露工具、再等批准）：{types:?}");
+    assert!(
+        requested < started,
+        "顺序反了（先暴露工具、再等批准）：{types:?}"
+    );
     assert_eq!(types.last().unwrap(), "run.completed");
 
     // 闸门类事件**立刻落库**（不是攒批）：另一台设备连上来时它必须已经在库里，
@@ -434,9 +503,17 @@ async fn approval_gate_opens_before_the_user_can_click() {
     assert!(requested_seq > 0);
 
     // 工具**真的执行了**：本机那份长期记忆里出现了这一条
-    let memory = state.media_dir().parent().unwrap().join("ai").join("memory.md");
+    let memory = state
+        .media_dir()
+        .parent()
+        .unwrap()
+        .join("ai")
+        .join("memory.md");
     let text = std::fs::read_to_string(&memory).unwrap_or_default();
-    assert!(text.contains("用户偏好 4:3 画幅"), "批准后要真的执行：{text}");
+    assert!(
+        text.contains("用户偏好 4:3 画幅"),
+        "批准后要真的执行：{text}"
+    );
 
     gateway.abort();
 }
@@ -445,11 +522,15 @@ async fn approval_gate_opens_before_the_user_can_click() {
 /// （一行，不重复）、Run 照样收口，而且模型收到的是"未执行"的如实说明（**不许假装跑过**）。
 #[tokio::test]
 async fn a_denied_call_is_recorded_and_never_runs() {
-    let (base_url, gateway) = fake_tool_gateway("remember", r#"{"content":"用户偏好 4:3 画幅"}"#).await;
+    let (base_url, gateway) =
+        fake_tool_gateway("remember", r#"{"content":"用户偏好 4:3 画幅"}"#).await;
     let state = state();
     seed_provider_and_model(&state);
     point_at_gateway(&state, &base_url);
-    set_policy(&state, serde_json::json!({ "permissionMode": "ask", "overrides": { "remember": "ask" } }));
+    set_policy(
+        &state,
+        serde_json::json!({ "permissionMode": "ask", "overrides": { "remember": "ask" } }),
+    );
 
     let (_, body) = send_json(
         router_for(state.clone()),
@@ -491,18 +572,32 @@ async fn a_denied_call_is_recorded_and_never_runs() {
     // 界面靠 `approval == "denied"` 把它画成「已拒绝」而不是「出错」。
     assert_eq!(calls[0]["approval"], "denied");
     assert_eq!(calls[0]["status"], "failed");
-    assert_eq!(calls[0]["error"], "用户没有批准这次工具调用（或等待超时）；不要重试同一件事，如实说明即可");
+    assert_eq!(
+        calls[0]["error"],
+        "用户没有批准这次工具调用（或等待超时）；不要重试同一件事，如实说明即可"
+    );
 
     // **没有执行**：记忆文件里不该出现那一条
-    let memory = state.media_dir().parent().unwrap().join("ai").join("memory.md");
+    let memory = state
+        .media_dir()
+        .parent()
+        .unwrap()
+        .join("ai")
+        .join("memory.md");
     let text = std::fs::read_to_string(&memory).unwrap_or_default();
-    assert!(!text.contains("用户偏好 4:3 画幅"), "被拒绝的调用不许真的跑：{text}");
+    assert!(
+        !text.contains("用户偏好 4:3 画幅"),
+        "被拒绝的调用不许真的跑：{text}"
+    );
 
     // 事件：`tool.failed` 带稳定码 `code`（界面按 `approval=denied` 画"已拒绝"），
     // 而且**不发 tool.started**（拒绝的调用没开始过）
     let types = event_types(&state, &run_id);
     assert!(types.contains(&"tool.failed".to_string()), "{types:?}");
-    assert!(!types.contains(&"tool.started".to_string()), "拒绝的调用没开始过：{types:?}");
+    assert!(
+        !types.contains(&"tool.started".to_string()),
+        "拒绝的调用没开始过：{types:?}"
+    );
     let denied_event = state
         .with(|conn| {
             conn.query_row(
@@ -533,12 +628,18 @@ async fn a_denied_call_is_recorded_and_never_runs() {
 #[tokio::test]
 async fn tool_round_limit_wraps_up_instead_of_failing_the_run() {
     // 模型**每一轮都要工具**（第二轮也会要到）→ 正好撞上限
-    let (base_url, gateway) =
-        scripted_tool_gateway(vec![vec![("list_skills", "{}")], vec![("list_skills", "{}")]]).await;
+    let (base_url, gateway) = scripted_tool_gateway(vec![
+        vec![("list_skills", "{}")],
+        vec![("list_skills", "{}")],
+    ])
+    .await;
     let state = state();
     seed_provider_and_model(&state);
     point_at_gateway(&state, &base_url);
-    set_policy(&state, serde_json::json!({ "maxToolSteps": 1, "maxCallsPerRun": 48 }));
+    set_policy(
+        &state,
+        serde_json::json!({ "maxToolSteps": 1, "maxCallsPerRun": 48 }),
+    );
 
     let (run_id, assistant_id, run) = start_run_and_wait(&state, "看看技能").await;
     assert_eq!(run["status"], "completed", "轮数到顶不是 Run 失败：{run}");
@@ -552,7 +653,11 @@ async fn tool_round_limit_wraps_up_instead_of_failing_the_run() {
     assert!(text.contains("这次要调用的工具没有执行"), "{text}");
     // 那句话要**同时**落进有序块（前端在 parts 非空时只渲染 parts）
     let messages = comfyhub_server_rs::ai::conversations::list_messages(&state, "conv-0").unwrap();
-    let parts = &messages.iter().find(|m| m.id == assistant_id).unwrap().parts;
+    let parts = &messages
+        .iter()
+        .find(|m| m.id == assistant_id)
+        .unwrap()
+        .parts;
     assert!(
         parts.iter().any(|p| p.r#type == "text" && p.text.as_deref().unwrap_or("").contains("工具轮数上限")),
         "补的说明也要落块：{parts:?}"
@@ -575,7 +680,10 @@ async fn tool_budget_exceeded_is_reported_per_call() {
     let state = state();
     seed_provider_and_model(&state);
     point_at_gateway(&state, &base_url);
-    set_policy(&state, serde_json::json!({ "maxToolSteps": 16, "maxCallsPerRun": 1 }));
+    set_policy(
+        &state,
+        serde_json::json!({ "maxToolSteps": 16, "maxCallsPerRun": 1 }),
+    );
 
     let (run_id, assistant_id, run) = start_run_and_wait(&state, "两次技能").await;
     assert_eq!(run["status"], "completed", "{run}");
@@ -589,7 +697,10 @@ async fn tool_budget_exceeded_is_reported_per_call() {
     assert_eq!(first["status"], "ok", "额度之内的那次要真的执行：{first}");
     assert_eq!(second["status"], "failed");
     assert!(
-        second["error"].as_str().unwrap().contains("工具调用次数已达上限"),
+        second["error"]
+            .as_str()
+            .unwrap()
+            .contains("工具调用次数已达上限"),
         "第二次要如实说清是额度拦住的：{}",
         second["error"]
     );
@@ -598,7 +709,9 @@ async fn tool_budget_exceeded_is_reported_per_call() {
     assert!(text.contains("工具调用次数已达上限（1 次）"), "{text}");
     // 第 3 次那个调用**没有执行**（额度已经用尽）→ 库里只有两行
     assert_eq!(
-        comfyhub_server_rs::ai::runs::list_tool_calls(&state, &run_id).unwrap().len(),
+        comfyhub_server_rs::ai::runs::list_tool_calls(&state, &run_id)
+            .unwrap()
+            .len(),
         2,
         "额度用尽之后不许再执行"
     );
@@ -620,7 +733,10 @@ async fn failed_calls_do_not_spend_the_budget() {
     let state = state();
     seed_provider_and_model(&state);
     point_at_gateway(&state, &base_url);
-    set_policy(&state, serde_json::json!({ "maxToolSteps": 16, "maxCallsPerRun": 1 }));
+    set_policy(
+        &state,
+        serde_json::json!({ "maxToolSteps": 16, "maxCallsPerRun": 1 }),
+    );
 
     let (run_id, _, run) = start_run_and_wait(&state, "先失败一次再查技能").await;
     assert_eq!(run["status"], "completed", "{run}");
@@ -648,8 +764,7 @@ async fn unknown_tool_is_reported_as_tool_not_found() {
     // 未知工具本来就不该是"某个真实工具"，所以**给它一个不属于任何工具的名字**，
     // 这条用例从此与"又搬了哪一件"无关。
     const UNKNOWN_TOOL: &str = "comfy_this_tool_never_existed";
-    let (base_url, gateway) =
-        scripted_tool_gateway(vec![vec![(UNKNOWN_TOOL, r#"{}"#)]]).await;
+    let (base_url, gateway) = scripted_tool_gateway(vec![vec![(UNKNOWN_TOOL, r#"{}"#)]]).await;
     let state = state();
     seed_provider_and_model(&state);
     point_at_gateway(&state, &base_url);
@@ -697,7 +812,10 @@ async fn ask_user_question_waits_then_continues_the_same_run() {
     let state = state();
     seed_provider_and_model(&state);
     point_at_gateway(&state, &base_url);
-    set_policy(&state, serde_json::json!({ "permissionMode": "ask", "overrides": {} }));
+    set_policy(
+        &state,
+        serde_json::json!({ "permissionMode": "ask", "overrides": {} }),
+    );
 
     let (_, body) = send_json(
         router_for(state.clone()),
@@ -712,8 +830,11 @@ async fn ask_user_question_waits_then_continues_the_same_run() {
     // ② 等提问卡出现（Run 挂在这里等，**不收尾**）
     let mut card: Vec<serde_json::Value> = Vec::new();
     for _ in 0..200 {
-        let (status, q) =
-            get_json(router_for(state.clone()), &format!("/api/ai/runs/{run_id}/question")).await;
+        let (status, q) = get_json(
+            router_for(state.clone()),
+            &format!("/api/ai/runs/{run_id}/question"),
+        )
+        .await;
         assert_eq!(status, StatusCode::OK, "{q}");
         if q["pending"] == true {
             card = q["questions"].as_array().cloned().unwrap_or_default();
@@ -738,7 +859,10 @@ async fn ask_user_question_waits_then_continues_the_same_run() {
         question_event["question"].is_object(),
         "客户端读的是 event.data['question'] 这个**对象**：{question_event}"
     );
-    assert_eq!(question_event["question"]["questionId"], card[0]["questionId"]);
+    assert_eq!(
+        question_event["question"]["questionId"],
+        card[0]["questionId"]
+    );
     assert_eq!(question_event["question"]["index"], 0);
     assert_eq!(question_event["question"]["total"], 2);
     assert_eq!(question_event["runId"], run_id.as_str());
@@ -759,7 +883,10 @@ async fn ask_user_question_waits_then_continues_the_same_run() {
     .await;
     assert_eq!(status, StatusCode::OK, "{answered}");
     assert_eq!(answered["accepted"], true);
-    assert_eq!(answered["answer"], "16:9", "点了按钮，答案就是那个选项的原文");
+    assert_eq!(
+        answered["answer"], "16:9",
+        "点了按钮，答案就是那个选项的原文"
+    );
     let (status, answered) = send_json(
         router_for(state.clone()),
         "POST",
@@ -775,8 +902,11 @@ async fn ask_user_question_waits_then_continues_the_same_run() {
     assert_eq!(run["status"], "completed", "{run}");
 
     // 库里两行都是 answered，且记着答了什么（`GET /api/ai/questions/{id}` 据此回放）
-    let (status, stored) =
-        get_json(router_for(state.clone()), &format!("/api/ai/questions/{first_id}")).await;
+    let (status, stored) = get_json(
+        router_for(state.clone()),
+        &format!("/api/ai/questions/{first_id}"),
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(stored["answered"], true);
     assert_eq!(stored["answer"], "16:9");
@@ -824,7 +954,10 @@ async fn ask_user_question_waits_then_continues_the_same_run() {
     assert_eq!(result["answers"][0]["optionIndex"], 1);
     assert_eq!(result["answers"][1]["answer"], "两张就行");
     assert_eq!(result["askedAll"][1]["answer"], "两张就行");
-    assert_eq!(result["budgetReset"], true, "用户真的答了 → 这一窗的工具额度重置");
+    assert_eq!(
+        result["budgetReset"], true,
+        "用户真的答了 → 这一窗的工具额度重置"
+    );
     assert_eq!(result["callsUsedInWindow"], 0);
     assert!(result["groupId"].is_string());
 
@@ -839,7 +972,8 @@ async fn ask_user_question_waits_then_continues_the_same_run() {
 /// 而且不许假装用户答了。
 #[tokio::test]
 async fn skipped_questions_are_reported_as_unanswered() {
-    let arguments = serde_json::json!({ "question": "要 NSFW 吗？", "options": ["要", "不要"] }).to_string();
+    let arguments =
+        serde_json::json!({ "question": "要 NSFW 吗？", "options": ["要", "不要"] }).to_string();
     let (base_url, gateway) = scripted_tool_gateway(vec![vec![(
         "ask_user_question",
         Box::leak(arguments.into_boxed_str()),
@@ -861,8 +995,11 @@ async fn skipped_questions_are_reported_as_unanswered() {
 
     let mut question_id = String::new();
     for _ in 0..200 {
-        let (_, q) =
-            get_json(router_for(state.clone()), &format!("/api/ai/runs/{run_id}/question")).await;
+        let (_, q) = get_json(
+            router_for(state.clone()),
+            &format!("/api/ai/runs/{run_id}/question"),
+        )
+        .await;
         if q["pending"] == true {
             question_id = q["question"]["questionId"].as_str().unwrap().to_string();
             break;
@@ -897,8 +1034,11 @@ async fn skipped_questions_are_reported_as_unanswered() {
     assert!(!text.contains("回答：要"), "不许假装用户答了：{text}");
 
     // 库里那行是 skipped（不是 pending —— 否则 `/api/ai/pending` 会一直列着它）
-    let (_, stored) =
-        get_json(router_for(state.clone()), &format!("/api/ai/questions/{question_id}")).await;
+    let (_, stored) = get_json(
+        router_for(state.clone()),
+        &format!("/api/ai/questions/{question_id}"),
+    )
+    .await;
     assert_eq!(stored["answered"], false);
     let (_, pending) = get_json(router_for(state.clone()), "/api/ai/pending").await;
     assert!(pending["asks"].as_array().unwrap().is_empty(), "{pending}");
@@ -928,7 +1068,10 @@ async fn executor_reports_the_stable_code_for_an_upstream_rejection() {
     assert_eq!(run["status"], "failed");
     assert_eq!(run["errorCode"], "RATE_LIMIT", "{run}");
     assert!(
-        run["errorMessage"].as_str().unwrap().contains("rate limited"),
+        run["errorMessage"]
+            .as_str()
+            .unwrap()
+            .contains("rate limited"),
         "上游的原话（已脱敏、已截断）要带出来，否则用户只看到「配置有误」：{run}"
     );
 
@@ -960,7 +1103,11 @@ async fn a_failed_run_still_persists_the_usage_of_completed_rounds() {
     assert_eq!(run["status"], "failed", "{run}");
     assert_eq!(run["errorCode"], "RATE_LIMIT");
 
-    let (_, messages) = get_json(router_for(state.clone()), "/api/ai/conversations/conv-0/messages").await;
+    let (_, messages) = get_json(
+        router_for(state.clone()),
+        "/api/ai/conversations/conv-0/messages",
+    )
+    .await;
     let assistant = messages
         .as_array()
         .unwrap()
@@ -968,7 +1115,10 @@ async fn a_failed_run_still_persists_the_usage_of_completed_rounds() {
         .find(|m| m["id"] == assistant_id.as_str())
         .unwrap();
     assert_eq!(assistant["status"], "failed");
-    assert_eq!(assistant["text"], "你好", "第一轮已经说出去的话照旧要落下来（R6）");
+    assert_eq!(
+        assistant["text"], "你好",
+        "第一轮已经说出去的话照旧要落下来（R6）"
+    );
     assert_eq!(
         assistant["usage"]["inputTokens"], 7,
         "跑完的那一轮的 usage 必须留在失败的消息上：{assistant}"
@@ -999,8 +1149,16 @@ async fn start_run_validates_then_creates_messages_and_run() {
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_eq!(body["error"], "CONFIG_ERROR");
     assert_eq!(body["detail"], "消息内容不能为空");
-    let (_, messages) = get_json(router_for(state.clone()), "/api/ai/conversations/conv-0/messages").await;
-    assert_eq!(messages.as_array().unwrap().len(), 1, "被拒的请求不许留下半条消息");
+    let (_, messages) = get_json(
+        router_for(state.clone()),
+        "/api/ai/conversations/conv-0/messages",
+    )
+    .await;
+    assert_eq!(
+        messages.as_array().unwrap().len(),
+        1,
+        "被拒的请求不许留下半条消息"
+    );
 
     // ② 会话不存在 → 400
     let (status, body) = send_json(
@@ -1041,11 +1199,21 @@ async fn start_run_validates_then_creates_messages_and_run() {
     assert_eq!(body.as_object().unwrap().len(), 3, "响应只有这三个键");
 
     // 用户消息 + 助手占位都落了库，且**用户在前**（顺序是界面的依据）
-    let (_, messages) = get_json(router_for(state.clone()), "/api/ai/conversations/conv-0/messages").await;
+    let (_, messages) = get_json(
+        router_for(state.clone()),
+        "/api/ai/conversations/conv-0/messages",
+    )
+    .await;
     let list = messages.as_array().unwrap();
     assert_eq!(list.len(), 3, "夹具 1 条 + 用户 + 助手占位");
-    let user = list.iter().find(|m| m["id"] == user_id.as_str()).expect("用户消息在");
-    let assistant = list.iter().find(|m| m["id"] == assistant_id.as_str()).expect("助手占位在");
+    let user = list
+        .iter()
+        .find(|m| m["id"] == user_id.as_str())
+        .expect("用户消息在");
+    let assistant = list
+        .iter()
+        .find(|m| m["id"] == assistant_id.as_str())
+        .expect("助手占位在");
     assert_eq!(user["role"], "user");
     assert_eq!(user["text"], "你好");
     assert_eq!(user["seq"], 2);
@@ -1056,7 +1224,8 @@ async fn start_run_validates_then_creates_messages_and_run() {
     // 这条断言钉的是**语义**：Run 绝不会永远停在 running（那会让界面一直转圈）
     let mut run = serde_json::Value::Null;
     for _ in 0..60 {
-        let (_, value) = get_json(router_for(state.clone()), &format!("/api/ai/runs/{run_id}")).await;
+        let (_, value) =
+            get_json(router_for(state.clone()), &format!("/api/ai/runs/{run_id}")).await;
         run = value;
         if run["status"] != "running" {
             break;
@@ -1071,7 +1240,11 @@ async fn start_run_validates_then_creates_messages_and_run() {
     assert_eq!(run["providerId"], "goat");
 
     // 失败的助手消息也落了如实的状态（留在 streaming 会让界面一直转圈）
-    let (_, messages) = get_json(router_for(state.clone()), "/api/ai/conversations/conv-0/messages").await;
+    let (_, messages) = get_json(
+        router_for(state.clone()),
+        "/api/ai/conversations/conv-0/messages",
+    )
+    .await;
     let assistant = messages
         .as_array()
         .unwrap()
@@ -1084,7 +1257,11 @@ async fn start_run_validates_then_creates_messages_and_run() {
     let types = event_types(&state, &run_id);
     assert_eq!(types[0], "run.started");
     assert_eq!(types[1], "message.started");
-    assert_eq!(types.last().unwrap(), "run.failed", "终态事件在最后：{types:?}");
+    assert_eq!(
+        types.last().unwrap(),
+        "run.failed",
+        "终态事件在最后：{types:?}"
+    );
     assert!(
         types.iter().all(|t| !t.is_empty()),
         "seq 从 1 起、连续递增（不许跳号）"
@@ -1146,14 +1323,26 @@ async fn retry_reuses_the_user_message_and_never_wipes_a_reply_with_content() {
     )
     .await;
     assert_eq!(status, StatusCode::ACCEPTED, "{retry}");
-    assert_eq!(retry["userMessageId"].as_str().unwrap(), first_user, "复用原来那条用户消息");
+    assert_eq!(
+        retry["userMessageId"].as_str().unwrap(),
+        first_user,
+        "复用原来那条用户消息"
+    );
     assert_eq!(
         retry["assistantMessageId"].as_str().unwrap(),
         first_assistant,
         "空的失败气泡就地复用（会话里不留空壳）"
     );
-    let (_, messages) = get_json(router_for(state.clone()), "/api/ai/conversations/conv-0/messages").await;
-    assert_eq!(messages.as_array().unwrap().len(), 3, "重试**不新增**任何消息");
+    let (_, messages) = get_json(
+        router_for(state.clone()),
+        "/api/ai/conversations/conv-0/messages",
+    )
+    .await;
+    assert_eq!(
+        messages.as_array().unwrap().len(),
+        3,
+        "重试**不新增**任何消息"
+    );
     // 第二次 Run 也在后台跑（上游是 127.0.0.1:9，会失败）—— 等它收尾再往下走
     let second_run = retry["runId"].as_str().unwrap().to_string();
     wait_for_run(&state, &second_run).await;
@@ -1188,15 +1377,26 @@ async fn retry_reuses_the_user_message_and_never_wipes_a_reply_with_content() {
         first_assistant,
         "有内容的失败回复**不许**被就地重置"
     );
-    let (_, messages) = get_json(router_for(state.clone()), "/api/ai/conversations/conv-0/messages").await;
+    let (_, messages) = get_json(
+        router_for(state.clone()),
+        "/api/ai/conversations/conv-0/messages",
+    )
+    .await;
     let kept = messages
         .as_array()
         .unwrap()
         .iter()
         .find(|m| m["id"] == first_assistant.as_str())
         .unwrap();
-    assert_eq!(kept["text"], "我已经说了很多话", "用户看到过的话一个字都不能丢（R6）");
-    assert_eq!(kept["parts"].as_array().unwrap().len(), 1, "它的工具卡/正文块也留着");
+    assert_eq!(
+        kept["text"], "我已经说了很多话",
+        "用户看到过的话一个字都不能丢（R6）"
+    );
+    assert_eq!(
+        kept["parts"].as_array().unwrap().len(),
+        1,
+        "它的工具卡/正文块也留着"
+    );
 
     // ③ 已经答完的回复**不允许**重试（直接发新消息即可）
     state
@@ -1220,7 +1420,10 @@ async fn retry_reuses_the_user_message_and_never_wipes_a_reply_with_content() {
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_eq!(body["error"], "CONFIG_ERROR");
-    assert!(body["detail"].as_str().unwrap().contains("不需要（也不能）重试"));
+    assert!(body["detail"]
+        .as_str()
+        .unwrap()
+        .contains("不需要（也不能）重试"));
 }
 
 /// 假网关：第 1 轮调一个工具，第 2 轮收口；**记录每一轮请求体**（用来断言图有没有真的挂上）。
@@ -1241,7 +1444,9 @@ async fn tool_call_then_reply_gateway(
     let handle = tokio::spawn(async move {
         let mut round = 0usize;
         loop {
-            let Ok((mut socket, _)) = listener.accept().await else { break };
+            let Ok((mut socket, _)) = listener.accept().await else {
+                break;
+            };
             round += 1;
             let recorder = recorder.clone();
             let arguments = arguments.clone();
@@ -1365,10 +1570,22 @@ async fn load_workflow_auto_attaches_the_reference_image_to_the_next_round() {
         bodies[0]
     );
     let second = &bodies[1];
-    assert!(second.contains(r#""type":"image_url""#), "第二轮必须把参考图挂上：{second}");
-    assert!(second.contains("data:image/jpeg;base64,"), "缩图之后是 JPEG：{second}");
-    assert!(second.contains("原图 1600×900"), "原始分辨率要告诉模型：{second}");
-    assert!(second.contains("1024×576"), "附上的是缩到 1024 长边的图：{second}");
+    assert!(
+        second.contains(r#""type":"image_url""#),
+        "第二轮必须把参考图挂上：{second}"
+    );
+    assert!(
+        second.contains("data:image/jpeg;base64,"),
+        "缩图之后是 JPEG：{second}"
+    );
+    assert!(
+        second.contains("原图 1600×900"),
+        "原始分辨率要告诉模型：{second}"
+    );
+    assert!(
+        second.contains("1024×576"),
+        "附上的是缩到 1024 长边的图：{second}"
+    );
 
     // 工具审计里也要能查得到（`referenceImages` 是这次调用**真实返回过**的事实）
     let result_json: String = state
@@ -1437,12 +1654,28 @@ async fn view_outputs_auto_attaches_the_gallery_image_to_the_next_round() {
 
     let bodies = seen.lock().unwrap().clone();
     assert_eq!(bodies.len(), 2, "两轮：看产物 → 附图 → 收口");
-    assert!(!bodies[0].contains("image_url"), "调用之前不该有图：{}", bodies[0]);
+    assert!(
+        !bodies[0].contains("image_url"),
+        "调用之前不该有图：{}",
+        bodies[0]
+    );
     let second = &bodies[1];
-    assert!(second.contains(r#""type":"image_url""#), "第二轮必须把产物图挂上：{second}");
-    assert!(second.contains("data:image/jpeg;base64,"), "缩图之后是 JPEG：{second}");
-    assert!(second.contains("原图 1600×900"), "原始分辨率要告诉模型：{second}");
-    assert!(second.contains("1024×576"), "附上的是缩到 1024 长边的图：{second}");
+    assert!(
+        second.contains(r#""type":"image_url""#),
+        "第二轮必须把产物图挂上：{second}"
+    );
+    assert!(
+        second.contains("data:image/jpeg;base64,"),
+        "缩图之后是 JPEG：{second}"
+    );
+    assert!(
+        second.contains("原图 1600×900"),
+        "原始分辨率要告诉模型：{second}"
+    );
+    assert!(
+        second.contains("1024×576"),
+        "附上的是缩到 1024 长边的图：{second}"
+    );
 
     // 工具审计里也要能查得到（`referenceImages` 是这次调用**真实返回过**的事实）
     let result_json: String = state
@@ -1456,7 +1689,10 @@ async fn view_outputs_auto_attaches_the_gallery_image_to_the_next_round() {
         })
         .unwrap();
     let payload: serde_json::Value = serde_json::from_str(&result_json).unwrap();
-    assert_eq!(payload["referenceImages"][0]["label"], "产物 #201", "{payload}");
+    assert_eq!(
+        payload["referenceImages"][0]["label"], "产物 #201",
+        "{payload}"
+    );
 
     gateway.abort();
 }

@@ -26,7 +26,11 @@ fn 权重表达与自然语言算同一组() {
     let a = ep("IMAGE", "(masterpiece:1.2), 1girl", None);
     let b = ep("IMAGE", "masterpiece, (1girl:1.1)", None);
     assert!(same_group(&a, &b), "权重写法不同不该拆组");
-    assert_eq!(group_key(&a), group_key(&b), "key 也必须一致（入库与回填要用它）");
+    assert_eq!(
+        group_key(&a),
+        group_key(&b),
+        "key 也必须一致（入库与回填要用它）"
+    );
 }
 
 #[test]
@@ -37,11 +41,7 @@ fn 归一化的全部削平手段一起生效() {
         "(masterpiece:1.2), 1girl,  (detailed background:1.4) ",
         None,
     );
-    let b = ep(
-        "IMAGE",
-        "detailed background,1GIRL,\n masterpiece",
-        None,
-    );
+    let b = ep("IMAGE", "detailed background,1GIRL,\n masterpiece", None);
     assert!(
         same_group(&a, &b),
         "大小写 / 换行 / 顺序 / 多余空白 / 权重，都该被削平"
@@ -294,7 +294,11 @@ fn media_dto(kind: &str, pos: Option<&str>, neg: Option<&str>) -> MediaDto {
 fn 从产物_dto取端点_没关联提示词就是空() {
     let a = Endpoint::from(&media_dto("IMAGE", None, None));
     let b = ep("IMAGE", "", None);
-    assert_eq!(group_key(&a), group_key(&b), "孤儿产物也要能算出一个稳定的 key");
+    assert_eq!(
+        group_key(&a),
+        group_key(&b),
+        "孤儿产物也要能算出一个稳定的 key"
+    );
 
     let c = Endpoint::from(&media_dto("IMAGE", Some("1girl"), Some("bad hands")));
     let d = ep("IMAGE", "1girl", Some("bad hands"));
@@ -341,7 +345,11 @@ fn prompt_dto(kind: &str, pos: &str, neg: Option<&str>) -> PromptDto {
 
 #[test]
 fn 从提示词_dto取端点() {
-    let a = Endpoint::from(&prompt_dto("IMAGE", "(masterpiece:1.2), 1girl", Some("bad hands")));
+    let a = Endpoint::from(&prompt_dto(
+        "IMAGE",
+        "(masterpiece:1.2), 1girl",
+        Some("bad hands"),
+    ));
     let b = ep("IMAGE", "1girl, masterpiece", Some("bad hands"));
     assert!(same_group(&a, &b));
 }
@@ -501,7 +509,10 @@ fn 落库_关联了提示词但正文空白的也不进组() {
     let n: i64 = conn
         .query_row("SELECT COUNT(*) FROM media_collections", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(n, 0, "正文空白的产物连集合行都不该有 —— 有了就会把不相干的图并成一组");
+    assert_eq!(
+        n, 0,
+        "正文空白的产物连集合行都不该有 —— 有了就会把不相干的图并成一组"
+    );
     crate::infra::testpaths::cleanup(&dir);
 }
 
@@ -539,7 +550,11 @@ fn 移出集合_回填不许再吸回来() {
 
     detach(&conn, m1).unwrap();
     assert_eq!(collection_of(&conn, m1), None, "移出就是没有归属");
-    assert_eq!(collection_of(&conn, m2), Some(original), "同组别的成员不受影响");
+    assert_eq!(
+        collection_of(&conn, m2),
+        Some(original),
+        "同组别的成员不受影响"
+    );
 
     // 模拟"重启"：回填再跑一遍
     let again = backfill(&conn).unwrap();
@@ -585,7 +600,10 @@ fn 移出集合_原集合空了就消失() {
             |r| r.get(0),
         )
         .unwrap();
-    assert_eq!(left, 0, "空壳与单成员 auto 集合都不许留（否则界面上是点不开的空格子）");
+    assert_eq!(
+        left, 0,
+        "空壳与单成员 auto 集合都不许留（否则界面上是点不开的空格子）"
+    );
     crate::infra::testpaths::cleanup(&dir);
 }
 
@@ -608,7 +626,11 @@ fn 移进集合_kind不同要明确拒绝() {
         matches!(err, WriteError::Validation(_)),
         "混 kind 必须是**明确拒绝**（400 说人话），不是静默不动：{err:?}"
     );
-    assert_eq!(collection_of(&conn, image), None, "拒绝之后归属一个字都不许动");
+    assert_eq!(
+        collection_of(&conn, image),
+        None,
+        "拒绝之后归属一个字都不许动"
+    );
     crate::infra::testpaths::cleanup(&dir);
 }
 
@@ -688,7 +710,10 @@ fn 新建手动集合的key不会被新图吸走() {
             |r| r.get(0),
         )
         .unwrap();
-    assert!(key.starts_with("manual:"), "手动集合的 key 必须自成一档：{key}");
+    assert!(
+        key.starts_with("manual:"),
+        "手动集合的 key 必须自成一档：{key}"
+    );
 
     // 同款提示词的新图该进算法那一组，**不许**进用户建的这个
     let fresh = insert_media(&conn, Some(p), "IMAGE");
@@ -707,7 +732,10 @@ fn 新建手动集合_混kind要拒绝() {
     let video = insert_media(&conn, Some(p), "VIDEO");
 
     let err = create_manual(&conn, &[image, video], None).unwrap_err();
-    assert!(matches!(err, WriteError::Validation(_)), "必须是 400 说人话：{err:?}");
+    assert!(
+        matches!(err, WriteError::Validation(_)),
+        "必须是 400 说人话：{err:?}"
+    );
     let n: i64 = conn
         .query_row("SELECT COUNT(*) FROM media_collections", [], |r| r.get(0))
         .unwrap();
@@ -729,9 +757,12 @@ fn 移进算法分组_那一组就地转成手动() {
     let b = insert_media(&conn, Some(p2), "IMAGE");
     let auto = group_id(&conn, a);
     assert_eq!(
-        conn.query_row("SELECT origin FROM media_collections WHERE id = ?1", params![auto], |r| r
-            .get::<_, String>(0))
-            .unwrap(),
+        conn.query_row(
+            "SELECT origin FROM media_collections WHERE id = ?1",
+            params![auto],
+            |r| r.get::<_, String>(0)
+        )
+        .unwrap(),
         "auto",
         "前提：它是算法分出来的"
     );
@@ -739,9 +770,12 @@ fn 移进算法分组_那一组就地转成手动() {
     move_into(&conn, b, auto).unwrap();
     assert_eq!(collection_of(&conn, b), Some(auto));
     assert_eq!(
-        conn.query_row("SELECT origin FROM media_collections WHERE id = ?1", params![auto], |r| r
-            .get::<_, String>(0))
-            .unwrap(),
+        conn.query_row(
+            "SELECT origin FROM media_collections WHERE id = ?1",
+            params![auto],
+            |r| r.get::<_, String>(0)
+        )
+        .unwrap(),
         "manual",
         "★ 用户碰过的组必须转成手动，否则它还会继续吸新图"
     );
@@ -800,11 +834,7 @@ fn 落库_优先挂到算法那一组而不是用户拆出来的那组() {
 
     // 新产物该进 auto 那一组（不是后建的 manual）
     let m2 = insert_media(&conn, Some(p), "IMAGE");
-    assert_eq!(
-        group_id(&conn, m2),
-        auto_id,
-        "用户拆出来的组不该继续吸新图"
-    );
+    assert_eq!(group_id(&conn, m2), auto_id, "用户拆出来的组不该继续吸新图");
     crate::infra::testpaths::cleanup(&dir);
 }
 
@@ -917,7 +947,11 @@ fn 探针与回填同口径() {
     );
     assert_eq!(collection_of(&conn, lone), None);
     assert_eq!(collection_of(&conn, orphan), None);
-    assert_eq!(collection_of(&conn, opted_out), None, "已移出的不许被吸回来");
+    assert_eq!(
+        collection_of(&conn, opted_out),
+        None,
+        "已移出的不许被吸回来"
+    );
     assert_eq!(collection_of(&conn, a), collection_of(&conn, b));
     crate::infra::testpaths::cleanup(&dir);
 }
@@ -980,14 +1014,24 @@ fn 删产物_集合空了就消失_还有成员就留着() {
     // （`media_write::delete` 在同一事务里做的两步：删行 + `prune_singleton_auto`）
     conn.execute("DELETE FROM media_assets WHERE id = ?1", params![m1])
         .unwrap();
-    assert_eq!(prune_singleton_auto(&conn).unwrap(), 0, "还剩两张，不该解散");
+    assert_eq!(
+        prune_singleton_auto(&conn).unwrap(),
+        0,
+        "还剩两张，不该解散"
+    );
     let n: i64 = conn
-        .query_row("SELECT COUNT(*) FROM media_collections WHERE id = ?1", params![cid], |r| {
-            r.get(0)
-        })
+        .query_row(
+            "SELECT COUNT(*) FROM media_collections WHERE id = ?1",
+            params![cid],
+            |r| r.get(0),
+        )
         .unwrap();
     assert_eq!(n, 1, "还有成员就不该删集合");
-    assert_eq!(collection_of(&conn, m2), Some(cid), "剩下两张的归属也不许动");
+    assert_eq!(
+        collection_of(&conn, m2),
+        Some(cid),
+        "剩下两张的归属也不许动"
+    );
     assert_eq!(collection_of(&conn, m3), Some(cid));
 
     // 一个成员都不剩（这里是用户自己建的手动集合被删空）→ 空壳要消失。
@@ -1007,7 +1051,10 @@ fn 删产物_集合空了就消失_还有成员就留着() {
             |r| r.get(0),
         )
         .unwrap();
-    assert_eq!(mine_left, 0, "删空了的集合必须被带走（否则『删到 0 张还留一个空组』）");
+    assert_eq!(
+        mine_left, 0,
+        "删空了的集合必须被带走（否则『删到 0 张还留一个空组』）"
+    );
     crate::infra::testpaths::cleanup(&dir);
 }
 
@@ -1070,7 +1117,11 @@ fn 从三张里删掉一张_还剩两张的自动集合不解散() {
         )
         .unwrap();
     assert_eq!(left, 1, "还有两个成员，集合行必须活着");
-    assert_eq!(collection_of(&conn, m2), Some(cid), "剩下两张的归属一个字都不许动");
+    assert_eq!(
+        collection_of(&conn, m2),
+        Some(cid),
+        "剩下两张的归属一个字都不许动"
+    );
     assert_eq!(collection_of(&conn, m3), Some(cid));
     crate::infra::testpaths::cleanup(&dir);
 }
@@ -1119,7 +1170,12 @@ fn 关联产物_按归一化后的提示词匹配() {
     // 预设（人自己存的）
     let preset = insert_prompt(&conn, "IMAGE", "1girl, cyberpunk", Some("lowres"));
     // 自动捕获的同款（写法不同：带权重、顺序不同）
-    let captured = insert_prompt(&conn, "IMAGE", "(1girl:1.2), cyberpunk", Some("(lowres:1.1)"));
+    let captured = insert_prompt(
+        &conn,
+        "IMAGE",
+        "(1girl:1.2), cyberpunk",
+        Some("(lowres:1.1)"),
+    );
     let m = insert_media(&conn, Some(captured), "IMAGE");
     // 一条**不同款**的（不该被关联）
     let other = insert_prompt(&conn, "IMAGE", "chinese ink painting", None);
@@ -1166,9 +1222,16 @@ fn 关联产物_真库现场_从画廊建的预设要认到那两条产物() {
     let preset = insert_prompt(&conn, "IMAGE", POSITIVE, None);
     let captured_b = insert_prompt(&conn, "IMAGE", POSITIVE, None);
     // 把它们标成自动捕获 / 手动（`presets_matching` 只看 Manual 那一边）
-    conn.execute("UPDATE prompts SET source = 'ComfyUI' WHERE id IN (?1, ?2)", params![captured_a, captured_b])
-        .unwrap();
-    conn.execute("UPDATE prompts SET source = 'Manual' WHERE id = ?1", params![preset]).unwrap();
+    conn.execute(
+        "UPDATE prompts SET source = 'ComfyUI' WHERE id IN (?1, ?2)",
+        params![captured_a, captured_b],
+    )
+    .unwrap();
+    conn.execute(
+        "UPDATE prompts SET source = 'Manual' WHERE id = ?1",
+        params![preset],
+    )
+    .unwrap();
 
     let m1 = insert_media(&conn, Some(captured_a), "IMAGE");
     let m2 = insert_media(&conn, Some(captured_b), "IMAGE");
@@ -1197,17 +1260,25 @@ fn 关联产物_真库现场_从画廊建的预设要认到那两条产物() {
 #[test]
 fn 关联产物_预设不存在时报未找到() {
     let (conn, dir) = temp_db("preset-media-missing");
-    assert!(matches!(media_of_preset(&conn, 999), Err(WriteError::NotFound)));
-    assert!(matches!(presets_matching(&conn, 999), Err(WriteError::NotFound)));
+    assert!(matches!(
+        media_of_preset(&conn, 999),
+        Err(WriteError::NotFound)
+    ));
+    assert!(matches!(
+        presets_matching(&conn, 999),
+        Err(WriteError::NotFound)
+    ));
     crate::infra::testpaths::cleanup(&dir);
 }
 
 #[test]
-fn prune_all_empty_一次清干净() {    let (conn, dir) = temp_db("prune-all");
+fn prune_all_empty_一次清干净() {
+    let (conn, dir) = temp_db("prune-all");
     let p = insert_prompt(&conn, "IMAGE", "1girl", None);
     let m = insert_media(&conn, Some(p), "IMAGE");
     group_id(&conn, m);
-    conn.execute("UPDATE media_assets SET collection_id = NULL", []).unwrap();
+    conn.execute("UPDATE media_assets SET collection_id = NULL", [])
+        .unwrap();
     assert_eq!(prune_all_empty(&conn).unwrap(), 1);
     let n: i64 = conn
         .query_row("SELECT COUNT(*) FROM media_collections", [], |r| r.get(0))
@@ -1244,7 +1315,11 @@ fn 重新整理_手动集合一个都不动() {
     let old_auto = group_id(&conn, a);
     assert_eq!(group_id(&conn, a2), old_auto, "前提：两张算法产物在一组");
     let manual = create_manual(&conn, &[b], Some("我的精选")).unwrap();
-    assert_eq!(collection_of(&conn, b), Some(manual), "前提：b 属于手动集合");
+    assert_eq!(
+        collection_of(&conn, b),
+        Some(manual),
+        "前提：b 属于手动集合"
+    );
     assert_ne!(old_auto, manual);
 
     let done = regroup_auto(&conn).unwrap();
@@ -1358,7 +1433,11 @@ fn 重新整理_把已分组的按当前规则重算() {
         collection_of(&conn, m2),
         "前提：老库里这两张被分在两个组"
     );
-    assert_eq!(backfill(&conn).unwrap(), 0, "前提：都已分组，backfill 一条都不碰");
+    assert_eq!(
+        backfill(&conn).unwrap(),
+        0,
+        "前提：都已分组，backfill 一条都不碰"
+    );
 
     let done = regroup_auto(&conn).unwrap();
     assert_eq!(done, 2, "两张都已分组，也该被重算进来");
@@ -1432,7 +1511,11 @@ fn 搬走一张之后_旧集合只剩一张就自动解散() {
 
     move_into(&conn, m1, target).unwrap();
 
-    assert_eq!(collection_of(&conn, m1), Some(target), "搬走的那张进了新集合");
+    assert_eq!(
+        collection_of(&conn, m1),
+        Some(target),
+        "搬走的那张进了新集合"
+    );
     assert_eq!(
         collection_of(&conn, m2),
         None,

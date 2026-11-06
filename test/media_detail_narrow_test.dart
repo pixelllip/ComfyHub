@@ -23,7 +23,11 @@ import 'package:viewer/state/library_store.dart';
 import 'package:viewer/state/nsfw_store.dart';
 import 'package:viewer/widgets/zoomable_image_view.dart';
 
-Map<String, dynamic> _mediaJson(int id, {int? collectionId, int collectionSize = 1}) {
+Map<String, dynamic> _mediaJson(
+  int id, {
+  int? collectionId,
+  int collectionSize = 1,
+}) {
   final json = <String, dynamic>{
     'id': id,
     'promptId': 1,
@@ -53,19 +57,19 @@ Map<String, dynamic> _mediaJson(int id, {int? collectionId, int collectionSize =
 }
 
 Map<String, dynamic> _promptJson() => {
-      'id': 1,
-      'title': '赛博朋克少女',
-      'kind': 'IMAGE',
-      'positivePrompt': '(1girl:1.2), cyberpunk',
-      'negativePrompt': 'lowres',
-      'loras': <Map<String, dynamic>>[],
-      'extraParams': <String, String>{},
-      'negativeMode': 'keep',
-      'favorite': false,
-      'hasWorkflow': false,
-      'mediaCount': 3,
-      'tags': <Map<String, dynamic>>[],
-    };
+  'id': 1,
+  'title': '赛博朋克少女',
+  'kind': 'IMAGE',
+  'positivePrompt': '(1girl:1.2), cyberpunk',
+  'negativePrompt': 'lowres',
+  'loras': <Map<String, dynamic>>[],
+  'extraParams': <String, String>{},
+  'negativeMode': 'keep',
+  'favorite': false,
+  'hasWorkflow': false,
+  'mediaCount': 3,
+  'tags': <Map<String, dynamic>>[],
+};
 
 /// 三条同批产物（集合 7），外加集合成员列表 —— 详情页要靠它算上一张 / 下一张。
 MockClient _client({int members = 3}) {
@@ -86,7 +90,10 @@ MockClient _client({int members = 3}) {
     } else if (path == '/api/media') {
       // 集合成员列表（`collectionId=7&sort=oldest`）
       body = {
-        'items': [for (var i = 1; i <= members; i++) _mediaJson(i, collectionId: 7, collectionSize: members)],
+        'items': [
+          for (var i = 1; i <= members; i++)
+            _mediaJson(i, collectionId: 7, collectionSize: members),
+        ],
         'total': members,
         'page': 1,
         'size': 200,
@@ -110,17 +117,20 @@ Future<LibraryStore> _store({int members = 3}) async {
   SharedPreferences.setMockInitialValues({});
   final settings = SettingsStore();
   await settings.load();
-  return LibraryStore(settings, api: ApiClient(settings.baseUrl, client: _client(members: members)));
+  return LibraryStore(
+    settings,
+    api: ApiClient(settings.baseUrl, client: _client(members: members)),
+  );
 }
 
 Widget _wrap(LibraryStore store) => MultiProvider(
-      providers: [
-        ChangeNotifierProvider<LibraryStore>.value(value: store),
-        ChangeNotifierProvider<SettingsStore>.value(value: store.settings),
-        ChangeNotifierProvider<NsfwStore>(create: (_) => NsfwStore()),
-      ],
-      child: const MaterialApp(home: MediaDetailPage(mediaId: 1)),
-    );
+  providers: [
+    ChangeNotifierProvider<LibraryStore>.value(value: store),
+    ChangeNotifierProvider<SettingsStore>.value(value: store.settings),
+    ChangeNotifierProvider<NsfwStore>(create: (_) => NsfwStore()),
+  ],
+  child: const MaterialApp(home: MediaDetailPage(mediaId: 1)),
+);
 
 void _surface(WidgetTester tester, Size size) {
   tester.view.physicalSize = size;
@@ -134,7 +144,9 @@ void main() {
   // -------------------------------------------------------------------------
 
   for (final width in [320.0, 384.0, 420.0]) {
-    testWidgets('窄屏 ${width.toInt()}dp：详情页不许 RenderFlex overflow', (tester) async {
+    testWidgets('窄屏 ${width.toInt()}dp：详情页不许 RenderFlex overflow', (
+      tester,
+    ) async {
       _surface(tester, Size(width, 900));
       final store = await _store();
       addTearDown(store.dispose);
@@ -143,7 +155,11 @@ void main() {
 
       // 「关联的提示词」与「生成参数」两张卡的表头原来是固定宽的 `Row`
       // （图标 + 标题 + 两个按钮 / 一句说明），窄屏下必然挤爆 —— 现在是 `Wrap`。
-      expect(tester.takeException(), isNull, reason: '${width.toInt()}dp 下不许有 overflow');
+      expect(
+        tester.takeException(),
+        isNull,
+        reason: '${width.toInt()}dp 下不许有 overflow',
+      );
 
       // 关键内容仍然在（折行不等于丢东西）
       expect(find.text('关联的提示词'), findsOneWidget);
@@ -175,7 +191,11 @@ void main() {
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
     await tester.pumpAndSettle();
     expect(find.text('2 / 3'), findsOneWidget, reason: '→ 该切到下一张');
-    expect(find.byType(MediaDetailPage), findsOneWidget, reason: '**替换**路由，不是又压一层');
+    expect(
+      find.byType(MediaDetailPage),
+      findsOneWidget,
+      reason: '**替换**路由，不是又压一层',
+    );
     expect(
       identical(tester.state(find.byType(MediaDetailPage)), stateBefore),
       isTrue,
@@ -229,8 +249,11 @@ void main() {
     await tester.pumpAndSettle();
 
     final listFinder = find.byType(Scrollable).first;
-    final before = tester.widget<Scrollable>(listFinder).controller?.position.pixels ??
-        Scrollable.of(tester.element(find.byType(ZoomableImageView))).position.pixels;
+    final before =
+        tester.widget<Scrollable>(listFinder).controller?.position.pixels ??
+        Scrollable.of(tester.element(find.byType(ZoomableImageView)))
+            .position
+            .pixels;
 
     // 把指针放到图上再滚
     final center = tester.getCenter(find.byType(ZoomableImageView));
@@ -239,11 +262,9 @@ void main() {
     await tester.sendEventToBinding(pointer.scroll(const Offset(0, 120)));
     await tester.pumpAndSettle();
 
-    final after = Scrollable.of(tester.element(find.byType(ZoomableImageView))).position.pixels;
-    expect(
-      after,
-      before,
-      reason: '图上的滚轮该被缩放吃掉（否则"滚一下既翻页又缩放"）',
-    );
+    final after = Scrollable.of(tester.element(find.byType(ZoomableImageView)))
+        .position
+        .pixels;
+    expect(after, before, reason: '图上的滚轮该被缩放吃掉（否则"滚一下既翻页又缩放"）');
   });
 }

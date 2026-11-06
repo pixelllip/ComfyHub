@@ -33,23 +33,29 @@ class MdInline {
   final String? link;
 
   /// 未传的字段沿用原值（注意 link 用"是否显式传入"判断，所以拆成两个方法）。
-  MdInline withStyle({bool? bold, bool? italic, bool? code, bool? strike, String? link}) => MdInline(
-        text,
-        bold: bold ?? this.bold,
-        italic: italic ?? this.italic,
-        code: code ?? this.code,
-        strike: strike ?? this.strike,
-        link: link ?? this.link,
-      );
+  MdInline withStyle({
+    bool? bold,
+    bool? italic,
+    bool? code,
+    bool? strike,
+    String? link,
+  }) => MdInline(
+    text,
+    bold: bold ?? this.bold,
+    italic: italic ?? this.italic,
+    code: code ?? this.code,
+    strike: strike ?? this.strike,
+    link: link ?? this.link,
+  );
 
   MdInline withText(String next) => MdInline(
-        next,
-        bold: bold,
-        italic: italic,
-        code: code,
-        strike: strike,
-        link: link,
-      );
+    next,
+    bold: bold,
+    italic: italic,
+    code: code,
+    strike: strike,
+    link: link,
+  );
 
   @override
   String toString() =>
@@ -180,7 +186,10 @@ const Set<String> codeBlockProseLanguages = {
 /// 判据与 [reflowWrappedProse] 共用一部分，但**更宽**：它只回答"能不能折"，
 /// 不回答"能不能并成一段"。
 bool _looksStructured(String code) {
-  final lines = code.replaceAll('\r\n', '\n').replaceAll('\r', '\n').split('\n');
+  final lines = code
+      .replaceAll('\r\n', '\n')
+      .replaceAll('\r', '\n')
+      .split('\n');
   for (final line in lines) {
     if (line.trim().isEmpty) continue;
     // 缩进 / 制表符 / 连续空格 = 代码对齐或 ASCII 图
@@ -188,7 +197,9 @@ bool _looksStructured(String code) {
     if (line.contains('\t') || line.contains('  ')) return true;
     final trimmed = line.trim();
     if (_codeishLineStart.hasMatch(trimmed)) return true;
-    if (trimmed.contains('{') || trimmed.contains('}') || trimmed.contains('=>')) {
+    if (trimmed.contains('{') ||
+        trimmed.contains('}') ||
+        trimmed.contains('=>')) {
       return true;
     }
     if (trimmed.endsWith(';') || trimmed.endsWith('\\')) return true;
@@ -218,7 +229,10 @@ String? reflowWrappedProse(String code, String? language) {
   final lang = (language ?? '').trim().toLowerCase();
   if (!_proseCodeLanguages.contains(lang)) return null;
 
-  final lines = code.replaceAll('\r\n', '\n').replaceAll('\r', '\n').split('\n');
+  final lines = code
+      .replaceAll('\r\n', '\n')
+      .replaceAll('\r', '\n')
+      .split('\n');
   final paragraphs = <List<String>>[];
   var current = <String>[];
   for (final line in lines) {
@@ -377,7 +391,10 @@ List<MdBlock> parseMarkdown(String source) {
 
 /// 真正的解析（不带缓存）。递归解析引用块时也走 `parseMarkdown`。
 List<MdBlock> _parseMarkdownUncached(String source) {
-  final lines = source.replaceAll('\r\n', '\n').replaceAll('\r', '\n').split('\n');
+  final lines = source
+      .replaceAll('\r\n', '\n')
+      .replaceAll('\r', '\n')
+      .split('\n');
   final blocks = <MdBlock>[];
   final paragraph = <String>[];
 
@@ -399,8 +416,9 @@ List<MdBlock> _parseMarkdownUncached(String source) {
       final body = <String>[];
       // 注意：`RegExp.escape('```')` 里含有 `$`，走 `String.replaceAll` 会被当成
       // 替换引用而炸掉（返回空串）——这里只对单个字符做转义。
-      final closePattern =
-          RegExp(r'^\s{0,3}' + RegExp.escape(fence.marker[0]) + r'{3,}[ \t]*$');
+      final closePattern = RegExp(
+        r'^\s{0,3}' + RegExp.escape(fence.marker[0]) + r'{3,}[ \t]*$',
+      );
       i++;
       var closed = false;
       while (i < lines.length) {
@@ -426,7 +444,12 @@ List<MdBlock> _parseMarkdownUncached(String source) {
     final heading = RegExp(r'^\s{0,3}(#{1,6})\s+(.*)$').firstMatch(line);
     if (heading != null) {
       flushParagraph();
-      blocks.add(MdHeading(heading.group(1)!.length, parseInline(heading.group(2)!.trim())));
+      blocks.add(
+        MdHeading(
+          heading.group(1)!.length,
+          parseInline(heading.group(2)!.trim()),
+        ),
+      );
       i++;
       continue;
     }
@@ -465,21 +488,29 @@ List<MdBlock> _parseMarkdownUncached(String source) {
               blocks.isNotEmpty &&
               blocks.last is MdListItem) {
             final prev = blocks.removeLast() as MdListItem;
-            blocks.add(MdListItem(
-              [...prev.spans, const MdInline('\n'), ...parseInline(lines[i].trim())],
-              ordered: prev.ordered,
-              index: prev.index,
-            ));
+            blocks.add(
+              MdListItem(
+                [
+                  ...prev.spans,
+                  const MdInline('\n'),
+                  ...parseInline(lines[i].trim()),
+                ],
+                ordered: prev.ordered,
+                index: prev.index,
+              ),
+            );
             i++;
             continue;
           }
           break;
         }
-        blocks.add(MdListItem(
-          parseInline(current.text),
-          ordered: current.ordered,
-          index: ordinal,
-        ));
+        blocks.add(
+          MdListItem(
+            parseInline(current.text),
+            ordered: current.ordered,
+            index: ordinal,
+          ),
+        );
         if (current.ordered) ordinal++;
         i++;
       }
@@ -540,7 +571,10 @@ bool _isBlank(String line) => line.trim().isEmpty;
     rows.add(_cells(_splitRow(line), aligns.length));
     j++;
   }
-  return (block: MdTable(aligns, _cells(_splitRow(head), aligns.length), rows), next: j);
+  return (
+    block: MdTable(aligns, _cells(_splitRow(head), aligns.length), rows),
+    next: j,
+  );
 }
 
 /// 分隔行 → 每列的对齐方式；不是分隔行返回 null。
@@ -554,13 +588,15 @@ List<MdColumnAlign>? _alignmentsOf(String line) {
     if (!RegExp(r'^:?-+:?$').hasMatch(c)) return null;
     final left = c.startsWith(':');
     final right = c.endsWith(':');
-    out.add(left && right
-        ? MdColumnAlign.center
-        : left
-            ? MdColumnAlign.left
-            : right
-                ? MdColumnAlign.right
-                : MdColumnAlign.none);
+    out.add(
+      left && right
+          ? MdColumnAlign.center
+          : left
+          ? MdColumnAlign.left
+          : right
+          ? MdColumnAlign.right
+          : MdColumnAlign.none,
+    );
   }
   return out;
 }
@@ -592,9 +628,8 @@ List<String> _splitRow(String line) {
 
 /// 把 [raw] 规整成 [columns] 列（多的丢、少的补空），并解析行内标记。
 List<List<MdInline>> _cells(List<String> raw, int columns) => [
-      for (var k = 0; k < columns; k++)
-        parseInline(k < raw.length ? raw[k] : ''),
-    ];
+  for (var k = 0; k < columns; k++) parseInline(k < raw.length ? raw[k] : ''),
+];
 
 class _Fence {
   const _Fence(this.marker, this.language);
@@ -605,7 +640,8 @@ class _Fence {
 _Fence? _fenceOf(String line) {
   // 结尾必须是行尾（允许尾随空格），不能把 "```\n" 这种"围栏后面还有内容"的
   // 情形当成开围栏 —— 否则开头的空行会让一个正常的代码块被当成未闭合。
-  final m = RegExp(r'^\s{0,3}(`{3,}|~{3,})[ \t]*([A-Za-z0-9_+#.-]*)[ \t]*$').firstMatch(line);
+  final m = RegExp(r'^\s{0,3}(`{3,}|~{3,})[ \t]*([A-Za-z0-9_+#.-]*)[ \t]*$')
+      .firstMatch(line);
   if (m == null) return null;
   final marker = m.group(1)!;
   final lang = m.group(2);
@@ -622,7 +658,11 @@ class _ListItem {
 _ListItem? _listItemOf(String line) {
   final ordered = RegExp(r'^\s{0,6}(\d{1,9})[.)]\s+(.*)$').firstMatch(line);
   if (ordered != null) {
-    return _ListItem(ordered.group(2)!, ordered: true, marker: ordered.group(1)!);
+    return _ListItem(
+      ordered.group(2)!,
+      ordered: true,
+      marker: ordered.group(1)!,
+    );
   }
   final bullet = RegExp(r'^\s{0,6}[-*+]\s+(.*)$').firstMatch(line);
   if (bullet != null) {
@@ -643,10 +683,15 @@ final _boldStar = RegExp(r'\*\*(?!\s)(.+?)(?<!\s)\*\*', dotAll: true);
 // 行内代码里的 `##`（`` `##x##` ``）不进这条规则：`code` 候选优先级更高，且命中后不递归。
 final _boldHash = RegExp(r'##[ \t]*(?!\s)(.+?)(?<!\s)[ \t]*##', dotAll: true);
 // 下划线强调必须落在词边界上，否则 snake_case_name 会被误判（CommonMark 同款规则）
-final _boldUnder = RegExp(r'(?<![\w])__(?![\s_])(.+?)(?<![\s_])__(?![\w])', dotAll: true);
+final _boldUnder = RegExp(
+  r'(?<![\w])__(?![\s_])(.+?)(?<![\s_])__(?![\w])',
+  dotAll: true,
+);
 final _strike = RegExp(r'~~(?!\s)(.+?)(?<!\s)~~', dotAll: true);
 final _italicStar = RegExp(r'(?<!\*)\*(?!\*)(?!\s)([^*]+?)(?<!\s)\*(?!\*)');
-final _italicUnder = RegExp(r'(?<![\w_])_(?![\s_])([^_]+?)(?<![\s_])_(?![\w_])');
+final _italicUnder = RegExp(
+  r'(?<![\w_])_(?![\s_])([^_]+?)(?<![\s_])_(?![\w_])',
+);
 final _codeSpan = RegExp(r'`([^`]+)`');
 final _link = RegExp(r'!?\[([^\]]*)\]\(([^)\s]+)(?:\s+"[^"]*")?\)');
 final _autoLink = RegExp(r'https?://[^\s<>()\[\]]*[^\s<>()\[\].,;:!?]');
@@ -670,7 +715,9 @@ void _scanInline(String text, MdInline style, List<MdInline> out) {
   // 候选：位置最靠前者胜；位置相同按优先级（数字小的先处理）
   final candidates = <({int start, int priority, String kind, Match m})>[];
   void add(String kind, int priority, Match? m) {
-    if (m != null) candidates.add((start: m.start, priority: priority, kind: kind, m: m));
+    if (m != null) {
+      candidates.add((start: m.start, priority: priority, kind: kind, m: m));
+    }
   }
 
   add('code', 0, _codeSpan.firstMatch(text));
@@ -679,7 +726,11 @@ void _scanInline(String text, MdInline style, List<MdInline> out) {
   // （`##` 与 `**` 起头字符不同，不会出现同起点争用）。
   add('bold', 1, _boldHash.firstMatch(text));
   add('strike', 2, _strike.firstMatch(text));
-  add('italic', 3, _italicStar.firstMatch(text) ?? _italicUnder.firstMatch(text));
+  add(
+    'italic',
+    3,
+    _italicStar.firstMatch(text) ?? _italicUnder.firstMatch(text),
+  );
   add('link', 4, _link.firstMatch(text));
   // 裸链接：已经在链接标记内部时不再识别（否则会套娃）
   if (style.link == null) add('auto', 5, _autoLink.firstMatch(text));
@@ -688,7 +739,9 @@ void _scanInline(String text, MdInline style, List<MdInline> out) {
     out.add(style.withText(text));
     return;
   }
-  candidates.sort((a, b) => a.start != b.start ? a.start - b.start : a.priority - b.priority);
+  candidates.sort(
+    (a, b) => a.start != b.start ? a.start - b.start : a.priority - b.priority,
+  );
   final pick = candidates.first;
 
   switch (pick.kind) {
@@ -706,13 +759,19 @@ void _scanInline(String text, MdInline style, List<MdInline> out) {
     case 'link':
       final before = text.substring(0, pick.m.start);
       if (before.isNotEmpty) out.add(style.withText(before));
-      final label = pick.m.group(1)!.isEmpty ? pick.m.group(2)! : pick.m.group(1)!;
-      out.add(MdInline(label,
+      final label = pick.m.group(1)!.isEmpty
+          ? pick.m.group(2)!
+          : pick.m.group(1)!;
+      out.add(
+        MdInline(
+          label,
           bold: style.bold,
           italic: style.italic,
           code: style.code,
           strike: style.strike,
-          link: pick.m.group(2)));
+          link: pick.m.group(2),
+        ),
+      );
       _scanInline(text.substring(pick.m.end), style, out);
     default: // auto
       // 末尾的中英文标点都不算地址的一部分（"见 https://a.example/x。" 这种很常见）
@@ -727,7 +786,13 @@ void _scanInline(String text, MdInline style, List<MdInline> out) {
 }
 
 /// 标记内递归解析：`**a *b* c**` 里的斜体要生效。
-void _emit(String text, Match m, MdInline style, List<MdInline> out, MdInline inner) {
+void _emit(
+  String text,
+  Match m,
+  MdInline style,
+  List<MdInline> out,
+  MdInline inner,
+) {
   final before = text.substring(0, m.start);
   if (before.isNotEmpty) out.add(style.withText(before));
   _scanInline(m.group(1)!, inner, out);

@@ -4,7 +4,6 @@
 
 use super::common::*;
 
-
 /// run-kit 的形状：11 个顶层键、7 个手机工具、模板横幅、两条按轮指令、预算数值。
 #[tokio::test]
 async fn run_kit_ships_every_rule_the_phone_needs() {
@@ -16,19 +15,33 @@ async fn run_kit_ships_every_rule_the_phone_needs() {
     assert_eq!(
         keys(&body),
         vec![
-            "continueInstruction", "inlineBudget", "kitVersion", "models", "nsfwEnabled",
-            "promptVersion", "schemaVersion", "systemPrompt", "titleInstruction", "tools",
+            "continueInstruction",
+            "inlineBudget",
+            "kitVersion",
+            "models",
+            "nsfwEnabled",
+            "promptVersion",
+            "schemaVersion",
+            "systemPrompt",
+            "titleInstruction",
+            "tools",
             "untrustedBanner",
         ]
     );
-    assert_eq!(body["schemaVersion"], 1, "与 /api/sync/manifest 的 user_version 同一个数");
+    assert_eq!(
+        body["schemaVersion"], 1,
+        "与 /api/sync/manifest 的 user_version 同一个数"
+    );
     // v60：新增 `reference_image_search`，第 26 条补"选项先找参考图"。
     assert_eq!(body["promptVersion"], "v60");
     assert_eq!(body["nsfwEnabled"], false, "夹具里没开 NSFW");
     assert_eq!(body["inlineBudget"]["perImageBytes"], 8388608, "单图 8MB");
     assert_eq!(body["inlineBudget"]["totalBytes"], 20971520, "合计 20MB");
     let kit = body["kitVersion"].as_str().unwrap();
-    assert!(kit.contains('.'), "kitVersion 形如 <日期>.<当日序号>：{kit}");
+    assert!(
+        kit.contains('.'),
+        "kitVersion 形如 <日期>.<当日序号>：{kit}"
+    );
 
     // tools[]：**只有手机可执行的那 8 个**（7 个 BOTH + 手机专属的 `comfy_queue_submit`），每项恰好四个键
     let tools = body["tools"].as_array().unwrap();
@@ -36,30 +49,52 @@ async fn run_kit_ships_every_rule_the_phone_needs() {
     assert_eq!(
         names,
         vec![
-            "ask_user_question", "civitai_search", "comfy_queue_submit", "list_skills", "load_skill",
-            "remember", "web_fetch", "web_search",
+            "ask_user_question",
+            "civitai_search",
+            "comfy_queue_submit",
+            "list_skills",
+            "load_skill",
+            "remember",
+            "web_fetch",
+            "web_search",
         ],
         "按 name 升序（顺序进了 kitVersion 签名）"
     );
     for tool in tools {
-        assert_eq!(keys(tool), vec!["description", "inputSchema", "name", "scope"]);
+        assert_eq!(
+            keys(tool),
+            vec!["description", "inputSchema", "name", "scope"]
+        );
         assert_eq!(tool["inputSchema"]["type"], "object");
         let scope = tool["scope"].as_str().unwrap();
         assert!(scope == "MOBILE" || scope == "BOTH", "错档：{scope}");
     }
     // 桌面专属的一个都不许出现（总纲 §3.5：别让模型看见它调不到的工具）
     for forbidden in [
-        "comfy_submit", "comfy_get_status", "read_file", "write_file", "register_skill",
-        "delete_skill", "list_dir", "find_model", "comfy_load_workflow",
+        "comfy_submit",
+        "comfy_get_status",
+        "read_file",
+        "write_file",
+        "register_skill",
+        "delete_skill",
+        "list_dir",
+        "find_model",
+        "comfy_load_workflow",
     ] {
-        assert!(!names.contains(&forbidden), "{forbidden} 是桌面专属，不该进手机清单");
+        assert!(
+            !names.contains(&forbidden),
+            "{forbidden} 是桌面专属，不该进手机清单"
+        );
     }
 
     // 横幅是**模板**（R7：两端不许各写一份），两条按轮指令也必须下发（R13）
     let banner = body["untrustedBanner"].as_str().unwrap();
     assert!(banner.contains("{kind}"));
     assert!(banner.contains("\n查询：{query}"));
-    assert!(body["titleInstruction"].as_str().unwrap().contains("[标题]"));
+    assert!(body["titleInstruction"]
+        .as_str()
+        .unwrap()
+        .contains("[标题]"));
     assert!(body["continueInstruction"]
         .as_str()
         .unwrap()
@@ -68,16 +103,34 @@ async fn run_kit_ships_every_rule_the_phone_needs() {
     // systemPrompt：五段来源都要真的进去
     let prompt = body["systemPrompt"].as_str().unwrap();
     assert!(prompt.contains("- Provider: 本机网关（openai-completions）"));
-    assert!(prompt.contains("- Model: m-full"), "缺省取第一个启用模型（display_name, model_id 序）");
-    assert!(prompt.contains("- 本次请求附带图片附件: 无"), "kit 是取那一刻的工件");
+    assert!(
+        prompt.contains("- Model: m-full"),
+        "缺省取第一个启用模型（display_name, model_id 序）"
+    );
+    assert!(
+        prompt.contains("- 本次请求附带图片附件: 无"),
+        "kit 是取那一刻的工件"
+    );
     assert!(prompt.contains("demo-skill"), "已装 Skills 的目录要进去");
     assert!(prompt.contains("用户偏好 4:3 画幅"), "长期记忆要进去");
-    assert!(prompt.contains("现有 1/100 条"), "还要报占用（模型据此知道还剩多少额度）");
+    assert!(
+        prompt.contains("现有 1/100 条"),
+        "还要报占用（模型据此知道还剩多少额度）"
+    );
     assert!(prompt.contains("**只能**写"), "文件白名单要如实写出来");
     assert!(prompt.contains("- 可调用的工具（参数结构见接口定义）：ask_user_question、"));
-    assert!(prompt.contains("事实纪律（不要猜本机状态）"), "常驻段必须在");
-    assert!(!prompt.contains("[MODE: UNRESTRICTED SANDBOX"), "NSFW 关着就不许注入那段");
-    assert!(prompt.contains("本机没有开启 NSFW 模式"), "关掉时要**如实说明**");
+    assert!(
+        prompt.contains("事实纪律（不要猜本机状态）"),
+        "常驻段必须在"
+    );
+    assert!(
+        !prompt.contains("[MODE: UNRESTRICTED SANDBOX"),
+        "NSFW 关着就不许注入那段"
+    );
+    assert!(
+        prompt.contains("本机没有开启 NSFW 模式"),
+        "关掉时要**如实说明**"
+    );
 
     // models[]：只有启用的两个；12 个键永远在，5 个可空键按行给
     let models = body["models"].as_array().unwrap();
@@ -88,25 +141,50 @@ async fn run_kit_ships_every_rule_the_phone_needs() {
     assert_eq!(
         keys(&models[0]),
         vec![
-            "attachmentTransports", "capabilitySource", "contextWindow", "displayName",
-            "inputModalities", "maxAttachmentBytes", "maxAttachmentCount", "maxOutputTokens",
-            "modelId", "parallelTools", "providerApi", "providerId", "providerName", "reasoning",
-            "thinkingEfforts", "thinkingFormat", "tools",
+            "attachmentTransports",
+            "capabilitySource",
+            "contextWindow",
+            "displayName",
+            "inputModalities",
+            "maxAttachmentBytes",
+            "maxAttachmentCount",
+            "maxOutputTokens",
+            "modelId",
+            "parallelTools",
+            "providerApi",
+            "providerId",
+            "providerName",
+            "reasoning",
+            "thinkingEfforts",
+            "thinkingFormat",
+            "tools",
         ]
     );
     assert_eq!(
         keys(&models[1]),
         vec![
-            "attachmentTransports", "capabilitySource", "displayName", "inputModalities",
-            "modelId", "parallelTools", "providerApi", "providerId", "providerName", "reasoning",
-            "thinkingEfforts", "tools",
+            "attachmentTransports",
+            "capabilitySource",
+            "displayName",
+            "inputModalities",
+            "modelId",
+            "parallelTools",
+            "providerApi",
+            "providerId",
+            "providerName",
+            "reasoning",
+            "thinkingEfforts",
+            "tools",
         ],
         "可空列为 NULL 时那 5 个键一个都不许自己冒出来"
     );
     // 桌面的凭据引用（`credentialRef`）连名字都不该下发
     let raw = serde_json::to_string(&body).unwrap();
     assert!(!raw.contains("RUN_KEY"), "手机拿了凭据引用没用，还多漏一样");
-    assert!(!raw.contains("mimeAllowlist"), "run-kit 的模型形状里没有这个键");
+    assert!(
+        !raw.contains("mimeAllowlist"),
+        "run-kit 的模型形状里没有这个键"
+    );
 }
 
 /// 覆盖参数：`?providerId=&modelId=` 只在**库里真存在且启用**时才认，否则 400 且不静默回落。
@@ -121,13 +199,20 @@ async fn run_kit_rejects_bad_provider_or_model_overrides() {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "body={body}");
-    assert!(body["systemPrompt"].as_str().unwrap().contains("- Model: m-bare"));
+    assert!(body["systemPrompt"]
+        .as_str()
+        .unwrap()
+        .contains("- Model: m-bare"));
 
     // Provider 不存在 / 没启用 → 400 CONFIG_ERROR（**不是 404**：前端按 error 分支、按 detail 给人看）
-    let (status, body) = get_json(router_for(state.clone()), "/api/ai/run-kit?providerId=nope").await;
+    let (status, body) =
+        get_json(router_for(state.clone()), "/api/ai/run-kit?providerId=nope").await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_eq!(body["error"], "CONFIG_ERROR");
-    assert!(body["detail"].as_str().unwrap().contains("Provider 不存在或未启用: nope"));
+    assert!(body["detail"]
+        .as_str()
+        .unwrap()
+        .contains("Provider 不存在或未启用: nope"));
 
     let (status, body) = get_json(
         router_for(state.clone()),
@@ -136,7 +221,10 @@ async fn run_kit_rejects_bad_provider_or_model_overrides() {
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_eq!(body["error"], "CONFIG_ERROR");
-    assert!(body["detail"].as_str().unwrap().contains("模型不存在或未启用: p-run/nope"));
+    assert!(body["detail"]
+        .as_str()
+        .unwrap()
+        .contains("模型不存在或未启用: p-run/nope"));
 
     // 被用户关掉的模型同样不许指定（"指定了就按它跑"，不许悄悄换一个）
     let (status, _) = get_json(
@@ -165,7 +253,11 @@ async fn run_kit_status_is_idempotent_and_bumps_only_when_rules_change() {
     assert_eq!(body["revoked"].as_array().unwrap().len(), 0);
 
     let (_, again) = get_json(router_for(state.clone()), "/api/ai/run-kit/status").await;
-    assert_eq!(again["current"].as_str().unwrap(), first, "幂等：再问一次还是同一个版本");
+    assert_eq!(
+        again["current"].as_str().unwrap(),
+        first,
+        "幂等：再问一次还是同一个版本"
+    );
 
     // 改规则：把 `web_search` 禁掉
     state
@@ -181,7 +273,10 @@ async fn run_kit_status_is_idempotent_and_bumps_only_when_rules_change() {
 
     let (_, bumped) = get_json(router_for(state.clone()), "/api/ai/run-kit/status").await;
     let second = bumped["current"].as_str().unwrap().to_string();
-    assert_ne!(second, first, "规则变了版本号必须动，否则手机永远拿不到新规则");
+    assert_ne!(
+        second, first,
+        "规则变了版本号必须动，否则手机永远拿不到新规则"
+    );
     assert_eq!(
         second.rsplit_once('.').unwrap().0,
         first.rsplit_once('.').unwrap().0,
@@ -232,7 +327,10 @@ async fn run_kit_nsfw_switch_decides_whether_the_block_is_injected() {
     let on_prompt = on["systemPrompt"].as_str().unwrap();
     assert!(on_prompt.contains("[MODE: UNRESTRICTED SANDBOX — STABLE]"));
     assert!(on_prompt.len() > off_prompt.len(), "开着时正文更长");
-    assert!(on_prompt.contains("事实纪律（不要猜本机状态）"), "关掉 NSFW 不等于把纪律一起关掉");
+    assert!(
+        on_prompt.contains("事实纪律（不要猜本机状态）"),
+        "关掉 NSFW 不等于把纪律一起关掉"
+    );
     assert!(!on_prompt.contains("本机没有开启 NSFW 模式"));
 }
 
@@ -269,7 +367,10 @@ async fn tool_policy_and_nsfw_endpoints() {
     assert_eq!(policy["maxToolSteps"], 25);
     assert_eq!(policy["maxCallsPerRun"], 48);
     assert!(
-        policy["writeRoots"][0].as_str().unwrap().ends_with("comfyui"),
+        policy["writeRoots"][0]
+            .as_str()
+            .unwrap()
+            .ends_with("comfyui"),
         "回的是展开后的绝对路径：{policy}"
     );
 
@@ -305,7 +406,10 @@ async fn tool_policy_and_nsfw_endpoints() {
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{err}");
     assert_eq!(err["error"], "CONFIG_ERROR");
-    assert!(err["detail"].as_str().unwrap().contains("未知的权限档"), "{err}");
+    assert!(
+        err["detail"].as_str().unwrap().contains("未知的权限档"),
+        "{err}"
+    );
     // 真的没被改动（"拒绝"不能变成"悄悄按 ask 存下来"）
     let (_, after) = get_json(router_for(state.clone()), "/api/ai/tools/policy").await;
     assert_eq!(after["permissionMode"], "full", "被拒的请求不许改库");
@@ -403,7 +507,14 @@ async fn tool_policy_and_nsfw_endpoints() {
     );
     assert_eq!(
         keys(&tools[0]),
-        vec!["access", "category", "description", "mutating", "name", "overridden"]
+        vec![
+            "access",
+            "category",
+            "description",
+            "mutating",
+            "name",
+            "overridden"
+        ]
     );
     assert_eq!(tools[0]["category"], "ask");
     assert_eq!(tools[0]["access"], "allow");
@@ -411,10 +522,18 @@ async fn tool_policy_and_nsfw_endpoints() {
     assert_eq!(by_name("remember")["category"], "memory");
     assert_eq!(by_name("remember")["mutating"], true, "`remember` 会写盘");
     assert_eq!(by_name("read_file")["category"], "files");
-    assert_eq!(by_name("write_file")["mutating"], true, "`write_file` 会写盘");
+    assert_eq!(
+        by_name("write_file")["mutating"],
+        true,
+        "`write_file` 会写盘"
+    );
     // 这一次策略已经被前面切成了 `full`，所以 `delete_skill` 的出厂档 ASK 被放宽成 allow
     // （出厂档本身在 `tools::tests::mutating_flags_come_from_the_generated_catalog` 里钉住）
-    assert_eq!(by_name("delete_skill")["access"], "allow", "full 档下 ask → allow");
+    assert_eq!(
+        by_name("delete_skill")["access"],
+        "allow",
+        "full 档下 ask → allow"
+    );
     assert_eq!(tools[0]["overridden"], false);
     // 覆盖过之后界面要能标出来
     let (_, saved) = send_json(
@@ -440,10 +559,16 @@ async fn tool_policy_and_nsfw_endpoints() {
     // ⑤ NSFW：出厂两档都关、版本号在；PUT 之后 effectiveBlur 才是 true
     let (status, nsfw) = get_json(router_for(state.clone()), "/api/ai/nsfw").await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(keys(&nsfw), vec!["blur", "effectiveBlur", "enabled", "promptVersion"]);
+    assert_eq!(
+        keys(&nsfw),
+        vec!["blur", "effectiveBlur", "enabled", "promptVersion"]
+    );
     assert_eq!(nsfw["enabled"], false);
     assert_eq!(nsfw["effectiveBlur"], false);
-    assert!(nsfw["promptVersion"].as_str().unwrap().starts_with('v'), "{nsfw}");
+    assert!(
+        nsfw["promptVersion"].as_str().unwrap().starts_with('v'),
+        "{nsfw}"
+    );
 
     // 只开 enabled（不传 blur）→ blur 按**关**处理（漏传不能让打码被悄悄打开）
     let (_, saved) = send_json(
@@ -478,7 +603,10 @@ async fn skills_roots_points_at_the_directories_the_endpoints_really_use() {
 
     let (status, body) = get_json(router_for(state.clone()), "/api/ai/skills/roots").await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(keys(&body), vec!["builtinRoot", "userRoot", "userRootExists"]);
+    assert_eq!(
+        keys(&body),
+        vec!["builtinRoot", "userRoot", "userRootExists"]
+    );
     assert_eq!(body["userRoot"], user.to_string_lossy().to_string());
     assert_eq!(body["builtinRoot"], builtin.to_string_lossy().to_string());
     assert_eq!(body["userRootExists"], false, "还没建过投放口");
@@ -527,8 +655,18 @@ async fn skills_crud_round_trip_with_stable_error_codes() {
     assert_eq!(
         keys(&body),
         vec![
-            "description", "digest", "enabled", "fileCount", "modelInvocable", "name", "sizeBytes",
-            "source", "updatedAt", "userInvocable", "version", "whenToUse"
+            "description",
+            "digest",
+            "enabled",
+            "fileCount",
+            "modelInvocable",
+            "name",
+            "sizeBytes",
+            "source",
+            "updatedAt",
+            "userInvocable",
+            "version",
+            "whenToUse"
         ],
         "version: 1 是 render 写死的 → 会读回来；conflict / validationError / origin 不该出现"
     );
@@ -540,7 +678,11 @@ async fn skills_crud_round_trip_with_stable_error_codes() {
     assert_eq!(body["version"], "1");
     assert_eq!(body["fileCount"], 1);
     assert!(body["sizeBytes"].as_i64().unwrap() > 0);
-    assert_eq!(body["digest"].as_str().unwrap().len(), 16, "sha256 前 16 位");
+    assert_eq!(
+        body["digest"].as_str().unwrap().len(),
+        16,
+        "sha256 前 16 位"
+    );
 
     // 落盘的格式（render 逐字）：frontmatter + 空行 + 正文 + 结尾换行
     let file = user_root.join("demo-skill").join("SKILL.md");
@@ -592,7 +734,10 @@ async fn skills_crud_round_trip_with_stable_error_codes() {
     )
     .await;
     assert_eq!(body["error"], "INVALID_ARGUMENT");
-    assert_eq!(body["detail"], "description 必填：说明这个 skill 什么时候用");
+    assert_eq!(
+        body["detail"],
+        "description 必填：说明这个 skill 什么时候用"
+    );
     let (_, body) = send_json(
         router_for(state.clone()),
         "POST",
@@ -603,12 +748,28 @@ async fn skills_crud_round_trip_with_stable_error_codes() {
     assert_eq!(body["detail"], "skill 正文不能为空");
 
     // 删除 → `{deleted:true, id}`；再删一次是 `{deleted:false}`（**不是 404**，幂等）
-    let (status, body) = send_empty(router_for(state.clone()), "DELETE", "/api/ai/skills/demo-skill").await;
+    let (status, body) = send_empty(
+        router_for(state.clone()),
+        "DELETE",
+        "/api/ai/skills/demo-skill",
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(body, serde_json::json!({ "deleted": true, "id": "demo-skill" }));
+    assert_eq!(
+        body,
+        serde_json::json!({ "deleted": true, "id": "demo-skill" })
+    );
     assert!(!file.exists(), "bundle 目录要整个删掉（含 references/）");
-    let (_, body) = send_empty(router_for(state.clone()), "DELETE", "/api/ai/skills/demo-skill").await;
-    assert_eq!(body, serde_json::json!({ "deleted": false, "id": "demo-skill" }));
+    let (_, body) = send_empty(
+        router_for(state.clone()),
+        "DELETE",
+        "/api/ai/skills/demo-skill",
+    )
+    .await;
+    assert_eq!(
+        body,
+        serde_json::json!({ "deleted": false, "id": "demo-skill" })
+    );
 }
 
 /// 内置 skill：**只能停用不能删除**；同名时用户版胜出并带上 `conflict`（AIH-037）。
@@ -628,10 +789,14 @@ async fn skills_builtin_is_readonly_and_user_override_wins_with_a_conflict_hint(
     let (_, body) = get_json(router_for(state.clone()), "/api/ai/skills").await;
     assert_eq!(body.as_array().unwrap().len(), 1);
     assert_eq!(body[0]["source"], "builtin");
-    assert!(body[0].get("conflict").is_none(), "没被覆盖时不该有 conflict 键");
+    assert!(
+        body[0].get("conflict").is_none(),
+        "没被覆盖时不该有 conflict 键"
+    );
 
     // 删内置 → SKILL_READONLY（且文件还在）
-    let (status, body) = send_empty(router_for(state.clone()), "DELETE", "/api/ai/skills/native").await;
+    let (status, body) =
+        send_empty(router_for(state.clone()), "DELETE", "/api/ai/skills/native").await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_eq!(body["error"], "SKILL_READONLY");
     assert_eq!(body["detail"], "「native」是内置 skill，只能停用不能删除");
@@ -691,7 +856,11 @@ async fn skills_rescan_registers_plain_files_and_never_touches_frontmatter() {
     std::fs::create_dir_all(&user_root).unwrap();
 
     // ① 平铺 `.md`，没有 frontmatter → 补 name（文件名兜底）+ description（正文第一行）
-    std::fs::write(user_root.join("flat-one.md"), "# 大标题\n这是正文。\n第二行").unwrap();
+    std::fs::write(
+        user_root.join("flat-one.md"),
+        "# 大标题\n这是正文。\n第二行",
+    )
+    .unwrap();
     // ② 已经有 frontmatter（而且**不合法**：缺 description）→ 一个字节都不许改
     let already = "---\nname: already-there\n---\n正文\n";
     std::fs::write(user_root.join("already-there.md"), already).unwrap();
@@ -717,9 +886,23 @@ async fn skills_rescan_registers_plain_files_and_never_touches_frontmatter() {
         .iter()
         .map(|v| v.as_str().unwrap().to_string())
         .collect();
-    assert_eq!(errors.len(), 2, "两件放进来也没法用的东西要**都**说出来：{errors:?}");
-    assert!(errors.iter().any(|e| e.contains("中文名.md") && e.contains("kebab-case")), "{errors:?}");
-    assert!(errors.iter().any(|e| e.contains("empty-one.md") && e.contains("正文为空")), "{errors:?}");
+    assert_eq!(
+        errors.len(),
+        2,
+        "两件放进来也没法用的东西要**都**说出来：{errors:?}"
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.contains("中文名.md") && e.contains("kebab-case")),
+        "{errors:?}"
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.contains("empty-one.md") && e.contains("正文为空")),
+        "{errors:?}"
+    );
 
     // 补出来的 frontmatter：name 来自文件名、description 来自正文第一行（去掉了 `#`）
     let raw = std::fs::read_to_string(user_root.join("flat-one.md")).unwrap();
@@ -728,7 +911,10 @@ async fn skills_rescan_registers_plain_files_and_never_touches_frontmatter() {
         "---\nname: flat-one\ndescription: 大标题\nversion: 1\n---\n\n# 大标题\n这是正文。\n第二行\n"
     );
     // 已经有 frontmatter 的**一个字节都没变**
-    assert_eq!(std::fs::read_to_string(user_root.join("already-there.md")).unwrap(), already);
+    assert_eq!(
+        std::fs::read_to_string(user_root.join("already-there.md")).unwrap(),
+        already
+    );
 
     // rescan 的 `skills` 是**扫描后的完整清单**（含那条非法的 already-there）
     let names: Vec<&str> = body["skills"]
@@ -763,7 +949,17 @@ async fn memory_endpoints_round_trip_and_report_stable_codes() {
     // 初始：空 + 两个上限（界面显示 "N / 100 条" 用）
     let (status, body) = get_json(router_for(state.clone()), "/api/ai/memory").await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(keys(&body), vec!["content", "entryCount", "maxChars", "maxEntries", "path", "updatedAt"]);
+    assert_eq!(
+        keys(&body),
+        vec![
+            "content",
+            "entryCount",
+            "maxChars",
+            "maxEntries",
+            "path",
+            "updatedAt"
+        ]
+    );
     assert_eq!(body["content"], "");
     assert_eq!(body["entryCount"], 0);
     assert_eq!(body["maxChars"], 8000);
@@ -779,9 +975,15 @@ async fn memory_endpoints_round_trip_and_report_stable_codes() {
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(body["content"], "- 甲\n- 乙", "读回来去掉首尾空白（幂等往返）");
+    assert_eq!(
+        body["content"], "- 甲\n- 乙",
+        "读回来去掉首尾空白（幂等往返）"
+    );
     assert_eq!(body["entryCount"], 2);
-    assert_eq!(std::fs::read_to_string(dir.join("memory.md")).unwrap(), "- 甲\n- 乙\n");
+    assert_eq!(
+        std::fs::read_to_string(dir.join("memory.md")).unwrap(),
+        "- 甲\n- 乙\n"
+    );
 
     // 加一条：**用户手敲的不带日期前缀**（日期前缀只有 AI 的 remember 加）
     let (status, body) = send_json(
@@ -793,7 +995,10 @@ async fn memory_endpoints_round_trip_and_report_stable_codes() {
     .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["content"], "- 甲\n- 乙\n- 丙");
-    assert!(!body["content"].as_str().unwrap().contains('['), "不许给用户的话加日期前缀");
+    assert!(
+        !body["content"].as_str().unwrap().contains('['),
+        "不许给用户的话加日期前缀"
+    );
 
     // 再说一遍不算新增（判重）
     let (_, body) = send_json(
@@ -837,7 +1042,10 @@ async fn memory_endpoints_round_trip_and_report_stable_codes() {
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_eq!(body["error"], "MEMORY_TOO_LARGE");
-    assert_eq!(body["detail"], "记忆太长（8001 > 8000 字符），请删掉一些再保存");
+    assert_eq!(
+        body["detail"],
+        "记忆太长（8001 > 8000 字符），请删掉一些再保存"
+    );
     // 失败之后**原内容还在**（没有半截写坏）
     let (_, body) = get_json(router_for(state.clone()), "/api/ai/memory").await;
     assert_eq!(body["content"], "- 甲\n- 丙");
@@ -898,10 +1106,17 @@ async fn memory_written_from_the_ui_shows_up_in_the_run_kit_prompt() {
     )
     .await;
 
-    let (status, kit) = get_json(router_for(state.clone()), "/api/ai/run-kit?providerId=p-kit&modelId=m-1").await;
+    let (status, kit) = get_json(
+        router_for(state.clone()),
+        "/api/ai/run-kit?providerId=p-kit&modelId=m-1",
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
     let prompt = kit["systemPrompt"].as_str().unwrap();
-    assert!(prompt.contains("用户喜欢国风"), "刚写的记忆必须立刻进提示词（刻意不缓存）");
+    assert!(
+        prompt.contains("用户喜欢国风"),
+        "刚写的记忆必须立刻进提示词（刻意不缓存）"
+    );
 }
 
 /// Skills 两个写侧工具：注册 → 立刻出现在列表里 → 删除；再删报 `SKILL_NOT_FOUND`。
@@ -922,7 +1137,11 @@ async fn skill_tools_register_then_delete() {
     )
     .await
     .unwrap();
-    assert!(out.content.contains("已注册 skill「e2e-helper」"), "{}", out.content);
+    assert!(
+        out.content.contains("已注册 skill「e2e-helper」"),
+        "{}",
+        out.content
+    );
     // 结构化负载是完整的 SkillDto（界面按它画卡片）
     assert_eq!(out.payload["name"], "e2e-helper");
     assert_eq!(out.payload["source"], "user");
@@ -945,21 +1164,37 @@ async fn skill_tools_register_then_delete() {
     .unwrap();
     assert!(again.content.contains("已注册"), "{}", again.content);
 
-    let deleted = call_tool(&state, "delete_skill", serde_json::json!({ "name": "e2e-helper" }))
-        .await
-        .unwrap();
+    let deleted = call_tool(
+        &state,
+        "delete_skill",
+        serde_json::json!({ "name": "e2e-helper" }),
+    )
+    .await
+    .unwrap();
     assert_eq!(deleted.payload["deleted"], true);
-    assert!(!storage.join("ai").join("skills").join("e2e-helper").exists());
+    assert!(!storage
+        .join("ai")
+        .join("skills")
+        .join("e2e-helper")
+        .exists());
 
-    let missing = call_tool(&state, "delete_skill", serde_json::json!({ "name": "e2e-helper" }))
-        .await
-        .unwrap_err();
+    let missing = call_tool(
+        &state,
+        "delete_skill",
+        serde_json::json!({ "name": "e2e-helper" }),
+    )
+    .await
+    .unwrap_err();
     assert_eq!(missing.code, "SKILL_NOT_FOUND");
 
     // 内置 skill 受保护（码原样透传，别改写成 TOOL_ERROR）
-    let builtin = call_tool(&state, "delete_skill", serde_json::json!({ "name": "no-such-builtin" }))
-        .await
-        .unwrap_err();
+    let builtin = call_tool(
+        &state,
+        "delete_skill",
+        serde_json::json!({ "name": "no-such-builtin" }),
+    )
+    .await
+    .unwrap_err();
     assert_eq!(builtin.code, "SKILL_NOT_FOUND");
 
     std::fs::remove_dir_all(state.project_root()).ok();

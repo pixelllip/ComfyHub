@@ -181,7 +181,9 @@ pub fn import_file(
     nsfw: bool,
 ) -> Imported {
     if !source.is_file() {
-        return Imported::Failed { reason: format!("文件不存在: {}", source.display()) };
+        return Imported::Failed {
+            reason: format!("文件不存在: {}", source.display()),
+        };
     }
     let kind = kind_hint
         .map(|k| k.trim().to_uppercase())
@@ -189,17 +191,22 @@ pub fn import_file(
         .unwrap_or_else(|| crate::media::media_upload::kind_of(original_name, None));
     let sha = match crate::media::media_upload::sha256_of(source) {
         Ok(sha) => sha,
-        Err(e) => return Imported::Failed { reason: format!("读取文件失败: {e}") },
+        Err(e) => {
+            return Imported::Failed {
+                reason: format!("读取文件失败: {e}"),
+            }
+        }
     };
 
     // 内容去重：同一份文件重复导入时直接复用已有记录
     let existing: Result<Option<i64>, ApiError> = state.with(|conn| {
         use rusqlite::OptionalExtension;
-        conn
-            .query_row("SELECT id FROM media_assets WHERE sha256 = ?1 LIMIT 1", params![sha], |row| {
-                row.get::<_, i64>(0)
-            })
-            .optional()
+        conn.query_row(
+            "SELECT id FROM media_assets WHERE sha256 = ?1 LIMIT 1",
+            params![sha],
+            |row| row.get::<_, i64>(0),
+        )
+        .optional()
     });
     match existing {
         Ok(Some(existing_id)) => {
@@ -209,14 +216,20 @@ pub fn import_file(
             return Imported::Duplicate { existing_id };
         }
         Ok(None) => {}
-        Err(e) => return Imported::Failed { reason: e.human().to_string() },
+        Err(e) => {
+            return Imported::Failed {
+                reason: e.human().to_string(),
+            }
+        }
     }
 
     let stored_name = crate::media::media_upload::new_stored_name(original_name);
     let media_dir = state.media_dir().to_path_buf();
     let dest = media_dir.join(&stored_name);
     if let Err(e) = std::fs::create_dir_all(&media_dir) {
-        return Imported::Failed { reason: format!("建不了存储目录: {e}") };
+        return Imported::Failed {
+            reason: format!("建不了存储目录: {e}"),
+        };
     }
     // move 跨盘可能失败 → 退回复制 + 删源（与 Kotlin 同）
     let copied = if move_file {
@@ -230,13 +243,23 @@ pub fn import_file(
         std::fs::copy(source, &dest).map(|_| ())
     };
     if let Err(e) = copied {
-        return Imported::Failed { reason: format!("写入存储目录失败: {e}") };
+        return Imported::Failed {
+            reason: format!("写入存储目录失败: {e}"),
+        };
     }
 
-    let size = std::fs::metadata(&dest).map(|m| m.len() as i64).unwrap_or(0);
+    let size = std::fs::metadata(&dest)
+        .map(|m| m.len() as i64)
+        .unwrap_or(0);
     let mime = crate::media::media_upload::detect_mime(original_name, None);
-    let dims = if kind == "IMAGE" { crate::media::thumbs::probe_image_size(&dest) } else { None };
-    let new_title = title.map(|t| take_chars(t, 255)).unwrap_or_else(|| original_name.to_string());
+    let dims = if kind == "IMAGE" {
+        crate::media::thumbs::probe_image_size(&dest)
+    } else {
+        None
+    };
+    let new_title = title
+        .map(|t| take_chars(t, 255))
+        .unwrap_or_else(|| original_name.to_string());
 
     let inserted = state.write(|tx| -> Result<i64, crate::library::repo::WriteError> {
         tx.execute(
@@ -286,7 +309,9 @@ pub fn import_file(
         Err(e) => {
             // 入库失败：把刚落的那份清掉（别留一地孤儿文件）
             let _ = std::fs::remove_file(&dest);
-            Imported::Failed { reason: e.human().to_string() }
+            Imported::Failed {
+                reason: e.human().to_string(),
+            }
         }
     }
 }
@@ -355,7 +380,10 @@ pub fn create_captured_prompt(
             kind,
             parsed.positive,
             parsed.negative.as_deref().filter(|t| !t.trim().is_empty()),
-            parsed.checkpoint.as_deref().filter(|t| !t.trim().is_empty()),
+            parsed
+                .checkpoint
+                .as_deref()
+                .filter(|t| !t.trim().is_empty()),
             loras,
             parsed.sampler.as_deref().filter(|t| !t.trim().is_empty()),
             parsed.scheduler.as_deref().filter(|t| !t.trim().is_empty()),
@@ -398,9 +426,15 @@ pub const LORA_BACKFILL_VERSION: i64 = 1;
 fn loras_backfill_marker(conn: &rusqlite::Connection) -> rusqlite::Result<Option<i64>> {
     use rusqlite::OptionalExtension;
     let raw: Option<String> = conn
-        .query_row("SELECT v FROM app_settings WHERE k = ?1", [LORA_BACKFILL_KEY], |row| row.get(0))
+        .query_row(
+            "SELECT v FROM app_settings WHERE k = ?1",
+            [LORA_BACKFILL_KEY],
+            |row| row.get(0),
+        )
         .optional()?;
-    Ok(raw.as_deref().and_then(|text| text.trim().parse::<i64>().ok()))
+    Ok(raw
+        .as_deref()
+        .and_then(|text| text.trim().parse::<i64>().ok()))
 }
 
 /// 回填还要不要跑（没有标记 / 标记低于当前版本 → `true`）。
@@ -477,7 +511,9 @@ pub fn backfill_loras(
 
     let mut updated = 0usize;
     for (prompt_id, stored_raw, raw) in rows {
-        let Some(parsed) = captured_loras(&raw) else { continue };
+        let Some(parsed) = captured_loras(&raw) else {
+            continue;
+        };
         if parsed.is_empty() {
             continue;
         }
@@ -538,9 +574,15 @@ pub const PROMPT_BACKFILL_VERSION: i64 = 2;
 fn prompt_backfill_marker(conn: &rusqlite::Connection) -> rusqlite::Result<Option<i64>> {
     use rusqlite::OptionalExtension;
     let raw: Option<String> = conn
-        .query_row("SELECT v FROM app_settings WHERE k = ?1", [PROMPT_BACKFILL_KEY], |row| row.get(0))
+        .query_row(
+            "SELECT v FROM app_settings WHERE k = ?1",
+            [PROMPT_BACKFILL_KEY],
+            |row| row.get(0),
+        )
         .optional()?;
-    Ok(raw.as_deref().and_then(|text| text.trim().parse::<i64>().ok()))
+    Ok(raw
+        .as_deref()
+        .and_then(|text| text.trim().parse::<i64>().ok()))
 }
 
 /// 回填还要不要跑（没有标记 / 标记低于当前版本 → `true`）。
@@ -608,14 +650,19 @@ pub fn backfill_runtime_prompts(conn: &rusqlite::Connection) -> rusqlite::Result
         if done.contains(&prompt_id) {
             continue;
         }
-        let Ok(doc) = serde_json::from_str::<Value>(&raw) else { continue };
+        let Ok(doc) = serde_json::from_str::<Value>(&raw) else {
+            continue;
+        };
         let history = crate::comfy::capture::history::parse(&doc);
-        let Some(graph) = history.graph.as_ref().and_then(Value::as_object) else { continue };
+        let Some(graph) = history.graph.as_ref().and_then(Value::as_object) else {
+            continue;
+        };
         let outputs = doc.get("outputs").and_then(Value::as_object);
-        let text = crate::workflow::graph_parse::final_positive(Some(graph), outputs).or_else(|| {
-            let positive = crate::workflow::graph_parse::parse(Some(graph)).positive;
-            (!positive.trim().is_empty()).then_some(positive)
-        });
+        let text =
+            crate::workflow::graph_parse::final_positive(Some(graph), outputs).or_else(|| {
+                let positive = crate::workflow::graph_parse::parse(Some(graph)).positive;
+                (!positive.trim().is_empty()).then_some(positive)
+            });
         let Some(text) = text else {
             continue;
         };
@@ -717,7 +764,11 @@ pub fn build_ingest_request(
     IngestRequest {
         run_key: run_key.to_string(),
         source: "ComfyUI".to_string(),
-        status: if is_error { "error".to_string() } else { "success".to_string() },
+        status: if is_error {
+            "error".to_string()
+        } else {
+            "success".to_string()
+        },
         error: None,
         comfy_url: Some(config.comfy_url.clone()),
         output_dir: config.output_dir.clone(),
@@ -739,20 +790,31 @@ fn collect_outputs(entry: &Value, graph: Option<&Map<String, Value>>) -> Vec<Ing
     };
     let mut out: Vec<IngestOutput> = Vec::new();
     for (node_id, node_output) in outputs {
-        let Some(node) = node_output.as_object() else { continue };
+        let Some(node) = node_output.as_object() else {
+            continue;
+        };
         let node_type = graph
             .and_then(|g| g.get(node_id))
             .and_then(|n| n.get("class_type"))
             .and_then(Value::as_str)
             .map(str::to_string);
         for key in ["images", "gifs", "audio", "video", "videos", "files"] {
-            let Some(items) = node.get(key).and_then(Value::as_array) else { continue };
+            let Some(items) = node.get(key).and_then(Value::as_array) else {
+                continue;
+            };
             for item in items {
-                let Some(item) = item.as_object() else { continue };
-                let Some(filename) = item.get("filename").and_then(Value::as_str) else { continue };
+                let Some(item) = item.as_object() else {
+                    continue;
+                };
+                let Some(filename) = item.get("filename").and_then(Value::as_str) else {
+                    continue;
+                };
                 out.push(IngestOutput {
                     filename: filename.to_string(),
-                    subfolder: item.get("subfolder").and_then(Value::as_str).map(str::to_string),
+                    subfolder: item
+                        .get("subfolder")
+                        .and_then(Value::as_str)
+                        .map(str::to_string),
                     type_field: item
                         .get("type")
                         .and_then(Value::as_str)
@@ -777,7 +839,11 @@ pub async fn ingest_claimed(
     config: &CaptureConfig,
 ) -> IngestResult {
     let run_key = req.run_key.clone();
-    let source = if req.source.trim().is_empty() { "ComfyUI" } else { req.source.as_str() };
+    let source = if req.source.trim().is_empty() {
+        "ComfyUI"
+    } else {
+        req.source.as_str()
+    };
     match ingest_inner(state, req, config, source).await {
         Ok(result) => result,
         Err(message) => {
@@ -840,7 +906,11 @@ async fn ingest_inner(
         let key = (
             item.filename.clone(),
             item.subfolder.clone().unwrap_or_default(),
-            if type_field.trim().is_empty() { "output".to_string() } else { type_field },
+            if type_field.trim().is_empty() {
+                "output".to_string()
+            } else {
+                type_field
+            },
         );
         if seen.contains(&key) {
             continue;
@@ -850,25 +920,31 @@ async fn ingest_inner(
     }
 
     if files.is_empty() {
-        let status = if req.status == "error" { "error" } else { "empty" };
+        let status = if req.status == "error" {
+            "error"
+        } else {
+            "empty"
+        };
         finish_run(state, &run_key, None, status, 0, None, req.error.as_deref())
             .map_err(|e| e.human().to_string())?;
         return Ok(IngestResult {
             run_key,
-            message: Some(
-                if status == "error" {
-                    "这次运行执行失败，只记录了日志".to_string()
-                } else {
-                    "这次运行没有产出文件".to_string()
-                },
-            ),
+            message: Some(if status == "error" {
+                "这次运行执行失败，只记录了日志".to_string()
+            } else {
+                "这次运行没有产出文件".to_string()
+            }),
             ..Default::default()
         });
     }
 
     let title = make_title(req, &parsed, &files);
     // 优先存界面格式工作流（能拖回 ComfyUI）；没有就把 API 节点图原样存下来
-    let workflow_json = req.workflow.as_ref().or(req.prompt.as_ref()).map(|v| v.to_string());
+    let workflow_json = req
+        .workflow
+        .as_ref()
+        .or(req.prompt.as_ref())
+        .map(|v| v.to_string());
 
     let prompt_id = state
         .write(|tx| {
@@ -934,8 +1010,16 @@ async fn ingest_inner(
         }
     }
 
-    finish_run(state, &run_key, Some(prompt_id), "success", imported, Some(&title), None)
-        .map_err(|e| e.human().to_string())?;
+    finish_run(
+        state,
+        &run_key,
+        Some(prompt_id),
+        "success",
+        imported,
+        Some(&title),
+        None,
+    )
+    .map_err(|e| e.human().to_string())?;
 
     Ok(IngestResult {
         run_key,
@@ -951,7 +1035,11 @@ async fn ingest_inner(
 }
 
 /// 标题（Kotlin `makeTitle`）：显式标题 → 保存节点的 filename_prefix → 文件名（去掉扩展名）。
-fn make_title(req: &IngestRequest, parsed: &crate::workflow::graph_parse::Parsed, files: &[&IngestOutput]) -> String {
+fn make_title(
+    req: &IngestRequest,
+    parsed: &crate::workflow::graph_parse::Parsed,
+    files: &[&IngestOutput],
+) -> String {
     let prefix = req
         .title
         .clone()
@@ -959,11 +1047,17 @@ fn make_title(req: &IngestRequest, parsed: &crate::workflow::graph_parse::Parsed
         .or_else(|| parsed.title_hint.clone())
         .or_else(|| {
             files.first().map(|f| {
-                let stem = f.filename.rsplit_once('.').map(|(head, _)| head).unwrap_or(&f.filename);
+                let stem = f
+                    .filename
+                    .rsplit_once('.')
+                    .map(|(head, _)| head)
+                    .unwrap_or(&f.filename);
                 stem.trim_end_matches(['_', ' ', '-']).to_string()
             })
         });
-    let base = prefix.filter(|t| !t.trim().is_empty()).unwrap_or_else(|| "ComfyUI 生成".to_string());
+    let base = prefix
+        .filter(|t| !t.trim().is_empty())
+        .unwrap_or_else(|| "ComfyUI 生成".to_string());
     let full = match parsed.seed {
         Some(seed) => format!("{base} · seed {seed}"),
         None => base,
@@ -988,24 +1082,41 @@ fn resolve_local_output(output_dir: Option<&str>, item: &IngestOutput) -> Option
 }
 
 /// HTTP 下载兜底（Kotlin `downloadOutput`）：`GET /view?filename=&subfolder=&type=`。
-async fn download_output(comfy_url: &str, item: &IngestOutput, state: &AppState) -> Option<PathBuf> {
+async fn download_output(
+    comfy_url: &str,
+    item: &IngestOutput,
+    state: &AppState,
+) -> Option<PathBuf> {
     let mut query = format!("filename={}", url_encode(&item.filename));
     if let Some(subfolder) = item.subfolder.as_deref().filter(|s| !s.trim().is_empty()) {
         query.push_str(&format!("&subfolder={}", url_encode(subfolder)));
     }
-    let type_field = item.type_field.clone().unwrap_or_else(|| "output".to_string());
+    let type_field = item
+        .type_field
+        .clone()
+        .unwrap_or_else(|| "output".to_string());
     query.push_str(&format!("&type={}", url_encode(&type_field)));
     let url = format!("{comfy_url}/view?{query}");
 
-    let tmp_dir = state.media_dir().parent().unwrap_or(state.media_dir()).join("tmp");
+    let tmp_dir = state
+        .media_dir()
+        .parent()
+        .unwrap_or(state.media_dir())
+        .join("tmp");
     std::fs::create_dir_all(&tmp_dir).ok()?;
     let ext = {
         let ext = crate::media::media_upload::extension_of(&item.filename);
-        if ext.is_empty() { "bin".to_string() } else { ext }
+        if ext.is_empty() {
+            "bin".to_string()
+        } else {
+            ext
+        }
     };
     let tmp = tmp_dir.join(format!("capture-{}.{ext}", random_suffix()));
 
-    let bytes = crate::comfy::comfy_client::get_bytes(&url, 300).await.ok()?;
+    let bytes = crate::comfy::comfy_client::get_bytes(&url, 300)
+        .await
+        .ok()?;
     std::fs::write(&tmp, &bytes).ok()?;
     Some(tmp)
 }
@@ -1065,10 +1176,17 @@ pub async fn poll_once(state: &AppState, config: &CaptureConfig) -> Value {
     result.insert("newMedia".into(), json!(0));
 
     let base = config.comfy_url.trim().trim_end_matches('/').to_string();
-    let history = match crate::comfy::comfy_client::get_json(&format!("{base}/history?max_items=100")).await {
+    let history = match crate::comfy::comfy_client::get_json(&format!(
+        "{base}/history?max_items=100"
+    ))
+    .await
+    {
         Ok(value) => value,
         Err(message) => {
-            result.insert("message".into(), json!(format!("连不上 ComfyUI（{base}）：{message}")));
+            result.insert(
+                "message".into(),
+                json!(format!("连不上 ComfyUI（{base}）：{message}")),
+            );
             return Value::Object(result);
         }
     };
@@ -1110,7 +1228,12 @@ pub async fn poll_once(state: &AppState, config: &CaptureConfig) -> Value {
             continue;
         }
         checked += 1;
-        let request = build_ingest_request(run_key, entry, config, status_str.as_deref() == Some("error"));
+        let request = build_ingest_request(
+            run_key,
+            entry,
+            config,
+            status_str.as_deref() == Some("error"),
+        );
         let outcome = ingest_claimed(state, &request, config).await;
         if outcome.imported > 0 {
             new_runs += 1;
@@ -1157,7 +1280,10 @@ fn url_encode(value: &str) -> String {
 
 fn random_suffix() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
-    let nanos = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
     format!("{:x}{:x}", std::process::id(), nanos)
 }
 

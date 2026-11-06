@@ -21,14 +21,22 @@ fn 归一化的四种写法() {
 fn 分类码_2_是未定义() {
     assert_eq!(category_name(Some(4)), "character");
     assert_eq!(category_name(Some(1)), "artist");
-    assert_eq!(category_name(Some(2)), "unknown", "2 在 danbooru 上没有定义，不许说成 copyright");
+    assert_eq!(
+        category_name(Some(2)),
+        "unknown",
+        "2 在 danbooru 上没有定义，不许说成 copyright"
+    );
     assert_eq!(category_name(None), "unknown");
 }
 
 #[test]
 fn 编码保留通配符与下划线() {
     assert_eq!(encode("shinku_(nte)"), "shinku_%28nte%29");
-    assert_eq!(encode("*shinku*"), "*shinku*", "通配符被编码成 %2A 就不是模糊搜索了");
+    assert_eq!(
+        encode("*shinku*"),
+        "*shinku*",
+        "通配符被编码成 %2A 就不是模糊搜索了"
+    );
     assert_eq!(encode("真红"), "%E7%9C%9F%E7%BA%A2");
     assert_eq!(encode("a b"), "a%20b");
 }
@@ -38,15 +46,27 @@ fn 客户端不许收空地址() {
     assert!(DanbooruClient::new("   ", USER_AGENT, 5).is_err());
     let client = DanbooruClient::new("https://example.com/", USER_AGENT, 999).unwrap();
     assert_eq!(client.base_url(), "https://example.com", "结尾斜杠要去掉");
-    assert_eq!(client.timeout.as_secs(), MAX_TIMEOUT_SECONDS, "超时要夹到上限");
+    assert_eq!(
+        client.timeout.as_secs(),
+        MAX_TIMEOUT_SECONDS,
+        "超时要夹到上限"
+    );
 }
 
 #[test]
 fn 挑战页判据认三种标记() {
-    assert!(looks_like_cloudflare_challenge("<html><title>Just a moment...</title>"));
-    assert!(looks_like_cloudflare_challenge("<script src='/cdn-cgi/challenge-platform/x'></script>"));
-    assert!(looks_like_cloudflare_challenge("Enable JavaScript and cookies to continue"));
-    assert!(!looks_like_cloudflare_challenge(r#"[{"name":"shinku_(nte)"}]"#));
+    assert!(looks_like_cloudflare_challenge(
+        "<html><title>Just a moment...</title>"
+    ));
+    assert!(looks_like_cloudflare_challenge(
+        "<script src='/cdn-cgi/challenge-platform/x'></script>"
+    ));
+    assert!(looks_like_cloudflare_challenge(
+        "Enable JavaScript and cookies to continue"
+    ));
+    assert!(!looks_like_cloudflare_challenge(
+        r#"[{"name":"shinku_(nte)"}]"#
+    ));
 }
 
 #[test]
@@ -62,8 +82,20 @@ fn wiki_截断是逐字符的() {
 #[test]
 fn 选角色是并列取第一个() {
     // 与 Kotlin `maxByOrNull` 同义：postCount 并列时**取先来的那个**
-    let tags = [Tag { name: "a_(x)".into(), category: Some(4), post_count: 100, deprecated: false },
-        Tag { name: "b_(x)".into(), category: Some(4), post_count: 100, deprecated: false }];
+    let tags = [
+        Tag {
+            name: "a_(x)".into(),
+            category: Some(4),
+            post_count: 100,
+            deprecated: false,
+        },
+        Tag {
+            name: "b_(x)".into(),
+            category: Some(4),
+            post_count: 100,
+            deprecated: false,
+        },
+    ];
     let picked = tags
         .iter()
         .filter(|t| t.category == Some(4))

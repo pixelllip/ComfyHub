@@ -30,7 +30,10 @@ fn text_块明文读得出来() {
     data.extend_from_slice(b"{\"1\":{\"class_type\":\"KSampler\"}}");
     let path = temp_png("text", &png_with(&[("tEXt", &data)]));
     let chunks = read_text_chunks(&path);
-    assert_eq!(chunks.get("prompt").unwrap(), "{\"1\":{\"class_type\":\"KSampler\"}}");
+    assert_eq!(
+        chunks.get("prompt").unwrap(),
+        "{\"1\":{\"class_type\":\"KSampler\"}}"
+    );
     let _ = std::fs::remove_file(path);
 }
 
@@ -48,14 +51,20 @@ fn ztxt_与_itxt_都能解() {
     let path = temp_png("ztxt", &png_with(&[("zTXt", &ztxt), ("iTXt", &itxt)]));
     let chunks = read_text_chunks(&path);
     assert_eq!(chunks.get("workflow").unwrap(), "{\"nodes\":[]}");
-    assert_eq!(chunks.get("prompt").unwrap(), "{\"2\":{\"class_type\":\"CLIPTextEncode\"}}");
+    assert_eq!(
+        chunks.get("prompt").unwrap(),
+        "{\"2\":{\"class_type\":\"CLIPTextEncode\"}}"
+    );
     let _ = std::fs::remove_file(path);
 }
 
 #[test]
 fn 压过的_itxt_也解得开() {
     let mut itxt = b"prompt\x00\x01\x00\x00\x00".to_vec();
-    itxt.extend_from_slice(&miniz_oxide::deflate::compress_to_vec_zlib(b"{\"a\":1}".as_slice(), 6));
+    itxt.extend_from_slice(&miniz_oxide::deflate::compress_to_vec_zlib(
+        b"{\"a\":1}".as_slice(),
+        6,
+    ));
     let path = temp_png("itxt-z", &png_with(&[("iTXt", &itxt)]));
     assert_eq!(read_text_chunks(&path).get("prompt").unwrap(), "{\"a\":1}");
     let _ = std::fs::remove_file(path);

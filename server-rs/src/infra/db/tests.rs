@@ -5,7 +5,9 @@
 use super::*;
 
 fn temp_path(label: &str) -> std::path::PathBuf {
-    crate::infra::testpaths::scratch(&format!("db-{label}")).join("nested").join("comfyhub.db")
+    crate::infra::testpaths::scratch(&format!("db-{label}"))
+        .join("nested")
+        .join("comfyhub.db")
 }
 
 /// **首次运行要能自己建库**（切流的硬要求）：目录不存在、库文件不存在 → 建目录 + 建表 + 写版本号。
@@ -16,7 +18,14 @@ fn open_or_create_makes_a_fresh_database() {
     let conn = open_or_create(&path).expect("要能自己建库");
     assert_eq!(schema_version(&conn).unwrap(), SCHEMA_VERSION);
     // 关键表都在（少一张 = 端点 500）
-    for table in ["prompts", "tags", "media_assets", "ai_conversations", "ai_attachments", "_sync_log"] {
+    for table in [
+        "prompts",
+        "tags",
+        "media_assets",
+        "ai_conversations",
+        "ai_attachments",
+        "_sync_log",
+    ] {
         let count: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?1",
@@ -27,7 +36,9 @@ fn open_or_create_makes_a_fresh_database() {
         assert_eq!(count, 1, "表 {table} 没建出来");
     }
     // PRAGMA 照样是自检过的（R1）
-    let fk: i64 = conn.query_row("PRAGMA foreign_keys", [], |r| r.get(0)).unwrap();
+    let fk: i64 = conn
+        .query_row("PRAGMA foreign_keys", [], |r| r.get(0))
+        .unwrap();
     assert_eq!(fk, 1);
     std::fs::remove_dir_all(path.parent().unwrap().parent().unwrap()).ok();
 }
@@ -46,7 +57,9 @@ fn open_or_create_leaves_a_current_database_alone() {
     drop(conn);
 
     let again = open_or_create(&path).unwrap();
-    let count: i64 = again.query_row("SELECT COUNT(*) FROM tags", [], |r| r.get(0)).unwrap();
+    let count: i64 = again
+        .query_row("SELECT COUNT(*) FROM tags", [], |r| r.get(0))
+        .unwrap();
     assert_eq!(count, 1, "重开不该动数据");
     assert_eq!(schema_version(&again).unwrap(), SCHEMA_VERSION);
     std::fs::remove_dir_all(path.parent().unwrap().parent().unwrap()).ok();
@@ -60,7 +73,8 @@ fn open_or_create_converges_an_unversioned_database() {
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     {
         let conn = Connection::open(&path).unwrap();
-        conn.execute_batch("CREATE TABLE legacy_marker (id INTEGER PRIMARY KEY);").unwrap();
+        conn.execute_batch("CREATE TABLE legacy_marker (id INTEGER PRIMARY KEY);")
+            .unwrap();
         assert_eq!(schema_version(&conn).unwrap(), 0);
     }
     let conn = open_or_create(&path).unwrap();
@@ -74,7 +88,11 @@ fn open_or_create_converges_an_unversioned_database() {
         .unwrap();
     assert_eq!(marker, 1, "老库里的东西不许被清掉");
     let prompts: i64 = conn
-        .query_row("SELECT COUNT(*) FROM sqlite_master WHERE name='prompts'", [], |r| r.get(0))
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE name='prompts'",
+            [],
+            |r| r.get(0),
+        )
         .unwrap();
     assert_eq!(prompts, 1, "缺的表要补上");
     std::fs::remove_dir_all(path.parent().unwrap().parent().unwrap()).ok();
@@ -112,7 +130,11 @@ fn open_or_create_heals_a_database_missing_a_declared_table() {
         )
         .unwrap();
     assert_eq!(gone, 0, "前提：这张表真的被删掉了");
-    assert_eq!(schema_version(&conn).unwrap(), SCHEMA_VERSION, "版本号仍是新的");
+    assert_eq!(
+        schema_version(&conn).unwrap(),
+        SCHEMA_VERSION,
+        "版本号仍是新的"
+    );
     drop(conn);
 
     let again = open_or_create(&path).expect("要能自愈");
@@ -212,7 +234,11 @@ fn open_or_create_heals_the_collection_table_and_column_together() {
         )
         .unwrap();
     let cid: i64 = again
-        .query_row("SELECT id FROM media_collections WHERE group_key='k1'", [], |r| r.get(0))
+        .query_row(
+            "SELECT id FROM media_collections WHERE group_key='k1'",
+            [],
+            |r| r.get(0),
+        )
         .unwrap();
     again
         .execute(
@@ -222,15 +248,20 @@ fn open_or_create_heals_the_collection_table_and_column_together() {
         )
         .unwrap();
     let back: Option<i64> = again
-        .query_row("SELECT collection_id FROM media_assets WHERE original_name='a.png'", [], |r| {
-            r.get(0)
-        })
+        .query_row(
+            "SELECT collection_id FROM media_assets WHERE original_name='a.png'",
+            [],
+            |r| r.get(0),
+        )
         .unwrap();
     assert_eq!(back, Some(cid), "补出来的列要能存能读");
 
     // 集合行被删掉时产物**不能跟着消失**（ON DELETE SET NULL 的语义）
     again
-        .execute("DELETE FROM media_collections WHERE id = ?1", rusqlite::params![cid])
+        .execute(
+            "DELETE FROM media_collections WHERE id = ?1",
+            rusqlite::params![cid],
+        )
         .unwrap();
     let (n, cid_after): (i64, Option<i64>) = again
         .query_row(
@@ -253,7 +284,8 @@ fn open_or_create_heals_a_missing_column_without_touching_data() {
     let path = temp_path("add-column");
     let conn = open_or_create(&path).unwrap();
     // 装成"这列是后加的"：SQLite 3.35+ 支持 DROP COLUMN；老版本靠重建表，这里用前者
-    conn.execute_batch("ALTER TABLE character_cards DROP COLUMN prompt;").unwrap();
+    conn.execute_batch("ALTER TABLE character_cards DROP COLUMN prompt;")
+        .unwrap();
     conn.execute_batch(
         "INSERT INTO character_cards (name, normalized, negative) VALUES ('先有的卡', '先有的卡', 'bad hands');",
     )
@@ -278,9 +310,15 @@ fn open_or_create_heals_a_missing_column_without_touching_data() {
         .unwrap();
     assert_eq!(has, 1, "DDL 里声明的列必须被补上");
     let kept: (String, String) = again
-        .query_row("SELECT name, negative FROM character_cards", [], |r| Ok((r.get(0)?, r.get(1)?)))
+        .query_row("SELECT name, negative FROM character_cards", [], |r| {
+            Ok((r.get(0)?, r.get(1)?))
+        })
         .unwrap();
-    assert_eq!(kept, ("先有的卡".to_string(), "bad hands".to_string()), "补列不许动已有数据");
+    assert_eq!(
+        kept,
+        ("先有的卡".to_string(), "bad hands".to_string()),
+        "补列不许动已有数据"
+    );
     std::fs::remove_dir_all(path.parent().unwrap().parent().unwrap()).ok();
 }
 
@@ -306,7 +344,11 @@ fn healing_a_missing_table_never_downgrades_a_newer_version() {
         )
         .unwrap();
     assert_eq!(healed, 1, "缺的表照样要补上");
-    assert_eq!(schema_version(&again).unwrap(), 99, "绝不许把更新的库降级写回去");
+    assert_eq!(
+        schema_version(&again).unwrap(),
+        99,
+        "绝不许把更新的库降级写回去"
+    );
     std::fs::remove_dir_all(path.parent().unwrap().parent().unwrap()).ok();
 }
 
@@ -353,14 +395,24 @@ fn open_or_create_migrates_the_old_card_tags_into_the_prompt() {
     assert_eq!(present, 1, "prompt 这一列没补上");
     // ★ 老 tag 栈一个不许丢：按老约定拼成一行
     let migrated: (String, Option<String>, String) = conn
-        .query_row("SELECT name, prompt, negative FROM character_cards", [], |r| {
-            Ok((r.get(0)?, r.get(1)?, r.get(2)?))
-        })
+        .query_row(
+            "SELECT name, prompt, negative FROM character_cards",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
         .unwrap();
     assert_eq!(migrated.0, "先有的卡");
-    assert_eq!(migrated.1.as_deref(), Some("shinku_(nte), pink streaks"), "tags 要拼成正面提示词");
+    assert_eq!(
+        migrated.1.as_deref(),
+        Some("shinku_(nte), pink streaks"),
+        "tags 要拼成正面提示词"
+    );
     assert_eq!(migrated.2, "bad hands", "老数据别的字段不动");
-    assert_eq!(schema_version(&conn).unwrap(), SCHEMA_VERSION, "版本号要跟到最新");
+    assert_eq!(
+        schema_version(&conn).unwrap(),
+        SCHEMA_VERSION,
+        "版本号要跟到最新"
+    );
     drop(conn);
 
     // 幂等：再开一次不许拼第二遍（也不许把用户后来手填的 prompt 盖掉）
@@ -368,12 +420,17 @@ fn open_or_create_migrates_the_old_card_tags_into_the_prompt() {
     let kept: String = again
         .query_row("SELECT prompt FROM character_cards", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(kept, "shinku_(nte), pink streaks", "迁移必须幂等：不许重复拼接");
+    assert_eq!(
+        kept, "shinku_(nte), pink streaks",
+        "迁移必须幂等：不许重复拼接"
+    );
 
     // ★ 用户在界面上清空提示词（`prompt = NULL`）之后，**下次开库不许把它从 tags 复活**：
     //   老库那个 `tags` 列还在，判据"prompt 为空 + tags 非空"永远成立 —— 所以迁移只能跑
     //   "刚补上这一列"的那一次（`open_or_create` 拿 `added` 判）。
-    again.execute("UPDATE character_cards SET prompt = NULL", []).unwrap();
+    again
+        .execute("UPDATE character_cards SET prompt = NULL", [])
+        .unwrap();
     drop(again);
     let third = open_or_create(&path).expect("第三次开库");
     let cleared: Option<String> = third
@@ -412,7 +469,10 @@ fn every_declared_table_is_actually_created() {
     let conn = open_memory().unwrap();
     conn.execute_batch(SCHEMA_SQL).unwrap();
     let declared = declared_tables();
-    assert!(declared.contains(&"workflow_recipes"), "至少得认得出这张表：{declared:?}");
+    assert!(
+        declared.contains(&"workflow_recipes"),
+        "至少得认得出这张表：{declared:?}"
+    );
     assert!(declared.contains(&"character_cards"), "{declared:?}");
     assert!(declared.contains(&"_sync_log"), "{declared:?}");
     for name in &declared {
@@ -427,14 +487,20 @@ fn every_declared_table_is_actually_created() {
     }
     // 反过来也要成立：库里建出来的表**一张都不许是**"声明之外"的
     // （漏读一张 = 自愈检查会漏掉那一张，那是最危险的方向）
-    assert!(declared.len() >= 20, "表数明显变少说明解析器坏了：{}", declared.len());
+    assert!(
+        declared.len() >= 20,
+        "表数明显变少说明解析器坏了：{}",
+        declared.len()
+    );
 }
 
 /// R1：读回来必须为 1（"写了就算"不算数）。
 #[test]
 fn pragma_foreign_keys_is_on_and_read_back() {
     let conn = open_memory().expect("开库");
-    let fk: i64 = conn.query_row("PRAGMA foreign_keys", [], |r| r.get(0)).unwrap();
+    let fk: i64 = conn
+        .query_row("PRAGMA foreign_keys", [], |r| r.get(0))
+        .unwrap();
     assert_eq!(fk, 1);
     assert!(assert_ready(&conn).is_ok());
 }
@@ -449,7 +515,9 @@ fn pragma_foreign_keys_is_on_and_read_back() {
 fn assert_ready_catches_a_connection_with_foreign_keys_off() {
     let conn = Connection::open_in_memory().unwrap();
     conn.execute_batch("PRAGMA foreign_keys = OFF;").unwrap();
-    let fk: i64 = conn.query_row("PRAGMA foreign_keys", [], |r| r.get(0)).unwrap();
+    let fk: i64 = conn
+        .query_row("PRAGMA foreign_keys", [], |r| r.get(0))
+        .unwrap();
     assert_eq!(fk, 0);
     assert!(assert_ready(&conn).is_err(), "自检必须抓住 fk=0");
 }
@@ -461,11 +529,12 @@ fn tx_immediate_commits_and_rolls_back() {
     conn.execute_batch("CREATE TABLE t (id INTEGER PRIMARY KEY, v TEXT NOT NULL);")
         .unwrap();
     tx_immediate(&mut conn, |tx| {
-        tx.execute("INSERT INTO t (v) VALUES ('a')", [])
-            .map(|_| ())
+        tx.execute("INSERT INTO t (v) VALUES ('a')", []).map(|_| ())
     })
     .unwrap();
-    let n: i64 = conn.query_row("SELECT COUNT(*) FROM t", [], |r| r.get(0)).unwrap();
+    let n: i64 = conn
+        .query_row("SELECT COUNT(*) FROM t", [], |r| r.get(0))
+        .unwrap();
     assert_eq!(n, 1);
 
     let failed: rusqlite::Result<()> = tx_immediate(&mut conn, |tx| {
@@ -473,7 +542,9 @@ fn tx_immediate_commits_and_rolls_back() {
         Err(rusqlite::Error::InvalidQuery) // 故意失败
     });
     assert!(failed.is_err());
-    let n: i64 = conn.query_row("SELECT COUNT(*) FROM t", [], |r| r.get(0)).unwrap();
+    let n: i64 = conn
+        .query_row("SELECT COUNT(*) FROM t", [], |r| r.get(0))
+        .unwrap();
     assert_eq!(n, 1, "回滚后不该留下第二条");
 }
 
@@ -510,7 +581,8 @@ fn fresh_database_has_no_card_tag_prompt_column() {
 /// tag 栈 → 自然语言的兜底转换：信息不丢、能读、不是原样抄 tag。
 #[test]
 fn tags_are_turned_into_a_natural_sentence() {
-    let text = tags_to_natural_language("1girl, red_eyes, silver_hair, school_uniform, shinku_(nte)");
+    let text =
+        tags_to_natural_language("1girl, red_eyes, silver_hair, school_uniform, shinku_(nte)");
     assert_eq!(
         text,
         "A girl with red eyes and silver hair, wearing school uniform. Shinku (nte)."
@@ -590,6 +662,9 @@ fn upgrading_to_11_converts_tag_cards_once() {
             |row| row.get(0),
         )
         .unwrap();
-    assert!(cleared.is_none(), "清空过的卡不许被 tag 列复活：{cleared:?}");
+    assert!(
+        cleared.is_none(),
+        "清空过的卡不许被 tag 列复活：{cleared:?}"
+    );
     std::fs::remove_dir_all(path.parent().unwrap().parent().unwrap()).ok();
 }

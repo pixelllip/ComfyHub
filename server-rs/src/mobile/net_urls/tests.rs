@@ -75,10 +75,22 @@ fn 端口为_0_时回空_宁可什么都不说也不报一个连不上的地址(
 #[test]
 fn 配对二维码不包含回环_且局域网排在_tailscale_前面() {
     let eps = pairing_candidates(vec![
-        Endpoint { kind: "loopback", url: "http://127.0.0.1:8081".into() },
-        Endpoint { kind: "tailscale", url: "http://100.64.0.5:8081".into() },
-        Endpoint { kind: "lan", url: "http://192.168.1.9:8081".into() },
-        Endpoint { kind: "lan", url: "http://10.1.2.3:8081".into() },
+        Endpoint {
+            kind: "loopback",
+            url: "http://127.0.0.1:8081".into(),
+        },
+        Endpoint {
+            kind: "tailscale",
+            url: "http://100.64.0.5:8081".into(),
+        },
+        Endpoint {
+            kind: "lan",
+            url: "http://192.168.1.9:8081".into(),
+        },
+        Endpoint {
+            kind: "lan",
+            url: "http://10.1.2.3:8081".into(),
+        },
     ]);
     let urls: Vec<&str> = eps.iter().map(|e| e.url.as_str()).collect();
     assert_eq!(
@@ -94,9 +106,10 @@ fn 配对二维码不包含回环_且局域网排在_tailscale_前面() {
 
 #[test]
 fn 只有回环时配对候选为空_宁可让用户手填也不给一个连不上的地址() {
-    let eps = pairing_candidates(vec![
-        Endpoint { kind: "loopback", url: "http://127.0.0.1:8081".into() },
-    ]);
+    let eps = pairing_candidates(vec![Endpoint {
+        kind: "loopback",
+        url: "http://127.0.0.1:8081".into(),
+    }]);
     assert!(eps.is_empty());
 }
 

@@ -55,7 +55,14 @@ Map<String, dynamic> _blueprintJson({bool api = false}) => api
     ? {
         'format': 'api',
         'objectInfo': false,
-        'counts': {'nodes': 3, 'edges': 2, 'groups': 0, 'errors': 0, 'warnings': 1, 'infos': 0},
+        'counts': {
+          'nodes': 3,
+          'edges': 2,
+          'groups': 0,
+          'errors': 0,
+          'warnings': 1,
+          'infos': 0,
+        },
         'nodes': [
           {
             'id': '1',
@@ -68,7 +75,13 @@ Map<String, dynamic> _blueprintJson({bool api = false}) => api
             'frontendOnly': false,
             'inputs': [],
             'outputs': [
-              {'name': '输出 0', 'type': 'MODEL', 'link': null, 'links': [], 'widget': false}
+              {
+                'name': '输出 0',
+                'type': 'MODEL',
+                'link': null,
+                'links': [],
+                'widget': false,
+              },
             ],
             'widgets': [],
           },
@@ -82,11 +95,29 @@ Map<String, dynamic> _blueprintJson({bool api = false}) => api
             'kind': 'normal',
             'frontendOnly': false,
             'inputs': [
-              {'name': 'model', 'type': 'MODEL', 'link': null, 'links': [], 'widget': false},
-              {'name': 'latent_image', 'type': 'LATENT', 'link': null, 'links': [], 'widget': false}
+              {
+                'name': 'model',
+                'type': 'MODEL',
+                'link': null,
+                'links': [],
+                'widget': false,
+              },
+              {
+                'name': 'latent_image',
+                'type': 'LATENT',
+                'link': null,
+                'links': [],
+                'widget': false,
+              },
             ],
             'outputs': [
-              {'name': '输出 0', 'type': 'LATENT', 'link': null, 'links': [], 'widget': false}
+              {
+                'name': '输出 0',
+                'type': 'LATENT',
+                'link': null,
+                'links': [],
+                'widget': false,
+              },
             ],
             'widgets': [],
           },
@@ -101,14 +132,32 @@ Map<String, dynamic> _blueprintJson({bool api = false}) => api
             'frontendOnly': false,
             'inputs': [],
             'outputs': [
-              {'name': '输出 0', 'type': 'LATENT', 'link': null, 'links': [], 'widget': false}
+              {
+                'name': '输出 0',
+                'type': 'LATENT',
+                'link': null,
+                'links': [],
+                'widget': false,
+              },
             ],
             'widgets': [],
           },
         ],
         'edges': [
-          {'id': null, 'from': {'node': '1', 'slot': 0}, 'to': {'node': '2', 'slot': 0}, 'type': null, 'implicit': true},
-          {'id': null, 'from': {'node': '3', 'slot': 0}, 'to': {'node': '2', 'slot': 1}, 'type': null, 'implicit': true},
+          {
+            'id': null,
+            'from': {'node': '1', 'slot': 0},
+            'to': {'node': '2', 'slot': 0},
+            'type': null,
+            'implicit': true,
+          },
+          {
+            'id': null,
+            'from': {'node': '3', 'slot': 0},
+            'to': {'node': '2', 'slot': 1},
+            'type': null,
+            'implicit': true,
+          },
         ],
         'groups': [],
         'issues': [],
@@ -117,7 +166,14 @@ Map<String, dynamic> _blueprintJson({bool api = false}) => api
     : {
         'format': 'ui',
         'objectInfo': true,
-        'counts': {'nodes': 4, 'edges': 2, 'groups': 1, 'errors': 1, 'warnings': 1, 'infos': 0},
+        'counts': {
+          'nodes': 4,
+          'edges': 2,
+          'groups': 1,
+          'errors': 1,
+          'warnings': 1,
+          'infos': 0,
+        },
         'nodes': [
           {
             'id': '1',
@@ -130,10 +186,16 @@ Map<String, dynamic> _blueprintJson({bool api = false}) => api
             'frontendOnly': false,
             'inputs': [],
             'outputs': [
-              {'name': 'MODEL', 'type': 'MODEL', 'link': null, 'links': [11], 'widget': false}
+              {
+                'name': 'MODEL',
+                'type': 'MODEL',
+                'link': null,
+                'links': [11],
+                'widget': false,
+              },
             ],
             'widgets': [
-              {'index': 0, 'name': 'ckpt_name', 'value': 'krea2.safetensors'}
+              {'index': 0, 'name': 'ckpt_name', 'value': 'krea2.safetensors'},
             ],
           },
           {
@@ -146,15 +208,34 @@ Map<String, dynamic> _blueprintJson({bool api = false}) => api
             'kind': 'normal',
             'frontendOnly': false,
             'inputs': [
-              {'name': 'model', 'type': 'MODEL', 'link': 11, 'links': [], 'widget': false},
-              {'name': 'seed', 'type': 'INT', 'link': null, 'links': [], 'widget': true, 'value': 42}
+              {
+                'name': 'model',
+                'type': 'MODEL',
+                'link': 11,
+                'links': [],
+                'widget': false,
+              },
+              {
+                'name': 'seed',
+                'type': 'INT',
+                'link': null,
+                'links': [],
+                'widget': true,
+                'value': 42,
+              },
             ],
             'outputs': [
-              {'name': 'LATENT', 'type': 'LATENT', 'link': null, 'links': [12], 'widget': false}
+              {
+                'name': 'LATENT',
+                'type': 'LATENT',
+                'link': null,
+                'links': [12],
+                'widget': false,
+              },
             ],
             'widgets': [
               {'index': 0, 'name': 'seed', 'value': 42},
-              {'index': 1, 'name': null, 'value': 'randomize'}
+              {'index': 1, 'name': null, 'value': 'randomize'},
             ],
           },
           {
@@ -167,10 +248,22 @@ Map<String, dynamic> _blueprintJson({bool api = false}) => api
             'kind': 'normal',
             'frontendOnly': false,
             'inputs': [
-              {'name': 'images', 'type': 'IMAGE', 'link': 12, 'links': [], 'widget': false}
+              {
+                'name': 'images',
+                'type': 'IMAGE',
+                'link': 12,
+                'links': [],
+                'widget': false,
+              },
             ],
             'outputs': [
-              {'name': 'images', 'type': 'IMAGE', 'link': null, 'links': [], 'widget': false}
+              {
+                'name': 'images',
+                'type': 'IMAGE',
+                'link': null,
+                'links': [],
+                'widget': false,
+              },
             ],
             'widgets': [],
           },
@@ -185,15 +278,33 @@ Map<String, dynamic> _blueprintJson({bool api = false}) => api
             'frontendOnly': true,
             'inputs': [],
             'outputs': [],
-            'widgets': [{'index': 0, 'name': null, 'value': '备注'}],
+            'widgets': [
+              {'index': 0, 'name': null, 'value': '备注'},
+            ],
           },
         ],
         'edges': [
-          {'id': 11, 'from': {'node': '1', 'slot': 0}, 'to': {'node': '2', 'slot': 0}, 'type': 'MODEL', 'implicit': false},
-          {'id': 12, 'from': {'node': '2', 'slot': 0}, 'to': {'node': '3', 'slot': 0}, 'type': 'LATENT', 'implicit': false},
+          {
+            'id': 11,
+            'from': {'node': '1', 'slot': 0},
+            'to': {'node': '2', 'slot': 0},
+            'type': 'MODEL',
+            'implicit': false,
+          },
+          {
+            'id': 12,
+            'from': {'node': '2', 'slot': 0},
+            'to': {'node': '3', 'slot': 0},
+            'type': 'LATENT',
+            'implicit': false,
+          },
         ],
         'groups': [
-          {'title': '主链', 'bounding': [-100, -60, 1300, 400], 'color': '#3f789e'}
+          {
+            'title': '主链',
+            'bounding': [-100, -60, 1300, 400],
+            'color': '#3f789e',
+          },
         ],
         'issues': [
           {
@@ -307,7 +418,11 @@ void main() {
       final loader = first.boxOf('1')!;
       final sampler = first.boxOf('2')!;
       final latent = first.boxOf('3')!;
-      expect(loader.left, lessThan(sampler.left), reason: 'CheckpointLoaderSimple 在 KSampler 左边');
+      expect(
+        loader.left,
+        lessThan(sampler.left),
+        reason: 'CheckpointLoaderSimple 在 KSampler 左边',
+      );
       expect(latent.left, lessThan(sampler.left));
       // 同层的两个上游必须**错开**排（同一列里上下分开），不能叠在一起
       expect(loader.left, latent.left);
@@ -339,7 +454,11 @@ void main() {
 
       expect(stats.drawnNodes, 1, reason: '视口里只有 1 号');
       expect(stats.culledNodes, 3);
-      expect(stats.drawnEdges, lessThan(blueprint.edges.length), reason: '视口外的线不许画');
+      expect(
+        stats.drawnEdges,
+        lessThan(blueprint.edges.length),
+        reason: '视口外的线不许画',
+      );
     });
 
     test('缩放很小时不画正文（LOD），但节点框仍然要画', () {
@@ -367,12 +486,20 @@ void main() {
       final transform = Matrix4.identity()
         ..translateByDouble(-100, -50, 0, 1)
         ..scaleByDouble(2, 2, 1, 1);
-      final rect = visibleGraphRect(transform, const Size(400, 300), Offset.zero);
+      final rect = visibleGraphRect(
+        transform,
+        const Size(400, 300),
+        Offset.zero,
+      );
       expect(rect.left, closeTo(50, 0.01));
       expect(rect.top, closeTo(25, 0.01));
       expect(rect.width, closeTo(200, 0.01));
       // origin 是"图坐标 → 画布坐标"，所以要减回去
-      final shifted = visibleGraphRect(transform, const Size(400, 300), const Offset(10, 10));
+      final shifted = visibleGraphRect(
+        transform,
+        const Size(400, 300),
+        const Offset(10, 10),
+      );
       expect(shifted.left, closeTo(40, 0.01));
     });
 
@@ -396,8 +523,11 @@ void main() {
           final row = blueprintWidgetRowRect(node, box, widget.index);
           // 超出节点底边的行根本不画（画笔里 `break`），也就不该被点到
           if (row.top > box.bottom - 10) continue;
-          expect(hitTestWidgetRow(node, box, row.center), widget.index,
-              reason: '节点 ${node.id} 第 ${widget.index} 行的中心必须命中它自己');
+          expect(
+            hitTestWidgetRow(node, box, row.center),
+            widget.index,
+            reason: '节点 ${node.id} 第 ${widget.index} 行的中心必须命中它自己',
+          );
           checked++;
         }
       }
@@ -406,9 +536,15 @@ void main() {
       // 标题条上点一下：**不该**命中任何参数行（那是"选中节点"的手势）
       final node = blueprint.nodes.firstWhere((n) => n.widgets.isNotEmpty);
       final box = layout.boxOf(node.id)!;
-      expect(hitTestWidgetRow(node, box, Offset(box.left + 4, box.top + 4)), isNull);
+      expect(
+        hitTestWidgetRow(node, box, Offset(box.left + 4, box.top + 4)),
+        isNull,
+      );
       // 节点外面更不该命中
-      expect(hitTestWidgetRow(node, box, Offset(box.left, box.bottom + 40)), isNull);
+      expect(
+        hitTestWidgetRow(node, box, Offset(box.left, box.bottom + 40)),
+        isNull,
+      );
     });
 
     test('参数行是"名字 | 值"两列：不重叠、不留缝、宽度有上下限', () {
@@ -423,13 +559,24 @@ void main() {
           // 多行文本框（Note / 长提示词）本来就没有"名字列"，
           // 它该占整行 —— 这里只钉单行参数的"名字 | 值"两列。
           if (!row.visible || row.multiline) continue;
-          expect(row.label.right, closeTo(row.value.left, 0.001), reason: '两列必须紧挨着，不留缝');
+          expect(
+            row.label.right,
+            closeTo(row.value.left, 0.001),
+            reason: '两列必须紧挨着，不留缝',
+          );
           expect(row.label.left, closeTo(row.rect.left, 0.001));
           expect(row.value.right, closeTo(row.rect.right, 0.001));
-          expect(row.label.width, greaterThanOrEqualTo(28), reason: '名字太窄就认不出是什么参数');
+          expect(
+            row.label.width,
+            greaterThanOrEqualTo(28),
+            reason: '名字太窄就认不出是什么参数',
+          );
           expect(row.label.width, lessThanOrEqualTo(96), reason: '名字太宽值就没地方了');
           expect(row.value.width, greaterThan(0), reason: '值那一列必须真的存在');
-          expect(row.rect.height, greaterThanOrEqualTo(kBlueprintWidgetBarHeight));
+          expect(
+            row.rect.height,
+            greaterThanOrEqualTo(kBlueprintWidgetBarHeight),
+          );
           checked++;
         }
       }
@@ -457,8 +604,11 @@ void main() {
 
       expect(rows.length, 2);
       expect(rows[0].multiline, isTrue);
-      expect(rows[0].rect.height, greaterThan(kBlueprintWidgetRowStep),
-          reason: '多行文本必须真的占多行，而不是压成一行');
+      expect(
+        rows[0].rect.height,
+        greaterThan(kBlueprintWidgetRowStep),
+        reason: '多行文本必须真的占多行，而不是压成一行',
+      );
       expect(rows[0].lines, 3);
       // 后面的参数仍然要留出位置，不许被长文本顶到框外
       expect(rows[1].multiline, isFalse);
@@ -490,7 +640,8 @@ void main() {
       expect(editor.editable, isTrue);
       expect(editor.setWidgetValue('2', 0, 777), isTrue);
       final json = jsonDecode(editor.toJson()) as Map<String, dynamic>;
-      final node = (json['nodes'] as List).firstWhere((n) => n['id'] == 2) as Map;
+      final node =
+          (json['nodes'] as List).firstWhere((n) => n['id'] == 2) as Map;
       expect((node['widgets_values'] as List)[0], 777);
       // ⚠ 新版前端存的那一份**优先**：只改位置那份会让"界面看着改了、转出来还是旧值"
       expect((node['widgets_values_named'] as Map)['seed'], 777);
@@ -503,12 +654,14 @@ void main() {
       expect(editor.setNodePosition('2', 123.5, -9.0), isTrue);
 
       final json = jsonDecode(editor.toJson()) as Map<String, dynamic>;
-      final node = (json['nodes'] as List).firstWhere((n) => n['id'] == 2) as Map;
+      final node =
+          (json['nodes'] as List).firstWhere((n) => n['id'] == 2) as Map;
       expect(node['mode'], 0);
       expect(node['title'], '采样器');
       expect(node['pos'], [123.5, -9.0]);
       // 前端 only 的 Note 与别的节点一个字节都没动
-      final note = (json['nodes'] as List).firstWhere((n) => n['id'] == 4) as Map;
+      final note =
+          (json['nodes'] as List).firstWhere((n) => n['id'] == 4) as Map;
       expect(note['type'], 'Note');
       expect(note['widgets_values'], ['备注']);
       expect((json['groups'] as List).length, 1);
@@ -518,12 +671,18 @@ void main() {
     test('不存在的节点 / 同样的值：如实回 false（不算改过）', () {
       final editor = WorkflowEditor.parse(_uiRaw)!;
       expect(editor.setWidgetValue('99', 0, 1), isFalse);
-      expect(editor.setNodeMode('2', kNodeModeBypassed), isFalse, reason: '本来就是旁路');
+      expect(
+        editor.setNodeMode('2', kNodeModeBypassed),
+        isFalse,
+        reason: '本来就是旁路',
+      );
       expect(editor.setNodeTitle('2', ''), isFalse, reason: '本来就没有自定义标题');
     });
 
     test('API 格式不能这样改（参数键名不在这份 JSON 里）', () {
-      final editor = WorkflowEditor.parse('{"1":{"class_type":"KSampler","inputs":{"seed":1}}}')!;
+      final editor = WorkflowEditor.parse(
+        '{"1":{"class_type":"KSampler","inputs":{"seed":1}}}',
+      )!;
       expect(editor.editable, isFalse);
       expect(editor.setWidgetValue('1', 0, 2), isFalse);
     });
@@ -544,14 +703,23 @@ void main() {
       addTearDown(tester.view.reset);
 
       final seen = <String>[];
-      Future<Map<String, dynamic>> diagnose(String raw, {bool diagnose = true}) async {
+      Future<Map<String, dynamic>> diagnose(
+        String raw, {
+        bool diagnose = true,
+      }) async {
         seen.add(raw);
         return _blueprintJson();
       }
 
-      await tester.pumpWidget(MaterialApp(
-        home: WorkflowBlueprintPage(title: '测试', raw: _uiRaw, diagnose: diagnose),
-      ));
+      await tester.pumpWidget(
+        MaterialApp(
+          home: WorkflowBlueprintPage(
+            title: '测试',
+            raw: _uiRaw,
+            diagnose: diagnose,
+          ),
+        ),
+      );
       await tester.pumpAndSettle();
 
       // 打开时并发两条：结构快照（diagnose=false）+ 全量体检（diagnose=true）。
@@ -598,16 +766,20 @@ void main() {
       tester.view.devicePixelRatio = 1.0;
       addTearDown(tester.view.reset);
 
-      await tester.pumpWidget(MaterialApp(
-        home: WorkflowBlueprintPage(
-          title: '测试',
-          raw: _uiRaw,
-          diagnose: (raw, {bool diagnose = true}) async => _blueprintJson(),
+      await tester.pumpWidget(
+        MaterialApp(
+          home: WorkflowBlueprintPage(
+            title: '测试',
+            raw: _uiRaw,
+            diagnose: (raw, {bool diagnose = true}) async => _blueprintJson(),
+          ),
         ),
-      ));
+      );
       await tester.pumpAndSettle();
 
-      final viewer = tester.widget<InteractiveViewer>(find.byType(InteractiveViewer));
+      final viewer = tester.widget<InteractiveViewer>(
+        find.byType(InteractiveViewer),
+      );
       final matrix = viewer.transformationController!.value;
       final viewport = tester.getSize(find.byType(InteractiveViewer));
 
@@ -616,12 +788,21 @@ void main() {
       // 图坐标 → 画布坐标（与页面里的 `origin` 同一套算法，padding = 40）
       const padding = 40.0;
       final origin = Offset(padding - bounds.left, padding - bounds.top);
-      final onScreen = MatrixUtils.transformPoint(matrix, bounds.center + origin);
+      final onScreen = MatrixUtils.transformPoint(
+        matrix,
+        bounds.center + origin,
+      );
 
-      expect((onScreen.dx - viewport.width / 2).abs(), lessThan(0.5),
-          reason: '横向必须居中；偏到右边就是"跑到右上角"那个 bug');
-      expect((onScreen.dy - viewport.height / 2).abs(), lessThan(0.5),
-          reason: '纵向必须居中');
+      expect(
+        (onScreen.dx - viewport.width / 2).abs(),
+        lessThan(0.5),
+        reason: '横向必须居中；偏到右边就是"跑到右上角"那个 bug',
+      );
+      expect(
+        (onScreen.dy - viewport.height / 2).abs(),
+        lessThan(0.5),
+        reason: '纵向必须居中',
+      );
       // 缩放要真的"适应窗口"（不是 1:1 原样铺开）
       final scale = blueprintScaleOf(matrix);
       expect(scale, lessThanOrEqualTo(1.0));
@@ -629,8 +810,11 @@ void main() {
       // ⚠ 判据必须是 blueprintScaleOf，不是 `getMaxScaleOnAxis()`：
       // 后者把 Z=1 也算进去，缩小的时候永远回 1.0，LOD 会整个失效。
       final expectedFit = (viewport.width - 48) / bounds.width;
-      expect((scale - expectedFit).abs(), lessThan(0.001),
-          reason: '按窗口宽度适应：$scale vs $expectedFit');
+      expect(
+        (scale - expectedFit).abs(),
+        lessThan(0.001),
+        reason: '按窗口宽度适应：$scale vs $expectedFit',
+      );
     });
 
     testWidgets('面板能折叠：收起之后画布变宽，再展开回来', (tester) async {
@@ -639,13 +823,15 @@ void main() {
       tester.view.devicePixelRatio = 1.0;
       addTearDown(tester.view.reset);
 
-      await tester.pumpWidget(MaterialApp(
-        home: WorkflowBlueprintPage(
-          title: '测试',
-          raw: _uiRaw,
-          diagnose: (raw, {bool diagnose = true}) async => _blueprintJson(),
+      await tester.pumpWidget(
+        MaterialApp(
+          home: WorkflowBlueprintPage(
+            title: '测试',
+            raw: _uiRaw,
+            diagnose: (raw, {bool diagnose = true}) async => _blueprintJson(),
+          ),
         ),
-      ));
+      );
       await tester.pumpAndSettle();
 
       final openWidth = tester.getSize(find.byType(InteractiveViewer)).width;
@@ -671,27 +857,34 @@ void main() {
       addTearDown(tester.view.reset);
 
       final seen = <String>[];
-      await tester.pumpWidget(MaterialApp(
-        home: WorkflowBlueprintPage(
-          title: '测试',
-          raw: _uiRaw,
-          diagnose: (raw, {bool diagnose = true}) async {
-            seen.add(raw);
-            return _blueprintJson();
-          },
+      await tester.pumpWidget(
+        MaterialApp(
+          home: WorkflowBlueprintPage(
+            title: '测试',
+            raw: _uiRaw,
+            diagnose: (raw, {bool diagnose = true}) async {
+              seen.add(raw);
+              return _blueprintJson();
+            },
+          ),
         ),
-      ));
+      );
       await tester.pumpAndSettle();
       await tester.tap(find.byIcon(Icons.edit_outlined));
       await tester.pumpAndSettle();
 
       final blueprint = WorkflowBlueprint.fromJson(_blueprintJson());
       final layout = BlueprintLayout.of(blueprint);
-      final viewer = tester.widget<InteractiveViewer>(find.byType(InteractiveViewer));
+      final viewer = tester.widget<InteractiveViewer>(
+        find.byType(InteractiveViewer),
+      );
       final matrix = viewer.transformationController!.value;
       final canvasTopLeft = tester.getTopLeft(find.byType(InteractiveViewer));
       const padding = 40.0;
-      final origin = Offset(padding - layout.bounds.left, padding - layout.bounds.top);
+      final origin = Offset(
+        padding - layout.bounds.left,
+        padding - layout.bounds.top,
+      );
 
       // 找一行"屏幕上画得出来、而且宽度够摆输入框"的参数（与生产判据同一个阈值）
       Object? original;
@@ -702,8 +895,10 @@ void main() {
         for (final widget in node.widgets) {
           final row = blueprintWidgetRowRect(node, box, widget.index);
           if (row.top > box.bottom - 10) continue;
-          final centre =
-              MatrixUtils.transformPoint(matrix, row.center + origin);
+          final centre = MatrixUtils.transformPoint(
+            matrix,
+            row.center + origin,
+          );
           final width = row.width * blueprintScaleOf(matrix);
           if (width < 40) continue;
           original = widget.value;
@@ -716,18 +911,27 @@ void main() {
 
       await tester.tapAt(target!);
       await tester.pumpAndSettle();
-      expect(find.byKey(const Key('blueprint-inline-widget-field')), findsOneWidget,
-          reason: '点了参数行就该在**画布上**出现输入框');
+      expect(
+        find.byKey(const Key('blueprint-inline-widget-field')),
+        findsOneWidget,
+        reason: '点了参数行就该在**画布上**出现输入框',
+      );
 
       // 数字按数字改，字符串按字符串改（类型从当前值推，见 coerceWidgetValue）
       final probe = original is num ? '424242' : 'blueprint-inline-probe';
-      await tester.enterText(find.byKey(const Key('blueprint-inline-widget-field')), probe);
+      await tester.enterText(
+        find.byKey(const Key('blueprint-inline-widget-field')),
+        probe,
+      );
       await tester.testTextInput.receiveAction(TextInputAction.done);
       await tester.pump(const Duration(milliseconds: 500));
       await tester.pumpAndSettle();
 
-      expect(find.byKey(const Key('blueprint-inline-widget-field')), findsNothing,
-          reason: '提交之后就地编辑器要收起来');
+      expect(
+        find.byKey(const Key('blueprint-inline-widget-field')),
+        findsNothing,
+        reason: '提交之后就地编辑器要收起来',
+      );
       expect(seen.length, greaterThanOrEqualTo(2), reason: '改完要就地复检');
       expect(seen.last, contains(probe), reason: '复检用的是**改过之后**的原文');
     });
@@ -739,19 +943,22 @@ void main() {
       tester.view.devicePixelRatio = 1.0;
       addTearDown(tester.view.reset);
 
-      await tester.pumpWidget(MaterialApp(
-        home: WorkflowBlueprintPage(
-          title: '测试',
-          raw: _uiRaw,
-          diagnose: (raw, {bool diagnose = true}) async {
-            final json = _blueprintJson();
-            final issues = (json['issues'] as List).cast<Map<String, dynamic>>();
-            issues.first['detail'] =
-                '开 ##模拟用户行为## 就行（`comfy_load_workflow`，**默认开着**）';
-            return json;
-          },
+      await tester.pumpWidget(
+        MaterialApp(
+          home: WorkflowBlueprintPage(
+            title: '测试',
+            raw: _uiRaw,
+            diagnose: (raw, {bool diagnose = true}) async {
+              final json = _blueprintJson();
+              final issues = (json['issues'] as List)
+                  .cast<Map<String, dynamic>>();
+              issues.first['detail'] =
+                  '开 ##模拟用户行为## 就行（`comfy_load_workflow`，**默认开着**）';
+              return json;
+            },
+          ),
         ),
-      ));
+      );
       await tester.pumpAndSettle();
       await tester.tap(find.textContaining('体检 2'));
       await tester.pumpAndSettle();
@@ -766,11 +973,15 @@ void main() {
     testWidgets('「看蓝图」只在给了蓝图取数时才出现', (tester) async {
       // 这条钉的是"蓝图是可选的"：`WorkflowButton` 不传 blueprint 时，
       // 弹窗与以前**逐字相同**（详情页与老用例因此一条都不用改）
-      await tester.pumpWidget(MaterialApp(
-        home: Scaffold(
-          body: Center(child: WorkflowButton(title: '测试', load: () async => _uiRaw)),
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: Center(
+              child: WorkflowButton(title: '测试', load: () async => _uiRaw),
+            ),
+          ),
         ),
-      ));
+      );
       await tester.tap(find.text('查看工作流'));
       await tester.pumpAndSettle();
       expect(find.text('看蓝图'), findsNothing);
@@ -778,17 +989,20 @@ void main() {
       await tester.tap(find.text('关闭'));
       await tester.pumpAndSettle();
 
-      await tester.pumpWidget(MaterialApp(
-        home: Scaffold(
-          body: Center(
-            child: WorkflowButton(
-              title: '测试',
-              load: () async => _uiRaw,
-              blueprint: (raw, {bool diagnose = true}) async => _blueprintJson(),
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: Center(
+              child: WorkflowButton(
+                title: '测试',
+                load: () async => _uiRaw,
+                blueprint: (raw, {bool diagnose = true}) async =>
+                    _blueprintJson(),
+              ),
             ),
           ),
         ),
-      ));
+      );
       await tester.tap(find.text('查看工作流'));
       await tester.pumpAndSettle();
       expect(find.text('看蓝图'), findsOneWidget);
@@ -815,25 +1029,40 @@ void main() {
         isFalse,
         reason: '深色主题的节点底一旦接近白色，大面积高对比就会刺眼（2026-10-18 的 bug）',
       );
-      expect(relativeLuminance(dark.canvas) < relativeLuminance(dark.body), isTrue,
-          reason: '节点底要比画布**亮一档**才分得出层（不许同色）');
+      expect(
+        relativeLuminance(dark.canvas) < relativeLuminance(dark.body),
+        isTrue,
+        reason: '节点底要比画布**亮一档**才分得出层（不许同色）',
+      );
     });
 
     test('两套主题下"节点底 vs 画布底"都看得清、但不刺眼', () {
       for (final palette in [BlueprintPalette.dark, BlueprintPalette.light]) {
         final ratio = contrastRatio(palette.body, palette.canvas);
-        expect(ratio, greaterThanOrEqualTo(1.1),
-            reason: '太低就分不出节点边界（浅色主题曾经就是这样）');
-        expect(ratio, lessThanOrEqualTo(2.5),
-            reason: '太大就是"一大片高对比色块"，正是用户说的刺眼');
+        expect(
+          ratio,
+          greaterThanOrEqualTo(1.1),
+          reason: '太低就分不出节点边界（浅色主题曾经就是这样）',
+        );
+        expect(
+          ratio,
+          lessThanOrEqualTo(2.5),
+          reason: '太大就是"一大片高对比色块"，正是用户说的刺眼',
+        );
       }
     });
 
     test('两套主题下节点标题都读得清（正文级对比 ≥ 7:1）', () {
       for (final palette in [BlueprintPalette.dark, BlueprintPalette.light]) {
-        expect(contrastRatio(palette.title, palette.body), greaterThanOrEqualTo(7.0));
-        expect(contrastRatio(palette.widgetText, palette.widgetBar), greaterThanOrEqualTo(4.5),
-            reason: '参数行是小字，至少要 AA 的 4.5:1');
+        expect(
+          contrastRatio(palette.title, palette.body),
+          greaterThanOrEqualTo(7.0),
+        );
+        expect(
+          contrastRatio(palette.widgetText, palette.widgetBar),
+          greaterThanOrEqualTo(4.5),
+          reason: '参数行是小字，至少要 AA 的 4.5:1',
+        );
       }
     });
 
@@ -844,12 +1073,24 @@ void main() {
       // 认不出来的 kind 回普通描边色 —— **不猜**
       expect(dark.accentOf('没见过的类'), dark.border);
       // 深浅两套都要给同名的 kind 留位置，否则某个主题下会静默退化成"没上色"
-      expect(dark.accents.keys.toSet(), BlueprintPalette.light.accents.keys.toSet());
+      expect(
+        dark.accents.keys.toSet(),
+        BlueprintPalette.light.accents.keys.toSet(),
+      );
     });
 
     test('两套配色必须是稳定单例（shouldRepaint 靠身份比较）', () {
-      expect(identical(BlueprintPalette.of(Brightness.dark), BlueprintPalette.dark), isTrue);
-      expect(identical(BlueprintPalette.of(Brightness.light), BlueprintPalette.light), isTrue);
+      expect(
+        identical(BlueprintPalette.of(Brightness.dark), BlueprintPalette.dark),
+        isTrue,
+      );
+      expect(
+        identical(
+          BlueprintPalette.of(Brightness.light),
+          BlueprintPalette.light,
+        ),
+        isTrue,
+      );
       expect(BlueprintPalette.dark.isDark, isTrue);
       expect(BlueprintPalette.light.isDark, isFalse);
     });
@@ -878,15 +1119,21 @@ void main() {
       expect(dark.typeColor('SEGS'), isNot(dark.unknownType));
       expect(dark.typeColor(null), dark.unknownType);
       // 深浅两套都要把这套类型表带全，否则某个主题下会静默退化成随机色
-      expect(dark.typeColors.keys.toSet(), BlueprintPalette.light.typeColors.keys.toSet());
+      expect(
+        dark.typeColors.keys.toSet(),
+        BlueprintPalette.light.typeColors.keys.toSet(),
+      );
     });
 
     test('标题条是中性的，不按节点类别整片染色（与 ComfyUI 一致）', () {
       final dark = BlueprintPalette.dark;
       expect(dark.header, isNot(dark.accentOf('note')));
       expect(dark.header, isNot(dark.accentOf('unknown')));
-      expect(relativeLuminance(dark.header), greaterThan(relativeLuminance(dark.body)),
-          reason: '标题条要比节点底亮一档才分得开');
+      expect(
+        relativeLuminance(dark.header),
+        greaterThan(relativeLuminance(dark.body)),
+        reason: '标题条要比节点底亮一档才分得开',
+      );
     });
   });
 }

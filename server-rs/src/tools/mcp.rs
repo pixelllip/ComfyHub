@@ -124,7 +124,10 @@ pub struct McpError {
 
 impl McpError {
     pub fn new(code: impl Into<String>, message: impl Into<String>) -> Self {
-        Self { code: code.into(), message: message.into() }
+        Self {
+            code: code.into(),
+            message: message.into(),
+        }
     }
 }
 
@@ -198,21 +201,15 @@ impl McpClient {
     }
 
     /// 同上，但可以再挂一路 stderr（测试 O12 的"尾部带进 detail"）。
-    pub fn from_io_with_stderr<R, W, E>(
-        reader: R,
-        writer: W,
-        stderr: Option<E>,
-    ) -> Self
+    pub fn from_io_with_stderr<R, W, E>(reader: R, writer: W, stderr: Option<E>) -> Self
     where
         R: AsyncRead + Unpin + Send + 'static,
         W: AsyncWrite + Unpin + Send + 'static,
         E: AsyncRead + Unpin + Send + 'static,
     {
         let (tx, mut rx) = mpsc::unbounded_channel::<String>();
-        let pending: PendingMap =
-            Arc::new(StdMutex::new(HashMap::new()));
-        let stderr_tail: Arc<StdMutex<VecDeque<String>>> =
-            Arc::new(StdMutex::new(VecDeque::new()));
+        let pending: PendingMap = Arc::new(StdMutex::new(HashMap::new()));
+        let stderr_tail: Arc<StdMutex<VecDeque<String>>> = Arc::new(StdMutex::new(VecDeque::new()));
         let notifications: Arc<StdMutex<VecDeque<Value>>> =
             Arc::new(StdMutex::new(VecDeque::new()));
         let instructions: Arc<StdMutex<Option<String>>> = Arc::new(StdMutex::new(None));
@@ -249,7 +246,10 @@ impl McpClient {
                                 continue;
                             }
                             if !trimmed.starts_with('{') {
-                                eprintln!("[mcp] 非协议输出（已忽略）: {}", truncate_chars(trimmed, 300));
+                                eprintln!(
+                                    "[mcp] 非协议输出（已忽略）: {}",
+                                    truncate_chars(trimmed, 300)
+                                );
                                 continue;
                             }
                             let obj: Value = match serde_json::from_str(trimmed) {
@@ -314,10 +314,9 @@ impl McpClient {
     /// MCP 客户端自己的环境**没有 shell 的 PATH**，comfy-mcp 内部起 `comfy-cli` 时要靠
     /// `COMFY_BIN` 的绝对路径；`PYTHONUTF8` / `PYTHONIOENCODING` 防中文乱码。
     pub fn spawn(runtime: &RuntimePaths, project_root: &Path) -> Result<Self, McpError> {
-        let python = runtime
-            .python
-            .clone()
-            .ok_or_else(|| McpError::new("MCP_NO_PYTHON", "没有可用的 Python（MCP 运行时未装配）"))?;
+        let python = runtime.python.clone().ok_or_else(|| {
+            McpError::new("MCP_NO_PYTHON", "没有可用的 Python（MCP 运行时未装配）")
+        })?;
 
         let mut command = tokio::process::Command::new(&python);
         match runtime.comfy_mcp.as_ref() {
@@ -350,10 +349,19 @@ impl McpClient {
         }
 
         let mut child = command.spawn().map_err(|e| {
-            McpError::new("MCP_SPAWN_FAILED", format!("起 MCP 子进程失败：{}", truncate_chars(&e.to_string(), 200)))
+            McpError::new(
+                "MCP_SPAWN_FAILED",
+                format!("起 MCP 子进程失败：{}", truncate_chars(&e.to_string(), 200)),
+            )
         })?;
-        let stdin = child.stdin.take().ok_or_else(|| McpError::new("MCP_SPAWN_FAILED", "拿不到子进程 stdin"))?;
-        let stdout = child.stdout.take().ok_or_else(|| McpError::new("MCP_SPAWN_FAILED", "拿不到子进程 stdout"))?;
+        let stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| McpError::new("MCP_SPAWN_FAILED", "拿不到子进程 stdin"))?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| McpError::new("MCP_SPAWN_FAILED", "拿不到子进程 stdout"))?;
         let stderr = child.stderr.take();
 
         let client = Self::from_io_with_stderr(stdout, stdin, stderr);
@@ -391,7 +399,11 @@ impl McpClient {
         let mut child = command.spawn().map_err(|e| {
             McpError::new(
                 "MCP_SPAWN_FAILED",
-                format!("起 MCP 子进程失败（{}）：{}", program.display(), truncate_chars(&e.to_string(), 200)),
+                format!(
+                    "起 MCP 子进程失败（{}）：{}",
+                    program.display(),
+                    truncate_chars(&e.to_string(), 200)
+                ),
             )
         })?;
         let stdin = child
@@ -422,14 +434,22 @@ impl McpClient {
 
     /// `initialize` 里服务端给的 instructions（官方建议先看它），拿不到就是 `None`。
     pub fn instructions(&self) -> Option<String> {
-        self.instructions.lock().unwrap_or_else(|e| e.into_inner()).clone()
+        self.instructions
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
 
     /// stderr 尾部 N 行（失败时拼进 `detail`，见 O12/O13）。
     pub fn stderr_tail(&self, lines: usize) -> String {
         let guard = self.stderr_tail.lock().unwrap_or_else(|e| e.into_inner());
         let skip = guard.len().saturating_sub(lines);
-        guard.iter().skip(skip).cloned().collect::<Vec<_>>().join("\n")
+        guard
+            .iter()
+            .skip(skip)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 
     /// 服务端主动发来的通知（进度通知走这条；只留最近 100 条）。
@@ -449,8 +469,13 @@ impl McpClient {
             "capabilities": {},
             "clientInfo": { "name": CLIENT_NAME, "version": "0.1" },
         });
-        let result = self.request("initialize", params, HANDSHAKE_TIMEOUT_MS).await?;
-        let instructions = result.get("instructions").and_then(|v| v.as_str()).map(|s| s.to_string());
+        let result = self
+            .request("initialize", params, HANDSHAKE_TIMEOUT_MS)
+            .await?;
+        let instructions = result
+            .get("instructions")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
         *self.instructions.lock().unwrap_or_else(|e| e.into_inner()) = instructions;
         // 握手完成的通知（**没有 id**，是通知不是请求）。
         self.notify("notifications/initialized", json!({}));
@@ -462,17 +487,32 @@ impl McpClient {
         let result = self
             .request("tools/list", json!({}), HANDSHAKE_TIMEOUT_MS)
             .await
-            .map_err(|e| McpError::new("MCP_TOOLS_FAILED", format!("拉取 MCP 工具清单失败：{}", e.message)))?;
-        let tools = result.get("tools").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+            .map_err(|e| {
+                McpError::new(
+                    "MCP_TOOLS_FAILED",
+                    format!("拉取 MCP 工具清单失败：{}", e.message),
+                )
+            })?;
+        let tools = result
+            .get("tools")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
         let mut out = Vec::new();
         for item in tools {
-            let Some(name) = item.get("name").and_then(|v| v.as_str()) else { continue };
+            let Some(name) = item.get("name").and_then(|v| v.as_str()) else {
+                continue;
+            };
             if name.trim().is_empty() {
                 continue;
             }
             out.push(McpDecl {
                 name: name.to_string(),
-                description: item.get("description").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                description: item
+                    .get("description")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string(),
                 input_schema: item
                     .get("inputSchema")
                     .cloned()
@@ -486,13 +526,25 @@ impl McpClient {
     }
 
     /// 调一个工具；`arguments` 原样透传（schema 是服务端给的，我们不改写）。
-    pub async fn call_tool(&self, name: &str, arguments: &Value) -> Result<McpCallResult, McpError> {
+    pub async fn call_tool(
+        &self,
+        name: &str,
+        arguments: &Value,
+    ) -> Result<McpCallResult, McpError> {
         if self.closed.load(Ordering::SeqCst) {
             return Err(McpError::new("MCP_CLOSED", "MCP 客户端已关闭"));
         }
-        let timeout = if LONG_TOOLS.contains(&name) { LONG_CALL_TIMEOUT_MS } else { DEFAULT_TIMEOUT_MS };
+        let timeout = if LONG_TOOLS.contains(&name) {
+            LONG_CALL_TIMEOUT_MS
+        } else {
+            DEFAULT_TIMEOUT_MS
+        };
         let result = self
-            .request("tools/call", json!({ "name": name, "arguments": arguments }), timeout)
+            .request(
+                "tools/call",
+                json!({ "name": name, "arguments": arguments }),
+                timeout,
+            )
             .await?;
         Ok(parse_call_result(name, result))
     }
@@ -510,23 +562,41 @@ impl McpClient {
         }
     }
 
-    async fn request(&self, method: &str, params: Value, timeout_ms: u64) -> Result<Value, McpError> {
+    async fn request(
+        &self,
+        method: &str,
+        params: Value,
+        timeout_ms: u64,
+    ) -> Result<Value, McpError> {
         if self.closed.load(Ordering::SeqCst) {
             return Err(McpError::new("MCP_CLOSED", "MCP 客户端已关闭"));
         }
         let id = self.next_id.fetch_add(1, Ordering::SeqCst);
         let (tx, rx) = oneshot::channel();
-        self.pending.lock().unwrap_or_else(|e| e.into_inner()).insert(id, tx);
-        let line = json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params }).to_string();
+        self.pending
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(id, tx);
+        let line =
+            json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params }).to_string();
         if self.tx.send(line).is_err() {
-            self.pending.lock().unwrap_or_else(|e| e.into_inner()).remove(&id);
+            self.pending
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .remove(&id);
             return Err(McpError::new("MCP_NOT_STARTED", "MCP 子进程还没起来"));
         }
         match tokio::time::timeout(Duration::from_millis(timeout_ms), rx).await {
             Ok(Ok(result)) => result,
-            Ok(Err(_)) => Err(McpError::new("MCP_EXITED", "MCP 子进程退出了（回复通道关闭）")),
+            Ok(Err(_)) => Err(McpError::new(
+                "MCP_EXITED",
+                "MCP 子进程退出了（回复通道关闭）",
+            )),
             Err(_) => {
-                self.pending.lock().unwrap_or_else(|e| e.into_inner()).remove(&id);
+                self.pending
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .remove(&id);
                 Err(McpError::new(
                     "MCP_TIMEOUT",
                     format!(
@@ -556,7 +626,10 @@ fn dispatch(
     let has_error = obj.get("error").is_some();
 
     if let (Some(id), true) = (id, has_result || has_error) {
-        let sender = pending.lock().unwrap_or_else(|e| e.into_inner()).remove(&id);
+        let sender = pending
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&id);
         if let Some(sender) = sender {
             if has_error {
                 let err = &obj["error"];
@@ -602,11 +675,7 @@ fn dispatch(
     }
 }
 
-fn fail_all_pending(
-    pending: &PendingMap,
-    code: &str,
-    message: &str,
-) {
+fn fail_all_pending(pending: &PendingMap, code: &str, message: &str) {
     let mut guard = pending.lock().unwrap_or_else(|e| e.into_inner());
     for (_, sender) in guard.drain() {
         let _ = sender.send(Err(McpError::new(code, message)));
@@ -618,7 +687,10 @@ fn fail_all_pending(
 /// ⚠ 非文本块（image / resource）**不做无声丢弃**：留一句占位 ——
 /// 否则模型会以为工具什么都没返回（AGENTS §10 的同一条纪律）。
 fn parse_call_result(name: &str, result: Value) -> McpCallResult {
-    let is_error = result.get("isError").and_then(|v| v.as_bool()).unwrap_or(false);
+    let is_error = result
+        .get("isError")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
     let mut texts = Vec::new();
     let mut others = Vec::new();
     if let Some(blocks) = result.get("content").and_then(|v| v.as_array()) {
@@ -718,7 +790,11 @@ pub fn scripts_dir_of(python_exe: &Path) -> Option<PathBuf> {
         .file_name()
         .map(|n| n.eq_ignore_ascii_case("Scripts"))
         .unwrap_or(false);
-    Some(if is_scripts { parent.to_path_buf() } else { parent.join("Scripts") })
+    Some(if is_scripts {
+        parent.to_path_buf()
+    } else {
+        parent.join("Scripts")
+    })
 }
 
 /// 给 MCP 子进程补上"comfy-cli 往哪儿写"的环境变量。
@@ -762,7 +838,10 @@ fn apply_comfy_cli_write_redirection(command: &mut tokio::process::Command, proj
         command.env("COMFY_SECRETS_PATH", home.join("secrets.json"));
         import_legacy_comfy_cli_secrets(&home);
         if let Some(dir) = redirect_comfy_cli_home(command, &home) {
-            eprintln!("[mcp] comfy-cli 的 config.ini 指向项目内：{}", dir.display());
+            eprintln!(
+                "[mcp] comfy-cli 的 config.ini 指向项目内：{}",
+                dir.display()
+            );
         }
         command.env("COMFY_CACHE_DIR", home.join("cache"));
     }
@@ -786,7 +865,9 @@ fn import_legacy_comfy_cli_secrets(home: &Path) {
     let Ok(local) = std::env::var("LOCALAPPDATA") else {
         return;
     };
-    let legacy = Path::new(local.trim()).join("comfy-cli").join("secrets.json");
+    let legacy = Path::new(local.trim())
+        .join("comfy-cli")
+        .join("secrets.json");
     if !legacy.is_file() {
         return;
     }
@@ -858,7 +939,10 @@ pub fn discover_runtime(project_root: &Path) -> RuntimePaths {
 
     let state = read_runtime_state(&dir);
     let python = [
-        state.as_ref().and_then(|s| s.python_exe.clone()).map(PathBuf::from),
+        state
+            .as_ref()
+            .and_then(|s| s.python_exe.clone())
+            .map(PathBuf::from),
         Some(dir.join("venv").join("Scripts").join("python.exe")),
         Some(dir.join("python").join("python.exe")),
     ]
@@ -867,8 +951,14 @@ pub fn discover_runtime(project_root: &Path) -> RuntimePaths {
     .find(|p| p.is_file());
 
     let scripts_dir = python.as_deref().and_then(scripts_dir_of);
-    let comfy_mcp = scripts_dir.as_ref().map(|d| d.join("comfy-mcp.exe")).filter(|p| p.is_file());
-    let comfy_cli = scripts_dir.as_ref().map(|d| d.join("comfy.exe")).filter(|p| p.is_file());
+    let comfy_mcp = scripts_dir
+        .as_ref()
+        .map(|d| d.join("comfy-mcp.exe"))
+        .filter(|p| p.is_file());
+    let comfy_cli = scripts_dir
+        .as_ref()
+        .map(|d| d.join("comfy.exe"))
+        .filter(|p| p.is_file());
 
     let mut problems = Vec::new();
     if python.is_none() {
@@ -883,18 +973,36 @@ pub fn discover_runtime(project_root: &Path) -> RuntimePaths {
     if python.is_some() && comfy_cli.is_none() {
         problems.push("缺 comfy.exe（comfy-cli 没装成？重跑 mcp-runtime.ps1 install）".to_string());
     }
-    if state.as_ref().and_then(|s| s.workspace.clone()).map(|w| w.trim().is_empty()).unwrap_or(true) {
+    if state
+        .as_ref()
+        .and_then(|s| s.workspace.clone())
+        .map(|w| w.trim().is_empty())
+        .unwrap_or(true)
+    {
         problems.push("comfy-cli 还没设工作区（它不知道用户的 ComfyUI 在哪）".to_string());
     }
 
-    RuntimePaths { dir, python, comfy_mcp, comfy_cli, scripts_dir, state, problems }
+    RuntimePaths {
+        dir,
+        python,
+        comfy_mcp,
+        comfy_cli,
+        scripts_dir,
+        state,
+        problems,
+    }
 }
 
 fn read_runtime_state(dir: &Path) -> Option<RuntimeState> {
     let file = dir.join("state.json");
     let text = std::fs::read_to_string(&file).ok()?;
     let value: Value = serde_json::from_str(&text).ok()?;
-    let text_of = |key: &str| value.get(key).and_then(|v| v.as_str()).map(|s| s.to_string());
+    let text_of = |key: &str| {
+        value
+            .get(key)
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+    };
     Some(RuntimeState {
         python_exe: text_of("pythonExe"),
         python_version: text_of("pythonVersion"),
@@ -1101,7 +1209,10 @@ fn flag_value_last(argv: &[String], aliases: &[&str]) -> Option<PathBuf> {
                 .filter(|next| !next.starts_with("--"))
                 .cloned()
         });
-        if let Some(value) = value.map(|v| v.trim().to_string()).filter(|v| !v.is_empty()) {
+        if let Some(value) = value
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty())
+        {
             found = Some(PathBuf::from(value));
         }
     }
@@ -1158,19 +1269,29 @@ pub fn desktop(dir: Option<PathBuf>) -> Option<Desktop> {
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
-    let input_dir = obj_ref.and_then(|o| o.get("inputDir")).and_then(existing_dir);
-    let output_dir = obj_ref.and_then(|o| o.get("outputDir")).and_then(existing_dir);
-    let install_dir = obj_ref.and_then(|o| o.get("installDir")).and_then(existing_dir);
+    let input_dir = obj_ref
+        .and_then(|o| o.get("inputDir"))
+        .and_then(existing_dir);
+    let output_dir = obj_ref
+        .and_then(|o| o.get("outputDir"))
+        .and_then(existing_dir);
+    let install_dir = obj_ref
+        .and_then(|o| o.get("installDir"))
+        .and_then(existing_dir);
 
     let source = match (settings_file.is_some(), paths.as_ref()) {
         (true, Some(p)) => format!(
             "ComfyUI Desktop 的 settings.json 与 {}",
-            p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default()
+            p.file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_default()
         ),
         (true, None) => "ComfyUI Desktop 的 settings.json".to_string(),
         (false, Some(p)) => format!(
             "ComfyUI Desktop 的 {}",
-            p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default()
+            p.file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_default()
         ),
         (false, None) => "ComfyUI Desktop 的配置".to_string(),
     };
@@ -1222,7 +1343,9 @@ pub fn prepare_launch_with(args: &Value, desktop: Option<Desktop>) -> LaunchPlan
         )),
         Some(d) => {
             if has_flag(FLAG_MODEL_PATHS) {
-                notes.push(format!("模型根：**尊重模型自己写的** `{FLAG_MODEL_PATHS}`，ComfyHub 没有覆盖。"));
+                notes.push(format!(
+                    "模型根：**尊重模型自己写的** `{FLAG_MODEL_PATHS}`，ComfyHub 没有覆盖。"
+                ));
             } else if let Some(cfg) = d.model_paths_config.as_ref() {
                 argv.push(FLAG_MODEL_PATHS.to_string());
                 argv.push(cfg.display().to_string());
@@ -1271,7 +1394,10 @@ pub fn prepare_launch_with(args: &Value, desktop: Option<Desktop>) -> LaunchPlan
     }
 
     let note = render_note(desktop.as_ref(), &added, &notes);
-    LaunchPlan { args: with_argv(args, &argv), note }
+    LaunchPlan {
+        args: with_argv(args, &argv),
+        note,
+    }
 }
 
 /// 把补好的 argv 写回参数对象（先擦掉旧的 `extra_args` 再写新的）。
@@ -1320,7 +1446,10 @@ fn render_note(desktop: Option<&Desktop>, added: &[&str], notes: &[String]) -> O
         if added.contains(&FLAG_MODEL_PATHS) {
             out.push_str(&format!(
                 "· 已挂 `{FLAG_MODEL_PATHS} {}`\n",
-                d.model_paths_config.as_ref().map(|p| p.display().to_string()).unwrap_or_default()
+                d.model_paths_config
+                    .as_ref()
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_default()
             ));
         }
         if added.contains(&FLAG_INPUT) || added.contains(&FLAG_OUTPUT) {
@@ -1328,13 +1457,19 @@ fn render_note(desktop: Option<&Desktop>, added: &[&str], notes: &[String]) -> O
             if added.contains(&FLAG_INPUT) {
                 parts.push(format!(
                     "input = {}",
-                    d.input_dir.as_ref().map(|p| p.display().to_string()).unwrap_or_default()
+                    d.input_dir
+                        .as_ref()
+                        .map(|p| p.display().to_string())
+                        .unwrap_or_default()
                 ));
             }
             if added.contains(&FLAG_OUTPUT) {
                 parts.push(format!(
                     "output = {}",
-                    d.output_dir.as_ref().map(|p| p.display().to_string()).unwrap_or_default()
+                    d.output_dir
+                        .as_ref()
+                        .map(|p| p.display().to_string())
+                        .unwrap_or_default()
                 ));
             }
             out.push_str(&format!("· 已挂 {}\n", parts.join("，")));
@@ -1377,7 +1512,10 @@ fn read_object(file: &Path) -> Option<Map<String, Value>> {
         Ok(Value::Object(map)) => Some(map),
         Ok(_) => None,
         Err(e) => {
-            eprintln!("[mcp] 读 ComfyUI Desktop 配置失败（忽略）：{} —— {e}", file.display());
+            eprintln!(
+                "[mcp] 读 ComfyUI Desktop 配置失败（忽略）：{} —— {e}",
+                file.display()
+            );
             None
         }
     }
@@ -1419,23 +1557,34 @@ fn first_yaml(dir: &Path) -> Option<PathBuf> {
 pub fn as_argv(value: Option<&Value>) -> Vec<String> {
     let raw: Vec<String> = match value {
         None | Some(Value::Null) => Vec::new(),
-        Some(Value::Array(items)) => items.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect(),
+        Some(Value::Array(items)) => items
+            .iter()
+            .filter_map(|v| v.as_str().map(|s| s.to_string()))
+            .collect(),
         Some(Value::String(text)) => {
             let trimmed = text.trim();
             if trimmed.is_empty() {
                 Vec::new()
             } else {
                 match serde_json::from_str::<Value>(trimmed) {
-                    Ok(Value::Array(items)) => {
-                        items.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect()
-                    }
-                    _ => trimmed.split(' ').filter(|s| !s.is_empty()).map(|s| s.to_string()).collect(),
+                    Ok(Value::Array(items)) => items
+                        .iter()
+                        .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                        .collect(),
+                    _ => trimmed
+                        .split(' ')
+                        .filter(|s| !s.is_empty())
+                        .map(|s| s.to_string())
+                        .collect(),
                 }
             }
         }
         _ => Vec::new(),
     };
-    raw.into_iter().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect()
+    raw.into_iter()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -1499,7 +1648,13 @@ impl McpRegistry {
     /// 已经拉到的 MCP 工具（两条桥合并；没启动过的那条不贡献）。
     pub fn specs(&self) -> Vec<McpSpec> {
         let mut out = self.specs.read().unwrap_or_else(|e| e.into_inner()).clone();
-        out.extend(self.anima_specs.read().unwrap_or_else(|e| e.into_inner()).iter().copied());
+        out.extend(
+            self.anima_specs
+                .read()
+                .unwrap_or_else(|e| e.into_inner())
+                .iter()
+                .copied(),
+        );
         out
     }
 
@@ -1522,18 +1677,39 @@ impl McpRegistry {
     }
 
     pub fn problems(&self) -> Vec<String> {
-        let mut out = self.problems.read().unwrap_or_else(|e| e.into_inner()).clone();
-        out.extend(self.anima_problems.read().unwrap_or_else(|e| e.into_inner()).iter().cloned());
+        let mut out = self
+            .problems
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        out.extend(
+            self.anima_problems
+                .read()
+                .unwrap_or_else(|e| e.into_inner())
+                .iter()
+                .cloned(),
+        );
         out
     }
 
     pub fn runtime_dir(&self) -> Option<String> {
-        self.runtime_dir.read().unwrap_or_else(|e| e.into_inner()).clone()
+        self.runtime_dir
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
 
     pub fn instructions(&self) -> Option<String> {
-        let comfy = self.instructions.read().unwrap_or_else(|e| e.into_inner()).clone();
-        let anima = self.anima_instructions.read().unwrap_or_else(|e| e.into_inner()).clone();
+        let comfy = self
+            .instructions
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        let anima = self
+            .anima_instructions
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
         match (comfy, anima) {
             (Some(a), Some(b)) => Some(format!("{a}\n\n{b}")),
             (Some(a), None) => Some(a),
@@ -1587,7 +1763,11 @@ impl McpRegistry {
             // ComfyUI 相反的结论。宁可少两条工具，也不让模型拿它们当证据。
             .filter(|decl| !is_hidden_tool(&decl.name))
             .map(|decl| {
-                let description = format!("{}{}", description_prefix(&decl.name), decl.description.trim());
+                let description = format!(
+                    "{}{}",
+                    description_prefix(&decl.name),
+                    decl.description.trim()
+                );
                 McpSpec {
                     name: Box::leak(decl.name.clone().into_boxed_str()),
                     description: Box::leak(description.into_boxed_str()),
@@ -1616,28 +1796,51 @@ impl McpRegistry {
             return Ok(client.clone());
         }
         let Some(engine) = crate::train::discover_engine(project_root) else {
-            let message = "没有找到 anima-lora-next 引擎（需要 train.py + .venv\\Scripts\\python.exe）".to_string();
-            *self.anima_problems.write().unwrap_or_else(|e| e.into_inner()) = vec![message.clone()];
+            let message =
+                "没有找到 anima-lora-next 引擎（需要 train.py + .venv\\Scripts\\python.exe）"
+                    .to_string();
+            *self
+                .anima_problems
+                .write()
+                .unwrap_or_else(|e| e.into_inner()) = vec![message.clone()];
             return Err(McpError::new("ANIMA_NOT_INSTALLED", message));
         };
         let script = engine.root.join("anima_daemon").join("mcp.py");
         if !script.is_file() {
             let message = format!("引擎缺 MCP 桥：{}", script.display());
-            *self.anima_problems.write().unwrap_or_else(|e| e.into_inner()) = vec![message.clone()];
+            *self
+                .anima_problems
+                .write()
+                .unwrap_or_else(|e| e.into_inner()) = vec![message.clone()];
             return Err(McpError::new("ANIMA_MCP_MISSING", message));
         }
         let envs = vec![
-            ("ANIMA_LORA_ROOT".to_string(), engine.root.display().to_string()),
+            (
+                "ANIMA_LORA_ROOT".to_string(),
+                engine.root.display().to_string(),
+            ),
             (
                 "ANIMA_DAEMON_PIDFILE".to_string(),
-                project_root.join(".run").join("anima-daemon.json").display().to_string(),
+                project_root
+                    .join(".run")
+                    .join("anima-daemon.json")
+                    .display()
+                    .to_string(),
             ),
         ];
         let args = vec!["-m".to_string(), "anima_daemon.mcp".to_string()];
-        let client = Arc::new(McpClient::spawn_program(&engine.python, &args, &engine.root, &envs)?);
+        let client = Arc::new(McpClient::spawn_program(
+            &engine.python,
+            &args,
+            &engine.root,
+            &envs,
+        )?);
         if let Err(e) = client.handshake().await {
             let _ = client.close().await;
-            *self.anima_problems.write().unwrap_or_else(|e| e.into_inner()) =
+            *self
+                .anima_problems
+                .write()
+                .unwrap_or_else(|e| e.into_inner()) =
                 vec![format!("训练 MCP 握手失败：{}", e.message)];
             return Err(e);
         }
@@ -1645,7 +1848,10 @@ impl McpRegistry {
             Ok(decls) => decls,
             Err(e) => {
                 let _ = client.close().await;
-                *self.anima_problems.write().unwrap_or_else(|e| e.into_inner()) =
+                *self
+                    .anima_problems
+                    .write()
+                    .unwrap_or_else(|e| e.into_inner()) =
                     vec![format!("训练 MCP 拉工具清单失败：{}", e.message)];
                 return Err(e);
             }
@@ -1654,7 +1860,11 @@ impl McpRegistry {
             .iter()
             .map(|decl| {
                 let name = format!("{ANIMA_PREFIX}{}", decl.name);
-                let description = format!("{}{}", anima_description_prefix(&decl.name), decl.description.trim());
+                let description = format!(
+                    "{}{}",
+                    anima_description_prefix(&decl.name),
+                    decl.description.trim()
+                );
                 McpSpec {
                     name: Box::leak(name.into_boxed_str()),
                     description: Box::leak(description.into_boxed_str()),
@@ -1667,14 +1877,25 @@ impl McpRegistry {
             .collect();
         eprintln!("[mcp] 训练引擎工具清单已就绪：{} 个", specs.len());
         *self.anima_specs.write().unwrap_or_else(|e| e.into_inner()) = specs;
-        *self.anima_instructions.write().unwrap_or_else(|e| e.into_inner()) = client.instructions();
-        *self.anima_problems.write().unwrap_or_else(|e| e.into_inner()) = Vec::new();
+        *self
+            .anima_instructions
+            .write()
+            .unwrap_or_else(|e| e.into_inner()) = client.instructions();
+        *self
+            .anima_problems
+            .write()
+            .unwrap_or_else(|e| e.into_inner()) = Vec::new();
         *guard = Some(client.clone());
         Ok(client)
     }
 
     /// 调一个 MCP 工具（失败时把 stderr 尾部拼进人话里 —— O12/O13）。
-    pub async fn call(&self, project_root: &Path, name: &str, arguments: &Value) -> Result<ToolOutcome, ToolFailure> {
+    pub async fn call(
+        &self,
+        project_root: &Path,
+        name: &str,
+        arguments: &Value,
+    ) -> Result<ToolOutcome, ToolFailure> {
         // 训练引擎的工具走第二条桥；名字前缀在这里剥掉（子进程只认原名的工具）。
         if let Some(stripped) = name.strip_prefix(ANIMA_PREFIX) {
             let client = self.ensure_anima(project_root).await?;
@@ -1704,9 +1925,20 @@ impl McpRegistry {
 
         let client = self.ensure(project_root).await?;
         // `launch_comfyui`：我们替它补共享模型根那三个参数（见模块头 §3）。
-        let plan = if name == "launch_comfyui" { Some(prepare_launch(arguments)) } else { None };
-        let suffix = plan.as_ref().and_then(|p| p.note.clone()).map(|n| format!("\n\n{n}")).unwrap_or_default();
-        let call_args = plan.as_ref().map(|p| p.args.clone()).unwrap_or_else(|| arguments.clone());
+        let plan = if name == "launch_comfyui" {
+            Some(prepare_launch(arguments))
+        } else {
+            None
+        };
+        let suffix = plan
+            .as_ref()
+            .and_then(|p| p.note.clone())
+            .map(|n| format!("\n\n{n}"))
+            .unwrap_or_default();
+        let call_args = plan
+            .as_ref()
+            .map(|p| p.args.clone())
+            .unwrap_or_else(|| arguments.clone());
 
         let result = match client.call_tool(name, &call_args).await {
             Ok(result) => result,
@@ -1717,7 +1949,10 @@ impl McpRegistry {
                 } else {
                     format!("\n\nMCP 子进程 stderr 末尾：\n{stderr}")
                 };
-                return Err(ToolFailure::new(&e.code, format!("{}{suffix}{detail}", e.message)));
+                return Err(ToolFailure::new(
+                    &e.code,
+                    format!("{}{suffix}{detail}", e.message),
+                ));
             }
         };
         let (content, _) = crate::tools::tools::truncate_result(&result.text);
@@ -1738,7 +1973,10 @@ impl McpRegistry {
                     content.clone()
                 }
             });
-            return Err(ToolFailure::new("MCP_TOOL_ERROR", format!("{message}{suffix}{detail}")));
+            return Err(ToolFailure::new(
+                "MCP_TOOL_ERROR",
+                format!("{message}{suffix}{detail}"),
+            ));
         }
         let text = if content.trim().is_empty() {
             format!("（MCP 工具「{name}」没有返回文本内容）")
@@ -1755,11 +1993,19 @@ impl McpRegistry {
 /// 启动时预热（不阻塞主线程；失败只记日志 —— 少一批工具也比后端起不来强）。
 pub async fn warmup(registry: &Arc<McpRegistry>, project_root: &Path) {
     if let Err(e) = registry.ensure(project_root).await {
-        eprintln!("[mcp] 桥未就绪（{}）：{}", e.code, truncate_chars(&e.message, 300));
+        eprintln!(
+            "[mcp] 桥未就绪（{}）：{}",
+            e.code,
+            truncate_chars(&e.message, 300)
+        );
     }
     // 训练引擎是可选能力：没装时只记一句，不要把“comfy-mcp 可用”也一起判死。
     if let Err(e) = registry.ensure_anima(project_root).await {
-        eprintln!("[mcp] 训练桥未就绪（{}）：{}", e.code, truncate_chars(&e.message, 300));
+        eprintln!(
+            "[mcp] 训练桥未就绪（{}）：{}",
+            e.code,
+            truncate_chars(&e.message, 300)
+        );
     }
 }
 
@@ -1824,7 +2070,9 @@ fn humanize_mcp_failure(name: &str, content: &str, stderr: &str) -> Option<Strin
         "工具在 comfy-mcp 子进程内部崩溃（不是参数校验失败）。先用 server_info 确认 ComfyUI 在线再重试一次；\
          仍失败就把下面的 stderr 交给用户。"
     };
-    Some(format!("MCP 工具「{name}」在 comfy-mcp 子进程内部崩溃（UnexpectedToolError）。{hint}"))
+    Some(format!(
+        "MCP 工具「{name}」在 comfy-mcp 子进程内部崩溃（UnexpectedToolError）。{hint}"
+    ))
 }
 
 // ---------------------------------------------------------------------------

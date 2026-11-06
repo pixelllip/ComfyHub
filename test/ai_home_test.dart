@@ -43,10 +43,10 @@ String _sse(int seq, String type, String dataJson) =>
 /// SSE 响应必须给出 **UTF-8 字节**：正文里有中文，直接当字符串塞进 `http.Response`
 /// 会被按 Latin-1 编码，客户端解码时炸成 "Contains invalid characters"。
 http.Response _sseResponse(String body) => http.Response.bytes(
-      utf8.encode(body),
-      200,
-      headers: {'content-type': 'text/event-stream; charset=utf-8'},
-    );
+  utf8.encode(body),
+  200,
+  headers: {'content-type': 'text/event-stream; charset=utf-8'},
+);
 
 /// 一个「纯文本模型」的假后端：任何图片附件都会被后端的 preflight 阻断。
 MockClient _fakeBackend({
@@ -79,8 +79,12 @@ MockClient _fakeBackend({
           'endpointTrust': 'loopback',
           'enabled': true,
           'revision': 1,
-          'credential': {'configured': true, 'source': 'managed', 'writable': true},
-        }
+          'credential': {
+            'configured': true,
+            'source': 'managed',
+            'writable': true,
+          },
+        },
       ];
     } else if (path == '/api/ai/providers/local-gw/models') {
       body = [
@@ -95,7 +99,7 @@ MockClient _fakeBackend({
           'thinkingFormat': thinkingFormat,
           'capabilitySource': 'manual',
           'enabled': true,
-        }
+        },
       ];
     } else if (path == '/api/ai/conversations' && request.method == 'POST') {
       body = {
@@ -107,8 +111,12 @@ MockClient _fakeBackend({
       };
     } else if (path == '/api/ai/conversations') {
       // 真后端是 `ORDER BY c.updated_at DESC`，照做 —— 用例里"聊完顶到最前"才有意义
-      body = [...conversations]..sort((a, b) => ((b['updatedAt'] ?? '') as String)
-          .compareTo((a['updatedAt'] ?? '') as String));
+      body = [...conversations]
+        ..sort(
+          (a, b) => ((b['updatedAt'] ?? '') as String).compareTo(
+            (a['updatedAt'] ?? '') as String,
+          ),
+        );
     } else if (RegExp(r'^/api/ai/conversations/[^/]+$').hasMatch(path) &&
         request.method == 'DELETE') {
       deletedConversations.add(path.split('/').last);
@@ -128,18 +136,28 @@ MockClient _fakeBackend({
         }
       }
       final id = 'r$runCount';
-      body = {'runId': id, 'assistantMessageId': 'a$runCount', 'userMessageId': 'u1'};
+      body = {
+        'runId': id,
+        'assistantMessageId': 'a$runCount',
+        'userMessageId': 'u1',
+      };
     } else if (path.startsWith('/api/ai/runs/') && path.endsWith('/events')) {
       final startedRunId = path.split('/')[4];
       sseProbe.add(startedRunId);
       // 第一次 Run 可以直接失败（重试用例）
       if (failFirstRun && startedRunId == 'r1') {
-        final fail = _sse(1, 'run.started', '{"runId":"r1"}') +
-            _sse(2, 'run.failed', '{"runId":"r1","code":"RATE_LIMIT","message":"上游限流"}');
+        final fail =
+            _sse(1, 'run.started', '{"runId":"r1"}') +
+            _sse(
+              2,
+              'run.failed',
+              '{"runId":"r1","code":"RATE_LIMIT","message":"上游限流"}',
+            );
         return _sseResponse(fail);
       }
       // 统一事件流：两段文本增量 + 完成（AIH-021）
-      final sse = _sse(1, 'run.started', '{"runId":"$startedRunId"}') +
+      final sse =
+          _sse(1, 'run.started', '{"runId":"$startedRunId"}') +
           _sse(2, 'message.started', '{"messageId":"a$runCount"}') +
           _sse(3, 'text.delta', '{"messageId":"a$runCount","text":"你好，"}') +
           _sse(4, 'text.delta', '{"messageId":"a$runCount","text":"我是假模型"}') +
@@ -372,22 +390,32 @@ void main() {
     // 三张能取到矩形的卡自上而下依次排开、互不重叠
     final model = tester.getRect(find.byKey(const Key('ai-panel-card-model')));
     final comfy = tester.getRect(find.byKey(const Key('ai-panel-card-comfy')));
-    final memory = tester.getRect(find.byKey(const Key('ai-panel-card-memory')));
+    final memory = tester.getRect(
+      find.byKey(const Key('ai-panel-card-memory')),
+    );
     expect(comfy.top, greaterThan(model.bottom), reason: '两块之间要断开');
     expect(memory.top, greaterThan(comfy.bottom), reason: '两块之间要断开');
 
     // 卡片外观统一：Skills 那张（sliver）与其余几张必须是同一套底色 / 圆角
-    final modelCard = tester
-        .widget<DecoratedBox>(
-          find.descendant(
-            of: find.byKey(const Key('ai-panel-card-model')),
-            matching: find.byType(DecoratedBox),
-          ).first,
-        )
-        .decoration as BoxDecoration;
-    final skillsCard = tester
-        .widget<DecoratedSliver>(find.byKey(const Key('ai-panel-card-skills')))
-        .decoration as BoxDecoration;
+    final modelCard =
+        tester
+                .widget<DecoratedBox>(
+                  find
+                      .descendant(
+                        of: find.byKey(const Key('ai-panel-card-model')),
+                        matching: find.byType(DecoratedBox),
+                      )
+                      .first,
+                )
+                .decoration
+            as BoxDecoration;
+    final skillsCard =
+        tester
+                .widget<DecoratedSliver>(
+                  find.byKey(const Key('ai-panel-card-skills')),
+                )
+                .decoration
+            as BoxDecoration;
     expect(skillsCard.color, modelCard.color, reason: 'Skills 那张卡的底色要跟别的卡一样');
     expect(skillsCard.borderRadius, modelCard.borderRadius);
   });
@@ -423,18 +451,35 @@ void main() {
     final list = tester.getRect(find.byKey(const Key('ai-message-list')));
 
     expect(list.left, closeTo(paneLeft, 0.5), reason: '消息区要从左边栏那条分隔线开始');
-    expect(list.right, closeTo(paneRight, 0.5),
-        reason: '消息区要铺到右侧栏那条分隔线 —— 滚动条就画在这个右边缘，这才叫"贴边"');
-    expect(list.width, greaterThan(900),
-        reason: '1600 宽的窗口下不许再缩成 752 居中（旧行为：两侧各空一大片）');
+    expect(
+      list.right,
+      closeTo(paneRight, 0.5),
+      reason: '消息区要铺到右侧栏那条分隔线 —— 滚动条就画在这个右边缘，这才叫"贴边"',
+    );
+    expect(
+      list.width,
+      greaterThan(900),
+      reason: '1600 宽的窗口下不许再缩成 752 居中（旧行为：两侧各空一大片）',
+    );
 
-    final userBubble = tester.getRect(find.byKey(const ValueKey('ai-bubble-u1')).first);
+    final userBubble = tester.getRect(
+      find.byKey(const ValueKey('ai-bubble-u1')).first,
+    );
     // 助手那条：一轮跑完界面会与服务端对齐一次（`_reloadMessages`），
     // 所以 id 是假后端 `/messages` 里给的那个（a2），不是乐观插入时的 a1
-    final assistantBubble = tester.getRect(find.byKey(const ValueKey('ai-bubble-a2')).first);
-    expect(assistantBubble.left, closeTo(paneLeft + 24, 0.5), reason: '助手气泡距左边栏 24');
-    expect(userBubble.right, closeTo(paneRight - 24, 0.5),
-        reason: '用户气泡要贴右（旧行为：item 缩成气泡那么宽，end 对齐等于没生效）');
+    final assistantBubble = tester.getRect(
+      find.byKey(const ValueKey('ai-bubble-a2')).first,
+    );
+    expect(
+      assistantBubble.left,
+      closeTo(paneLeft + 24, 0.5),
+      reason: '助手气泡距左边栏 24',
+    );
+    expect(
+      userBubble.right,
+      closeTo(paneRight - 24, 0.5),
+      reason: '用户气泡要贴右（旧行为：item 缩成气泡那么宽，end 对齐等于没生效）',
+    );
   });
 
   testWidgets('会话列表：显示最近一次对话时间，聊完立刻变成「刚刚」（用户建议 ⑥）', (tester) async {
@@ -442,23 +487,31 @@ void main() {
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
 
-    await tester.pumpWidget(await buildAiHomePage(
-      conversations: [
-        {
-          'id': 'c2',
-          'title': '五分钟前聊过的',
-          'messageCount': 4,
-          'updatedAt': DateTime.now().toUtc().subtract(const Duration(minutes: 5)).toIso8601String(),
-        },
-        // 后端给的是 UTC（`Instant.toString()`），前端要按本地时区显示才对
-        {
-          'id': 'c1',
-          'title': '三天前聊过的',
-          'messageCount': 0,
-          'updatedAt': DateTime.now().toUtc().subtract(const Duration(days: 3)).toIso8601String(),
-        },
-      ],
-    ));
+    await tester.pumpWidget(
+      await buildAiHomePage(
+        conversations: [
+          {
+            'id': 'c2',
+            'title': '五分钟前聊过的',
+            'messageCount': 4,
+            'updatedAt': DateTime.now()
+                .toUtc()
+                .subtract(const Duration(minutes: 5))
+                .toIso8601String(),
+          },
+          // 后端给的是 UTC（`Instant.toString()`），前端要按本地时区显示才对
+          {
+            'id': 'c1',
+            'title': '三天前聊过的',
+            'messageCount': 0,
+            'updatedAt': DateTime.now()
+                .toUtc()
+                .subtract(const Duration(days: 3))
+                .toIso8601String(),
+          },
+        ],
+      ),
+    );
     await tester.pumpAndSettle();
 
     expect(find.text('4 条消息 · 5 分钟前'), findsOneWidget);
@@ -471,29 +524,34 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.textContaining('刚刚'), findsWidgets, reason: '刚发过消息的会话不能还写着旧时间');
-    final store = tester.element(find.byType(AiHomePage)).read<AiWorkspaceStore>();
+    final store = tester
+        .element(find.byType(AiHomePage))
+        .read<AiWorkspaceStore>();
     expect(store.conversation?.id, 'c1');
     expect(store.conversations.first.id, 'c1', reason: '刚聊过的会话要顶到列表最前');
   });
 
-  testWidgets('会话列表：当前会话有明确底色，按下 / 悬停高亮被压淡（用户 bug：次新那条看着像被选中）',
-      (tester) async {
+  testWidgets('会话列表：当前会话有明确底色，按下 / 悬停高亮被压淡（用户 bug：次新那条看着像被选中）', (tester) async {
     tester.view.physicalSize = const Size(1600, 1000);
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
 
     // 用 App 真正在跑的深色主题：Material 默认的按下高亮（~38% 白）只在深色下才这么抢眼，
     // 拿默认浅色主题测等于没测。
-    await tester.pumpWidget(await buildAiHomePage(
-      theme: AppTheme.build(Brightness.dark),
-      conversations: [
-        {'id': 'cA', 'title': '会话 A', 'messageCount': 2},
-        {'id': 'cB', 'title': '会话 B', 'messageCount': 4},
-      ],
-    ));
+    await tester.pumpWidget(
+      await buildAiHomePage(
+        theme: AppTheme.build(Brightness.dark),
+        conversations: [
+          {'id': 'cA', 'title': '会话 A', 'messageCount': 2},
+          {'id': 'cB', 'title': '会话 B', 'messageCount': 4},
+        ],
+      ),
+    );
     await tester.pumpAndSettle();
 
-    final store = tester.element(find.byType(AiHomePage)).read<AiWorkspaceStore>();
+    final store = tester
+        .element(find.byType(AiHomePage))
+        .read<AiWorkspaceStore>();
     await store.openConversation('cA');
     await tester.pumpAndSettle();
 
@@ -502,9 +560,14 @@ void main() {
 
     // ListTile 的底色由它自己那层 Ink 的 ShapeDecoration 画出来
     Color? tileBackground(String title) {
-      final ink = tester.widget<Ink>(find
-          .descendant(of: find.widgetWithText(ListTile, title), matching: find.byType(Ink))
-          .first);
+      final ink = tester.widget<Ink>(
+        find
+            .descendant(
+              of: find.widgetWithText(ListTile, title),
+              matching: find.byType(Ink),
+            )
+            .first,
+      );
       final decoration = ink.decoration;
       return decoration is ShapeDecoration ? decoration.color : null;
     }
@@ -514,16 +577,27 @@ void main() {
     //    反而比真选中的更像选中 —— 用户报的就是这个。
     expect(tileOf('会话 A').selected, isTrue);
     expect(tileOf('会话 B').selected, isFalse);
-    expect(tileBackground('会话 A')?.a, greaterThan(0.1),
-        reason: '当前会话的底色要看得出来，不能是透明或接近透明');
-    expect(tileBackground('会话 B'), anyOf(isNull, isA<Color>().having((c) => c.a, 'alpha', 0)),
-        reason: '没打开的会话不该有底色');
+    expect(
+      tileBackground('会话 A')?.a,
+      greaterThan(0.1),
+      reason: '当前会话的底色要看得出来，不能是透明或接近透明',
+    );
+    expect(
+      tileBackground('会话 B'),
+      anyOf(isNull, isA<Color>().having((c) => c.a, 'alpha', 0)),
+      reason: '没打开的会话不该有底色',
+    );
 
     // ② 按下 / 水波纹高亮必须压淡：它比选中态还亮，而且窗口在收到 mouse-up 之前
     //    失去焦点 / 被最小化时会**卡在屏幕上**，看着就是"某一条被选中了"。
-    final tileTheme = Theme.of(tester.element(find.widgetWithText(ListTile, '会话 A')));
-    expect(tileTheme.highlightColor.a, lessThanOrEqualTo(0.12),
-        reason: '按下高亮必须比选中底色淡，卡住也不刺眼');
+    final tileTheme = Theme.of(
+      tester.element(find.widgetWithText(ListTile, '会话 A')),
+    );
+    expect(
+      tileTheme.highlightColor.a,
+      lessThanOrEqualTo(0.12),
+      reason: '按下高亮必须比选中底色淡，卡住也不刺眼',
+    );
     expect(tileTheme.splashColor.a, lessThanOrEqualTo(0.12));
   });
 
@@ -560,14 +634,21 @@ void main() {
     await tester.pumpAndSettle();
 
     // 全局唯一的 FAB 会压住输入区：**一个都不许有**（右下角那个位置属于「发送」）
-    expect(find.byType(FloatingActionButton), findsNothing,
-        reason: '窄屏的 Comfy 状态入口进了标题栏，不该再留一个 FAB 压住发送按钮');
+    expect(
+      find.byType(FloatingActionButton),
+      findsNothing,
+      reason: '窄屏的 Comfy 状态入口进了标题栏，不该再留一个 FAB 压住发送按钮',
+    );
 
     final entry = find.byTooltip('更多操作');
     expect(entry, findsOneWidget, reason: '第三栏铺不开时，标题栏必须有一个可达的入口');
 
     final send = tester.getRect(find.widgetWithText(FilledButton, '发送'));
-    expect(tester.getRect(entry).overlaps(send), isFalse, reason: '入口不能压在发送按钮上');
+    expect(
+      tester.getRect(entry).overlaps(send),
+      isFalse,
+      reason: '入口不能压在发送按钮上',
+    );
 
     await tester.tap(entry);
     await tester.pumpAndSettle();
@@ -581,13 +662,15 @@ void main() {
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
 
-    await tester.pumpWidget(await buildAiHomePage(
-      modelName: 'DeepSeek V4.1 Flash',
-      modalities: const ['text', 'image'],
-      usage: {'inputTokens': 12167, 'outputTokens': 28},
-      // 权限档切到"自动允许（无需批准）"：宽屏下这是底行最宽的那枚控件
-      permissionMode: AiToolPolicy.modeFull,
-    ));
+    await tester.pumpWidget(
+      await buildAiHomePage(
+        modelName: 'DeepSeek V4.1 Flash',
+        modalities: const ['text', 'image'],
+        usage: {'inputTokens': 12167, 'outputTokens': 28},
+        // 权限档切到"自动允许（无需批准）"：宽屏下这是底行最宽的那枚控件
+        permissionMode: AiToolPolicy.modeFull,
+      ),
+    );
     await tester.pumpAndSettle();
     await tester.enterText(find.byType(TextField).first, '你好');
     await tester.tap(find.widgetWithText(FilledButton, '发送'));
@@ -595,14 +678,20 @@ void main() {
 
     // 输入区宽度（360 - 两侧 12）= 336 < 440 → 控件退成**图标**档（见 `_ComposerLabel`）
     // ★ 底行**始终是一排**（两行排版 2026-10-11 已删）
-    expect(find.byKey(const Key('ai-composer-two-row')), findsNothing,
-        reason: '两行排版已删除：窄了该压文字，不该折成两行');
+    expect(
+      find.byKey(const Key('ai-composer-two-row')),
+      findsNothing,
+      reason: '两行排版已删除：窄了该压文字，不该折成两行',
+    );
     final input = tester.getRect(find.byType(TextField).first);
     final send = tester.getRect(find.widgetWithText(FilledButton, '发送'));
     final attach = tester.getRect(find.byTooltip('添加附件 / 插入卡片（@）'));
     expect(send.right, closeTo(input.right, 1), reason: '发送按钮贴右（和输入框右边缘对齐）');
-    expect((send.center.dy - attach.center.dy).abs(), lessThan(6),
-        reason: '发送必须和操作控件同一排');
+    expect(
+      (send.center.dy - attach.center.dy).abs(),
+      lessThan(6),
+      reason: '发送必须和操作控件同一排',
+    );
     expect(tester.takeException(), isNull, reason: '360 宽下不许 overflow');
 
     // 四枚控件都还在（一个都没被丢掉），信息进 tooltip。
@@ -611,7 +700,9 @@ void main() {
     // 所以紧凑形态的 tooltip 额外带着来源（2026-10：工作台的模型按 Provider 分组，
     // 来源要标出来）。那行来源跟着选中项变，逐字匹配会让这条用例一换 Provider 就红。
     final modelTooltip = find.byWidgetPredicate(
-      (w) => w is Tooltip && (w.message ?? '').startsWith('当前模型是 DeepSeek V4.1 Flash（文本 / 图片）'),
+      (w) =>
+          w is Tooltip &&
+          (w.message ?? '').startsWith('当前模型是 DeepSeek V4.1 Flash（文本 / 图片）'),
     );
     expect(
       tester.widget<Tooltip>(modelTooltip).message,
@@ -621,41 +712,61 @@ void main() {
     final controls = <String, Finder>{
       '添加附件 / 插入卡片（@）': find.byTooltip('添加附件 / 插入卡片（@）'),
       '权限档': find.byTooltip(
-          '当前是${AiToolPolicy.modeFullLabel}，AI 调用工具不会等你批准。'
-          '可读 / 可写目录范围不变，越界仍会被拒。点一下改回「${AiToolPolicy.modeAskLabel}」。'),
+        '当前是${AiToolPolicy.modeFullLabel}，AI 调用工具不会等你批准。'
+        '可读 / 可写目录范围不变，越界仍会被拒。点一下改回「${AiToolPolicy.modeAskLabel}」。',
+      ),
       '模型选择': modelTooltip,
-      '思考强度': find.byTooltip(
-          '不支持思考。该模型未声明推理能力，请到「设置 → AI 模型」声明。'),
+      '思考强度': find.byTooltip('不支持思考。该模型未声明推理能力，请到「设置 → AI 模型」声明。'),
     };
     for (final entry in controls.entries) {
       expect(entry.value, findsWidgets, reason: '${entry.key} 必须还在底行里');
       final rect = tester.getRect(entry.value.last);
-      expect(rect.left, greaterThanOrEqualTo(input.left - 0.5),
-          reason: '${entry.key} 不能被从左边裁掉（用户报的"控件显示不全"）');
-      expect(rect.right, lessThanOrEqualTo(input.right + 0.5),
-          reason: '${entry.key} 不能被从右边裁掉');
+      expect(
+        rect.left,
+        greaterThanOrEqualTo(input.left - 0.5),
+        reason: '${entry.key} 不能被从左边裁掉（用户报的"控件显示不全"）',
+      );
+      expect(
+        rect.right,
+        lessThanOrEqualTo(input.right + 0.5),
+        reason: '${entry.key} 不能被从右边裁掉',
+      );
     }
 
     // 四枚 + 发送：360（内容区 336）时整排一次放得下，发送收在最右
     for (final entry in controls.entries) {
-      expect((tester.getRect(entry.value.last).center.dy - send.center.dy).abs(), lessThan(6),
-          reason: '${entry.key} 要和发送按钮同一排');
-      expect(tester.getRect(entry.value.last).height, greaterThanOrEqualTo(44),
-          reason: '${entry.key} 的命中高度要 ≥44（不然点不准）');
+      expect(
+        (tester.getRect(entry.value.last).center.dy - send.center.dy).abs(),
+        lessThan(6),
+        reason: '${entry.key} 要和发送按钮同一排',
+      );
+      expect(
+        tester.getRect(entry.value.last).height,
+        greaterThanOrEqualTo(44),
+        reason: '${entry.key} 的命中高度要 ≥44（不然点不准）',
+      );
     }
     // 整排贴着输入区右边缘收尾（收在发送按钮上）
-    expect(send.right, closeTo(input.right, 1),
-        reason: '这一排的右边界就是发送按钮 / 输入区右边缘');
+    expect(
+      send.right,
+      closeTo(input.right, 1),
+      reason: '这一排的右边界就是发送按钮 / 输入区右边缘',
+    );
     // 操作控件**从左边起排**（用户 2026-09-24：除了发送按钮和 token 用量，其他都靠左）：
     // 老写法整排 `Wrap(alignment: end)`，附件左边空着一大片，所有控件都被甩到右边。
     // 容差 5px 是 `IconButton` 自己的内缩（48 的命中区里那 40 宽的可见盒居中，左缩 4）。
-    expect(tester.getRect(find.byTooltip('添加附件 / 插入卡片（@）')).left, closeTo(input.left, 5),
-        reason: '第一枚操作控件（添加附件）必须贴在输入区左边缘，不能整排靠右');
-    expect(find.byTooltip('不支持思考。该模型未声明推理能力，请到「设置 → AI 模型」声明。'),
-        findsWidgets);
+    expect(
+      tester.getRect(find.byTooltip('添加附件 / 插入卡片（@）')).left,
+      closeTo(input.left, 5),
+      reason: '第一枚操作控件（添加附件）必须贴在输入区左边缘，不能整排靠右',
+    );
+    expect(find.byTooltip('不支持思考。该模型未声明推理能力，请到「设置 → AI 模型」声明。'), findsWidgets);
     // 窄屏不再显示 token 用量（用户：宽度太窄的时候可以不显示）
-    expect(find.textContaining('本对话 ↑'), findsNothing,
-        reason: '窄屏下 token 汇总让位给操作控件');
+    expect(
+      find.textContaining('本对话 ↑'),
+      findsNothing,
+      reason: '窄屏下 token 汇总让位给操作控件',
+    );
   });
 
   // 「最小窗口宽度」那一档也要能看：320 是产品约定的下限（`windows/runner/win32_window.cpp`
@@ -666,12 +777,14 @@ void main() {
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
 
-    await tester.pumpWidget(await buildAiHomePage(
-      modelName: 'DeepSeek V4.1 Flash',
-      modalities: const ['text', 'image'],
-      usage: {'inputTokens': 12167, 'outputTokens': 28},
-      permissionMode: AiToolPolicy.modeFull,
-    ));
+    await tester.pumpWidget(
+      await buildAiHomePage(
+        modelName: 'DeepSeek V4.1 Flash',
+        modalities: const ['text', 'image'],
+        usage: {'inputTokens': 12167, 'outputTokens': 28},
+        permissionMode: AiToolPolicy.modeFull,
+      ),
+    );
     await tester.pumpAndSettle();
     await tester.enterText(find.byType(TextField).first, '你好');
     await tester.tap(find.widgetWithText(FilledButton, '发送'));
@@ -680,8 +793,11 @@ void main() {
     // ★ 底行**始终是一排**（用户 2026-10-11："在其他特定宽度下，控件变成两行排列也很难看"）。
     // 以前 560 以下会切到 `ai-composer-two-row` 那个两行布局 —— 现在那个分支已经删了，
     // 判据只剩"窗口宽度"，窄了就压缩文字/退图标，**不折行**。
-    expect(find.byKey(const Key('ai-composer-two-row')), findsNothing,
-        reason: '两行排版已删除：窄了该压文字，不该折成两行');
+    expect(
+      find.byKey(const Key('ai-composer-two-row')),
+      findsNothing,
+      reason: '两行排版已删除：窄了该压文字，不该折成两行',
+    );
     final input = tester.getRect(find.byType(TextField).first);
     final send = tester.getRect(find.widgetWithText(FilledButton, '发送'));
     final attach = tester.getRect(find.byTooltip('添加附件 / 插入卡片（@）'));
@@ -689,11 +805,17 @@ void main() {
 
     // 附件和发送**同一排**（发送是个固定宽的按钮，不该独占一行），
     // 整排都落在输入区里，没有任何 RenderFlex overflow。
-    expect((send.center.dy - attach.center.dy).abs(), lessThan(6),
-        reason: '发送必须和操作控件同一排');
+    expect(
+      (send.center.dy - attach.center.dy).abs(),
+      lessThan(6),
+      reason: '发送必须和操作控件同一排',
+    );
     expect(attach.left, greaterThanOrEqualTo(input.left - 0.5));
-    expect(attach.left, closeTo(input.left, 5),
-        reason: '操作控件从左边起排（用户：除了发送，其他都靠左）');
+    expect(
+      attach.left,
+      closeTo(input.left, 5),
+      reason: '操作控件从左边起排（用户：除了发送，其他都靠左）',
+    );
     expect(tester.takeException(), isNull, reason: '320 宽下不许 overflow');
 
     // ★ 每一枚操作控件都要**够大、点得准**（用户 2026-10-11："按钮太小了比较难点"）。
@@ -701,27 +823,40 @@ void main() {
     final controls320 = <String, Finder>{
       '添加附件 / 插入卡片（@）': find.byTooltip('添加附件 / 插入卡片（@）'),
       '权限档': find.byTooltip(
-          '当前是${AiToolPolicy.modeFullLabel}，AI 调用工具不会等你批准。'
-          '可读 / 可写目录范围不变，越界仍会被拒。点一下改回「${AiToolPolicy.modeAskLabel}」。'),
-      '思考强度': find.byTooltip(
-          '不支持思考。该模型未声明推理能力，请到「设置 → AI 模型」声明。'),
+        '当前是${AiToolPolicy.modeFullLabel}，AI 调用工具不会等你批准。'
+        '可读 / 可写目录范围不变，越界仍会被拒。点一下改回「${AiToolPolicy.modeAskLabel}」。',
+      ),
+      '思考强度': find.byTooltip('不支持思考。该模型未声明推理能力，请到「设置 → AI 模型」声明。'),
     };
     for (final entry in controls320.entries) {
       expect(entry.value, findsWidgets, reason: '${entry.key} 必须还在底行里');
       final rect = tester.getRect(entry.value.last);
-      expect(rect.height, greaterThanOrEqualTo(44),
-          reason: '${entry.key} 的命中高度要 ≥44（不然点不准）');
-      expect(rect.center.dy, closeTo(attach.center.dy, 6),
-          reason: '${entry.key} 和附件同一排');
-      expect(rect.right, lessThanOrEqualTo(input.right + 0.5),
-          reason: '${entry.key} 不能被从右边裁掉');
+      expect(
+        rect.height,
+        greaterThanOrEqualTo(44),
+        reason: '${entry.key} 的命中高度要 ≥44（不然点不准）',
+      );
+      expect(
+        rect.center.dy,
+        closeTo(attach.center.dy, 6),
+        reason: '${entry.key} 和附件同一排',
+      );
+      expect(
+        rect.right,
+        lessThanOrEqualTo(input.right + 0.5),
+        reason: '${entry.key} 不能被从右边裁掉',
+      );
     }
 
     // 操作控件全都排在发送按钮**左边**（发送仍然是最右那一枚）
     final effort = tester.getRect(
-      find.byTooltip('不支持思考。该模型未声明推理能力，请到「设置 → AI 模型」声明。'));
-    expect(effort.right, lessThanOrEqualTo(send.left + 0.5),
-        reason: '操作控件在左、发送在右（和宽屏的次序一致）');
+      find.byTooltip('不支持思考。该模型未声明推理能力，请到「设置 → AI 模型」声明。'),
+    );
+    expect(
+      effort.right,
+      lessThanOrEqualTo(send.left + 0.5),
+      reason: '操作控件在左、发送在右（和宽屏的次序一致）',
+    );
 
     // 窄屏不显示 token 用量（它让位给操作控件），但宽屏下必须还在
     expect(find.textContaining('本对话 ↑'), findsNothing);
@@ -741,9 +876,15 @@ void main() {
     tester.view.physicalSize = const Size(1600, 900);
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
-    await tester.pumpWidget(await buildAiHomePage(permissionMode: AiToolPolicy.modeFull));
+    await tester.pumpWidget(
+      await buildAiHomePage(permissionMode: AiToolPolicy.modeFull),
+    );
     await tester.pumpAndSettle();
-    expect(find.text(AiToolPolicy.modeFullLabel), findsOneWidget, reason: '宽窗口给全称');
+    expect(
+      find.text(AiToolPolicy.modeFullLabel),
+      findsOneWidget,
+      reason: '宽窗口给全称',
+    );
     expect(find.byKey(const Key('ai-composer-two-row')), findsNothing);
     expect(tester.takeException(), isNull);
   });
@@ -752,9 +893,15 @@ void main() {
     tester.view.physicalSize = const Size(960, 900);
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
-    await tester.pumpWidget(await buildAiHomePage(permissionMode: AiToolPolicy.modeFull));
+    await tester.pumpWidget(
+      await buildAiHomePage(permissionMode: AiToolPolicy.modeFull),
+    );
     await tester.pumpAndSettle();
-    expect(find.text(AiToolPolicy.modeFullLabel), findsNothing, reason: '中档不该再铺全称');
+    expect(
+      find.text(AiToolPolicy.modeFullLabel),
+      findsNothing,
+      reason: '中档不该再铺全称',
+    );
     expect(find.text('自动'), findsOneWidget, reason: '中档要给短标签');
     expect(find.byKey(const Key('ai-composer-two-row')), findsNothing);
     expect(tester.takeException(), isNull);
@@ -764,22 +911,32 @@ void main() {
     tester.view.physicalSize = const Size(340, 900);
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
-    await tester.pumpWidget(await buildAiHomePage(permissionMode: AiToolPolicy.modeFull));
+    await tester.pumpWidget(
+      await buildAiHomePage(permissionMode: AiToolPolicy.modeFull),
+    );
     await tester.pumpAndSettle();
     expect(find.text('自动'), findsNothing, reason: '最窄档退成图标');
     final permTip = find.byTooltip(
-        '当前是${AiToolPolicy.modeFullLabel}，AI 调用工具不会等你批准。'
-        '可读 / 可写目录范围不变，越界仍会被拒。点一下改回「${AiToolPolicy.modeAskLabel}」。');
+      '当前是${AiToolPolicy.modeFullLabel}，AI 调用工具不会等你批准。'
+      '可读 / 可写目录范围不变，越界仍会被拒。点一下改回「${AiToolPolicy.modeAskLabel}」。',
+    );
     expect(permTip, findsOneWidget, reason: '退成图标后当前档位必须还能查到（tooltip）');
-    expect(tester.getRect(permTip).height, greaterThanOrEqualTo(44),
-        reason: '最窄档也要点得准（用户："按钮太小了比较难点"）');
-    expect(find.byKey(const Key('ai-composer-two-row')), findsNothing,
-        reason: '最窄档也不许折成两行');
+    expect(
+      tester.getRect(permTip).height,
+      greaterThanOrEqualTo(44),
+      reason: '最窄档也要点得准（用户："按钮太小了比较难点"）',
+    );
+    expect(
+      find.byKey(const Key('ai-composer-two-row')),
+      findsNothing,
+      reason: '最窄档也不许折成两行',
+    );
     expect(tester.takeException(), isNull, reason: '340 宽下不许 overflow');
   });
 
   // 反向保险：窗口宽裕时**不换行**（否则底行会白白多出一行高度）
-  testWidgets('宽窗口输入区底行仍然是一行', (tester) async {    tester.view.physicalSize = const Size(1600, 900);
+  testWidgets('宽窗口输入区底行仍然是一行', (tester) async {
+    tester.view.physicalSize = const Size(1600, 900);
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
 
@@ -790,8 +947,11 @@ void main() {
     // 一行时发送按钮和"添加附件"在同一水平带上（换行后发送会落到操作组下面）
     final attach = tester.getRect(find.byTooltip('添加附件 / 插入卡片（@）'));
     final send = tester.getRect(find.widgetWithText(FilledButton, '发送'));
-    expect((send.center.dy - attach.center.dy).abs(), lessThan(8),
-        reason: '宽窗口下发送按钮仍和操作组同一行');
+    expect(
+      (send.center.dy - attach.center.dy).abs(),
+      lessThan(8),
+      reason: '宽窗口下发送按钮仍和操作组同一行',
+    );
   });
 
   testWidgets('冷启动落在新建的聊天记录上，而不是重新打开上次那条', (tester) async {
@@ -802,7 +962,9 @@ void main() {
     await tester.pumpWidget(await buildAiHomePage());
     await tester.pumpAndSettle();
 
-    final store = tester.element(find.byType(AiHomePage)).read<AiWorkspaceStore>();
+    final store = tester
+        .element(find.byType(AiHomePage))
+        .read<AiWorkspaceStore>();
     expect(store.conversation?.id, 'c1');
     expect(store.messages, isEmpty, reason: '新开一条，不该带出历史消息');
     expect(find.text('AI 工作台'), findsOneWidget, reason: '空态页面 = 新会话');
@@ -816,7 +978,9 @@ void main() {
     await tester.pumpWidget(await buildAiHomePage());
     await tester.pumpAndSettle();
 
-    final store = tester.element(find.byType(AiHomePage)).read<AiWorkspaceStore>();
+    final store = tester
+        .element(find.byType(AiHomePage))
+        .read<AiWorkspaceStore>();
     await tester.enterText(find.byType(TextField), '打了一半的需求');
     await tester.pumpAndSettle();
 
@@ -838,7 +1002,9 @@ void main() {
     await tester.pumpWidget(await buildAiHomePage());
     await tester.pumpAndSettle();
 
-    final store = tester.element(find.byType(AiHomePage)).read<AiWorkspaceStore>();
+    final store = tester
+        .element(find.byType(AiHomePage))
+        .read<AiWorkspaceStore>();
     expect(store.isEmptyConversation, isTrue);
 
     // 再点一次「新建对话」：上一个一条消息都没有的会话应该被清掉
@@ -856,7 +1022,9 @@ void main() {
     await tester.pumpWidget(await buildAiHomePage());
     await tester.pumpAndSettle();
 
-    final store = tester.element(find.byType(AiHomePage)).read<AiWorkspaceStore>();
+    final store = tester
+        .element(find.byType(AiHomePage))
+        .read<AiWorkspaceStore>();
     await tester.enterText(find.byType(TextField), '你好');
     await tester.tap(find.text('发送'));
     await tester.pumpAndSettle();
@@ -876,12 +1044,16 @@ void main() {
     await tester.pumpWidget(await buildAiHomePage());
     await tester.pumpAndSettle();
 
-    final store = tester.element(find.byType(AiHomePage)).read<AiWorkspaceStore>();
+    final store = tester
+        .element(find.byType(AiHomePage))
+        .read<AiWorkspaceStore>();
     await store.selectModel(store.models.first);
     await tester.pumpAndSettle();
 
     // 新建一个 store（同一份 SharedPreferences）→ 模拟下次冷启动
-    final second = AiWorkspaceStore(api: AiApiClient('http://127.0.0.1:8080', client: _fakeBackend()));
+    final second = AiWorkspaceStore(
+      api: AiApiClient('http://127.0.0.1:8080', client: _fakeBackend()),
+    );
     await second.load();
     expect(second.selectedModel?.id, 'm-text', reason: '上次选的模型要自动选回来');
     expect(second.selectedProvider?.id, 'local-gw');
@@ -892,7 +1064,9 @@ void main() {
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
 
-    await tester.pumpWidget(await buildAiHomePage(modalities: ['text', 'image']));
+    await tester.pumpWidget(
+      await buildAiHomePage(modalities: ['text', 'image']),
+    );
     await tester.pumpAndSettle();
 
     // 打开模型选择器
@@ -913,12 +1087,14 @@ void main() {
         .element(find.byType(AiHomePage))
         .read<AiWorkspaceStore>();
     // 模拟用户添加了一张图片附件（能力由后端判定）
-    store.addAttachment(const AiAttachment(
-      name: 'poster.png',
-      modality: 'image',
-      mimeType: 'image/png',
-      sizeBytes: 2048,
-    ));
+    store.addAttachment(
+      const AiAttachment(
+        name: 'poster.png',
+        modality: 'image',
+        mimeType: 'image/png',
+        sizeBytes: 2048,
+      ),
+    );
     await tester.pumpAndSettle();
 
     expect(find.textContaining('附件未通过准入'), findsOneWidget);
@@ -941,7 +1117,9 @@ void main() {
     await tester.pumpWidget(await buildAiHomePage());
     await tester.pumpAndSettle();
 
-    final store = tester.element(find.byType(AiHomePage)).read<AiWorkspaceStore>();
+    final store = tester
+        .element(find.byType(AiHomePage))
+        .read<AiWorkspaceStore>();
     expect(store.selectedModel?.id, 'm-text', reason: '加载后应自动选中目录里的模型');
 
     await tester.enterText(find.byType(TextField), '你好');
@@ -972,10 +1150,9 @@ void main() {
     expect(find.text('不支持思考'), findsOneWidget, reason: '没声明就别给一堆选了会被拒的选项');
     // 没有可选档位时按钮不可点（点到也不会弹菜单）：InkWell.onTap 为 null
     final button = tester.widget<InkWell>(
-      find.ancestor(
-        of: find.text('不支持思考'),
-        matching: find.byType(InkWell),
-      ).first,
+      find
+          .ancestor(of: find.text('不支持思考'), matching: find.byType(InkWell))
+          .first,
     );
     expect(button.onTap, isNull, reason: '没档位时不该给出可点的选择器');
   });
@@ -986,21 +1163,29 @@ void main() {
     addTearDown(tester.view.reset);
     lastRunBody = null;
 
-    await tester.pumpWidget(await buildAiHomePage(
-      reasoning: true,
-      thinkingFormat: 'deepseek',
-      thinkingEfforts: {'off': 'none', 'low': 'low', 'high': 'high'},
-    ));
+    await tester.pumpWidget(
+      await buildAiHomePage(
+        reasoning: true,
+        thinkingFormat: 'deepseek',
+        thinkingEfforts: {'off': 'none', 'low': 'low', 'high': 'high'},
+      ),
+    );
     await tester.pumpAndSettle();
 
-    final store = tester.element(find.byType(AiHomePage)).read<AiWorkspaceStore>();
+    final store = tester
+        .element(find.byType(AiHomePage))
+        .read<AiWorkspaceStore>();
     // 目录只声明了三档，所以界面上也只能有这三档（medium / max 不出现）
     expect(store.selectedModel!.selectableEfforts, [
       AiReasoningEffort.off,
       AiReasoningEffort.low,
       AiReasoningEffort.high,
     ]);
-    expect(find.text('默认'), findsOneWidget, reason: '缺省档位叫「默认」（2026-09-20 由「关闭」改名）');
+    expect(
+      find.text('默认'),
+      findsOneWidget,
+      reason: '缺省档位叫「默认」（2026-09-20 由「关闭」改名）',
+    );
 
     await tester.tap(find.byType(AppMenuButton<AiReasoningEffort>));
     await tester.pumpAndSettle();
@@ -1024,10 +1209,12 @@ void main() {
     addTearDown(tester.view.reset);
     lastRunBody = null;
 
-    await tester.pumpWidget(await buildAiHomePage(
-      reasoning: true,
-      thinkingEfforts: {'low': 'low', 'high': 'high'},
-    ));
+    await tester.pumpWidget(
+      await buildAiHomePage(
+        reasoning: true,
+        thinkingEfforts: {'low': 'low', 'high': 'high'},
+      ),
+    );
     await tester.pumpAndSettle();
 
     await tester.enterText(find.byType(TextField), '你好');
@@ -1060,12 +1247,16 @@ void main() {
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
 
-    await tester.pumpWidget(await buildAiHomePage(
-      usage: {'inputTokens': 1200, 'outputTokens': 300, 'cachedTokens': 400},
-    ));
+    await tester.pumpWidget(
+      await buildAiHomePage(
+        usage: {'inputTokens': 1200, 'outputTokens': 300, 'cachedTokens': 400},
+      ),
+    );
     await tester.pumpAndSettle();
 
-    final store = tester.element(find.byType(AiHomePage)).read<AiWorkspaceStore>();
+    final store = tester
+        .element(find.byType(AiHomePage))
+        .read<AiWorkspaceStore>();
     expect(store.usageSummary.isEmpty, isTrue, reason: '还没对话时不该显示统计');
 
     await tester.enterText(find.byType(TextField), '你好');
@@ -1088,14 +1279,18 @@ void main() {
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
 
-    await tester.pumpWidget(await buildAiHomePage(
-      modelName: 'DeepSeek V4.1 Flash',
-      modalities: const ['text', 'image', 'video', 'audio'],
-      usage: {'inputTokens': 6400, 'outputTokens': 1500},
-    ));
+    await tester.pumpWidget(
+      await buildAiHomePage(
+        modelName: 'DeepSeek V4.1 Flash',
+        modalities: const ['text', 'image', 'video', 'audio'],
+        usage: {'inputTokens': 6400, 'outputTokens': 1500},
+      ),
+    );
     await tester.pumpAndSettle();
 
-    final store = tester.element(find.byType(AiHomePage)).read<AiWorkspaceStore>();
+    final store = tester
+        .element(find.byType(AiHomePage))
+        .read<AiWorkspaceStore>();
     expect(store.usageSummary.isEmpty, isTrue, reason: '还没对话时不显示统计');
 
     await tester.enterText(find.byType(TextField), '你好');
@@ -1120,7 +1315,11 @@ void main() {
       find.ancestor(of: find.text('发送'), matching: find.byType(FilledButton)),
     );
     final input = tester.getRect(find.byType(TextField));
-    expect(send.right, closeTo(input.right, 1), reason: '发送按钮必须贴右（不能被顶出去、也不该缩在中间）');
+    expect(
+      send.right,
+      closeTo(input.right, 1),
+      reason: '发送按钮必须贴右（不能被顶出去、也不该缩在中间）',
+    );
     // 按钮右边不该再有空白：贴右的另一种写法是"右边还剩一截"
     expect(send.right, greaterThanOrEqualTo(input.right - 1));
     // 汇总排在按钮左边（中间只隔 12px），不是被甩到别处
@@ -1135,10 +1334,12 @@ void main() {
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
 
-    await tester.pumpWidget(await buildAiHomePage(
-      modelName: 'GPT-4o',
-      usage: {'inputTokens': 1200, 'outputTokens': 300},
-    ));
+    await tester.pumpWidget(
+      await buildAiHomePage(
+        modelName: 'GPT-4o',
+        usage: {'inputTokens': 1200, 'outputTokens': 300},
+      ),
+    );
     await tester.pumpAndSettle();
 
     await tester.enterText(find.byType(TextField), '你好');
@@ -1163,7 +1364,9 @@ void main() {
     await tester.pumpWidget(await buildAiHomePage(failFirstRun: true));
     await tester.pumpAndSettle();
 
-    final store = tester.element(find.byType(AiHomePage)).read<AiWorkspaceStore>();
+    final store = tester
+        .element(find.byType(AiHomePage))
+        .read<AiWorkspaceStore>();
     await tester.enterText(find.byType(TextField), '你好');
     await tester.tap(find.text('发送'));
     await tester.pumpAndSettle();
@@ -1172,7 +1375,11 @@ void main() {
     expect(find.textContaining('上游限流'), findsOneWidget);
     expect(find.text('重试'), findsOneWidget);
     expect(lastRunBodies.length, 1);
-    expect(lastRunBodies.first.containsKey('retryOfRunId'), isFalse, reason: '首次请求不该带重试标记');
+    expect(
+      lastRunBodies.first.containsKey('retryOfRunId'),
+      isFalse,
+      reason: '首次请求不该带重试标记',
+    );
 
     await tester.tap(find.text('重试'));
     await tester.pumpAndSettle();

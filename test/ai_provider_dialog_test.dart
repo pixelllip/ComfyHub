@@ -96,7 +96,11 @@ void main() {
       reason: 'ID 可以是 2fast，但引用名必须以字母开头 —— 不许再把这件事推给用户',
     );
     expect(isValidCredentialRef(defaultCredentialRef('2fast')), isTrue);
-    expect(isValidCredentialRef('2FAST_API_KEY'), isFalse, reason: '这一条正是补前缀的理由');
+    expect(
+      isValidCredentialRef('2FAST_API_KEY'),
+      isFalse,
+      reason: '这一条正是补前缀的理由',
+    );
   });
 
   testWidgets('表单里没有端点信任级别与凭据引用名，但有 API Key 一栏', (tester) async {
@@ -124,8 +128,13 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(recorder.providerCreates, hasLength(1));
-    final sent = jsonDecode(recorder.providerCreates.single) as Map<String, dynamic>;
-    expect(sent['credentialRef'], 'MY_GATEWAY_API_KEY', reason: '引用名由程序按 ID 推出');
+    final sent =
+        jsonDecode(recorder.providerCreates.single) as Map<String, dynamic>;
+    expect(
+      sent['credentialRef'],
+      'MY_GATEWAY_API_KEY',
+      reason: '引用名由程序按 ID 推出',
+    );
     expect(
       sent.containsKey('endpointTrust'),
       isFalse,
@@ -158,7 +167,8 @@ void main() {
 
     await tester.tap(find.text('创建'));
     await tester.pumpAndSettle();
-    final sent = jsonDecode(recorder.providerCreates.single) as Map<String, dynamic>;
+    final sent =
+        jsonDecode(recorder.providerCreates.single) as Map<String, dynamic>;
     expect(sent['credentialRef'], 'P2FAST_API_KEY');
   });
 

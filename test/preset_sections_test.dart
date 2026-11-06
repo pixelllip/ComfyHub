@@ -117,13 +117,7 @@ void main() {
     final cardsClient = MockClient((request) async {
       cardCalls.add(request.url.path);
       final body = request.url.path == '/api/ai/style-cards'
-          ? [
-              card(
-                id: 2,
-                name: '赛博国风',
-                promptText: 'semi-thick line work',
-              ),
-            ]
+          ? [card(id: 2, name: '赛博国风', promptText: 'semi-thick line work')]
           : [card()];
       return http.Response(
         jsonEncode(body),

@@ -66,124 +66,130 @@ class _Rec {
 /// 键名逐字对齐 `submit_queue.rs::pending_approvals`（也是工具审批那 6 个键：
 /// `callId` / `runId` / `conversationId` / `name` / `argumentsJson` / `askedAt`）。
 Map<String, dynamic> _queuedSubmit(String queueId, {int promptId = 310}) => {
-      'callId': 'submit:$queueId',
-      // 桌面 Run 才有 runId；排队的提交是"还没轮到跑"的命令，后端给空串
-      'runId': '',
-      'conversationId': 'c1',
-      // 名字就是它真正要干的事（批准 = 让桌面真的提交）
-      'name': 'comfy_submit',
-      'argumentsJson': jsonEncode({'promptId': promptId, 'nsfw': false}),
-      // ⚠ 审批这一份是 **ISO 文本**（提问那份才是毫秒数）
-      'askedAt': '2026-09-27T05:30:00Z',
-    };
+  'callId': 'submit:$queueId',
+  // 桌面 Run 才有 runId；排队的提交是"还没轮到跑"的命令，后端给空串
+  'runId': '',
+  'conversationId': 'c1',
+  // 名字就是它真正要干的事（批准 = 让桌面真的提交）
+  'name': 'comfy_submit',
+  'argumentsJson': jsonEncode({'promptId': promptId, 'nsfw': false}),
+  // ⚠ 审批这一份是 **ISO 文本**（提问那份才是毫秒数）
+  'askedAt': '2026-09-27T05:30:00Z',
+};
 
 MockClient _backend(_Rec rec) => MockClient((request) async {
-      final path = Uri.decodeComponent(request.url.path);
-      rec.calls.add('${request.method} $path');
-      Object body;
+  final path = Uri.decodeComponent(request.url.path);
+  rec.calls.add('${request.method} $path');
+  Object body;
 
-      if (path == '/api/ai/pending') {
-        if (rec.pendingFails) {
-          return http.Response(
-            jsonEncode({'error': '待审批接口挂了'}),
-            503,
-            headers: {'content-type': 'application/json; charset=utf-8'},
-          );
-        }
-        body = {'asks': <Object>[], 'approvals': rec.approvals};
-      } else if (path.startsWith('/api/ai/tool-calls/')) {
-        final segments = path.split('/');
-        final callId = segments[4];
-        // 真后端接受之后这一条**当场离开待办**（`submit_jobs.approval` 置位），
-        // 所以假后端也要跟着改 —— 否则刷新一拉，刚批过的那行又回来了。
-        if (rec.acceptanceOk) {
-          rec.approvals = rec.approvals.where((a) => a['callId'] != callId).toList();
-        }
-        body = {
-          'callId': callId,
-          'approved': segments.last == 'approve',
-          'accepted': rec.acceptanceOk,
-        };
-      } else if (path == '/api/capture/jobs') {
-        body = {
-          'queueRunning': 0,
-          'queuePending': 0,
-          'comfyReachable': true,
-          'submissions': <Object>[],
-        };
-      } else if (path == '/api/ai/providers') {
-        body = [
-          {
-            'id': 'local-gw',
-            'displayName': '本机网关',
-            'api': 'openai-completions',
-            'baseURL': 'http://127.0.0.1:11434/v1',
-            'credentialRef': 'LOCAL_KEY',
-            'endpointTrust': 'loopback',
-            'enabled': true,
-            'revision': 1,
-            'credential': {'configured': true, 'source': 'managed', 'writable': true},
-          }
-        ];
-      } else if (path == '/api/ai/providers/local-gw/models') {
-        body = [
-          {
-            'providerId': 'local-gw',
-            'id': 'model-00',
-            'displayName': '模型 00',
-            'inputModalities': ['text'],
-            'tools': true,
-            'capabilitySource': 'manual',
-            'enabled': true,
-          }
-        ];
-      } else if (path == '/api/ai/conversations' && request.method == 'POST') {
-        body = {
-          'id': 'c1',
-          'title': '新对话',
-          'providerId': 'local-gw',
-          'modelId': 'model-00',
-          'messageCount': 0,
-        };
-      } else if (path == '/api/ai/conversations') {
-        body = <Object>[];
-      } else if (path == '/api/ai/conversations/c1/messages') {
-        body = <Object>[];
-      } else if (path == '/api/ai/skills') {
-        body = <Object>[];
-      } else if (path == '/api/ai/skills/roots') {
-        body = {
-          'userRoot': r'D:\ComfyHub\storage\ai\skills',
-          'builtinRoot': r'D:\ComfyHub\skills\builtin',
-          'userRootExists': true,
-        };
-      } else if (path == '/api/ai/memory') {
-        body = {
-          'content': '',
-          'path': r'D:\ComfyHub\storage\ai\memory.md',
-          'entryCount': 0,
-          'maxChars': 8000,
-          'maxEntries': 100,
-        };
-      } else if (path == '/api/ai/tools/policy') {
-        body = {
-          'writeRoots': [r'D:\ComfyHub\comfyui'],
-          'readRoots': [r'D:\ComfyHub\comfyui'],
-          'defaultWriteRoot': r'D:\ComfyHub\comfyui',
-          'overrides': <String, String>{},
-        };
-      } else if (path == '/api/ai/tools') {
-        body = <Object>[];
-      } else {
-        body = <Object>[];
-      }
-
+  if (path == '/api/ai/pending') {
+    if (rec.pendingFails) {
       return http.Response(
-        jsonEncode(body),
-        200,
+        jsonEncode({'error': '待审批接口挂了'}),
+        503,
         headers: {'content-type': 'application/json; charset=utf-8'},
       );
-    });
+    }
+    body = {'asks': <Object>[], 'approvals': rec.approvals};
+  } else if (path.startsWith('/api/ai/tool-calls/')) {
+    final segments = path.split('/');
+    final callId = segments[4];
+    // 真后端接受之后这一条**当场离开待办**（`submit_jobs.approval` 置位），
+    // 所以假后端也要跟着改 —— 否则刷新一拉，刚批过的那行又回来了。
+    if (rec.acceptanceOk) {
+      rec.approvals = rec.approvals
+          .where((a) => a['callId'] != callId)
+          .toList();
+    }
+    body = {
+      'callId': callId,
+      'approved': segments.last == 'approve',
+      'accepted': rec.acceptanceOk,
+    };
+  } else if (path == '/api/capture/jobs') {
+    body = {
+      'queueRunning': 0,
+      'queuePending': 0,
+      'comfyReachable': true,
+      'submissions': <Object>[],
+    };
+  } else if (path == '/api/ai/providers') {
+    body = [
+      {
+        'id': 'local-gw',
+        'displayName': '本机网关',
+        'api': 'openai-completions',
+        'baseURL': 'http://127.0.0.1:11434/v1',
+        'credentialRef': 'LOCAL_KEY',
+        'endpointTrust': 'loopback',
+        'enabled': true,
+        'revision': 1,
+        'credential': {
+          'configured': true,
+          'source': 'managed',
+          'writable': true,
+        },
+      },
+    ];
+  } else if (path == '/api/ai/providers/local-gw/models') {
+    body = [
+      {
+        'providerId': 'local-gw',
+        'id': 'model-00',
+        'displayName': '模型 00',
+        'inputModalities': ['text'],
+        'tools': true,
+        'capabilitySource': 'manual',
+        'enabled': true,
+      },
+    ];
+  } else if (path == '/api/ai/conversations' && request.method == 'POST') {
+    body = {
+      'id': 'c1',
+      'title': '新对话',
+      'providerId': 'local-gw',
+      'modelId': 'model-00',
+      'messageCount': 0,
+    };
+  } else if (path == '/api/ai/conversations') {
+    body = <Object>[];
+  } else if (path == '/api/ai/conversations/c1/messages') {
+    body = <Object>[];
+  } else if (path == '/api/ai/skills') {
+    body = <Object>[];
+  } else if (path == '/api/ai/skills/roots') {
+    body = {
+      'userRoot': r'D:\ComfyHub\storage\ai\skills',
+      'builtinRoot': r'D:\ComfyHub\skills\builtin',
+      'userRootExists': true,
+    };
+  } else if (path == '/api/ai/memory') {
+    body = {
+      'content': '',
+      'path': r'D:\ComfyHub\storage\ai\memory.md',
+      'entryCount': 0,
+      'maxChars': 8000,
+      'maxEntries': 100,
+    };
+  } else if (path == '/api/ai/tools/policy') {
+    body = {
+      'writeRoots': [r'D:\ComfyHub\comfyui'],
+      'readRoots': [r'D:\ComfyHub\comfyui'],
+      'defaultWriteRoot': r'D:\ComfyHub\comfyui',
+      'overrides': <String, String>{},
+    };
+  } else if (path == '/api/ai/tools') {
+    body = <Object>[];
+  } else {
+    body = <Object>[];
+  }
+
+  return http.Response(
+    jsonEncode(body),
+    200,
+    headers: {'content-type': 'application/json; charset=utf-8'},
+  );
+});
 
 /// 宽屏挂上 AI 工作台：只有在 `width >= 1200` 时右侧栏（`_ContextPanel`）才会铺开，
 /// 所以这些用例都按桌面尺寸挂 —— 否则"卡没出现"只是因为右侧栏压根没渲染（假阴性）。
@@ -336,7 +342,11 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('批准'), findsNWidgets(5), reason: '一屏最多 5 条');
-    expect(find.textContaining('还有 1 条'), findsOneWidget, reason: '剩下的要如实说还有几条');
+    expect(
+      find.textContaining('还有 1 条'),
+      findsOneWidget,
+      reason: '剩下的要如实说还有几条',
+    );
     // 第 6 条折在"还有 N 条"里，不画出来
     expect(find.byKey(const Key('ai-pending-approve-submit:q6')), findsNothing);
     expect(find.text('6 项待批'), findsOneWidget);
@@ -362,6 +372,9 @@ void main() {
 
     expect(find.text('待审批'), findsOneWidget);
     expect(find.textContaining('手机排队的提交'), findsOneWidget);
-    expect(find.byKey(const Key('ai-pending-approve-submit:q1')), findsOneWidget);
+    expect(
+      find.byKey(const Key('ai-pending-approve-submit:q1')),
+      findsOneWidget,
+    );
   });
 }

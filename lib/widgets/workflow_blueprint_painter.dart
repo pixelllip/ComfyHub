@@ -12,6 +12,7 @@ import '../core/workflow_blueprint.dart';
 class BlueprintPaintStats {
   /// 这一帧画到的节点数
   final int drawnNodes;
+
   /// 这一帧跳过的节点数（视口之外）
   final int culledNodes;
   final int drawnEdges;
@@ -37,7 +38,9 @@ class BlueprintPaintStats {
 double relativeLuminance(Color color) {
   double channel(double c) =>
       c <= 0.03928 ? c / 12.92 : math.pow((c + 0.055) / 1.055, 2.4).toDouble();
-  return 0.2126 * channel(color.r) + 0.7152 * channel(color.g) + 0.0722 * channel(color.b);
+  return 0.2126 * channel(color.r) +
+      0.7152 * channel(color.g) +
+      0.0722 * channel(color.b);
 }
 
 /// WCAG 对比度（1:1 ~ 21:1）。
@@ -69,28 +72,38 @@ class BlueprintPalette {
   /// 画布底色。**画布必须有自己的底色**，别再借 `Scaffold` 的 surface
   /// （借了就没法保证"节点底与画布底同侧"这件事）。
   final Color canvas;
+
   /// 网格线（很淡，只帮着看清平移了多少）。
   final Color grid;
+
   /// 普通节点底色。
   final Color body;
+
   /// 普通节点描边。
   final Color border;
+
   /// 节点标题条底色。
   ///
   /// ComfyUI 的标题条是**中性灰**（不是按节点类别上色）：截图实测深色主题下
   /// 标题条约 `#3E3E3E`、节点底 `#313131`、画布 `#282828`。语义色只留在描边上
   /// —— 整条标题按类别染成蓝 / 紫 / 绿反而比 ComfyUI 更花。
   final Color header;
+
   /// 节点标题文字。
   final Color title;
+
   /// 节点类名（次要文字）。
   final Color subtitle;
+
   /// 插口名文字。
   final Color portLabel;
+
   /// 参数行的小格子底。
   final Color widgetBar;
+
   /// 参数行的文字。
   final Color widgetText;
+
   /// `kind` 的语义强调色（**只用在边框上**）。
   final Map<String, Color> accents;
 
@@ -269,10 +282,13 @@ class BlueprintPalette {
 /// 旧值是 26/18/16/11 —— 小字挤在一起，长提示词只能显示一行，与 ComfyUI 差得远。
 const double kBlueprintHeaderHeight = 28;
 const double kBlueprintPortHeight = 18;
+
 /// 参数行之间的步距（含小格子本体的高度）。
 const double kBlueprintWidgetRowStep = 20;
+
 /// 参数小格子的高度。
 const double kBlueprintWidgetBarHeight = 16;
+
 /// 参数行文字大小 / 行高（多行文本按它算高度）。
 const double kBlueprintWidgetTextSize = 10.5;
 const double kBlueprintWidgetLineHeight = 13;
@@ -280,16 +296,22 @@ const double kBlueprintWidgetLineHeight = 13;
 /// 一个**参数行**的完整几何（绘制、命中和就地编辑共用）。
 class BlueprintWidgetRow {
   final int index;
+
   /// 整行（含两列）
   final Rect rect;
+
   /// 名字列（多行文本框没有名字列，宽度为 0）
   final Rect label;
+
   /// 值列（多行文本框 = 整行）
   final Rect value;
+
   /// 是不是多行文本框（Note / 提示词这类）
   final bool multiline;
+
   /// 是否落在节点底边以内（节点太矮时后面的行不画、也点不到）
   final bool visible;
+
   /// 画几行文字（仅多行有意义）
   final int lines;
 
@@ -317,9 +339,8 @@ bool isBlueprintNote(BlueprintNode node) {
 /// 纯控件输入（`widget: true` 且没有接线）在 ComfyUI 里显示为参数行、**不是**一个
 /// 左侧插口；把它算进端口行数会把参数区一路往下推（TextGenerate 有 20 个输入，
 /// 其中一半是控件，旧算法直接吃掉 360px 高度）。
-int blueprintInputSocketCount(BlueprintNode node) => node.inputs
-    .where((port) => !port.widget || port.link != null)
-    .length;
+int blueprintInputSocketCount(BlueprintNode node) =>
+    node.inputs.where((port) => !port.widget || port.link != null).length;
 
 /// 端口区一共几行（左右取较大者，与 ComfyUI 的 litegraph 一致）。
 int blueprintPortRowCount(BlueprintNode node) =>
@@ -358,7 +379,8 @@ bool isBlueprintMultilineWidget(BlueprintNode node, BlueprintWidget widget) {
   final cls = node.className.toLowerCase();
   if (cls.contains('multiline') || cls.contains('markdown')) return true;
   final name = (widget.name ?? '').toLowerCase();
-  final textLike = cls.contains('textencode') ||
+  final textLike =
+      cls.contains('textencode') ||
       cls.contains('textgenerate') ||
       cls.contains('primitivestring') ||
       cls.contains('stringconcatenate') ||
@@ -415,7 +437,9 @@ List<BlueprintWidgetRow> blueprintWidgetRows(BlueprintNode node, Rect box) {
   if (node.widgets.isEmpty) return rows;
   final note = isBlueprintNote(node);
   final bodyTop =
-      box.top + kBlueprintHeaderHeight + blueprintPortRowCount(node) * kBlueprintPortHeight;
+      box.top +
+      kBlueprintHeaderHeight +
+      blueprintPortRowCount(node) * kBlueprintPortHeight;
   // 留 1px 给节点底边框：CLIPLoader 这种"3 行刚好塞满 106px"的节点，
   // 多扣 3px 会把最后一行裁掉一条。
   final bottom = box.bottom - 1;
@@ -432,7 +456,10 @@ List<BlueprintWidgetRow> blueprintWidgetRows(BlueprintNode node, Rect box) {
     var height = kBlueprintWidgetBarHeight;
     if (multiline) {
       final limit = math.max(kBlueprintWidgetBarHeight, maxHeight - reserve);
-      final maxLines = math.max(1, ((limit - 6) / kBlueprintWidgetLineHeight).floor());
+      final maxLines = math.max(
+        1,
+        ((limit - 6) / kBlueprintWidgetLineHeight).floor(),
+      );
       lines = math.min(
         maxLines,
         estimateBlueprintTextLines(
@@ -443,10 +470,18 @@ List<BlueprintWidgetRow> blueprintWidgetRows(BlueprintNode node, Rect box) {
       );
       height = limit < kBlueprintWidgetBarHeight
           ? kBlueprintWidgetBarHeight
-          : math.min(limit, math.max(kBlueprintWidgetBarHeight, lines * kBlueprintWidgetLineHeight + 6));
+          : math.min(
+              limit,
+              math.max(
+                kBlueprintWidgetBarHeight,
+                lines * kBlueprintWidgetLineHeight + 6,
+              ),
+            );
     }
     final visible = top < bottom - 4 && maxHeight >= 8;
-    final drawnHeight = visible ? math.min(height, maxHeight).toDouble() : height;
+    final drawnHeight = visible
+        ? math.min(height, maxHeight).toDouble()
+        : height;
     final rect = Rect.fromLTWH(box.left + 6, top, box.width - 12, drawnHeight);
     final labelWidth = multiline ? 0.0 : _blueprintLabelWidth(rect);
     rows.add(
@@ -515,14 +550,18 @@ int? hitTestWidgetRow(BlueprintNode node, Rect box, Offset point) {
 class BlueprintPainterSpec {
   final WorkflowBlueprint blueprint;
   final BlueprintLayout layout;
+
   /// 图坐标 → 画布坐标的平移（画布左上角留白 + 包围盒可能为负）
   final Offset origin;
+
   /// **当前视口**（图坐标）。剔除就靠它 —— 上千节点的图只画看得见的那几个。
   final Rect viewport;
   final String? selectedId;
   final Set<String> highlightedNodes;
+
   /// 低于这个缩放就不画正文（LOD）：缩到 5% 还逐字排版会让整帧卡住
   final double scale;
+
   /// 配色（深浅两套之一）。**必须由页面按 `Theme.of(context).brightness` 传进来** ——
   /// 画笔里再写死一套颜色就会重演"深色主题下压一片近白"那个 bug。
   final BlueprintPalette palette;
@@ -581,12 +620,14 @@ class BlueprintPainter extends CustomPainter {
     culledNodes = nodes.$2;
     canvas.restore();
 
-    onPainted?.call(BlueprintPaintStats(
-      drawnNodes: drawnNodes,
-      culledNodes: culledNodes,
-      drawnEdges: drawnEdges,
-      culledEdges: culledEdges,
-    ));
+    onPainted?.call(
+      BlueprintPaintStats(
+        drawnNodes: drawnNodes,
+        culledNodes: culledNodes,
+        drawnEdges: drawnEdges,
+        culledEdges: culledEdges,
+      ),
+    );
   }
 
   // -------------------------------------------------------------------------
@@ -603,7 +644,8 @@ class BlueprintPainter extends CustomPainter {
   void _paintGrid(Canvas canvas, Rect viewport) {
     if (spec.scale < 0.15) return;
     if (!viewport.isFinite || viewport.isEmpty) return;
-    if ((viewport.width / _gridStep).ceil() > 200 || (viewport.height / _gridStep).ceil() > 200) {
+    if ((viewport.width / _gridStep).ceil() > 200 ||
+        (viewport.height / _gridStep).ceil() > 200) {
       return;
     }
     final paint = Paint()
@@ -612,10 +654,18 @@ class BlueprintPainter extends CustomPainter {
     final left = (viewport.left / _gridStep).floorToDouble() * _gridStep;
     final top = (viewport.top / _gridStep).floorToDouble() * _gridStep;
     for (var x = left; x <= viewport.right; x += _gridStep) {
-      canvas.drawLine(Offset(x, viewport.top), Offset(x, viewport.bottom), paint);
+      canvas.drawLine(
+        Offset(x, viewport.top),
+        Offset(x, viewport.bottom),
+        paint,
+      );
     }
     for (var y = top; y <= viewport.bottom; y += _gridStep) {
-      canvas.drawLine(Offset(viewport.left, y), Offset(viewport.right, y), paint);
+      canvas.drawLine(
+        Offset(viewport.left, y),
+        Offset(viewport.right, y),
+        paint,
+      );
     }
   }
 
@@ -625,12 +675,18 @@ class BlueprintPainter extends CustomPainter {
   void _paintGroups(Canvas canvas, Rect viewport) {
     for (final group in spec.blueprint.groups) {
       if (!group.valid) continue;
-      final rect = Rect.fromLTWH(group.left, group.top, group.width, group.height);
+      final rect = Rect.fromLTWH(
+        group.left,
+        group.top,
+        group.width,
+        group.height,
+      );
       if (!visibleInViewport(rect, viewport)) continue;
       final colour = _parseColor(group.color) ?? const Color(0xFF3F789E);
       // 深色画布下 alpha 0.06 的底色**等于没画**，所以按明暗各给一档
       final dark = spec.palette.isDark;
-      final fill = Paint()..color = colour.withValues(alpha: dark ? 0.12 : 0.07);
+      final fill = Paint()
+        ..color = colour.withValues(alpha: dark ? 0.12 : 0.07);
       final border = Paint()
         ..color = colour.withValues(alpha: dark ? 0.75 : 0.55)
         ..style = PaintingStyle.stroke
@@ -666,7 +722,10 @@ class BlueprintPainter extends CustomPainter {
       final start = _outputAnchor(fromNode, from, edge.fromSlot);
       final end = _inputAnchor(toNode, to, edge.toSlot);
       // 剔除：整条贝塞尔都在视口外就跳过（用两头的包围盒近似，够用且便宜）
-      if (!visibleInViewport(Rect.fromPoints(start, end).inflate(40), viewport)) {
+      if (!visibleInViewport(
+        Rect.fromPoints(start, end).inflate(40),
+        viewport,
+      )) {
         culled++;
         continue;
       }
@@ -677,8 +736,8 @@ class BlueprintPainter extends CustomPainter {
       final colour = severity == 'error'
           ? const Color(0xFFE53935)
           : severity == 'warn'
-              ? const Color(0xFFF9A825)
-              : spec.palette.typeColor(type);
+          ? const Color(0xFFF9A825)
+          : spec.palette.typeColor(type);
       final paint = Paint()
         ..color = colour.withValues(alpha: severity == 'none' ? 0.92 : 1)
         ..style = PaintingStyle.stroke
@@ -709,11 +768,15 @@ class BlueprintPainter extends CustomPainter {
   ) {
     final declared = edge.type;
     if (declared != null && declared.trim().isNotEmpty) return declared;
-    if (fromNode != null && edge.fromSlot >= 0 && edge.fromSlot < fromNode.outputs.length) {
+    if (fromNode != null &&
+        edge.fromSlot >= 0 &&
+        edge.fromSlot < fromNode.outputs.length) {
       final type = fromNode.outputs[edge.fromSlot].type;
       if (type.isNotEmpty) return type;
     }
-    if (toNode != null && edge.toSlot >= 0 && edge.toSlot < toNode.inputs.length) {
+    if (toNode != null &&
+        edge.toSlot >= 0 &&
+        edge.toSlot < toNode.inputs.length) {
       final type = toNode.inputs[edge.toSlot].type;
       if (type.isNotEmpty) return type;
     }
@@ -723,7 +786,9 @@ class BlueprintPainter extends CustomPainter {
   /// 这条线自己有没有结论（类型不匹配 / 引用了不存在的节点）。
   String _edgeSeverity(BlueprintEdge edge) {
     for (final issue in spec.blueprint.issues) {
-      if (issue.links.isNotEmpty && edge.id != null && issue.links.contains(edge.id)) {
+      if (issue.links.isNotEmpty &&
+          edge.id != null &&
+          issue.links.contains(edge.id)) {
         return issue.severity;
       }
     }
@@ -771,7 +836,9 @@ class BlueprintPainter extends CustomPainter {
     canvas.drawRRect(
       rounded,
       Paint()
-        ..color = selected ? const Color(0xFF00B0FF) : border.withValues(alpha: dim ? 0.5 : 1)
+        ..color = selected
+            ? const Color(0xFF00B0FF)
+            : border.withValues(alpha: dim ? 0.5 : 1)
         ..style = PaintingStyle.stroke
         ..strokeWidth = selected ? 3 : (severity == 'none' ? 1.2 : 2.4),
     );
@@ -812,7 +879,8 @@ class BlueprintPainter extends CustomPainter {
 
     if (spec.scale > 0.18) {
       // 标题被改过时类名才是"这到底是什么节点"：标题上、类名下，两行都塞进 28px。
-      final showClass = spec.scale > 0.5 &&
+      final showClass =
+          spec.scale > 0.5 &&
           node.title.trim().isNotEmpty &&
           node.title != node.className &&
           rect.height > _headerHeight + 4;
@@ -858,10 +926,21 @@ class BlueprintPainter extends CustomPainter {
     // 角标：旁路 / 静音 / 纯前端
     if (node.bypassed || node.muted || node.frontendOnly) {
       final label = node.muted ? '静音' : (node.bypassed ? '旁路' : '前端');
-      _badge(canvas, rect, label, dim ? const Color(0xFF9E9E9E) : const Color(0xFF6D4C41));
+      _badge(
+        canvas,
+        rect,
+        label,
+        dim ? const Color(0xFF9E9E9E) : const Color(0xFF6D4C41),
+      );
     }
     if (severity != 'none') {
-      _badge(canvas, rect, severity == 'error' ? '!' : '?', border, right: true);
+      _badge(
+        canvas,
+        rect,
+        severity == 'error' ? '!' : '?',
+        border,
+        right: true,
+      );
     }
   }
 
@@ -917,8 +996,8 @@ class BlueprintPainter extends CustomPainter {
     final issueColor = issues.any((issue) => issue.isError)
         ? const Color(0xFFE05252)
         : issues.any((issue) => issue.isWarn)
-            ? const Color(0xFFE0A32E)
-            : null;
+        ? const Color(0xFFE0A32E)
+        : null;
     // 外圈用画布底色：圆点压在节点边框上时边界才清楚
     canvas.drawCircle(
       at,
@@ -993,10 +1072,16 @@ class BlueprintPainter extends CustomPainter {
         _switch(canvas, row.rect, value, dim);
         continue;
       }
-      final text = blueprintWidgetText(value).replaceAll(RegExp(r'[\r\n]+'), ' ');
+      final text = blueprintWidgetText(value)
+          .replaceAll(RegExp(r'[\r\n]+'), ' ');
       final swatch = _hexColor(text);
       if (swatch != null) {
-        final chip = Rect.fromLTWH(row.rect.right - 17, row.rect.top + 3, 10, 10);
+        final chip = Rect.fromLTWH(
+          row.rect.right - 17,
+          row.rect.top + 3,
+          10,
+          10,
+        );
         canvas.drawRRect(
           RRect.fromRectAndRadius(chip, const Radius.circular(2)),
           Paint()..color = swatch,
@@ -1017,7 +1102,10 @@ class BlueprintPainter extends CustomPainter {
         color: spec.palette.widgetText.withValues(alpha: dim ? 0.5 : 1),
         size: 10,
         // ⚠ 只能占"值"那一列：给整行宽度会让长值左移压住名字列。
-        maxWidth: math.max(10.0, row.value.width - 10 - (swatch != null ? 14 : 0)),
+        maxWidth: math.max(
+          10.0,
+          row.value.width - 10 - (swatch != null ? 14 : 0),
+        ),
       );
     }
   }
@@ -1045,21 +1133,35 @@ class BlueprintPainter extends CustomPainter {
     canvas.drawRRect(
       track,
       Paint()
-        ..color = (value ? spec.palette.typeColor('BOOLEAN') : spec.palette.subtitle)
-            .withValues(alpha: dim ? 0.35 : (value ? 0.9 : 0.4)),
+        ..color =
+            (value ? spec.palette.typeColor('BOOLEAN') : spec.palette.subtitle)
+                .withValues(alpha: dim ? 0.35 : (value ? 0.9 : 0.4)),
     );
     canvas.drawCircle(
-      Offset(value ? track.right - height / 2 : track.left + height / 2, track.center.dy),
+      Offset(
+        value ? track.right - height / 2 : track.left + height / 2,
+        track.center.dy,
+      ),
       height / 2 - 2,
       Paint()..color = spec.palette.title.withValues(alpha: dim ? 0.5 : 1),
     );
   }
 
-  void _badge(Canvas canvas, Rect rect, String label, Color colour, {bool right = false}) {
+  void _badge(
+    Canvas canvas,
+    Rect rect,
+    String label,
+    Color colour, {
+    bool right = false,
+  }) {
     final painter = TextPainter(
       text: TextSpan(
         text: label,
-        style: TextStyle(color: Colors.white, fontSize: 9, fontWeight: FontWeight.bold),
+        style: TextStyle(
+          color: Colors.white,
+          fontSize: 9,
+          fontWeight: FontWeight.bold,
+        ),
       ),
       textDirection: TextDirection.ltr,
     )..layout();
@@ -1088,14 +1190,20 @@ class BlueprintPainter extends CustomPainter {
       final mapped = blueprintInputRowIndex(node, slot);
       if (mapped != null) row = mapped;
     }
-    return Offset(box.left, box.top + _headerHeight + _portHeight * row + _portHeight / 2);
+    return Offset(
+      box.left,
+      box.top + _headerHeight + _portHeight * row + _portHeight / 2,
+    );
   }
 
   /// 输出锚点：输出永远是插口，行号就是 slot。
   Offset _outputAnchor(BlueprintNode? node, Rect box, int slot) {
     final count = node?.outputs.length ?? 0;
     final row = count > 0 ? slot.clamp(0, count - 1) : math.max(0, slot);
-    return Offset(box.right, box.top + _headerHeight + _portHeight * row + _portHeight / 2);
+    return Offset(
+      box.right,
+      box.top + _headerHeight + _portHeight * row + _portHeight / 2,
+    );
   }
 
   // -------------------------------------------------------------------------
@@ -1103,11 +1211,11 @@ class BlueprintPainter extends CustomPainter {
   // -------------------------------------------------------------------------
 
   TextStyle _style(Color color, double size, {bool bold = false}) => TextStyle(
-        color: color,
-        fontSize: size,
-        fontWeight: bold ? FontWeight.w600 : FontWeight.normal,
-        height: 1.22,
-      );
+    color: color,
+    fontSize: size,
+    fontWeight: bold ? FontWeight.w600 : FontWeight.normal,
+    height: 1.22,
+  );
 
   /// 画一行字；超出 `maxWidth` 由 TextPainter 自己省略（**不手算字符数**）。
   void _text(
@@ -1130,7 +1238,10 @@ class BlueprintPainter extends CustomPainter {
     // 担心"逐字量太贵"是多余的：`_paintNodes` 已经做了视口剔除，
     // 要量的只有屏幕里那几十个节点；何况旧实现本来就已经在建 TextPainter 并 layout 了。
     final painter = TextPainter(
-      text: TextSpan(text: text, style: _style(color, size, bold: bold)),
+      text: TextSpan(
+        text: text,
+        style: _style(color, size, bold: bold),
+      ),
       textDirection: TextDirection.ltr,
       maxLines: 1,
       ellipsis: '…',
@@ -1151,7 +1262,10 @@ class BlueprintPainter extends CustomPainter {
   }) {
     if (text.isEmpty) return;
     final painter = TextPainter(
-      text: TextSpan(text: text, style: _style(color, size, bold: bold)),
+      text: TextSpan(
+        text: text,
+        style: _style(color, size, bold: bold),
+      ),
       textDirection: TextDirection.ltr,
       maxLines: 1,
       ellipsis: '…',
@@ -1259,6 +1373,9 @@ Rect visibleGraphRect(Matrix4 transform, Size viewport, Offset origin) {
   final inverse = Matrix4.tryInvert(transform);
   if (inverse == null || viewport.isEmpty) return Rect.largest;
   final a = MatrixUtils.transformPoint(inverse, Offset.zero);
-  final b = MatrixUtils.transformPoint(inverse, Offset(viewport.width, viewport.height));
+  final b = MatrixUtils.transformPoint(
+    inverse,
+    Offset(viewport.width, viewport.height),
+  );
   return Rect.fromPoints(a, b).shift(-origin);
 }

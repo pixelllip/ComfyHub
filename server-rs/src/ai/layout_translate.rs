@@ -112,9 +112,8 @@ pub async fn translate(state: &AppState, body: &Value) -> Result<Value, ApiError
         .to_string();
 
     let provider = require_provider_row(state, provider_id)?;
-    let api = Api::parse(&provider.api).ok_or_else(|| {
-        ApiError::bad_request(format!("不认识的协议：{}", provider.api))
-    })?;
+    let api = Api::parse(&provider.api)
+        .ok_or_else(|| ApiError::bad_request(format!("不认识的协议：{}", provider.api)))?;
 
     let user = build_user_prompt(&spec, &intent);
     let mut prompt = String::new();
@@ -179,7 +178,10 @@ pub async fn translate(state: &AppState, body: &Value) -> Result<Value, ApiError
 /// 2026-11-01 的实际教训：只认 `length` 时，DeepSeek 的 `incomplete` 会被当成
 /// "正常收尾"，于是半句话被交给界面，还带着 `ok` 之外的 6 条"漏了某某"。
 fn is_truncated(finish: Option<&str>) -> bool {
-    matches!(finish, Some("length") | Some("max_tokens") | Some("incomplete") | Some("content_filter"))
+    matches!(
+        finish,
+        Some("length") | Some("max_tokens") | Some("incomplete") | Some("content_filter")
+    )
 }
 
 /// 上游给了空正文时，说清楚是哪一种空。
@@ -295,7 +297,11 @@ fn build_user_prompt(spec: &Value, intent: &str) -> String {
     format!(
         "【布局规格】\n{}\n\n【用户意图】\n{}",
         serde_json::to_string(&payload).unwrap_or_default(),
-        if intent.is_empty() { "（未提供）" } else { intent }
+        if intent.is_empty() {
+            "（未提供）"
+        } else {
+            intent
+        }
     )
 }
 
@@ -321,7 +327,10 @@ fn clean_prompt(raw: &str) -> String {
     // 硬截断只防失控，不参与正常路径（正常输出 120~200 字）
     if text.chars().count() > MAX_PROMPT_CHARS {
         let cut: String = text.chars().take(MAX_PROMPT_CHARS).collect();
-        let end = cut.rfind('。').map(|i| i + '。'.len_utf8()).unwrap_or(cut.len());
+        let end = cut
+            .rfind('。')
+            .map(|i| i + '。'.len_utf8())
+            .unwrap_or(cut.len());
         return cut[..end].to_string();
     }
     text
@@ -349,7 +358,10 @@ fn validate(spec: &Value, prompt: &str) -> Vec<String> {
         let name = r.get("label").and_then(Value::as_str).unwrap_or("").trim();
         let kind = r.get("kind").and_then(Value::as_str).unwrap_or("object");
         if kind == "blank" {
-            if !BLANK_WORDS.iter().any(|w| prompt.to_lowercase().contains(w)) {
+            if !BLANK_WORDS
+                .iter()
+                .any(|w| prompt.to_lowercase().contains(w))
+            {
                 issues.push("留白区没有被明确留出来（模型可能往那里塞了东西）".into());
             }
             continue;
@@ -392,11 +404,22 @@ fn validate(spec: &Value, prompt: &str) -> Vec<String> {
         let name = r.get("label").and_then(Value::as_str).unwrap_or("这一块");
         let ok = match rel {
             "mirror" => [
-                "同一个人", "同一人", "镜像", "倒影", "翻转", "一致",
+                "同一个人",
+                "同一人",
+                "镜像",
+                "倒影",
+                "翻转",
+                "一致",
                 // ⚠ 不能把 "mirror" 本身算进去：那句话里出现 "mirror" 只说明它在讲镜子，
                 // 不说明它写了"镜中是本人"（第一版这么写，测试里立刻漏判）。
-                "same person", "the same girl", "the same woman", "mirror image",
-                "mirrored", "reflection of", "identical", "flipped",
+                "same person",
+                "the same girl",
+                "the same woman",
+                "mirror image",
+                "mirrored",
+                "reflection of",
+                "identical",
+                "flipped",
             ]
             .iter()
             .any(|k| prompt.to_lowercase().contains(k)),
@@ -437,26 +460,54 @@ fn validate(spec: &Value, prompt: &str) -> Vec<String> {
     for (present, words, side) in [
         (
             right,
-            ["画面右侧", "画面右边", "画面右半", "right side of the frame", "right edge of the frame"],
+            [
+                "画面右侧",
+                "画面右边",
+                "画面右半",
+                "right side of the frame",
+                "right edge of the frame",
+            ],
             "右",
         ),
         (
             left,
-            ["画面左侧", "画面左边", "画面左半", "left side of the frame", "left edge of the frame"],
+            [
+                "画面左侧",
+                "画面左边",
+                "画面左半",
+                "left side of the frame",
+                "left edge of the frame",
+            ],
             "左",
         ),
         (
             top,
-            ["画面顶部", "画面最上", "画面上缘", "top of the frame", "top edge of the frame"],
+            [
+                "画面顶部",
+                "画面最上",
+                "画面上缘",
+                "top of the frame",
+                "top edge of the frame",
+            ],
             "上",
         ),
         (
             bottom,
-            ["画面底部", "画面最下", "画面下缘", "bottom of the frame", "bottom edge of the frame"],
+            [
+                "画面底部",
+                "画面最下",
+                "画面下缘",
+                "bottom of the frame",
+                "bottom edge of the frame",
+            ],
             "下",
         ),
     ] {
-        if !present && words.iter().any(|w| prompt.to_lowercase().contains(&w.to_lowercase())) {
+        if !present
+            && words
+                .iter()
+                .any(|w| prompt.to_lowercase().contains(&w.to_lowercase()))
+        {
             issues.push(format!("正文说了画面{side}侧，但布局里那边没有框"));
         }
     }
@@ -471,8 +522,21 @@ fn num(r: &Value, key: &str) -> f64 {
 /// "留白"这件事在人话里有七八种说法，模型通常不会正好用"留白"两个字。
 /// 正文是英文，所以中英都收。
 const BLANK_WORDS: [&str; 15] = [
-    "留白", "空白", "空着", "空出", "留出", "不放置", "不安排", "空无一物", "没有物体",
-    "empty", "left empty", "left clear", "no objects", "nothing", "clear floor",
+    "留白",
+    "空白",
+    "空着",
+    "空出",
+    "留出",
+    "不放置",
+    "不安排",
+    "空无一物",
+    "没有物体",
+    "empty",
+    "left empty",
+    "left clear",
+    "no objects",
+    "nothing",
+    "clear floor",
 ];
 
 /// 标签是否被正文覆盖：整串命中，或**任意一个够长的词元**命中。
@@ -534,7 +598,10 @@ mod tests {
             region("镜子", 0, 0, 200, 200),
             region("窗", 700, 100, 250, 300)
         ]));
-        let merged = validate(&spec, "The mirror hangs on the left and the window on the right.");
+        let merged = validate(
+            &spec,
+            "The mirror hangs on the left and the window on the right.",
+        );
         assert!(merged.iter().any(|i| i.contains("段")), "{merged:?}");
     }
 
@@ -579,7 +646,11 @@ mod tests {
         // 写法一：字面
         assert!(validate(&spec, "画面左下留白，左上是一面镜子。").is_empty());
         // 写法二：换了词，仍然是"留出来"的意思
-        assert!(validate(&spec, "画面左下方留出一块空白，不放置任何物体；左上是一面镜子。").is_empty());
+        assert!(validate(
+            &spec,
+            "画面左下方留出一块空白，不放置任何物体；左上是一面镜子。"
+        )
+        .is_empty());
         // 真的漏了才报
         let issues = validate(&spec, "左上是一面镜子。");
         assert!(issues.iter().any(|i| i.contains("留白区")));
@@ -596,9 +667,15 @@ mod tests {
 
     #[test]
     fn 清理代码块与前缀() {
-        assert_eq!(clean_prompt("```text\n画面左侧有一张桌子。\n```"), "画面左侧有一张桌子。");
-        assert_eq!(clean_prompt("提示词：画面左侧有一张桌子。"), "画面左侧有一张桌子。");
-        assert_eq!(clean_prompt("\"画面左侧\"") , "画面左侧");
+        assert_eq!(
+            clean_prompt("```text\n画面左侧有一张桌子。\n```"),
+            "画面左侧有一张桌子。"
+        );
+        assert_eq!(
+            clean_prompt("提示词：画面左侧有一张桌子。"),
+            "画面左侧有一张桌子。"
+        );
+        assert_eq!(clean_prompt("\"画面左侧\""), "画面左侧");
     }
 
     #[test]
@@ -620,6 +697,9 @@ mod tests {
         spec["camera"] = json!("topdown");
         let text = build_user_prompt(&spec, "");
         assert!(text.contains("\"camera\":\"topdown\""));
-        assert!(text.contains("（未提供）"), "没给意图也要说清楚，不许发空段");
+        assert!(
+            text.contains("（未提供）"),
+            "没给意图也要说清楚，不许发空段"
+        );
     }
 }

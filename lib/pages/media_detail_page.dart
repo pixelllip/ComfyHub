@@ -385,7 +385,9 @@ class _MediaDetailPageState extends State<MediaDetailPage> {
                 tooltip: m.favorite ? '取消收藏' : '收藏',
                 icon: Icon(
                   m.favorite ? Icons.star : Icons.star_border,
-                  color: m.favorite ? Theme.of(context).colorScheme.tertiary : null,
+                  color: m.favorite
+                      ? Theme.of(context).colorScheme.tertiary
+                      : null,
                 ),
                 onPressed: () async {
                   await store.api.updateMedia(m.id, favorite: !m.favorite);

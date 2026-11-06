@@ -23,10 +23,10 @@ enum AppThemeMode {
   const AppThemeMode(this.label);
 
   ThemeMode get material => switch (this) {
-        AppThemeMode.dark => ThemeMode.dark,
-        AppThemeMode.light => ThemeMode.light,
-        AppThemeMode.system => ThemeMode.system,
-      };
+    AppThemeMode.dark => ThemeMode.dark,
+    AppThemeMode.light => ThemeMode.light,
+    AppThemeMode.system => ThemeMode.system,
+  };
 
   /// 读偏好。认不出来的（老版本写的、用户手改过的）一律回默认，**绝不抛** ——
   /// 它在 App 启动路径上，崩了就是白屏。
@@ -122,8 +122,8 @@ class AppShapes extends ThemeExtension<AppShapes> {
 
   /// 顶角是 [extraLarge] 的底部面板形状（M3 bottom sheet）。
   RoundedRectangleBorder get bottomSheet => RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(extraLarge)),
-      );
+    borderRadius: BorderRadius.vertical(top: Radius.circular(extraLarge)),
+  );
 
   RoundedRectangleBorder rounded(double radius, {BorderSide? side}) =>
       RoundedRectangleBorder(
@@ -138,14 +138,13 @@ class AppShapes extends ThemeExtension<AppShapes> {
     double? medium,
     double? large,
     double? extraLarge,
-  }) =>
-      AppShapes(
-        extraSmall: extraSmall ?? this.extraSmall,
-        small: small ?? this.small,
-        medium: medium ?? this.medium,
-        large: large ?? this.large,
-        extraLarge: extraLarge ?? this.extraLarge,
-      );
+  }) => AppShapes(
+    extraSmall: extraSmall ?? this.extraSmall,
+    small: small ?? this.small,
+    medium: medium ?? this.medium,
+    large: large ?? this.large,
+    extraLarge: extraLarge ?? this.extraLarge,
+  );
 
   @override
   AppShapes lerp(ThemeExtension<AppShapes>? other, double t) {
@@ -203,9 +202,9 @@ class AppColors extends ThemeExtension<AppColors> {
   /// 从当前方案派生三组语义色（种子只定色相，明暗跟着 [scheme] 走）。
   factory AppColors.from(ColorScheme scheme) {
     ColorScheme palette(int seed) => ColorScheme.fromSeed(
-          seedColor: Color(seed),
-          brightness: scheme.brightness,
-        );
+      seedColor: Color(seed),
+      brightness: scheme.brightness,
+    );
     final s = palette(0xFF2E7D32);
     final w = palette(0xFF8A5A00);
     final i = palette(0xFF1565C0);
@@ -244,21 +243,20 @@ class AppColors extends ThemeExtension<AppColors> {
     Color? onInfo,
     Color? infoContainer,
     Color? onInfoContainer,
-  }) =>
-      AppColors(
-        success: success ?? this.success,
-        onSuccess: onSuccess ?? this.onSuccess,
-        successContainer: successContainer ?? this.successContainer,
-        onSuccessContainer: onSuccessContainer ?? this.onSuccessContainer,
-        warning: warning ?? this.warning,
-        onWarning: onWarning ?? this.onWarning,
-        warningContainer: warningContainer ?? this.warningContainer,
-        onWarningContainer: onWarningContainer ?? this.onWarningContainer,
-        info: info ?? this.info,
-        onInfo: onInfo ?? this.onInfo,
-        infoContainer: infoContainer ?? this.infoContainer,
-        onInfoContainer: onInfoContainer ?? this.onInfoContainer,
-      );
+  }) => AppColors(
+    success: success ?? this.success,
+    onSuccess: onSuccess ?? this.onSuccess,
+    successContainer: successContainer ?? this.successContainer,
+    onSuccessContainer: onSuccessContainer ?? this.onSuccessContainer,
+    warning: warning ?? this.warning,
+    onWarning: onWarning ?? this.onWarning,
+    warningContainer: warningContainer ?? this.warningContainer,
+    onWarningContainer: onWarningContainer ?? this.onWarningContainer,
+    info: info ?? this.info,
+    onInfo: onInfo ?? this.onInfo,
+    infoContainer: infoContainer ?? this.infoContainer,
+    onInfoContainer: onInfoContainer ?? this.onInfoContainer,
+  );
 
   @override
   AppColors lerp(ThemeExtension<AppColors>? other, double t) {
@@ -333,12 +331,12 @@ class AppTheme {
   /// 桌面端装上就用它；没装则退到系统自带的 YaHei / PingFang，行为与以前一致。
   static const List<String> cjkFallback = <String>[
     'Source Han Sans SC', // 思源黑体（Adobe 名）
-    'Noto Sans SC',       // 思源黑体的 Google 名（Windows 10/11 常见）
+    'Noto Sans SC', // 思源黑体的 Google 名（Windows 10/11 常见）
     'Microsoft YaHei UI', // Windows 11 默认中文 UI 字体
-    'Microsoft YaHei',    // Windows 中文正文字体
-    'PingFang SC',        // macOS / iOS
-    'Hiragino Sans GB',   // 老版本 macOS
-    'Noto Sans CJK SC',   // Linux / Android 常见
+    'Microsoft YaHei', // Windows 中文正文字体
+    'PingFang SC', // macOS / iOS
+    'Hiragino Sans GB', // 老版本 macOS
+    'Noto Sans CJK SC', // Linux / Android 常见
     'Source Han Sans CN', // 思源黑体（简体中文的另一个家族名）
     'WenQuanYi Micro Hei', // Linux
     'SimHei',
@@ -391,8 +389,11 @@ class AppTheme {
         seedColor: seed,
         brightness: brightness,
       );
-      scheme = ColorScheme.fromSeed(seedColor: defaultSeed, brightness: brightness)
-          .copyWith(
+      scheme =
+          ColorScheme.fromSeed(
+            seedColor: defaultSeed,
+            brightness: brightness,
+          ).copyWith(
             primary: accentScheme.primary,
             onPrimary: accentScheme.onPrimary,
             primaryContainer: accentScheme.primaryContainer,
@@ -459,7 +460,9 @@ class AppTheme {
       ],
 
       // M3 的触摸反馈：移动端 sparkle、桌面 ripple。
-      splashFactory: mobile ? InkSparkle.splashFactory : InkRipple.splashFactory,
+      splashFactory: mobile
+          ? InkSparkle.splashFactory
+          : InkRipple.splashFactory,
 
       // 页面切换统一走 M3 的 fade-forwards（桌面端也不再用平台默认的"无动画"）。
       pageTransitionsTheme: const PageTransitionsTheme(
@@ -490,7 +493,13 @@ class AppTheme {
         centerTitle: false,
         // 页面标题比正文大一档（参照的 Material You 设置页是很醒目的大标题；
         // 这里不做整条 LargeAppBar 重构，只把字号提上去，高度仍是 56，窄屏不挤）。
-        titleTextStyle: _ui(22, FontWeight.w700, family, height: 1.3, color: scheme.onSurface),
+        titleTextStyle: _ui(
+          22,
+          FontWeight.w700,
+          family,
+          height: 1.3,
+          color: scheme.onSurface,
+        ),
       ),
 
       // 分隔线：给一个默认色，页面里的 `Divider()` 不用再逐个传 color。
@@ -499,8 +508,12 @@ class AppTheme {
 
       tabBarTheme: TabBarThemeData(
         labelStyle: _ui(14, FontWeight.w700, family, color: scheme.onSurface),
-        unselectedLabelStyle:
-            _ui(14, FontWeight.w500, family, color: scheme.onSurfaceVariant),
+        unselectedLabelStyle: _ui(
+          14,
+          FontWeight.w500,
+          family,
+          color: scheme.onSurfaceVariant,
+        ),
         labelColor: scheme.onSurface,
         unselectedLabelColor: scheme.onSurfaceVariant,
         indicatorColor: scheme.primary,
@@ -518,9 +531,7 @@ class AppTheme {
         elevation: 0,
         margin: EdgeInsets.zero,
         surfaceTintColor: Colors.transparent,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(24),
-        ),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
       ),
 
       // 输入框：M3 的 filled 变体（4 圆角）+ **看得见的焦点环**。
@@ -546,7 +557,10 @@ class AppTheme {
           color: scheme.onSurfaceVariant,
         ),
         isDense: true,
-        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+        contentPadding: const EdgeInsets.symmetric(
+          horizontal: 12,
+          vertical: 12,
+        ),
       ),
 
       // 按钮：M3 的形状是**胶囊**（StadiumBorder）。
@@ -685,8 +699,14 @@ class AppTheme {
         useIndicator: true,
         indicatorColor: scheme.secondaryContainer,
         indicatorShape: const StadiumBorder(),
-        selectedIconTheme: IconThemeData(color: scheme.onSecondaryContainer, size: 24),
-        unselectedIconTheme: IconThemeData(color: scheme.onSurfaceVariant, size: 24),
+        selectedIconTheme: IconThemeData(
+          color: scheme.onSecondaryContainer,
+          size: 24,
+        ),
+        unselectedIconTheme: IconThemeData(
+          color: scheme.onSurfaceVariant,
+          size: 24,
+        ),
         selectedLabelTextStyle: TextStyle(
           fontFamily: family,
           fontFamilyFallback: cjkFallback,
@@ -799,16 +819,15 @@ class AppTheme {
     String? family, {
     required Color color,
     double height = 1.4,
-  }) =>
-      TextStyle(
-        fontFamily: family,
-        fontFamilyFallback: cjkFallback,
-        fontSize: size,
-        fontWeight: weight,
-        height: height,
-        letterSpacing: 0,
-        color: color,
-      );
+  }) => TextStyle(
+    fontFamily: family,
+    fontFamilyFallback: cjkFallback,
+    fontSize: size,
+    fontWeight: weight,
+    height: height,
+    letterSpacing: 0,
+    color: color,
+  );
 
   /// 按钮样式：**只统一形状**（M3 胶囊）。
   ///
@@ -818,9 +837,8 @@ class AppTheme {
   /// 也不碰 `side`：M3 的描边色本来就来自 `outlineVariant`，而"禁用态要淡化"
   /// 那件事只有默认实现做对了 —— 用 `WidgetStatePropertyAll` 覆盖会把禁用态
   /// 也画成实边。
-  static ButtonStyle _buttonStyle() => const ButtonStyle(
-        shape: WidgetStatePropertyAll(StadiumBorder()),
-      );
+  static ButtonStyle _buttonStyle() =>
+      const ButtonStyle(shape: WidgetStatePropertyAll(StadiumBorder()));
 
   /// 弹出菜单样式（`AppMenuButton` / 右键菜单 / `DropdownButtonFormField` 共用）。
   ///
@@ -828,16 +846,16 @@ class AppTheme {
   /// 一个 —— 与列表项那种每帧 N 份的阴影不是一回事。底色用 `surfaceContainer`
   /// （M3 的菜单角色），配合 4 圆角。
   static MenuStyle _menuStyle(ColorScheme scheme) => MenuStyle(
-        backgroundColor: WidgetStatePropertyAll(scheme.surfaceContainer),
-        surfaceTintColor: const WidgetStatePropertyAll(Colors.transparent),
-        shadowColor: WidgetStatePropertyAll(Colors.black.withValues(alpha: 0.3)),
-        elevation: const WidgetStatePropertyAll(3),
-        shape: WidgetStatePropertyAll(
-          RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(AppShapes.standard.extraSmall),
-          ),
-        ),
-      );
+    backgroundColor: WidgetStatePropertyAll(scheme.surfaceContainer),
+    surfaceTintColor: const WidgetStatePropertyAll(Colors.transparent),
+    shadowColor: WidgetStatePropertyAll(Colors.black.withValues(alpha: 0.3)),
+    elevation: const WidgetStatePropertyAll(3),
+    shape: WidgetStatePropertyAll(
+      RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(AppShapes.standard.extraSmall),
+      ),
+    ),
+  );
 
   /// 把 Material 3 的默认排版改成"中文友好"版本。
   ///
@@ -867,17 +885,16 @@ class AppTheme {
       FontWeight weight, {
       double height = 1.55,
       Color? color,
-    }) =>
-        TextStyle(
-          fontFamily: family,
-          fontFamilyFallback: cjkFallback,
-          fontSize: size,
-          fontWeight: weight,
-          height: height,
-          // 拉丁字体的字距放到中文上会显得散，统一归零
-          letterSpacing: 0,
-          color: color ?? fallback,
-        );
+    }) => TextStyle(
+      fontFamily: family,
+      fontFamilyFallback: cjkFallback,
+      fontSize: size,
+      fontWeight: weight,
+      height: height,
+      // 拉丁字体的字距放到中文上会显得散，统一归零
+      letterSpacing: 0,
+      color: color ?? fallback,
+    );
 
     return base.copyWith(
       // 大标题：字重拉满，中文才有分量

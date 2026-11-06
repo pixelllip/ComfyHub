@@ -174,10 +174,17 @@ pub struct DanbooruClient {
 }
 
 impl DanbooruClient {
-    pub fn new(base_url: &str, user_agent: &str, timeout_seconds: u64) -> Result<Self, ToolFailure> {
+    pub fn new(
+        base_url: &str,
+        user_agent: &str,
+        timeout_seconds: u64,
+    ) -> Result<Self, ToolFailure> {
         let base = base_url.trim().trim_end_matches('/').to_string();
         if base.is_empty() {
-            return Err(ToolFailure::new("DANBOORU_FAILED", "danbooru 地址是空的（这是本机的 bug，请如实告诉用户）"));
+            return Err(ToolFailure::new(
+                "DANBOORU_FAILED",
+                "danbooru 地址是空的（这是本机的 bug，请如实告诉用户）",
+            ));
         }
         Ok(Self {
             base,
@@ -202,7 +209,12 @@ impl DanbooruClient {
     }
 
     /// 查一个角色 / tag：`text` 给模型，`meta` 给界面与角色卡。
-    pub async fn lookup(&self, query: &str, limit: i64, related_limit: i64) -> Result<Outcome, ToolFailure> {
+    pub async fn lookup(
+        &self,
+        query: &str,
+        limit: i64,
+        related_limit: i64,
+    ) -> Result<Outcome, ToolFailure> {
         let q = normalize_tag(query);
         if q.is_empty() {
             return Err(ToolFailure::new("INVALID_ARGUMENT", "查询词不能为空"));
@@ -232,7 +244,9 @@ impl DanbooruClient {
             .cloned();
         let variants: Vec<String> = all
             .iter()
-            .filter(|t| t.category == Some(4) && Some(&t.name) != character.as_ref().map(|c| &c.name))
+            .filter(|t| {
+                t.category == Some(4) && Some(&t.name) != character.as_ref().map(|c| &c.name)
+            })
             .map(|t| t.name.clone())
             .collect();
 
@@ -248,7 +262,10 @@ impl DanbooruClient {
         meta.insert("normalizedTag".into(), json!(q));
         meta.insert("exact".into(), tags_json(&exact));
         if character.is_none() {
-            meta.insert("candidates".into(), tags_json(&all.iter().take(lim as usize).cloned().collect::<Vec<_>>()));
+            meta.insert(
+                "candidates".into(),
+                tags_json(&all.iter().take(lim as usize).cloned().collect::<Vec<_>>()),
+            );
         }
         if let Some(character) = character.as_ref() {
             let mut body = Map::new();
@@ -262,11 +279,17 @@ impl DanbooruClient {
                 Some(wiki) => {
                     body.insert(
                         "otherNames".into(),
-                        wiki.get("other_names").cloned().unwrap_or_else(|| json!([])),
+                        wiki.get("other_names")
+                            .cloned()
+                            .unwrap_or_else(|| json!([])),
                     );
                     body.insert(
                         "wiki".into(),
-                        json!(wiki.get("body").and_then(Value::as_str).map(body_text).unwrap_or_default()),
+                        json!(wiki
+                            .get("body")
+                            .and_then(Value::as_str)
+                            .map(body_text)
+                            .unwrap_or_default()),
                     );
                     body.insert("wikiMissing".into(), json!(false));
                 }
@@ -278,14 +301,27 @@ impl DanbooruClient {
             meta.insert("character".into(), Value::Object(body));
             meta.insert(
                 "wikiUrl".into(),
-                json!(format!("{}/wiki_pages/{}", self.base, encode(&character.name))),
+                json!(format!(
+                    "{}/wiki_pages/{}",
+                    self.base,
+                    encode(&character.name)
+                )),
             );
         }
         meta.insert("verifiedAt".into(), json!(now_iso()));
         meta.insert("provider".into(), json!("danbooru"));
 
         Ok(Outcome {
-            text: self.render(query, &q, &exact, &all, character.as_ref(), &variants, wiki.as_ref(), &related),
+            text: self.render(
+                query,
+                &q,
+                &exact,
+                &all,
+                character.as_ref(),
+                &variants,
+                wiki.as_ref(),
+                &related,
+            ),
             meta: Value::Object(meta),
         })
     }
@@ -304,8 +340,12 @@ impl DanbooruClient {
             "{}/posts.json?tags={tags}&limit={lim}&only={fields}",
             self.base
         );
-        let Some(body) = self.get_json(&url, true).await? else { return Ok(Vec::new()) };
-        let Some(items) = body.as_array() else { return Ok(Vec::new()) };
+        let Some(body) = self.get_json(&url, true).await? else {
+            return Ok(Vec::new());
+        };
+        let Some(items) = body.as_array() else {
+            return Ok(Vec::new());
+        };
         Ok(items.iter().filter_map(post_from_value).collect())
     }
 
@@ -316,7 +356,10 @@ impl DanbooruClient {
         let parsed = reqwest::Url::parse(url)
             .map_err(|_| ToolFailure::new("DANBOORU_FAILED", "参考图地址不合法"))?;
         if !matches!(parsed.scheme(), "http" | "https") {
-            return Err(ToolFailure::new("DANBOORU_FAILED", "参考图地址必须是 http(s)"));
+            return Err(ToolFailure::new(
+                "DANBOORU_FAILED",
+                "参考图地址必须是 http(s)",
+            ));
         }
         let host = parsed.host_str().unwrap_or("cdn.donmai.us").to_string();
         let route = crate::infra::outbound::route(&host).describe();
@@ -380,7 +423,6 @@ impl DanbooruClient {
         Ok((bytes.to_vec(), content_type))
     }
 
-
     // -----------------------------------------------------------------------
     //  正文（给模型看的那一份）
     // -----------------------------------------------------------------------
@@ -402,15 +444,27 @@ impl DanbooruClient {
         out.push_str("分类码：0=general 1=artist 3=copyright 4=character 5=meta\n");
 
         if exact.is_empty() {
-            out.push_str(&format!("· 精确 tag `{q}` **不存在**（danbooru 上没这个 tag）——别照这个写法出图。\n"));
+            out.push_str(&format!(
+                "· 精确 tag `{q}` **不存在**（danbooru 上没这个 tag）——别照这个写法出图。\n"
+            ));
         } else {
             let listed: Vec<String> = exact
                 .iter()
-                .map(|t| format!("`{}`（{}，{} 张）", t.name, category_name(t.category), t.post_count))
+                .map(|t| {
+                    format!(
+                        "`{}`（{}，{} 张）",
+                        t.name,
+                        category_name(t.category),
+                        t.post_count
+                    )
+                })
                 .collect();
             out.push_str(&format!("· 精确命中：{}\n", listed.join("、")));
         }
-        let others: Vec<&Tag> = all.iter().filter(|t| !exact.iter().any(|e| e.name == t.name)).collect();
+        let others: Vec<&Tag> = all
+            .iter()
+            .filter(|t| !exact.iter().any(|e| e.name == t.name))
+            .collect();
         if !others.is_empty() {
             out.push_str("· 名字相近的 tag（可能是同一角色的换装版本 / 同名角色）：\n");
             for tag in others.iter().take(12) {
@@ -438,15 +492,27 @@ impl DanbooruClient {
             "★ 角色 tag：`{}`（{} 张{}）\n",
             character.name,
             character.post_count,
-            if character.deprecated { "，**已弃用**" } else { "" }
+            if character.deprecated {
+                "，**已弃用**"
+            } else {
+                ""
+            }
         ));
         let other_names: Vec<String> = wiki
             .and_then(|w| w.get("other_names"))
             .and_then(Value::as_array)
-            .map(|names| names.iter().filter_map(|n| n.as_str().map(str::to_string)).collect())
+            .map(|names| {
+                names
+                    .iter()
+                    .filter_map(|n| n.as_str().map(str::to_string))
+                    .collect()
+            })
             .unwrap_or_default();
         if !other_names.is_empty() {
-            out.push_str(&format!("· 别名（danbooru 记的 other names）：{}\n", other_names.join("、")));
+            out.push_str(&format!(
+                "· 别名（danbooru 记的 other names）：{}\n",
+                other_names.join("、")
+            ));
         }
         match wiki.and_then(|w| w.get("body")).and_then(Value::as_str) {
             Some(body) if !body.trim().is_empty() => {
@@ -489,16 +555,29 @@ impl DanbooruClient {
     //  出网
     // -----------------------------------------------------------------------
 
-    async fn fetch_tags(&self, query: &str, fuzzy: bool, limit: i64) -> Result<Vec<Tag>, ToolFailure> {
-        let pattern = if fuzzy { format!("*{query}*") } else { query.to_string() };
+    async fn fetch_tags(
+        &self,
+        query: &str,
+        fuzzy: bool,
+        limit: i64,
+    ) -> Result<Vec<Tag>, ToolFailure> {
+        let pattern = if fuzzy {
+            format!("*{query}*")
+        } else {
+            query.to_string()
+        };
         let url = format!(
             "{}/tags.json?search%5Bname_matches%5D={}&search%5Border%5D=count&limit={limit}",
             self.base,
             encode(&pattern)
         );
         // ⚠ `tags.json` 回的是**数组**（`wiki_pages` / `related_tag` 回的是对象）
-        let Some(body) = self.get_json(&url, false).await? else { return Ok(Vec::new()) };
-        let Some(arr) = body.as_array() else { return Ok(Vec::new()) };
+        let Some(body) = self.get_json(&url, false).await? else {
+            return Ok(Vec::new());
+        };
+        let Some(arr) = body.as_array() else {
+            return Ok(Vec::new());
+        };
         Ok(arr
             .iter()
             .filter_map(|item| {
@@ -507,7 +586,10 @@ impl DanbooruClient {
                     name,
                     category: item.get("category").and_then(Value::as_i64),
                     post_count: item.get("post_count").and_then(Value::as_i64).unwrap_or(0),
-                    deprecated: item.get("is_deprecated").and_then(Value::as_bool).unwrap_or(false),
+                    deprecated: item
+                        .get("is_deprecated")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false),
                 })
             })
             .collect())
@@ -528,8 +610,12 @@ impl DanbooruClient {
         // 404 也当"没有同现 tag"：这一步是**增值信息**，它挂了不该把已经解析出来的
         // 角色 tag / 别名一起丢掉（正文里会如实写"同现 tag 没拿到"）。
         // 429 / 5xx 仍然抛错 —— 那是"没查成"，与"没有"是两回事。
-        let Some(body) = self.get_json(&url, true).await? else { return Ok(Vec::new()) };
-        let Some(arr) = body.get("related_tags").and_then(Value::as_array) else { return Ok(Vec::new()) };
+        let Some(body) = self.get_json(&url, true).await? else {
+            return Ok(Vec::new());
+        };
+        let Some(arr) = body.get("related_tags").and_then(Value::as_array) else {
+            return Ok(Vec::new());
+        };
         Ok(arr
             .iter()
             .filter_map(|item| {
@@ -537,7 +623,10 @@ impl DanbooruClient {
                 let name = tag_obj.get("name").and_then(Value::as_str)?.to_string();
                 Some(RelatedTag {
                     name,
-                    post_count: tag_obj.get("post_count").and_then(Value::as_i64).unwrap_or(0),
+                    post_count: tag_obj
+                        .get("post_count")
+                        .and_then(Value::as_i64)
+                        .unwrap_or(0),
                     frequency: item.get("frequency").and_then(Value::as_f64).unwrap_or(0.0),
                 })
             })
@@ -549,9 +638,16 @@ impl DanbooruClient {
     /// 404 在 `not_found_ok` 下回 `None`；其余非 2xx 一律 [`ToolFailure`]（带稳定码），
     /// **绝不把"没查成"说成"没有这个 tag"**。
     async fn get_json(&self, url: &str, not_found_ok: bool) -> Result<Option<Value>, ToolFailure> {
-        let parsed = reqwest::Url::parse(url)
-            .map_err(|_| ToolFailure::new("DANBOORU_FAILED", "查询地址拼装失败（这是本机的 bug，请如实告诉用户）"))?;
-        let host = parsed.host_str().unwrap_or("danbooru.donmai.us").to_string();
+        let parsed = reqwest::Url::parse(url).map_err(|_| {
+            ToolFailure::new(
+                "DANBOORU_FAILED",
+                "查询地址拼装失败（这是本机的 bug，请如实告诉用户）",
+            )
+        })?;
+        let host = parsed
+            .host_str()
+            .unwrap_or("danbooru.donmai.us")
+            .to_string();
         let route = crate::infra::outbound::route(&host).describe();
 
         let client = self.http_client(&host)?;
@@ -569,11 +665,18 @@ impl DanbooruClient {
                             "连不上 {host}（{}；本次出网路径「{route}」）。\
                              danbooru 在国内通常**必须走代理** —— 如实告诉用户，别反复重试，\
                              也不要凭印象编 tag。",
-                            if e.is_connect() { "连接被拒 / 超时" } else { "读超时" }
+                            if e.is_connect() {
+                                "连接被拒 / 超时"
+                            } else {
+                                "读超时"
+                            }
                         ),
                     )
                 } else {
-                    ToolFailure::new("DANBOORU_FAILED", format!("连不上 {host}（{e}；路径「{route}」）"))
+                    ToolFailure::new(
+                        "DANBOORU_FAILED",
+                        format!("连不上 {host}（{e}；路径「{route}」）"),
+                    )
                 }
             })?;
 
@@ -607,9 +710,18 @@ impl DanbooruClient {
                         self.user_agent
                     ),
                 ),
-                404 => ("DANBOORU_NOT_FOUND", "danbooru 上没有这个 tag（404）——**别照这个写法出图**".to_string()),
-                429 => ("DANBOORU_RATE_LIMIT", "danbooru 限流了（429）；等一下再查，不要连着查".to_string()),
-                500..=599 => ("DANBOORU_FAILED", format!("danbooru 暂时不可用（{status}）")),
+                404 => (
+                    "DANBOORU_NOT_FOUND",
+                    "danbooru 上没有这个 tag（404）——**别照这个写法出图**".to_string(),
+                ),
+                429 => (
+                    "DANBOORU_RATE_LIMIT",
+                    "danbooru 限流了（429）；等一下再查，不要连着查".to_string(),
+                ),
+                500..=599 => (
+                    "DANBOORU_FAILED",
+                    format!("danbooru 暂时不可用（{status}）"),
+                ),
                 _ => ("DANBOORU_FAILED", format!("danbooru 返回 {status}")),
             };
             return Err(ToolFailure::new(code, hint));
@@ -644,8 +756,9 @@ impl DanbooruClient {
             .redirect(reqwest::redirect::Policy::none());
         match crate::infra::outbound::route(host) {
             crate::infra::outbound::Route::Proxy(addr) => {
-                let proxy = reqwest::Proxy::all(format!("http://{addr}"))
-                    .map_err(|e| ToolFailure::new("DANBOORU_FAILED", format!("代理地址不合法：{e}")))?;
+                let proxy = reqwest::Proxy::all(format!("http://{addr}")).map_err(|e| {
+                    ToolFailure::new("DANBOORU_FAILED", format!("代理地址不合法：{e}"))
+                })?;
                 builder = builder.proxy(proxy);
             }
             crate::infra::outbound::Route::Direct => {
@@ -728,7 +841,8 @@ fn post_from_value(item: &Value) -> Option<Post> {
     })
 }
 
-fn tags_json(tags: &[Tag]) -> Value {    Value::Array(
+fn tags_json(tags: &[Tag]) -> Value {
+    Value::Array(
         tags.iter()
             .map(|tag| {
                 let mut out = Map::new();
@@ -768,7 +882,9 @@ pub fn now_iso() -> String {
 /// ⚠ 它**不再往 session 里记"查过哪个 tag"**：那本账是角色卡 `tagsVerifiedAt` 的判据，
 /// 而角色卡 2026-10 已收敛成"名称 / 正面提示词 / 负面提示词"，没有核对时间这个字段了。
 /// 这条工具现在只负责把规范写法与同现 tag 交给模型。
-pub async fn tool_lookup(arguments: &Value) -> Result<crate::tools::tools::ToolOutcome, ToolFailure> {
+pub async fn tool_lookup(
+    arguments: &Value,
+) -> Result<crate::tools::tools::ToolOutcome, ToolFailure> {
     let query = arguments
         .get("query")
         .and_then(Value::as_str)

@@ -164,8 +164,10 @@ String? _searchUp(String start) {
 ///  6. `<根>\server-rs\target\debug\`   —— 没编过 release 时用 debug
 ///
 /// `env` 是留给用例的缝隙（读 [kServerExeEnv]），生产走 [Platform.environment]。
-List<MapEntry<String, String>> serverExeCandidates(String root,
-    {Map<String, String>? env}) {
+List<MapEntry<String, String>> serverExeCandidates(
+  String root, {
+  Map<String, String>? env,
+}) {
   final sep = Platform.pathSeparator;
   final e = env ?? Platform.environment;
   final out = <MapEntry<String, String>>[];
@@ -175,16 +177,31 @@ List<MapEntry<String, String>> serverExeCandidates(String root,
 
   try {
     final exeDir = File(Platform.resolvedExecutable).parent.path;
-    out.add(MapEntry('App 自带 backend\\', [exeDir, 'backend', kServerExeName].join(sep)));
+    out.add(
+      MapEntry(
+        'App 自带 backend\\',
+        [exeDir, 'backend', kServerExeName].join(sep),
+      ),
+    );
   } catch (_) {}
 
   out
     ..add(MapEntry('backend\\', [root, 'backend', kServerExeName].join(sep)))
-    ..add(MapEntry('server\\（旧发布包布局）', [root, 'server', kServerExeName].join(sep)))
-    ..add(MapEntry('server-rs\\target\\release',
-        [root, 'server-rs', 'target', 'release', kServerExeName].join(sep)))
-    ..add(MapEntry('server-rs\\target\\debug',
-        [root, 'server-rs', 'target', 'debug', kServerExeName].join(sep)));
+    ..add(
+      MapEntry('server\\（旧发布包布局）', [root, 'server', kServerExeName].join(sep)),
+    )
+    ..add(
+      MapEntry(
+        'server-rs\\target\\release',
+        [root, 'server-rs', 'target', 'release', kServerExeName].join(sep),
+      ),
+    )
+    ..add(
+      MapEntry(
+        'server-rs\\target\\debug',
+        [root, 'server-rs', 'target', 'debug', kServerExeName].join(sep),
+      ),
+    );
   return out;
 }
 
@@ -198,7 +215,11 @@ BackendLayout? resolveLayout({String? projectRoot, Map<String, String>? env}) {
   for (final candidate in serverExeCandidates(root, env: env)) {
     try {
       if (File(candidate.value).existsSync()) {
-        return BackendLayout(root: root, exe: candidate.value, exeSource: candidate.key);
+        return BackendLayout(
+          root: root,
+          exe: candidate.value,
+          exeSource: candidate.key,
+        );
       }
     } catch (_) {
       // 单个候选探不动不影响别的候选
@@ -290,15 +311,16 @@ String dataDbParentOf(String dataDir) =>
 String dataStorageDirOf(String dataDir) =>
     [dataDir, 'storage'].join(Platform.pathSeparator);
 
-String runDirOf(String root) =>
-    [root, '.run'].join(Platform.pathSeparator);
+String runDirOf(String root) => [root, '.run'].join(Platform.pathSeparator);
 
 /// 后端**实际**监听的端口记录（`.run\api.json`），后端自己写的，我们只读。
 ///
 /// 读不到 / 格式坏了都回 null，**绝不抛**（它在启动与退出的关键路径上）。
 Map<String, dynamic>? readPortFile(String root) {
   try {
-    final file = File([runDirOf(root), 'api.json'].join(Platform.pathSeparator));
+    final file = File(
+      [runDirOf(root), 'api.json'].join(Platform.pathSeparator),
+    );
     if (!file.existsSync()) return null;
     final value = jsonDecode(file.readAsStringSync());
     if (value is Map) return value.cast<String, dynamic>();

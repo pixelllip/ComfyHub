@@ -26,8 +26,8 @@
 
 use serde_json::{json, Map, Value};
 
-use crate::web::routes::AppState;
 use crate::tools::tools::{ToolFailure, ToolOutcome};
+use crate::web::routes::AppState;
 
 /// 工具结果是**截断**过的（`ToolRegistry.MAX_RESULT_CHARS`）：每一类留多少条。
 const MAX_LOCAL_FILES: usize = 8;
@@ -72,14 +72,19 @@ pub fn search_json(
         // 那是**假话**（库里大多数提示词都有 API 图），而代价正是这个仓库最怕的那种：
         // AI 会据此告诉用户"这些工作流都不能提交"。所以这里**恒查一次图**来定 `runnable`，
         // 只在 `includeGraph=true` 时才把图本身附上（图的体积才是当初想省的东西）。
-        let graph = crate::comfy::capture::prompt_api_graph(state, p.id).ok().flatten();
+        let graph = crate::comfy::capture::prompt_api_graph(state, p.id)
+            .ok()
+            .flatten();
         let runnable = graph.is_some();
 
         let mut o = Map::new();
         o.insert("promptId".into(), json!(p.id));
         o.insert("title".into(), json!(p.title));
         o.insert("kind".into(), json!(p.kind));
-        o.insert("positivePrompt".into(), json!(take_chars(&p.positive_prompt, 400)));
+        o.insert(
+            "positivePrompt".into(),
+            json!(take_chars(&p.positive_prompt, 400)),
+        );
         o.insert(
             "negativePrompt".into(),
             opt_str(p.negative_prompt.as_deref().map(|s| take_chars(s, 200))),
@@ -87,11 +92,26 @@ pub fn search_json(
         o.insert("checkpoint".into(), opt_str(p.checkpoint.clone()));
         o.insert("sampler".into(), opt_str(p.sampler.clone()));
         o.insert("scheduler".into(), opt_str(p.scheduler.clone()));
-        o.insert("steps".into(), p.steps.map(|v| json!(v)).unwrap_or(Value::Null));
-        o.insert("cfgScale".into(), p.cfg_scale.map(|v| json!(v)).unwrap_or(Value::Null));
-        o.insert("seed".into(), p.seed.map(|v| json!(v)).unwrap_or(Value::Null));
-        o.insert("width".into(), p.width.map(|v| json!(v)).unwrap_or(Value::Null));
-        o.insert("height".into(), p.height.map(|v| json!(v)).unwrap_or(Value::Null));
+        o.insert(
+            "steps".into(),
+            p.steps.map(|v| json!(v)).unwrap_or(Value::Null),
+        );
+        o.insert(
+            "cfgScale".into(),
+            p.cfg_scale.map(|v| json!(v)).unwrap_or(Value::Null),
+        );
+        o.insert(
+            "seed".into(),
+            p.seed.map(|v| json!(v)).unwrap_or(Value::Null),
+        );
+        o.insert(
+            "width".into(),
+            p.width.map(|v| json!(v)).unwrap_or(Value::Null),
+        );
+        o.insert(
+            "height".into(),
+            p.height.map(|v| json!(v)).unwrap_or(Value::Null),
+        );
         o.insert("source".into(), opt_str(p.source.clone()));
         o.insert("hasMedia".into(), json!(p.media_count > 0));
         o.insert("runnable".into(), json!(runnable));
@@ -120,10 +140,7 @@ pub fn search_json(
 }
 
 /// `comfy_find_workflow`：两段式查找（库 → 本机文件）。
-pub fn tool_find_workflow(
-    state: &AppState,
-    arguments: &Value,
-) -> Result<ToolOutcome, ToolFailure> {
+pub fn tool_find_workflow(state: &AppState, arguments: &Value) -> Result<ToolOutcome, ToolFailure> {
     let Some(query) = arguments
         .get("query")
         .and_then(Value::as_str)
@@ -133,7 +150,11 @@ pub fn tool_find_workflow(
     else {
         return Err(ToolFailure::new("INVALID_ARGUMENT", "缺少参数 query"));
     };
-    let limit = arguments.get("limit").and_then(Value::as_i64).unwrap_or(5).clamp(1, 20);
+    let limit = arguments
+        .get("limit")
+        .and_then(Value::as_i64)
+        .unwrap_or(5)
+        .clamp(1, 20);
     let include_graph = arguments
         .get("includeGraph")
         .and_then(Value::as_bool)
@@ -148,7 +169,10 @@ pub fn tool_find_workflow(
     // 库里没有 → **必须**回头看一眼本机（用户 bug ⑤：首次使用时库必然是空的）
     let local = crate::comfy::comfy_dirs::workflows_json(
         state,
-        crate::comfy::comfy_dirs::WorkflowQuery { q: Some(query.clone()), limit: Some(MAX_LOCAL_FILES) },
+        crate::comfy::comfy_dirs::WorkflowQuery {
+            q: Some(query.clone()),
+            limit: Some(MAX_LOCAL_FILES),
+        },
     )
     .map_err(|e| ToolFailure::new("COMFY_DISABLED", e.human()))?;
     let local_count = local["count"].as_i64().unwrap_or(0);

@@ -20,8 +20,11 @@ import 'package:viewer/models/ai_models.dart';
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
-  const methodChannel = MethodChannel(LocalHarnessRunEventSourceNames.methodChannel);
-  final messenger = TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+  const methodChannel = MethodChannel(
+    LocalHarnessRunEventSourceNames.methodChannel,
+  );
+  final messenger =
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
   final calls = <MethodCall>[];
 
   /// 本机密钥库里"已经"有这些 ref（假 Keystore）。
@@ -32,7 +35,9 @@ void main() {
     stored = {};
     messenger.setMockMethodCallHandler(methodChannel, (call) async {
       calls.add(call);
-      final args = Map<String, dynamic>.from((call.arguments as Map?) ?? const {});
+      final args = Map<String, dynamic>.from(
+        (call.arguments as Map?) ?? const {},
+      );
       switch (call.method) {
         case 'hasCredential':
           return stored.containsKey(args['ref']);
@@ -49,25 +54,36 @@ void main() {
 
   tearDown(() => messenger.setMockMethodCallHandler(methodChannel, null));
 
-  DeviceCredentialStore device() => DeviceCredentialStore(channel: methodChannel);
+  DeviceCredentialStore device() =>
+      DeviceCredentialStore(channel: methodChannel);
 
   AiProvider provider({String? ref = 'PHONE_KEY'}) => AiProvider(
-        id: 'p1',
-        displayName: '本机网关',
-        api: 'openai-completions',
-        baseURL: 'http://127.0.0.1:11434/v1',
-        credentialRef: ref,
-        endpointTrust: 'loopback',
-        enabled: true,
-        revision: 1,
-        credential: const AiCredentialStatus(configured: true, source: 'managed', writable: true),
-      );
+    id: 'p1',
+    displayName: '本机网关',
+    api: 'openai-completions',
+    baseURL: 'http://127.0.0.1:11434/v1',
+    credentialRef: ref,
+    endpointTrust: 'loopback',
+    enabled: true,
+    revision: 1,
+    credential: const AiCredentialStatus(
+      configured: true,
+      source: 'managed',
+      writable: true,
+    ),
+  );
 
   test('平台默认值：Android 用本机密钥库，其余平台用后端托管', () {
     final api = AiApiClient('http://127.0.0.1:8080');
     // `forceLocal` 就是 Android 那条分支的开关（测试进程里 Platform.isAndroid 恒为 false）
-    expect(openCredentialStore(api: api, forceLocal: true), isA<DeviceCredentialStore>());
-    expect(openCredentialStore(api: api, forceLocal: false), isA<RemoteCredentialStore>());
+    expect(
+      openCredentialStore(api: api, forceLocal: true),
+      isA<DeviceCredentialStore>(),
+    );
+    expect(
+      openCredentialStore(api: api, forceLocal: false),
+      isA<RemoteCredentialStore>(),
+    );
     expect(openCredentialStore(api: api, forceLocal: true).isLocal, isTrue);
   });
 
@@ -118,7 +134,10 @@ void main() {
 
   test('没有 ref / 空值时**说清楚**，不许静默写进一个没有名字的槽位', () async {
     final store = device();
-    await expectLater(store.save(provider(ref: '   '), 'sk-x'), throwsA(isA<StateError>()));
+    await expectLater(
+      store.save(provider(ref: '   '), 'sk-x'),
+      throwsA(isA<StateError>()),
+    );
     await expectLater(
       store.clear(provider(ref: null)),
       completes,
@@ -161,7 +180,7 @@ void main() {
       displayName: '全能模型',
       inputModalities: ['text', 'image'],
       attachmentTransports: {
-        'image': ['inline_base64']
+        'image': ['inline_base64'],
       },
       mimeAllowlist: ['image/png'],
       tools: true,

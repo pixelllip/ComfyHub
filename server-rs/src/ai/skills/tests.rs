@@ -6,7 +6,8 @@ use super::*;
 
 #[test]
 fn frontmatter_认块标量与引号() {
-    let raw = "---\nname: demo\ndescription: |\n  第一行\n  第二行\nwhenToUse: '场景 X'\n---\n正文\n";
+    let raw =
+        "---\nname: demo\ndescription: |\n  第一行\n  第二行\nwhenToUse: '场景 X'\n---\n正文\n";
     let (meta, body) = parse_front_matter(raw);
     assert_eq!(meta.get("name").unwrap(), "demo");
     assert_eq!(meta.get("description").unwrap(), "第一行\n第二行");
@@ -61,7 +62,11 @@ fn 扫描认_bundle_与平铺两种形态并且非法项要标记出来() {
         "---\nname: good-skill\ndescription: 好用\n---\n正文",
     )
     .unwrap();
-    std::fs::write(user.join("flat.md"), "---\nname: flat\ndescription: 平铺\n---\n正文").unwrap();
+    std::fs::write(
+        user.join("flat.md"),
+        "---\nname: flat\ndescription: 平铺\n---\n正文",
+    )
+    .unwrap();
     // 非法项：目录名与 frontmatter 的 name 不一致（不许静默忽略，也不许进 catalog）
     std::fs::create_dir_all(user.join("bad-name")).unwrap();
     std::fs::write(
@@ -74,7 +79,11 @@ fn 扫描认_bundle_与平铺两种形态并且非法项要标记出来() {
 
     let entries = catalog(&dir.join("builtin"), &user);
     let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
-    assert_eq!(names, vec!["flat", "good-skill"], "非法项不进 catalog，合法的按 name 升序");
+    assert_eq!(
+        names,
+        vec!["flat", "good-skill"],
+        "非法项不进 catalog，合法的按 name 升序"
+    );
 
     let all = scan(&dir.join("builtin"), &user);
     assert_eq!(all.len(), 4, "scan() 照样列出非法项（界面要显示诊断）");
@@ -89,8 +98,16 @@ fn 同名时用户版胜出() {
     let user = dir.join("user");
     std::fs::create_dir_all(&builtin).unwrap();
     std::fs::create_dir_all(&user).unwrap();
-    std::fs::write(builtin.join("same.md"), "---\nname: same\ndescription: 内置\n---\n正文").unwrap();
-    std::fs::write(user.join("same.md"), "---\nname: same\ndescription: 用户\n---\n正文").unwrap();
+    std::fs::write(
+        builtin.join("same.md"),
+        "---\nname: same\ndescription: 内置\n---\n正文",
+    )
+    .unwrap();
+    std::fs::write(
+        user.join("same.md"),
+        "---\nname: same\ndescription: 用户\n---\n正文",
+    )
+    .unwrap();
     let found = catalog(&builtin, &user);
     assert_eq!(found.len(), 1, "同名只留一条");
     assert_eq!(found[0].description, "用户");

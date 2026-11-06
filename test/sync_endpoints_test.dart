@@ -12,9 +12,13 @@ import 'package:http/testing.dart';
 import 'package:viewer/core/sync_endpoints.dart';
 
 /// 只有 `ok` 里的那些地址会回 200 的假后端。
-MockClient _backend(Set<String> ok, {void Function(String base, String path)? onCall}) {
+MockClient _backend(
+  Set<String> ok, {
+  void Function(String base, String path)? onCall,
+}) {
   return MockClient((request) async {
-    final base = '${request.url.scheme}://${request.url.host}:${request.url.port}';
+    final base =
+        '${request.url.scheme}://${request.url.host}:${request.url.port}';
     onCall?.call(base, request.url.path);
     if (!ok.contains(base)) {
       return http.Response('connection refused', 503);
@@ -40,12 +44,21 @@ void main() {
       autoUrl: 'http://127.0.0.1:8080',
       current: 'http://10.0.2.2:8080',
       history: ['http://192.168.1.9:8080', 'http://100.64.0.7:8080'],
-      client: _backend({'http://192.168.1.9:8080'}, onCall: (b, p) { if (p == '/api/health') called.add(b); }),
+      client: _backend(
+        {'http://192.168.1.9:8080'},
+        onCall: (b, p) {
+          if (p == '/api/health') called.add(b);
+        },
+      ),
     );
 
     // 前两条（当前 / 自动发现）都不通 → 第三条（历史里的局域网）通
     expect(picked.baseUrl, 'http://192.168.1.9:8080');
-    expect(called, ['http://10.0.2.2:8080', 'http://127.0.0.1:8080', 'http://192.168.1.9:8080']);
+    expect(called, [
+      'http://10.0.2.2:8080',
+      'http://127.0.0.1:8080',
+      'http://192.168.1.9:8080',
+    ]);
     expect(picked.tried, 3);
     expect(picked.probe?.ok, isTrue, reason: '挑中那次的探测结论要留着（界面要显示版本/耗时）');
   });
@@ -56,7 +69,12 @@ void main() {
       autoUrl: 'http://127.0.0.1:8080',
       current: 'http://192.168.1.9:8080',
       history: const [],
-      client: _backend({'http://192.168.1.9:8080'}, onCall: (b, p) { if (p == '/api/health') called.add(b); }),
+      client: _backend(
+        {'http://192.168.1.9:8080'},
+        onCall: (b, p) {
+          if (p == '/api/health') called.add(b);
+        },
+      ),
     );
     expect(picked.baseUrl, 'http://192.168.1.9:8080');
     expect(called.length, 1);
@@ -81,10 +99,18 @@ void main() {
       autoUrl: 'http://192.168.1.9:8080',
       current: 'http://192.168.1.9:8080',
       history: ['http://192.168.1.9:8080', 'http://10.0.2.2:8080'],
-      client: _backend(const {}, onCall: (b, p) { if (p == '/api/health') called.add(b); }),
+      client: _backend(
+        const {},
+        onCall: (b, p) {
+          if (p == '/api/health') called.add(b);
+        },
+      ),
     );
     expect(picked.baseUrl, isNull);
-    expect(called, ['http://192.168.1.9:8080', 'http://10.0.2.2:8080'], reason: '去重后只试两条');
+    expect(called, [
+      'http://192.168.1.9:8080',
+      'http://10.0.2.2:8080',
+    ], reason: '去重后只试两条');
     expect(picked.candidates.length, 2);
   });
 

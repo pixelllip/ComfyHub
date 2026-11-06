@@ -20,11 +20,17 @@ fn 投放文件名可重复且不互相覆盖() {
     // ⚠ 这里与 Kotlin **逐字一致**：它把整串都做字符映射（不先取 basename），
     //   所以结果里会留下一串下划线开头。**没有穿越风险**：分隔符已经全变成 `_`，
     //   再 join 到 input 目录之下也拼不出第二个目录。
-    assert_eq!(input_filename_for(r"..\..\etc\pass wd.PNG", "m310", None), "_.._etc_pass_wd-m310.PNG");
+    assert_eq!(
+        input_filename_for(r"..\..\etc\pass wd.PNG", "m310", None),
+        "_.._etc_pass_wd-m310.PNG"
+    );
     // 全是点 → 清完之后空掉 → 回落到 image.png（否则会拼出一个没有名字的文件）
     assert_eq!(input_filename_for("....", "m310", None), "image-m310.png");
     // 显式文件名优先（id 后缀插在**扩展名之前**，所以 LoadImage 还认得出它是 png）
-    assert_eq!(input_filename_for("orig.png", "m310", Some("bg.png")), "bg-m310.png");
+    assert_eq!(
+        input_filename_for("orig.png", "m310", Some("bg.png")),
+        "bg-m310.png"
+    );
     // 没有任何扩展名时补 .png（ComfyUI 的 LoadImage 按扩展名找解码器）
     assert_eq!(input_filename_for("noext", "m1", None), "noext-m1.png");
     // 纯扩展名（`.png`）要当"没有扩展名"处理，别把 stem 变成空串
@@ -38,17 +44,33 @@ fn region_预设与显式坐标都对() {
     assert_eq!(parse_region("").unwrap(), [0.0, 0.0, 1.0, 1.0]);
     assert_eq!(parse_region("0.5,0,0.5,1").unwrap(), [0.5, 0.0, 0.5, 1.0]);
     // 越界的宽高要**夹到边界内**（0.8+0.5 > 1），而不是画到画布外面去
-    assert_eq!(parse_region("0.8,0.8,0.5,0.5").unwrap(), [0.8, 0.8, 0.19999999999999996, 0.19999999999999996]);
+    assert_eq!(
+        parse_region("0.8,0.8,0.5,0.5").unwrap(),
+        [0.8, 0.8, 0.19999999999999996, 0.19999999999999996]
+    );
 }
 
 #[test]
 fn region_四种拒绝都是人话() {
     let too_few = parse_region("0.1,0.2").unwrap_err();
     assert_eq!(too_few.code, "INVALID_ARGUMENT");
-    assert!(too_few.message.contains("x,y,w,h"), "要说清该给什么：{}", too_few.message);
-    assert!(parse_region("0.1,0.2,0.3,第四").is_err(), "非数字要报错，不许静默当 0");
-    assert!(parse_region("1.2,0,0.5,0.5").is_err(), "超过 1 要报错（它是归一化的）");
-    assert!(parse_region("1,0,0,0.5").is_err(), "宽高为 0 要报错（否则遮罩是全黑）");
+    assert!(
+        too_few.message.contains("x,y,w,h"),
+        "要说清该给什么：{}",
+        too_few.message
+    );
+    assert!(
+        parse_region("0.1,0.2,0.3,第四").is_err(),
+        "非数字要报错，不许静默当 0"
+    );
+    assert!(
+        parse_region("1.2,0,0.5,0.5").is_err(),
+        "超过 1 要报错（它是归一化的）"
+    );
+    assert!(
+        parse_region("1,0,0,0.5").is_err(),
+        "宽高为 0 要报错（否则遮罩是全黑）"
+    );
 }
 
 #[test]
@@ -96,7 +118,10 @@ fn 羽化_只糊边缘不动中心() {
     let blurred = box_blur(&sharp, 64, 64, 16);
     let at = |p: &Vec<u8>, x: usize, y: usize| p[y * 64 + x];
     assert_eq!(at(&sharp, 32, 32), 255, "硬边界：第 32 列是白的");
-    assert!(at(&blurred, 32, 32) < 255 && at(&blurred, 32, 32) > 0, "羽化后边界变成过渡值");
+    assert!(
+        at(&blurred, 32, 32) < 255 && at(&blurred, 32, 32) > 0,
+        "羽化后边界变成过渡值"
+    );
     assert_eq!(at(&blurred, 63, 32), 255, "远离边界的地方仍是纯白");
     assert_eq!(at(&blurred, 0, 32), 0, "远离边界的地方仍是纯黑");
     // 羽化**不该**让整张图变暗（边缘钳位保证这一点）
@@ -109,9 +134,18 @@ fn 指纹只由参数决定() {
     let b = content_tag(768, 1024, &[0.58, 0.26, 0.36, 0.74], "rect", false, 16);
     assert_eq!(a, b, "同一组参数必须得到同一个文件名");
     assert_eq!(a.len(), 12, "6 个字节的十六进制");
-    assert_ne!(a, content_tag(768, 1024, &[0.58, 0.26, 0.36, 0.74], "rect", true, 16));
-    assert_ne!(a, content_tag(768, 1024, &[0.58, 0.26, 0.36, 0.74], "rect", false, 24));
-    assert_ne!(a, content_tag(768, 1024, &[0.5, 0.26, 0.36, 0.74], "rect", false, 16));
+    assert_ne!(
+        a,
+        content_tag(768, 1024, &[0.58, 0.26, 0.36, 0.74], "rect", true, 16)
+    );
+    assert_ne!(
+        a,
+        content_tag(768, 1024, &[0.58, 0.26, 0.36, 0.74], "rect", false, 24)
+    );
+    assert_ne!(
+        a,
+        content_tag(768, 1024, &[0.5, 0.26, 0.36, 0.74], "rect", false, 16)
+    );
 }
 
 #[test]
@@ -150,16 +184,20 @@ fn 写不进_input_的状态(label: &str) -> (crate::web::routes::AppState, Path
     let output = shared.join("output");
     std::fs::create_dir_all(&input).unwrap();
     std::fs::create_dir_all(&output).unwrap();
-    white_bg_with_block(200, 200, 70, 40, 130, 160).save(input.join("person-m344.png")).unwrap();
+    white_bg_with_block(200, 200, 70, 40, 130, 160)
+        .save(input.join("person-m344.png"))
+        .unwrap();
 
     let conn = crate::infra::db::open_memory().unwrap();
     let schema = std::fs::read_to_string(
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("db").join("schema.sqlite.sql"),
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("db")
+            .join("schema.sqlite.sql"),
     )
     .expect("读得到真 schema");
     conn.execute_batch(&schema).expect("建 schema");
-    let state =
-        crate::web::routes::AppState::new(conn, ":memory:", root.join("media"));
+    let state = crate::web::routes::AppState::new(conn, ":memory:", root.join("media"));
     crate::comfy::capture::save_capture_config(
         &state,
         crate::comfy::capture::CaptureConfig {
@@ -194,20 +232,33 @@ fn 摆放的人物图写不进时改走_upload_而不是报错() {
     let result = make_mask_with(&args, &input, &mut delivery)
         .expect("直写被拒也要给出结果（那份内容攒给 ComfyUI 写），不能当场报错");
 
-    assert!(!delivery.is_empty(), "写不进去的那一份必须攒着等 /upload/image");
+    assert!(
+        !delivery.is_empty(),
+        "写不进去的那一份必须攒着等 /upload/image"
+    );
     let (target, bytes, why) = &delivery.pending[0];
     assert_eq!(
         target.file_name().unwrap().to_string_lossy(),
         "placed-person-m344.png",
         "攒的必须是**摆好的那一份**（丢错文件 = 阶段二拿错图）"
     );
-    assert!(bytes.starts_with(&[0x89, b'P', b'N', b'G']), "攒的要是编好的 PNG 字节：{:02x?}", &bytes[..4]);
-    assert!(why.contains("os error 5"), "直写被拒的原因要原样带出来：{why}");
+    assert!(
+        bytes.starts_with(&[0x89, b'P', b'N', b'G']),
+        "攒的要是编好的 PNG 字节：{:02x?}",
+        &bytes[..4]
+    );
+    assert!(
+        why.contains("os error 5"),
+        "直写被拒的原因要原样带出来：{why}"
+    );
 
     assert_eq!(result["personFilename"], "placed-person-m344.png");
     assert_eq!(result["placedSubjectFilename"], "placed-person-m344.png");
     assert_eq!(result["maskGenerated"], false, "主体档本来就不写遮罩");
-    assert!(result.get("channel").is_none(), "还没 flush，不许先说走了 upload");
+    assert!(
+        result.get("channel").is_none(),
+        "还没 flush，不许先说走了 upload"
+    );
     crate::infra::testpaths::cleanup(input.parent().unwrap().parent().unwrap());
 }
 
@@ -223,8 +274,14 @@ fn 上传回来的文件名会回填到结果里() {
     apply_uploaded_names(
         &mut result,
         &[
-            ("placed-person-m344.png".to_string(), "placed-person.png".to_string()),
-            ("comfyhub_mask_ab12cd.png".to_string(), "comfyhub_mask_ab12cd.png".to_string()),
+            (
+                "placed-person-m344.png".to_string(),
+                "placed-person.png".to_string(),
+            ),
+            (
+                "comfyhub_mask_ab12cd.png".to_string(),
+                "comfyhub_mask_ab12cd.png".to_string(),
+            ),
         ],
     );
     assert_eq!(result["personFilename"], "placed-person.png");
@@ -274,8 +331,15 @@ fn 写得进去时不攒投递() {
     });
     let mut delivery = Delivery::for_input_dir(&input);
     make_mask_with(&args, &input, &mut delivery).unwrap();
-    assert!(delivery.is_empty(), "直写成功就不该攒：{}", input.join("plain-mask.png").display());
-    assert!(input.join("plain-mask.png").is_file(), "而且文件真的要落盘了");
+    assert!(
+        delivery.is_empty(),
+        "直写成功就不该攒：{}",
+        input.join("plain-mask.png").display()
+    );
+    assert!(
+        input.join("plain-mask.png").is_file(),
+        "而且文件真的要落盘了"
+    );
     crate::infra::testpaths::cleanup(input.parent().unwrap().parent().unwrap());
 }
 
@@ -288,17 +352,30 @@ fn 主体遮罩抠出的是形状不是整块矩形() {
     let dir = crate::infra::testpaths::scratch("subject");
     let path = dir.join("person.png");
     // 400x400 的白底，中间一个 100x200 的红方块（模拟站着的人）
-    white_bg_with_block(400, 400, 150, 100, 250, 300).save(&path).unwrap();
+    white_bg_with_block(400, 400, 150, 100, 250, 300)
+        .save(&path)
+        .unwrap();
 
-    let (mask, background, ratio) =
-        subject_mask(&path, 400, 400, SUBJECT_TOLERANCE_DEFAULT, &[0.0, 0.0, 1.0, 1.0], false, None).unwrap();
+    let (mask, background, ratio) = subject_mask(
+        &path,
+        400,
+        400,
+        SUBJECT_TOLERANCE_DEFAULT,
+        &[0.0, 0.0, 1.0, 1.0],
+        false,
+        None,
+    )
+    .unwrap();
     assert_eq!(background, [252, 252, 250], "背景色要从四周一圈估出来");
     let at = |x: usize, y: usize| mask[y * 400 + x];
     assert_eq!(at(200, 200), 255, "方块里是白的（要重绘）");
     assert_eq!(at(20, 20), 0, "白底是黑的（保留）—— 这一条就是白框的解药");
     assert_eq!(at(390, 390), 0);
     // 占比 ≈ 100*200/400*400 = 12.5%
-    assert!((ratio - 0.125).abs() < 0.02, "占比应当接近 12.5%，实测 {ratio}");
+    assert!(
+        (ratio - 0.125).abs() < 0.02,
+        "占比应当接近 12.5%，实测 {ratio}"
+    );
     std::fs::remove_dir_all(&dir).ok();
 }
 
@@ -315,18 +392,42 @@ fn 主体遮罩只留最大的一块连通区并支持与矩形取交集() {
     }
     img.save(&path).unwrap();
 
-    let (mask, _, _) =
-        subject_mask(&path, 300, 300, SUBJECT_TOLERANCE_DEFAULT, &[0.0, 0.0, 1.0, 1.0], false, None).unwrap();
+    let (mask, _, _) = subject_mask(
+        &path,
+        300,
+        300,
+        SUBJECT_TOLERANCE_DEFAULT,
+        &[0.0, 0.0, 1.0, 1.0],
+        false,
+        None,
+    )
+    .unwrap();
     assert_eq!(mask[15 * 300 + 15], 0, "孤立的小块要当噪点丢掉");
     assert_eq!(mask[150 * 300 + 150], 255);
 
     // 与 region 取交集：方块横跨 x=120..180，画布 300 → 中线在 150
-    let (left, _, _) =
-        subject_mask(&path, 300, 300, SUBJECT_TOLERANCE_DEFAULT, &[0.0, 0.0, 0.5, 1.0], true, None).unwrap();
+    let (left, _, _) = subject_mask(
+        &path,
+        300,
+        300,
+        SUBJECT_TOLERANCE_DEFAULT,
+        &[0.0, 0.0, 0.5, 1.0],
+        true,
+        None,
+    )
+    .unwrap();
     assert_eq!(left[150 * 300 + 140], 255, "左半边里、方块内的点要留着");
     assert_eq!(left[150 * 300 + 160], 0, "region 之外必须清零");
-    let (right, _, _) =
-        subject_mask(&path, 300, 300, SUBJECT_TOLERANCE_DEFAULT, &[0.5, 0.0, 0.5, 1.0], true, None).unwrap();
+    let (right, _, _) = subject_mask(
+        &path,
+        300,
+        300,
+        SUBJECT_TOLERANCE_DEFAULT,
+        &[0.5, 0.0, 0.5, 1.0],
+        true,
+        None,
+    )
+    .unwrap();
     assert_eq!(right[150 * 300 + 160], 255, "右半边里、方块内的点要留着");
     assert_eq!(right[150 * 300 + 130], 0, "region 之外必须清零");
     std::fs::remove_dir_all(&dir).ok();
@@ -338,10 +439,20 @@ fn 主体遮罩只留最大的一块连通区并支持与矩形取交集() {
 fn 主体遮罩会缩放到画布尺寸() {
     let dir = crate::infra::testpaths::scratch("subject3");
     let path = dir.join("person.png");
-    white_bg_with_block(400, 400, 150, 100, 250, 300).save(&path).unwrap();
+    white_bg_with_block(400, 400, 150, 100, 250, 300)
+        .save(&path)
+        .unwrap();
 
-    let (mask, _, ratio) =
-        subject_mask(&path, 200, 200, SUBJECT_TOLERANCE_DEFAULT, &[0.0, 0.0, 1.0, 1.0], false, None).unwrap();
+    let (mask, _, ratio) = subject_mask(
+        &path,
+        200,
+        200,
+        SUBJECT_TOLERANCE_DEFAULT,
+        &[0.0, 0.0, 1.0, 1.0],
+        false,
+        None,
+    )
+    .unwrap();
     assert_eq!(mask.len(), 200 * 200);
     assert_eq!(mask[100 * 200 + 100], 255, "缩放后方块中心仍是白的");
     assert_eq!(mask[10 * 200 + 10], 0);
@@ -361,17 +472,40 @@ fn 主体遮罩要把被包住的同色窟窿填回来() {
     for y in 40..160 {
         for x in 60..140 {
             let edge = !(44..156).contains(&y) || !(64..136).contains(&x);
-            img.put_pixel(x, y, if edge { image::Rgb([20, 20, 24]) } else { image::Rgb([250, 250, 248]) });
+            img.put_pixel(
+                x,
+                y,
+                if edge {
+                    image::Rgb([20, 20, 24])
+                } else {
+                    image::Rgb([250, 250, 248])
+                },
+            );
         }
     }
     img.save(&path).unwrap();
 
-    let (mask, _, ratio) =
-        subject_mask(&path, 200, 200, SUBJECT_TOLERANCE_DEFAULT, &[0.0, 0.0, 1.0, 1.0], false, None).unwrap();
-    assert_eq!(mask[100 * 200 + 100], 255, "被描边围住的白色内部必须算主体（否则人变半透明）");
+    let (mask, _, ratio) = subject_mask(
+        &path,
+        200,
+        200,
+        SUBJECT_TOLERANCE_DEFAULT,
+        &[0.0, 0.0, 1.0, 1.0],
+        false,
+        None,
+    )
+    .unwrap();
+    assert_eq!(
+        mask[100 * 200 + 100],
+        255,
+        "被描边围住的白色内部必须算主体（否则人变半透明）"
+    );
     assert_eq!(mask[10 * 200 + 10], 0, "画面四角的真背景不许被填");
     // 实心方块 80x120 ≈ 24%（填洞前后都是这个数）
-    assert!((ratio - 0.24).abs() < 0.03, "占比应当接近 24%，实测 {ratio}");
+    assert!(
+        (ratio - 0.24).abs() < 0.03,
+        "占比应当接近 24%，实测 {ratio}"
+    );
     std::fs::remove_dir_all(&dir).ok();
 }
 
@@ -397,13 +531,27 @@ fn 绿幕背景不填洞且腿间留空() {
             img.put_pixel(x, y, image::Rgb([30, 30, 40]));
         }
     }
-    let (mask, background, _) =
-        subject_mask_from_image(&img, 200, 200, SUBJECT_TOLERANCE_DEFAULT, &[0.0, 0.0, 1.0, 1.0], false, None)
-            .unwrap();
+    let (mask, background, _) = subject_mask_from_image(
+        &img,
+        200,
+        200,
+        SUBJECT_TOLERANCE_DEFAULT,
+        &[0.0, 0.0, 1.0, 1.0],
+        false,
+        None,
+    )
+    .unwrap();
     assert_eq!(background, [0, 177, 64], "绿幕要能从边框认出来");
     let saturation = background.iter().max().unwrap() - background.iter().min().unwrap();
-    assert!(saturation as i32 >= CHROMA_MIN_SATURATION, "绿幕是高饱和 → 走不填洞那一档");
-    assert_eq!(mask[100 * 200 + 100], 0, "腿间那条绿缝必须留在背景里（这就是用户看到的那圈白）");
+    assert!(
+        saturation as i32 >= CHROMA_MIN_SATURATION,
+        "绿幕是高饱和 → 走不填洞那一档"
+    );
+    assert_eq!(
+        mask[100 * 200 + 100],
+        0,
+        "腿间那条绿缝必须留在背景里（这就是用户看到的那圈白）"
+    );
     assert_eq!(mask[100 * 200 + 80], 255, "左边那条腿是主体");
     assert_eq!(mask[100 * 200 + 115], 255, "右边那条腿是主体");
     assert_eq!(mask[5 * 200 + 5], 0);
@@ -417,14 +565,32 @@ fn 白底仍然填洞但会提醒改绿幕() {
     for y in 40..160 {
         for x in 70..130 {
             let edge = !(44..156).contains(&y) || !(74..126).contains(&x);
-            img.put_pixel(x, y, if edge { image::Rgb([20, 20, 24]) } else { image::Rgb([250, 250, 248]) });
+            img.put_pixel(
+                x,
+                y,
+                if edge {
+                    image::Rgb([20, 20, 24])
+                } else {
+                    image::Rgb([250, 250, 248])
+                },
+            );
         }
     }
-    let (mask, background, _) =
-        subject_mask_from_image(&img, 200, 200, SUBJECT_TOLERANCE_DEFAULT, &[0.0, 0.0, 1.0, 1.0], false, None)
-            .unwrap();
+    let (mask, background, _) = subject_mask_from_image(
+        &img,
+        200,
+        200,
+        SUBJECT_TOLERANCE_DEFAULT,
+        &[0.0, 0.0, 1.0, 1.0],
+        false,
+        None,
+    )
+    .unwrap();
     let saturation = background.iter().max().unwrap() - background.iter().min().unwrap();
-    assert!((saturation as i32) < CHROMA_MIN_SATURATION, "白底是低饱和 → 走填洞那一档");
+    assert!(
+        (saturation as i32) < CHROMA_MIN_SATURATION,
+        "白底是低饱和 → 走填洞那一档"
+    );
     assert_eq!(mask[100 * 200 + 100], 255, "被描边围住的白色内部要填回来");
 }
 
@@ -437,7 +603,11 @@ fn 背景色解析只认确定写法() {
     assert_eq!(parse_color("magenta"), Some([255, 0, 255]));
     assert_eq!(parse_color("#0b0"), Some([0, 187, 0]));
     assert_eq!(parse_color("white"), Some([255, 255, 255]));
-    assert_eq!(parse_color("浅蓝"), None, "认不出来就回落成「从边框估」，不猜");
+    assert_eq!(
+        parse_color("浅蓝"),
+        None,
+        "认不出来就回落成「从边框估」，不猜"
+    );
 }
 /// **细发丝不许被删**（用户 2026-09-26："细的头发也被你去掉了"）：
 /// 与主体只隔着几个半透明像素的细条，必须靠"膨胀后取最大连通区再取交集"保住。
@@ -460,7 +630,11 @@ fn 与主体细连接的细发丝不会被当噪点删掉() {
     }
     keep_largest_blob(&mut mask, w, h);
     assert_eq!(mask[40 * w + 65], 255, "连着主体的发丝要保住");
-    assert_eq!(mask[40 * w + 76], 255, "断口只有 2 像素、膨胀 3 能连上 → 也要保住");
+    assert_eq!(
+        mask[40 * w + 76],
+        255,
+        "断口只有 2 像素、膨胀 3 能连上 → 也要保住"
+    );
     // 真正孤立的远处碎块（离主体 > 3 像素）照旧删掉
     for y in 2..5 {
         for x in 2..5 {
@@ -488,8 +662,16 @@ fn 已删除的颜色档参数会被明确拒绝() {
     });
     let err = reject_removed_args(&args).unwrap_err();
     assert_eq!(err.code, "INVALID_ARGUMENT");
-    assert!(err.message.contains("matteSource"), "要指名道姓说是哪个参数：{}", err.message);
-    assert!(err.message.contains("已删除"), "要说清是删掉了、不是写错了：{}", err.message);
+    assert!(
+        err.message.contains("matteSource"),
+        "要指名道姓说是哪个参数：{}",
+        err.message
+    );
+    assert!(
+        err.message.contains("已删除"),
+        "要说清是删掉了、不是写错了：{}",
+        err.message
+    );
 
     // 每一个老参数都要被认出来（漏一个 = 它会被当成未知键悄悄忽略）
     for removed in REMOVED_ARGS {
@@ -500,7 +682,11 @@ fn 已删除的颜色档参数会被明确拒绝() {
         map.insert("region".to_string(), json!("0.1,0.1,0.2,0.2"));
         let err = reject_removed_args(&Value::Object(map)).unwrap_err();
         assert_eq!(err.code, "INVALID_ARGUMENT", "{removed} 应当被拒");
-        assert!(err.message.contains(removed), "{removed} 的报错要点名它：{}", err.message);
+        assert!(
+            err.message.contains(removed),
+            "{removed} 的报错要点名它：{}",
+            err.message
+        );
     }
 
     // 正常参数一个都不许误伤
@@ -524,8 +710,16 @@ fn 摆放要缩放并搬到位且图与遮罩不脱节() {
             img.put_pixel(x, y, image::Rgb([200, 30, 40]));
         }
     }
-    let (mask, _, _) =
-        subject_mask_from_image(&img, 400, 400, SUBJECT_TOLERANCE_DEFAULT, &[0.0, 0.0, 1.0, 1.0], false, None).unwrap();
+    let (mask, _, _) = subject_mask_from_image(
+        &img,
+        400,
+        400,
+        SUBJECT_TOLERANCE_DEFAULT,
+        &[0.0, 0.0, 1.0, 1.0],
+        false,
+        None,
+    )
+    .unwrap();
     let bbox = mask_bbox(&mask, 400, 400).unwrap();
     assert_eq!(bbox, (150, 100, 250, 300));
 
@@ -533,19 +727,34 @@ fn 摆放要缩放并搬到位且图与遮罩不脱节() {
     let new_box = mask_bbox(&placed_mask, 400, 400).unwrap();
     let (cx, cy) = ((new_box.0 + new_box.2) / 2, (new_box.1 + new_box.3) / 2);
     assert_eq!((cx, cy), (100, 300), "中心要搬到 (0.25,0.75) x 400");
-    assert_eq!((new_box.2 - new_box.0, new_box.3 - new_box.1), (50, 100), "宽高各缩一半");
+    assert_eq!(
+        (new_box.2 - new_box.0, new_box.3 - new_box.1),
+        (50, 100),
+        "宽高各缩一半"
+    );
 
     // 图与遮罩不脱节
     let pixel = *placed_img.get_pixel(cx as u32, cy as u32);
-    assert!(pixel[0] > 150 && pixel[1] < 80, "新位置上的像素应当是人物（红），实测 {pixel:?}");
+    assert!(
+        pixel[0] > 150 && pixel[1] < 80,
+        "新位置上的像素应当是人物（红），实测 {pixel:?}"
+    );
     assert_eq!(placed_mask[cy * 400 + cx], 255);
-    assert_eq!(placed_mask[200 * 400 + 200], 0, "原位置必须清掉（否则老地方留个鬼影）");
+    assert_eq!(
+        placed_mask[200 * 400 + 200],
+        0,
+        "原位置必须清掉（否则老地方留个鬼影）"
+    );
     let old = *placed_img.get_pixel(200, 200);
-    assert!(old[0] < 40 && old[1] < 40, "原位置的像素也要清掉，实测 {old:?}");
+    assert!(
+        old[0] < 40 && old[1] < 40,
+        "原位置的像素也要清掉，实测 {old:?}"
+    );
 }
 
 #[test]
-fn 只取文件名挡目录穿越() {        assert_eq!(file_name_only(r"..\..\windows\system32\x.png"), "x.png");
+fn 只取文件名挡目录穿越() {
+    assert_eq!(file_name_only(r"..\..\windows\system32\x.png"), "x.png");
     assert_eq!(file_name_only("/etc/passwd"), "passwd");
     assert_eq!(file_name_only("  bg.png  "), "bg.png");
 }
@@ -556,7 +765,11 @@ fn 只取文件名挡目录穿越() {        assert_eq!(file_name_only(r"..\..\w
 fn 找不到_comfyui_时如实报错() {
     let failure = input_dir_from(Vec::new()).unwrap_err();
     assert_eq!(failure.code, "COMFY_NOT_FOUND");
-    assert!(failure.message.contains("设置"), "要告诉用户去哪儿确认：{}", failure.message);
+    assert!(
+        failure.message.contains("设置"),
+        "要告诉用户去哪儿确认：{}",
+        failure.message
+    );
 }
 
 /// 候选顺序：**先到先得**，第一个真实存在的目录就是投放目标。
@@ -590,7 +803,10 @@ fn 候选目录按顺序取第一个存在的() {
     assert_eq!(picks, probed.join("input"), "不存在的候选不许占位");
 
     // ③ 一个都没有 → 如实报错（不建目录、不猜）
-    assert_eq!(input_dir_from(Vec::new()).unwrap_err().code, "COMFY_NOT_FOUND");
+    assert_eq!(
+        input_dir_from(Vec::new()).unwrap_err().code,
+        "COMFY_NOT_FOUND"
+    );
     std::fs::remove_dir_all(&root).ok();
 }
 
@@ -607,14 +823,20 @@ fn 实例说的_input_覆盖我们按配置推的那份() {
     let shared = root.join("ComfyUI-Shared").join("input");
     std::fs::create_dir_all(&install).unwrap();
     std::fs::create_dir_all(&shared).unwrap();
-    let candidates = vec![(install.clone(), "capture-output"), (shared.clone(), "desktop-config")];
+    let candidates = vec![
+        (install.clone(), "capture-output"),
+        (shared.clone(), "desktop-config"),
+    ];
 
     // ① 实例读的是**共享**那份，而配置推出来的是**安装目录**那份 → 以实例为准 + 说清两边
     let picked = choose_input_dir(&candidates, Some(shared.clone())).unwrap();
     assert_eq!(picked.dir, shared, "写错那一份的表现就是提交时 400");
     assert_eq!(picked.source, "instance");
     let note = picked.note.expect("不一致时必须如实说出来");
-    assert!(note.contains(&install.display().to_string()), "两个目录都要点名：{note}");
+    assert!(
+        note.contains(&install.display().to_string()),
+        "两个目录都要点名：{note}"
+    );
     assert!(note.contains(&shared.display().to_string()), "{note}");
 
     // ② 两边一致 → 同样以实例为准，但没有 note
@@ -631,7 +853,10 @@ fn 实例说的_input_覆盖我们按配置推的那份() {
 
     // ④ 候选全不存在 + 实例不答话 → 如实报错（不建目录、不猜）
     let missing = vec![(root.join("nope").join("input"), "capture-output")];
-    assert_eq!(choose_input_dir(&missing, None).unwrap_err().code, "COMFY_NOT_FOUND");
+    assert_eq!(
+        choose_input_dir(&missing, None).unwrap_err().code,
+        "COMFY_NOT_FOUND"
+    );
     std::fs::remove_dir_all(&root).ok();
 }
 
@@ -640,18 +865,28 @@ fn 实例说的_input_覆盖我们按配置推的那份() {
 fn 配置的输出目录推兄弟_input() {
     let root = crate::infra::testpaths::scratch("input-sibling");
     assert_eq!(
-        sibling_input_of(Some(&root.join("ComfyUI-Shared").join("output").display().to_string())),
+        sibling_input_of(Some(
+            &root
+                .join("ComfyUI-Shared")
+                .join("output")
+                .display()
+                .to_string()
+        )),
         Some(root.join("ComfyUI-Shared").join("input")),
         "output 的兄弟目录"
     );
     // 用户直接填了 input 目录（老设置页允许）→ 原样用，不许再往下拼一层
     assert_eq!(
-        sibling_input_of(Some(&root.join("shared").join("input").display().to_string())),
+        sibling_input_of(Some(
+            &root.join("shared").join("input").display().to_string()
+        )),
         Some(root.join("shared").join("input"))
     );
     // 大小写不敏感：Windows 上 `Output` 也是那个 output
     assert_eq!(
-        sibling_input_of(Some(&root.join("shared").join("Output").display().to_string())),
+        sibling_input_of(Some(
+            &root.join("shared").join("Output").display().to_string()
+        )),
         Some(root.join("shared").join("input"))
     );
     assert_eq!(sibling_input_of(None), None);
@@ -671,7 +906,14 @@ fn 抠图模型检查只认_comfyui_根下的_rembg_且如实报缺() {
     // ① 有模型的根：`output/` + `models/` 就够"看起来是 ComfyUI"，再放一个 BEN2
     std::fs::create_dir_all(with_model.join("output")).unwrap();
     std::fs::create_dir_all(with_model.join("models").join("rembg")).unwrap();
-    std::fs::write(with_model.join("models").join("rembg").join("BEN2_Base.pth"), b"x").unwrap();
+    std::fs::write(
+        with_model
+            .join("models")
+            .join("rembg")
+            .join("BEN2_Base.pth"),
+        b"x",
+    )
+    .unwrap();
     // ② 同名的空目录（**本机 Shared 那份 rembg 就是空的** —— 只查它就会误报"缺"）
     std::fs::create_dir_all(without.join("output")).unwrap();
     std::fs::create_dir_all(without.join("models").join("rembg")).unwrap();
@@ -681,13 +923,27 @@ fn 抠图模型检查只认_comfyui_根下的_rembg_且如实报缺() {
     let out = matting_models(&[with_model.clone(), without.clone(), not_comfy.clone()]);
     assert_eq!(out["usable"], true);
     let checked = out["checked"].as_array().unwrap();
-    assert_eq!(checked.len(), 2, "只该列真像 ComfyUI 的那两个根：{checked:?}");
+    assert_eq!(
+        checked.len(),
+        2,
+        "只该列真像 ComfyUI 的那两个根：{checked:?}"
+    );
     assert!(
-        checked[0]["files"].as_array().unwrap().iter().any(|f| f == "BEN2_Base.pth"),
+        checked[0]["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|f| f == "BEN2_Base.pth"),
         "有模型的那份要报出来：{checked:?}"
     );
-    assert!(checked[1]["files"].as_array().unwrap().is_empty(), "空的那份要如实报空");
-    assert!(out["download"]["RMBG-1.4.pth"].as_str().unwrap().contains("RMBG-1.4.pth"));
+    assert!(
+        checked[1]["files"].as_array().unwrap().is_empty(),
+        "空的那份要如实报空"
+    );
+    assert!(out["download"]["RMBG-1.4.pth"]
+        .as_str()
+        .unwrap()
+        .contains("RMBG-1.4.pth"));
     assert!(
         out["note"].as_str().unwrap().contains("静默下载"),
         "要说清「别硬跑」的原因（那个节点会自己去下）"

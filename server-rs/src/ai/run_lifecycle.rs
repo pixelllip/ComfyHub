@@ -40,9 +40,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::ai::events::{event_type, RunEventBus, TERMINAL_EVENTS};
-use crate::web::routes::{ApiError, AppState};
 use crate::ai::runs::{self, NewRun};
 use crate::provider::upstream::TokenUsage;
+use crate::web::routes::{ApiError, AppState};
 
 /// SSE 轮询间隔（毫秒）。120ms ≈ 每秒 8 次读一条 `seq > cursor` 的索引查询 ——
 /// 对 SQLite WAL 是白菜价，而界面上看起来就是"逐字在流"。
@@ -149,8 +149,12 @@ pub fn provider(state: &AppState, id: &str) -> Result<ModelRow, ApiError> {
             None => Ok(None),
         }
     })?;
-    let Some((id, display_name, api, base_url, credential_ref, endpoint_trust, enabled)) = row else {
-        return Err(ApiError::ai("CONFIG_ERROR", format!("Provider 不存在: {id}")));
+    let Some((id, display_name, api, base_url, credential_ref, endpoint_trust, enabled)) = row
+    else {
+        return Err(ApiError::ai(
+            "CONFIG_ERROR",
+            format!("Provider 不存在: {id}"),
+        ));
     };
     if !enabled {
         return Err(ApiError::ai("CONFIG_ERROR", "该 Provider 已被停用"));
@@ -176,7 +180,8 @@ pub fn provider(state: &AppState, id: &str) -> Result<ModelRow, ApiError> {
 pub fn model(state: &AppState, provider_id: &str, model_id: &str) -> Result<ModelRow, ApiError> {
     let mut row = provider(state, provider_id)?;
     let found = state.with(|conn| {
-        let mut stmt = conn.prepare("SELECT * FROM ai_models WHERE provider_id = ?1 AND model_id = ?2")?;
+        let mut stmt =
+            conn.prepare("SELECT * FROM ai_models WHERE provider_id = ?1 AND model_id = ?2")?;
         let mut rows = stmt.query_map(rusqlite::params![provider_id, model_id], |row| {
             Ok((
                 row.get::<_, Option<i64>>("tools")?.unwrap_or(0) != 0,
@@ -194,7 +199,10 @@ pub fn model(state: &AppState, provider_id: &str, model_id: &str) -> Result<Mode
         }
     })?;
     let Some((tools, reasoning, efforts, format, max_out, enabled, modalities)) = found else {
-        return Err(ApiError::ai("UNKNOWN_MODEL", format!("模型不在目录中: {model_id}")));
+        return Err(ApiError::ai(
+            "UNKNOWN_MODEL",
+            format!("模型不在目录中: {model_id}"),
+        ));
     };
     if !enabled {
         return Err(ApiError::ai("CONFIG_ERROR", "该模型已被停用"));
@@ -230,26 +238,43 @@ pub fn model(state: &AppState, provider_id: &str, model_id: &str) -> Result<Mode
 /// `LEVELS` 也必须覆盖**全部**等级名（`minimal` / `xhigh` 早先漏了）：
 /// 目录里声明了极高档的模型（claude / gpt-5.x 那批）一选「极高」就被这里判成"未知的思考强度"，
 /// 而界面上那一档明明是可选的。
-pub fn thinking_effort(m: &ModelRow, requested: Option<&str>) -> Result<(String, Option<String>), ApiError> {
+pub fn thinking_effort(
+    m: &ModelRow,
+    requested: Option<&str>,
+) -> Result<(String, Option<String>), ApiError> {
     /// 等级名（**不是**线上值）：模型表里的键就是它。
     const LEVELS: [&str; 6] = ["minimal", "low", "medium", "high", "xhigh", "max"];
-    let requested = requested.map(str::trim).filter(|s| !s.is_empty()).unwrap_or("off");
+    let requested = requested
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("off");
     if requested == "off" {
         return Ok(("off".to_string(), None));
     }
     if !LEVELS.contains(&requested) {
         return Err(ApiError::ai(
             "CONFIG_ERROR",
-            format!("未知的思考强度：{requested}（可选 off / {}）", LEVELS.join(" / ")),
+            format!(
+                "未知的思考强度：{requested}（可选 off / {}）",
+                LEVELS.join(" / ")
+            ),
         ));
     }
     if !m.reasoning {
         return Err(ApiError::ai(
             "CONFIG_ERROR",
-            format!("模型 {} 未声明推理能力，不能设置思考强度（可在「设置 → AI 模型」里声明）", m.id),
+            format!(
+                "模型 {} 未声明推理能力，不能设置思考强度（可在「设置 → AI 模型」里声明）",
+                m.id
+            ),
         ));
     }
-    let declared: Vec<String> = m.thinking_efforts.keys().filter(|&k| k != "off").cloned().collect();
+    let declared: Vec<String> = m
+        .thinking_efforts
+        .keys()
+        .filter(|&k| k != "off")
+        .cloned()
+        .collect();
     if declared.is_empty() {
         // 只声明了"能思考"、没列档位：等级名就是线上值（老行为，网关多半直接认）
         return Ok((requested.to_string(), Some(requested.to_string())));
@@ -257,7 +282,11 @@ pub fn thinking_effort(m: &ModelRow, requested: Option<&str>) -> Result<(String,
     if !declared.iter().any(|k| k == requested) {
         return Err(ApiError::ai(
             "CONFIG_ERROR",
-            format!("模型 {} 未声明思考强度 {requested}（可选：{}）", m.id, declared.join(" / ")),
+            format!(
+                "模型 {} 未声明思考强度 {requested}（可选：{}）",
+                m.id,
+                declared.join(" / ")
+            ),
         ));
     }
     // ★ 线上值取表里的（空串/空白当作没填 → 退回等级名，绝不发一个空参数）
@@ -276,7 +305,11 @@ pub fn thinking_effort(m: &ModelRow, requested: Option<&str>) -> Result<(String,
 /// 顺序**照抄 Kotlin**（`AiRoutes.kt:358`），每一步都不能挪：先校验（不通过就是一封
 /// 400 + 稳定码，**一个字节都不写库**），再落用户消息与助手占位，最后才建 Run。
 /// 顺序错了的表现是"消息进去了、Run 没建成"—— 会话里凭空多一条提问。
-pub fn start(state: &AppState, conversation_id: &str, req: &RunStartRequest) -> Result<RunStartResponse, ApiError> {
+pub fn start(
+    state: &AppState,
+    conversation_id: &str,
+    req: &RunStartRequest,
+) -> Result<RunStartResponse, ApiError> {
     // ① 会话必须存在（不存在 → CONFIG_ERROR）
     crate::ai::conversations::get(state, conversation_id)?;
 
@@ -325,8 +358,9 @@ pub fn start(state: &AppState, conversation_id: &str, req: &RunStartRequest) -> 
             })?;
         let mut blockers: Vec<String> = Vec::new();
         for (index, id) in unique_ids.iter().enumerate() {
-            let dto = crate::media::attachments::get(state, id)?
-                .ok_or_else(|| ApiError::ai("CONFIG_ERROR", format!("附件不存在或已被删除: {id}")))?;
+            let dto = crate::media::attachments::get(state, id)?.ok_or_else(|| {
+                ApiError::ai("CONFIG_ERROR", format!("附件不存在或已被删除: {id}"))
+            })?;
             let fact = crate::media::strict_intake::AttachmentFact {
                 name: dto.name.clone(),
                 modality: Some(dto.modality.clone()),
@@ -341,8 +375,12 @@ pub fn start(state: &AppState, conversation_id: &str, req: &RunStartRequest) -> 
                 &provider.api,
                 fact.modality.as_deref().unwrap_or_default(),
             );
-            let result =
-                crate::media::strict_intake::evaluate(&admission_model, &fact, &transports, index as i64);
+            let result = crate::media::strict_intake::evaluate(
+                &admission_model,
+                &fact,
+                &transports,
+                index as i64,
+            );
             for blocker in result.blockers {
                 blockers.push(format!("{}：{blocker}", dto.name));
             }
@@ -360,24 +398,37 @@ pub fn start(state: &AppState, conversation_id: &str, req: &RunStartRequest) -> 
 
     // ⑤ 重试的三种情况（AIH-024）：旧 Run 必须属于这条会话；旧助手消息只有
     //    failed / cancelled 才允许接着用；**有内容的失败回复原样留着**、重试另起一条（R6）。
-    let retry_of = match req.retry_of_run_id.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+    let retry_of = match req
+        .retry_of_run_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
         Some(id) => {
             let old = runs::get(state, id)?;
             if old.conversation_id != conversation_id {
-                return Err(ApiError::ai("CONFIG_ERROR", "要重试的那次运行不属于这条会话"));
+                return Err(ApiError::ai(
+                    "CONFIG_ERROR",
+                    "要重试的那次运行不属于这条会话",
+                ));
             }
             Some(old)
         }
         None => None,
     };
-    let retry_assistant = match retry_of.as_ref().and_then(|r| r.assistant_message_id.clone()) {
+    let retry_assistant = match retry_of
+        .as_ref()
+        .and_then(|r| r.assistant_message_id.clone())
+    {
         Some(message_id) => {
             let message = message_of(state, &message_id)?;
             let status = message.1.clone();
             if status != "failed" && status != "cancelled" {
                 return Err(ApiError::ai(
                     "CONFIG_ERROR",
-                    format!("那条回复的状态是 {status}，不需要（也不能）重试；直接发一条新消息即可"),
+                    format!(
+                        "那条回复的状态是 {status}，不需要（也不能）重试；直接发一条新消息即可"
+                    ),
                 ));
             }
             Some((message_id, message.0))
@@ -477,7 +528,14 @@ pub fn start(state: &AppState, conversation_id: &str, req: &RunStartRequest) -> 
 
     // ⑨ 开流 + **交给执行器**（整条链在下一批：上游客户端 → 协议适配器 → 主循环）
     state.bus.open(&run.id);
-    crate::ai::executor::spawn(state, &run.id, &provider, &model, effort_wire, req.text.clone());
+    crate::ai::executor::spawn(
+        state,
+        &run.id,
+        &provider,
+        &model,
+        effort_wire,
+        req.text.clone(),
+    );
 
     Ok(RunStartResponse {
         run_id: run.id,
@@ -488,20 +546,22 @@ pub fn start(state: &AppState, conversation_id: &str, req: &RunStartRequest) -> 
 
 /// 读一条消息的 `(正文, 状态)`。
 fn message_of(state: &AppState, message_id: &str) -> Result<(String, String), ApiError> {
-    state.with(|conn| {
-        let mut stmt = conn.prepare("SELECT text, status FROM ai_messages WHERE id = ?1")?;
-        let mut rows = stmt.query_map(rusqlite::params![message_id], |row| {
-            Ok((
-                row.get::<_, Option<String>>("text")?.unwrap_or_default(),
-                row.get::<_, Option<String>>("status")?.unwrap_or_else(|| "complete".into()),
-            ))
-        })?;
-        match rows.next() {
-            Some(row) => Ok(Some(row?)),
-            None => Ok(None),
-        }
-    })?
-    .ok_or_else(|| ApiError::ai("CONFIG_ERROR", format!("消息不存在: {message_id}")))
+    state
+        .with(|conn| {
+            let mut stmt = conn.prepare("SELECT text, status FROM ai_messages WHERE id = ?1")?;
+            let mut rows = stmt.query_map(rusqlite::params![message_id], |row| {
+                Ok((
+                    row.get::<_, Option<String>>("text")?.unwrap_or_default(),
+                    row.get::<_, Option<String>>("status")?
+                        .unwrap_or_else(|| "complete".into()),
+                ))
+            })?;
+            match rows.next() {
+                Some(row) => Ok(Some(row?)),
+                None => Ok(None),
+            }
+        })?
+        .ok_or_else(|| ApiError::ai("CONFIG_ERROR", format!("消息不存在: {message_id}")))
 }
 
 /// `POST /api/ai/runs/{id}/cancel`。
@@ -511,14 +571,21 @@ fn message_of(state: &AppState, message_id: &str) -> Result<(String, String), Ap
 pub fn cancel(state: &AppState, run_id: &str) -> Result<CancelResult, ApiError> {
     let run = runs::get(state, run_id)?;
     if run.status != runs::RUNNING {
-        return Ok(CancelResult { cancelled: false, status: run.status });
+        return Ok(CancelResult {
+            cancelled: false,
+            status: run.status,
+        });
     }
     // 执行器是进程内的：把取消旗标立起来，主循环下一轮自己收尾
     // （它负责落终态 + flush + 发 run.cancelled —— 见 `executor`）
     let cancelled = crate::ai::executor::cancel(state, run_id);
     Ok(CancelResult {
         cancelled,
-        status: if cancelled { "cancelling".to_string() } else { run.status },
+        status: if cancelled {
+            "cancelling".to_string()
+        } else {
+            run.status
+        },
     })
 }
 
@@ -692,13 +759,23 @@ pub fn finish_run(
     // 顺序：**先发事件再落终态**。反过来的话 SSE 可能先看到 `status != running`
     // 而结束流，那条终态事件就永远发不出去了。
     bus.emit(state, run_id, event, &payload)?;
-    runs::finish(state, run_id, status, error_code, error_message, usage_json.as_ref())?;
+    runs::finish(
+        state,
+        run_id,
+        status,
+        error_code,
+        error_message,
+        usage_json.as_ref(),
+    )?;
     // 这个 Run 上还没人回答的提问一律按失效收尾（Kotlin `AskRegistry.discardRun`）。
     // ⚠ 少了这一步，那些行会永远停在 pending：`/api/ai/pending` 一直把它们列出来，
     // 而点进去谁也答不了（Run 已经结束）—— 那就是一张"点了也没用"的卡。
     // 放在这里是因为它是**收尾的唯一入口**（正常 / 失败 / 取消三条路都走它）。
     if let Err(e) = crate::ai::questions::finalize_run(state, run_id, "expired") {
-        eprintln!("收尾提问失败（Run {run_id} 上还挂着 pending 行）：{}", e.human());
+        eprintln!(
+            "收尾提问失败（Run {run_id} 上还挂着 pending 行）：{}",
+            e.human()
+        );
     }
     bus.close(state, run_id)?;
     Ok(())

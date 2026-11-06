@@ -18,8 +18,11 @@ void main() {
     final theme = AppTheme.build(Brightness.dark);
     final sb = theme.scrollbarTheme;
 
-    expect(sb.crossAxisMargin, 0,
-        reason: 'crossAxisMargin 非 0 就是"没贴边"的元凶（M3 默认为 8）');
+    expect(
+      sb.crossAxisMargin,
+      0,
+      reason: 'crossAxisMargin 非 0 就是"没贴边"的元凶（M3 默认为 8）',
+    );
     expect(sb.thickness?.resolve({}), isNotNull);
     expect(sb.thickness!.resolve({})!, greaterThan(0));
   });
@@ -42,7 +45,8 @@ void main() {
             child: ListView.builder(
               controller: controller,
               itemCount: 200,
-              itemBuilder: (_, i) => SizedBox(height: 40, child: Text('row $i')),
+              itemBuilder: (_, i) =>
+                  SizedBox(height: 40, child: Text('row $i')),
             ),
           ),
         ),

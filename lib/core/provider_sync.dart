@@ -55,7 +55,9 @@ class ProviderSync {
     if (!local.isLocal) {
       // 桌面上后端库本身就是真源，没有"从别处取"这回事。
       // 走到这里只可能是接线错了 —— 如实说，而不是对着自己同步一遍还报"成功"。
-      return const ProviderSyncReport.failed('这台设备上的 Provider 就在本机后端，不需要从桌面同步。');
+      return const ProviderSyncReport.failed(
+        '这台设备上的 Provider 就在本机后端，不需要从桌面同步。',
+      );
     }
 
     final List<AiProvider> remote;
@@ -98,7 +100,8 @@ class ProviderSync {
             'api': p.api,
             'baseURL': p.baseURL,
             // 空引用名**不写这个键**（写 null 与"没给"在两端是两件事，见 `ProviderJson`）
-            if ((p.credentialRef ?? '').trim().isNotEmpty) 'credentialRef': p.credentialRef,
+            if ((p.credentialRef ?? '').trim().isNotEmpty)
+              'credentialRef': p.credentialRef,
             'endpointTrust': p.endpointTrust,
             'enabled': p.enabled,
           });
@@ -146,10 +149,12 @@ class ProviderSync {
         }
       } catch (e) {
         // ⚠ 这里**绝不能**回落成 `saveModels(id, const [])`：网关抖一下 = 模型全没了
-        problems.add(ProviderSyncProblem(
-          id,
-          'Provider 已同步，但模型目录没同步上（本机那份没动），${_describe(e)}',
-        ));
+        problems.add(
+          ProviderSyncProblem(
+            id,
+            'Provider 已同步，但模型目录没同步上（本机那份没动），${_describe(e)}',
+          ),
+        );
       }
     }
 
@@ -257,5 +262,6 @@ class ProviderSyncReport {
   bool get ok => error == null;
 
   /// 有没有真的动过本机库（界面据此决定要不要提示"刷新"）。
-  bool get touched => created.isNotEmpty || updated.isNotEmpty || modelsWritten > 0;
+  bool get touched =>
+      created.isNotEmpty || updated.isNotEmpty || modelsWritten > 0;
 }

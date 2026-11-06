@@ -64,23 +64,24 @@ class RemoteCredentialStore implements CredentialStore {
   bool get isLocal => false;
 
   @override
-  Future<AiCredentialStatus> statusOf(AiProvider provider) async => provider.credential;
+  Future<AiCredentialStatus> statusOf(AiProvider provider) async =>
+      provider.credential;
 
   @override
   Future<AiCredentialStatus> save(AiProvider provider, String value) =>
       _api.setCredential(provider.id, value);
 
   @override
-  Future<AiCredentialStatus> clear(AiProvider provider) => _api.removeCredential(provider.id);
+  Future<AiCredentialStatus> clear(AiProvider provider) =>
+      _api.removeCredential(provider.id);
 
   /// 桌面自己就是密钥的真源 —— 没有"把桌面上的密钥推给桌面"这回事。
   ///
   /// 抛而不是回 `null`：回 null 会让调用方以为"这条没有值"，
   /// 于是静默少推一把 key（而用户点的明明是"全推上去"）。
   @override
-  Future<String?> reveal(AiProvider provider) => throw StateError(
-        '桌面自己就是密钥的真源（reveal 只在手机上、且只在"推给桌面"那一个动作里用）',
-      );
+  Future<String?> reveal(AiProvider provider) =>
+      throw StateError('桌面自己就是密钥的真源（reveal 只在手机上、且只在"推给桌面"那一个动作里用）');
 }
 
 /// 手机实现：`MethodChannel` → 本地 Kotlin harness → Android Keystore。
@@ -89,7 +90,9 @@ class RemoteCredentialStore implements CredentialStore {
 /// `removeCredential` 三个动作，没有"取出来"的那个（与桌面同一条纪律）。
 class DeviceCredentialStore implements CredentialStore {
   DeviceCredentialStore({MethodChannel? channel})
-      : _method = channel ?? const MethodChannel(LocalHarnessRunEventSource.methodChannelName);
+    : _method =
+          channel ??
+          const MethodChannel(LocalHarnessRunEventSource.methodChannelName);
 
   /// 与 Kotlin 侧 `HarnessBridge.METHOD_CHANNEL` 同名（复用本地源的常量，改一处就够）。
   final MethodChannel _method;
@@ -102,9 +105,15 @@ class DeviceCredentialStore implements CredentialStore {
     final ref = provider.credentialRef?.trim();
     // ref 为空 = 这条 provider 不需要密钥（与桌面 `describe` 的第一个分支同义）
     if (ref == null || ref.isEmpty) {
-      return const AiCredentialStatus(configured: false, source: 'none', writable: false);
+      return const AiCredentialStatus(
+        configured: false,
+        source: 'none',
+        writable: false,
+      );
     }
-    final has = await _method.invokeMethod<bool>('hasCredential', {'ref': ref}) ?? false;
+    final has =
+        await _method.invokeMethod<bool>('hasCredential', {'ref': ref}) ??
+        false;
     return AiCredentialStatus(
       configured: has,
       // `keystore` 是**手机侧专有**的来源名：它绝不能与 `managed` 混在一起 ——
@@ -125,7 +134,10 @@ class DeviceCredentialStore implements CredentialStore {
     if (value.trim().isEmpty) {
       throw StateError('密钥不能为空（要清除请点「移除密钥」）');
     }
-    await _method.invokeMethod<bool>('putCredential', {'ref': ref, 'value': value});
+    await _method.invokeMethod<bool>('putCredential', {
+      'ref': ref,
+      'value': value,
+    });
     return statusOf(provider);
   }
 
@@ -133,7 +145,11 @@ class DeviceCredentialStore implements CredentialStore {
   Future<AiCredentialStatus> clear(AiProvider provider) async {
     final ref = provider.credentialRef?.trim();
     if (ref == null || ref.isEmpty) {
-      return const AiCredentialStatus(configured: false, source: 'none', writable: false);
+      return const AiCredentialStatus(
+        configured: false,
+        source: 'none',
+        writable: false,
+      );
     }
     await _method.invokeMethod<bool>('removeCredential', {'ref': ref});
     return statusOf(provider);

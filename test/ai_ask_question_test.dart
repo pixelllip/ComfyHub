@@ -87,32 +87,63 @@ String _pagedPayload() {
     List<String> options = const [],
     bool multi = false,
     String? header,
-  }) =>
-      {
-        'questionId': id,
-        'runId': 'r1',
-        'conversationId': 'c1',
-        'question': text,
-        'header': ?header,
-        'options': options,
-        'allowFreeText': true,
-        'answered': false,
-        'askedAt': 1,
-        'index': index,
-        'total': 3,
-        'groupId': 'g-1',
-        'multiSelect': multi,
-      };
+  }) => {
+    'questionId': id,
+    'runId': 'r1',
+    'conversationId': 'c1',
+    'question': text,
+    'header': ?header,
+    'options': options,
+    'allowFreeText': true,
+    'answered': false,
+    'askedAt': 1,
+    'index': index,
+    'total': 3,
+    'groupId': 'g-1',
+    'multiSelect': multi,
+  };
 
-  return _sse(3, 'user.question',
-          jsonEncode({'runId': 'r1', 'question': q(_questionId, _question, index: 0, options: _options, header: '参考图')})) +
-      _sse(4, 'user.question',
-          jsonEncode({'runId': 'r1', 'question': q(_q2, '出多大？', index: 1, options: _q2Options, multi: true, header: '输出尺寸')})) +
-      _sse(5, 'user.question',
-          jsonEncode({'runId': 'r1', 'question': q(_q3, '还有别的要交代的吗？', index: 2, header: '备注')}));
+  return _sse(
+        3,
+        'user.question',
+        jsonEncode({
+          'runId': 'r1',
+          'question': q(
+            _questionId,
+            _question,
+            index: 0,
+            options: _options,
+            header: '参考图',
+          ),
+        }),
+      ) +
+      _sse(
+        4,
+        'user.question',
+        jsonEncode({
+          'runId': 'r1',
+          'question': q(
+            _q2,
+            '出多大？',
+            index: 1,
+            options: _q2Options,
+            multi: true,
+            header: '输出尺寸',
+          ),
+        }),
+      ) +
+      _sse(
+        5,
+        'user.question',
+        jsonEncode({
+          'runId': 'r1',
+          'question': q(_q3, '还有别的要交代的吗？', index: 2, header: '备注'),
+        }),
+      );
 }
 
-String _askToolEvents() => _sse(
+String _askToolEvents() =>
+    _sse(
       1,
       'tool.requested',
       jsonEncode({
@@ -123,12 +154,20 @@ String _askToolEvents() => _sse(
         'approval': 'not_required',
       }),
     ) +
-    _sse(2, 'tool.started', jsonEncode({'callId': _callId, 'name': 'ask_user_question'}));
+    _sse(
+      2,
+      'tool.started',
+      jsonEncode({'callId': _callId, 'name': 'ask_user_question'}),
+    );
 
 const _callId = 'call_00_w3oy2hgdwhoanKYvvw2Y8083';
 
 /// 事件体的拼装（抽出来是为了在用例里能断言"假后端真的发了这些事件"）。
-String _body({bool nested = true, bool paged = false, bool withImages = false}) =>
+String _body({
+  bool nested = true,
+  bool paged = false,
+  bool withImages = false,
+}) =>
     _sse(0, 'run.started', '{"runId":"r1"}') +
     _sse(1, 'message.started', '{"messageId":"a1"}') +
     // 真事件的顺序：tool.requested → tool.started → user.question
@@ -144,7 +183,8 @@ String _body({bool nested = true, bool paged = false, bool withImages = false}) 
 
 /// Run 收尾时的落库形态（parts 里那条 `tool_call` + `tool_result`）：
 /// 答完之后这张卡要切成"已回答"，历史里一眼能看出这一轮基于什么做的。
-String _askCompleted() => _sse(
+String _askCompleted() =>
+    _sse(
       4,
       'message.completed',
       jsonEncode({
@@ -197,112 +237,121 @@ class _Fake {
   bool withImages = false;
 
   List<Map<String, dynamic>> _messages() => [
-        {
-          'id': 'u1',
-          'conversationId': 'c1',
-          'seq': 1,
-          'role': 'user',
-          'status': 'complete',
-          'text': '帮我生一张图',
-          'parts': [
-            {'type': 'text', 'text': '帮我生一张图'},
-          ],
-        },
-        {
-          'id': 'a1',
-          'conversationId': 'c1',
-          'seq': 2,
-          'role': 'assistant',
-          // 还在等回答：这一轮没收尾（真后端此时也还是 streaming）
-          'status': 'streaming',
-          'text': '好的。',
-          'parts': [
-            {'type': 'text', 'text': '好的。'},
-          ],
-        },
-      ];
+    {
+      'id': 'u1',
+      'conversationId': 'c1',
+      'seq': 1,
+      'role': 'user',
+      'status': 'complete',
+      'text': '帮我生一张图',
+      'parts': [
+        {'type': 'text', 'text': '帮我生一张图'},
+      ],
+    },
+    {
+      'id': 'a1',
+      'conversationId': 'c1',
+      'seq': 2,
+      'role': 'assistant',
+      // 还在等回答：这一轮没收尾（真后端此时也还是 streaming）
+      'status': 'streaming',
+      'text': '好的。',
+      'parts': [
+        {'type': 'text', 'text': '好的。'},
+      ],
+    },
+  ];
 
   MockClient client() => MockClient((request) async {
-        final path = request.url.path;
-        Object body;
+    final path = request.url.path;
+    Object body;
 
-        if (path == '/api/ai/providers') {
-          body = [
-            {
-              'id': 'local-gw',
-              'displayName': '本机网关',
-              'api': 'openai-completions',
-              'baseURL': 'http://127.0.0.1:11434/v1',
-              'endpointTrust': 'loopback',
-              'enabled': true,
-              'revision': 1,
-              'credential': {'configured': true, 'source': 'managed', 'writable': true},
-            }
-          ];
-        } else if (path == '/api/ai/providers/local-gw/models') {
-          body = [
-            {
-              'providerId': 'local-gw',
-              'id': 'm-text',
-              'displayName': '纯文本模型',
-              'inputModalities': ['text'],
-              'tools': true,
-              'reasoning': false,
-              'thinkingEfforts': <String, String>{},
-              'capabilitySource': 'manual',
-              'enabled': true,
-            }
-          ];
-        } else if (path == '/api/ai/conversations' && request.method == 'POST') {
-          body = {
-            'id': 'c1',
-            'title': '新对话',
-            'providerId': 'local-gw',
-            'modelId': 'm-text',
-            'messageCount': 0,
-          };
-        } else if (path == '/api/ai/conversations') {
-          body = [
-            {'id': 'c1', 'title': '新对话', 'messageCount': 2, 'archived': false},
-          ];
-        } else if (path == '/api/ai/conversations/c1/messages') {
-          body = _messages();
-        } else if (path == '/api/ai/conversations/c1/runs') {
-          body = {'runId': 'r1', 'assistantMessageId': 'a1', 'userMessageId': 'u1'};
-        } else if (path == '/api/ai/runs/r1/events') {
-          // 客户端 `runEvents` 会把整条流读完再逐条 yield，所以这里**一次性**
-          // 把"提问 + 收尾"都给出去。用例看到的仍然是"提问时 Run 还没结束"：
-          // `_consumeRun` 在 `user.question` 那条上就挂住等用户回答了。
-          return http.Response.bytes(
-            utf8.encode(
-              _body(
-                nested: !flatQuestionPayload,
-                paged: paged,
-                withImages: withImages,
-              ),
-            ),
-            200,
-            headers: {'content-type': 'text/event-stream; charset=utf-8'},
-          );
-        } else if (path.startsWith('/api/ai/questions/') && path.endsWith('/answer')) {
-          answered.add({
-            'id': path.split('/')[4],
-            ...jsonDecode(request.body) as Map<String, dynamic>,
-          });
-          body = {'accepted': true};
-        } else if (path.startsWith('/api/ai/questions/') && path.endsWith('/skip')) {
-          skipped.add(path.split('/')[4]);
-          body = {'accepted': true};
-        } else if (path == '/api/ai/runs/r1/question') {
-          body = {'pending': false};
-        } else if (path == '/api/ai/comfy/jobs') {
-          body = {'running': 0, 'pending': 0, 'jobs': <Object>[]};
-        } else {
-          body = <Object>[];
-        }
-        return http.Response(jsonEncode(body), 200,
-            headers: {'content-type': 'application/json; charset=utf-8'});
+    if (path == '/api/ai/providers') {
+      body = [
+        {
+          'id': 'local-gw',
+          'displayName': '本机网关',
+          'api': 'openai-completions',
+          'baseURL': 'http://127.0.0.1:11434/v1',
+          'endpointTrust': 'loopback',
+          'enabled': true,
+          'revision': 1,
+          'credential': {
+            'configured': true,
+            'source': 'managed',
+            'writable': true,
+          },
+        },
+      ];
+    } else if (path == '/api/ai/providers/local-gw/models') {
+      body = [
+        {
+          'providerId': 'local-gw',
+          'id': 'm-text',
+          'displayName': '纯文本模型',
+          'inputModalities': ['text'],
+          'tools': true,
+          'reasoning': false,
+          'thinkingEfforts': <String, String>{},
+          'capabilitySource': 'manual',
+          'enabled': true,
+        },
+      ];
+    } else if (path == '/api/ai/conversations' && request.method == 'POST') {
+      body = {
+        'id': 'c1',
+        'title': '新对话',
+        'providerId': 'local-gw',
+        'modelId': 'm-text',
+        'messageCount': 0,
+      };
+    } else if (path == '/api/ai/conversations') {
+      body = [
+        {'id': 'c1', 'title': '新对话', 'messageCount': 2, 'archived': false},
+      ];
+    } else if (path == '/api/ai/conversations/c1/messages') {
+      body = _messages();
+    } else if (path == '/api/ai/conversations/c1/runs') {
+      body = {'runId': 'r1', 'assistantMessageId': 'a1', 'userMessageId': 'u1'};
+    } else if (path == '/api/ai/runs/r1/events') {
+      // 客户端 `runEvents` 会把整条流读完再逐条 yield，所以这里**一次性**
+      // 把"提问 + 收尾"都给出去。用例看到的仍然是"提问时 Run 还没结束"：
+      // `_consumeRun` 在 `user.question` 那条上就挂住等用户回答了。
+      return http.Response.bytes(
+        utf8.encode(
+          _body(
+            nested: !flatQuestionPayload,
+            paged: paged,
+            withImages: withImages,
+          ),
+        ),
+        200,
+        headers: {'content-type': 'text/event-stream; charset=utf-8'},
+      );
+    } else if (path.startsWith('/api/ai/questions/') &&
+        path.endsWith('/answer')) {
+      answered.add({
+        'id': path.split('/')[4],
+        ...jsonDecode(request.body) as Map<String, dynamic>,
       });
+      body = {'accepted': true};
+    } else if (path.startsWith('/api/ai/questions/') &&
+        path.endsWith('/skip')) {
+      skipped.add(path.split('/')[4]);
+      body = {'accepted': true};
+    } else if (path == '/api/ai/runs/r1/question') {
+      body = {'pending': false};
+    } else if (path == '/api/ai/comfy/jobs') {
+      body = {'running': 0, 'pending': 0, 'jobs': <Object>[]};
+    } else {
+      body = <Object>[];
+    }
+    return http.Response(
+      jsonEncode(body),
+      200,
+      headers: {'content-type': 'application/json; charset=utf-8'},
+    );
+  });
 }
 
 /// 起一次 Run 并等到提问卡出现（事件流挂在提问上，Run 不会结束）。
@@ -322,19 +371,25 @@ Future<AiWorkspaceStore> _openAsk(
   final store = AiWorkspaceStore(
     api: AiApiClient(settings.baseUrl, client: fake.client()),
   );
-  await tester.pumpWidget(MultiProvider(
-    providers: [
-      ChangeNotifierProvider<SettingsStore>.value(value: settings),
-      ChangeNotifierProvider<AiWorkspaceStore>.value(value: store),
-    ],
-    child: const MaterialApp(home: AiHomePage()),
-  ));
+  await tester.pumpWidget(
+    MultiProvider(
+      providers: [
+        ChangeNotifierProvider<SettingsStore>.value(value: settings),
+        ChangeNotifierProvider<AiWorkspaceStore>.value(value: store),
+      ],
+      child: const MaterialApp(home: AiHomePage()),
+    ),
+  );
   await tester.pumpAndSettle();
 
   unawaited(store.send('帮我生一张图'));
   await tester.pump();
   await tester.pump(const Duration(milliseconds: 50));
-  expect(store.pendingQuestion?.questionId, expectedQuestionId, reason: '事件到了就该进"等你回答"状态');
+  expect(
+    store.pendingQuestion?.questionId,
+    expectedQuestionId,
+    reason: '事件到了就该进"等你回答"状态',
+  );
   return store;
 }
 
@@ -370,7 +425,11 @@ void main() {
 
     final calls = store.toolCallsFor(message);
     expect(calls, hasLength(1), reason: '一次提问只能有一条调用，别按 questionId 再开一条');
-    expect(calls.single.callId, _callId, reason: '模型那条调用的 callId 不能被 questionId 顶掉');
+    expect(
+      calls.single.callId,
+      _callId,
+      reason: '模型那条调用的 callId 不能被 questionId 顶掉',
+    );
     expect(calls.single.question?.questionId, _questionId);
     expect(calls.single.question?.callId, _callId, reason: '问题里也要记着它挂在哪个调用上');
 
@@ -416,7 +475,11 @@ void main() {
     await tester.pump(const Duration(milliseconds: 50));
 
     expect(answered.single['optionIndex'], 0);
-    expect(answered.single['answer'], isNull, reason: '点选项走 optionIndex，别再带一段文字');
+    expect(
+      answered.single['answer'],
+      isNull,
+      reason: '点选项走 optionIndex，别再带一段文字',
+    );
     expect(store.pendingQuestion, isNull, reason: '答完就该退回普通输入区');
     expect(find.byKey(const Key('ask-answer-field')), findsNothing);
   });
@@ -424,7 +487,10 @@ void main() {
   testWidgets('自己输入答案：POST 带文本', (tester) async {
     await _openAsk(tester, _Fake());
 
-    await tester.enterText(find.byKey(const Key('ask-answer-field')), '用我自己传的那张');
+    await tester.enterText(
+      find.byKey(const Key('ask-answer-field')),
+      '用我自己传的那张',
+    );
     await tester.pump();
     await tester.tap(find.byKey(const Key('ask-answer-submit')));
     await tester.pump();
@@ -437,7 +503,9 @@ void main() {
   // 用户 bug 2026-09-21 的**第二个根因**：后端当时把 `PendingQuestion` **平铺**在事件
   // data 顶层（`data['question']` 于是是**问题文字**，不是对象），客户端按嵌套形状解，
   // 解出来 null → 界面永远不解出提问。现在两边都认，这里把老形状也钉住。
-  testWidgets('老的平铺形状也认：question 是字符串 + 有 questionId 就当成一份 PendingQuestion', (tester) async {
+  testWidgets('老的平铺形状也认：question 是字符串 + 有 questionId 就当成一份 PendingQuestion', (
+    tester,
+  ) async {
     final fake = _Fake()..flatQuestionPayload = true;
     final store = await _openAsk(tester, fake);
 
@@ -475,7 +543,10 @@ void main() {
       size: const Size(1000, 500),
     );
 
-    expect(find.byKey(const Key('ask-composer-question-image')), findsOneWidget);
+    expect(
+      find.byKey(const Key('ask-composer-question-image')),
+      findsOneWidget,
+    );
     expect(find.byKey(const Key('ask-answer-field')), findsOneWidget);
     expect(find.byKey(const Key('ask-answer-submit')), findsOneWidget);
   });
@@ -485,8 +556,12 @@ void main() {
   // 答案可为空（空着的那题按"跳过"发 = 告诉模型"用户没回答"）。
 
   testWidgets('一卡三题：分页「第 N/M 题」，最后一页按钮变「提交」，逐题作答', (tester) async {
-    final store = await _openAsk(tester, _Fake()..paged = true,
-        size: const Size(1400, 1400), expectedQuestionId: _q3);
+    final store = await _openAsk(
+      tester,
+      _Fake()..paged = true,
+      size: const Size(1400, 1400),
+      expectedQuestionId: _q3,
+    );
 
     // 第 1 题（单选）
     expect(find.text('第 1/3 题'), findsOneWidget);
@@ -522,8 +597,12 @@ void main() {
   });
 
   testWidgets('上一题：翻回去还能改，答案跟着题走', (tester) async {
-    await _openAsk(tester, _Fake()..paged = true,
-        size: const Size(1400, 1400), expectedQuestionId: _q3);
+    await _openAsk(
+      tester,
+      _Fake()..paged = true,
+      size: const Size(1400, 1400),
+      expectedQuestionId: _q3,
+    );
 
     await tester.tap(find.byKey(const Key('ask-answer-submit'))); // 到第 2 题
     await tester.pump();
@@ -553,8 +632,12 @@ void main() {
   });
 
   testWidgets('逐题跳过：跳过本题只收当前那一题，卡片继续等下一题', (tester) async {
-    final store = await _openAsk(tester, _Fake()..paged = true,
-        size: const Size(1400, 1400), expectedQuestionId: _q3);
+    final store = await _openAsk(
+      tester,
+      _Fake()..paged = true,
+      size: const Size(1400, 1400),
+      expectedQuestionId: _q3,
+    );
 
     expect(find.text('第 1/3 题'), findsOneWidget);
     await tester.tap(find.byKey(const Key('ask-skip-current')));

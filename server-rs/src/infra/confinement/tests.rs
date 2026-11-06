@@ -27,7 +27,11 @@ fn 探到写不进就如实报_且把系统错误原样带出去() {
         report.blocked_paths,
         vec!["ComfyUI 工作区 D:/bad（PermissionDenied（os error 5））".to_string()]
     );
-    assert_eq!(report.checked_paths.len(), 2, "探过几处要如实说，否则看不出覆盖没覆盖全");
+    assert_eq!(
+        report.checked_paths.len(),
+        2,
+        "探过几处要如实说，否则看不出覆盖没覆盖全"
+    );
 }
 
 #[test]
@@ -104,7 +108,11 @@ fn 真探一次_项目内的临时目录一定写得进() {
     let blocker = root.join(format!(".comfyhub-write-probe-{}", std::process::id()));
     std::fs::create_dir(&blocker).unwrap();
     let denied = probe_dir(&root).unwrap_err();
-    assert_eq!(denied.raw_os_error(), Some(5), "要拿到系统的原始错误码：{denied}");
+    assert_eq!(
+        denied.raw_os_error(),
+        Some(5),
+        "要拿到系统的原始错误码：{denied}"
+    );
     assert!(
         format!("{denied}").contains("os error 5"),
         "系统错误要带 os error：{denied}"
@@ -123,12 +131,18 @@ fn 界面那份结论要带判据与修法() {
     let root = scratch("describe");
     let conn = crate::infra::db::open_memory().unwrap();
     let schema = std::fs::read_to_string(
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("db").join("schema.sqlite.sql"),
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("db")
+            .join("schema.sqlite.sql"),
     )
     .expect("读得到真 schema");
     conn.execute_batch(&schema).expect("建 schema");
-    let state =
-        crate::web::routes::AppState::new(conn, root.to_string_lossy().as_ref(), root.join("media"));
+    let state = crate::web::routes::AppState::new(
+        conn,
+        root.to_string_lossy().as_ref(),
+        root.join("media"),
+    );
     crate::comfy::capture::save_capture_config(
         &state,
         crate::comfy::capture::CaptureConfig {
@@ -162,8 +176,14 @@ fn 界面那份结论要带判据与修法() {
 #[test]
 fn 修法文案指向发布包而不是让用户改_acl() {
     let text = remedy_text();
-    assert!(text.contains("pack-release.ps1"), "要给出真正管用的那一步：{text}");
-    assert!(text.contains("COMFYHUB_SERVER_EXE"), "已有工作区外的产物时也要有路：{text}");
+    assert!(
+        text.contains("pack-release.ps1"),
+        "要给出真正管用的那一步：{text}"
+    );
+    assert!(
+        text.contains("COMFYHUB_SERVER_EXE"),
+        "已有工作区外的产物时也要有路：{text}"
+    );
     for wrong in ["权限", "ACL", "换个终端", "双击 ComfyUI"] {
         assert!(!text.contains(wrong), "别再说错的处方（{wrong}）：{text}");
     }

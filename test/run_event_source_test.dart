@@ -13,9 +13,14 @@ import 'package:viewer/core/run_event_source.dart';
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
-  const methodChannel = MethodChannel(LocalHarnessRunEventSource.methodChannelName);
-  const eventChannel = EventChannel(LocalHarnessRunEventSource.eventChannelName);
-  final messenger = TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+  const methodChannel = MethodChannel(
+    LocalHarnessRunEventSource.methodChannelName,
+  );
+  const eventChannel = EventChannel(
+    LocalHarnessRunEventSource.eventChannelName,
+  );
+  final messenger =
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
 
   final methodCalls = <MethodCall>[];
 
@@ -28,8 +33,10 @@ void main() {
     messenger.setMockStreamHandler(eventChannel, null);
   });
 
-  LocalHarnessRunEventSource source() =>
-      LocalHarnessRunEventSource(methodChannel: methodChannel, eventChannel: eventChannel);
+  LocalHarnessRunEventSource source() => LocalHarnessRunEventSource(
+    methodChannel: methodChannel,
+    eventChannel: eventChannel,
+  );
 
   void mockMethods(Future<Object?> Function(MethodCall call) handler) {
     messenger.setMockMethodCallHandler(methodChannel, (call) async {
@@ -41,7 +48,10 @@ void main() {
   test('isLocal 为真，且通道名与 Kotlin 侧一致（改了要同时改两边）', () {
     expect(source().isLocal, isTrue);
     expect(LocalHarnessRunEventSource.methodChannelName, 'comfyhub/harness');
-    expect(LocalHarnessRunEventSource.eventChannelName, 'comfyhub/harness/events');
+    expect(
+      LocalHarnessRunEventSource.eventChannelName,
+      'comfyhub/harness/events',
+    );
   });
 
   test('startRun 把参数原样送到 Kotlin，并解析回 runId/conversationId', () async {
@@ -61,15 +71,17 @@ void main() {
       });
     });
 
-    final handles = await source().startRun(const RunStartRequest(
-      conversationId: 'c1',
-      text: '画一只猫',
-      providerId: 'p1',
-      modelId: 'm1',
-      api: 'openai-completions',
-      baseUrl: 'https://api.example.com/v1',
-      credentialRef: 'ref-1',
-    ));
+    final handles = await source().startRun(
+      const RunStartRequest(
+        conversationId: 'c1',
+        text: '画一只猫',
+        providerId: 'p1',
+        modelId: 'm1',
+        api: 'openai-completions',
+        baseUrl: 'https://api.example.com/v1',
+        credentialRef: 'ref-1',
+      ),
+    );
 
     expect(handles.runId, 'r1');
     expect(handles.conversationId, 'c1');
@@ -94,12 +106,14 @@ void main() {
       });
     });
 
-    final handles = await source().startRun(const RunStartRequest(
-      conversationId: 'c1',
-      text: '你好',
-      userMessageId: 'ui-user-1',
-      assistantMessageId: 'ui-assistant-1',
-    ));
+    final handles = await source().startRun(
+      const RunStartRequest(
+        conversationId: 'c1',
+        text: '你好',
+        userMessageId: 'ui-user-1',
+        assistantMessageId: 'ui-assistant-1',
+      ),
+    );
 
     expect(handles.userMessageId, 'ui-user-1');
     expect(handles.assistantMessageId, 'ui-assistant-1');
@@ -141,8 +155,22 @@ void main() {
       switch (call.method) {
         case 'listMessages':
           return jsonEncode([
-            {'id': 'm1', 'conversationId': 'c1', 'seq': 1, 'role': 'user', 'status': 'complete', 'text': '画一只猫'},
-            {'id': 'm2', 'conversationId': 'c1', 'seq': 2, 'role': 'assistant', 'status': 'complete', 'text': '好'},
+            {
+              'id': 'm1',
+              'conversationId': 'c1',
+              'seq': 1,
+              'role': 'user',
+              'status': 'complete',
+              'text': '画一只猫',
+            },
+            {
+              'id': 'm2',
+              'conversationId': 'c1',
+              'seq': 2,
+              'role': 'assistant',
+              'status': 'complete',
+              'text': '好',
+            },
           ]);
         case 'listParts':
           final id = (call.arguments as Map)['messageId'];
@@ -151,7 +179,12 @@ void main() {
           // 只认对象的话工具名 / 参数永远空着
           return jsonEncode([
             {'type': 'reasoning', 'text': '想一下', 'jsonPayload': null},
-            {'type': 'tool_call', 'text': null, 'toolCallId': 'call-1', 'jsonPayload': '{"name":"comfy_submit","arguments":"{}"}'},
+            {
+              'type': 'tool_call',
+              'text': null,
+              'toolCallId': 'call-1',
+              'jsonPayload': '{"name":"comfy_submit","arguments":"{}"}',
+            },
             {'type': 'text', 'text': '好'},
           ]);
         default:
@@ -163,7 +196,11 @@ void main() {
     expect(messages, hasLength(2));
     expect(messages.first.parts, isEmpty);
     final assistant = messages.last;
-    expect(assistant.parts.map((p) => p.type).toList(), ['reasoning', 'tool_call', 'text']);
+    expect(assistant.parts.map((p) => p.type).toList(), [
+      'reasoning',
+      'tool_call',
+      'text',
+    ]);
     expect(assistant.parts[1].toolName, 'comfy_submit');
     expect(assistant.parts[1].toolArguments, '{}');
   });
@@ -171,7 +208,10 @@ void main() {
   test('fetchRunKit 把 {ok=false, reason} 原样带回来（拿不到规则就不许开跑）', () async {
     mockMethods((call) async {
       expect(call.method, 'fetchRunKit');
-      return jsonEncode({'ok': false, 'reason': '桌面已有更新的规则版本（2026-09-24.1 ≠ 2026-09-23.1）'});
+      return jsonEncode({
+        'ok': false,
+        'reason': '桌面已有更新的规则版本（2026-09-24.1 ≠ 2026-09-23.1）',
+      });
     });
 
     final result = await source().fetchRunKit(baseUrl: 'http://desk:8080');
@@ -191,8 +231,16 @@ void main() {
         onListen: (arguments, sink) {
           // Kotlin 侧会带上 Dart 给的 runId / after（订阅参数）
           expect(arguments, {'runId': 'r1', 'after': 3});
-          sink.success({'seq': 4, 'type': 'text.delta', 'payloadJson': '{"text":"你好"}'});
-          sink.success({'seq': 5, 'type': 'run.failed', 'payloadJson': '{"code":"RATE_LIMIT","message":"被限流"}'});
+          sink.success({
+            'seq': 4,
+            'type': 'text.delta',
+            'payloadJson': '{"text":"你好"}',
+          });
+          sink.success({
+            'seq': 5,
+            'type': 'run.failed',
+            'payloadJson': '{"code":"RATE_LIMIT","message":"被限流"}',
+          });
           sink.endOfStream();
         },
       ),
@@ -211,13 +259,15 @@ void main() {
   });
 
   test('answerQuestion / cancelRun / recoverUnfinished 走对应的方法名', () async {
-    mockMethods((call) async => switch (call.method) {
-          'answerQuestion' => true,
-          'cancelRun' => true,
-          'recoverUnfinished' => 2,
-          'pendingOutbox' => 3,
-          _ => null,
-        });
+    mockMethods(
+      (call) async => switch (call.method) {
+        'answerQuestion' => true,
+        'cancelRun' => true,
+        'recoverUnfinished' => 2,
+        'pendingOutbox' => 3,
+        _ => null,
+      },
+    );
 
     final s = source();
     await s.answerQuestion('q1', '要赛博朋克', optionIndex: 1);
@@ -225,18 +275,30 @@ void main() {
     expect(await s.recoverUnfinished(), 2);
     expect(await s.pendingOutbox(), 3);
 
-    expect(methodCalls.map((c) => c.method).toList(),
-        ['answerQuestion', 'cancelRun', 'recoverUnfinished', 'pendingOutbox']);
-    final answerArgs = Map<String, dynamic>.from(methodCalls.first.arguments as Map);
+    expect(methodCalls.map((c) => c.method).toList(), [
+      'answerQuestion',
+      'cancelRun',
+      'recoverUnfinished',
+      'pendingOutbox',
+    ]);
+    final answerArgs = Map<String, dynamic>.from(
+      methodCalls.first.arguments as Map,
+    );
     expect(answerArgs['questionId'], 'q1');
     expect(answerArgs['answer'], '要赛博朋克');
     expect(answerArgs['optionIndex'], 1);
   });
 
   test('本地会话列表：Kotlin 给 JSON 字符串，这里解成会话对象列表', () async {
-    mockMethods((call) async => jsonEncode([
-          {'id': 'c1', 'title': '离线时起的会话', 'updatedAt': '2026-09-23T05:30:00.000Z'},
-        ]));
+    mockMethods(
+      (call) async => jsonEncode([
+        {
+          'id': 'c1',
+          'title': '离线时起的会话',
+          'updatedAt': '2026-09-23T05:30:00.000Z',
+        },
+      ]),
+    );
     final list = await source().listConversations();
     expect(list, hasLength(1));
     expect(list.single.title, '离线时起的会话');

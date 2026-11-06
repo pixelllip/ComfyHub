@@ -98,8 +98,7 @@ class _Backend {
         'report': {
           'archived': 120,
           'bytes': 4096,
-          'file':
-              r'C:\ComfyHub\storage\ai\run-events\run-events-20261106-220000.jsonl',
+          'file': r'C:\ComfyHub\storage\ai\run-events\run-events-20261106-220000.jsonl',
           'cutoff': '2026-10-07T00:00:00Z',
           'remaining': 0,
         },
@@ -219,7 +218,10 @@ void main() {
 
     expect(backend.calls, contains('POST /api/system/events/archive'));
     expect(find.textContaining('归档了 120 条事件'), findsOneWidget);
-    expect(find.textContaining('run-events-20261106-220000.jsonl'), findsOneWidget);
+    expect(
+      find.textContaining('run-events-20261106-220000.jsonl'),
+      findsOneWidget,
+    );
   });
 
   testWidgets('320 宽不溢出', (tester) async {

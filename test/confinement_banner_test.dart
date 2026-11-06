@@ -18,7 +18,9 @@ const _restricted = {
   'serverImage': r'D:\myProject\FlutterProject\viewer\server-rs\target\release\comfyhub-server-rs.exe',
   'imageInsideProjectRoot': true,
   'checkedPaths': ['产物目录：D:\\Comfy-Desktop\\ComfyUI-Shared\\output'],
-  'blockedPaths': ['产物目录 D:\\Comfy-Desktop\\ComfyUI-Shared\\output（permissiondenied（os error 5））'],
+  'blockedPaths': [
+    '产物目录 D:\\Comfy-Desktop\\ComfyUI-Shared\\output（permissiondenied（os error 5））',
+  ],
   'summary': '受限（写不进 …）',
   'remedy': '把整套 ComfyHub 放到**工作区外**再启动',
 };
@@ -36,11 +38,13 @@ ApiClient _client(Object? body, {int status = 200}) {
   final settings = SettingsStore();
   return ApiClient(
     settings.baseUrl,
-    client: MockClient((_) async => http.Response(
-          jsonEncode(body),
-          status,
-          headers: {'content-type': 'application/json; charset=utf-8'},
-        )),
+    client: MockClient(
+      (_) async => http.Response(
+        jsonEncode(body),
+        status,
+        headers: {'content-type': 'application/json; charset=utf-8'},
+      ),
+    ),
   );
 }
 
@@ -52,9 +56,11 @@ void main() {
       //   但那不是被沙箱框住的地方 —— 所以判据为真、受限为假时**绝不能**亮横幅。
       ConfinementInfo.fromJson(_free),
     ]) {
-      await tester.pumpWidget(MaterialApp(
-        home: Scaffold(body: ConfinementBanner(info: info)),
-      ));
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(body: ConfinementBanner(info: info)),
+        ),
+      );
       expect(find.textContaining('写不进项目外'), findsNothing);
       expect(find.byIcon(Icons.lock_outline), findsNothing);
     }
@@ -62,9 +68,13 @@ void main() {
 
   testWidgets('受限时把判据与修法一起说清楚', (tester) async {
     final info = ConfinementInfo.fromJson(_restricted);
-    await tester.pumpWidget(MaterialApp(
-      home: Scaffold(body: ConfinementBanner(info: info, onOpenSettings: () {})),
-    ));
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: ConfinementBanner(info: info, onOpenSettings: () {}),
+        ),
+      ),
+    );
 
     expect(find.text(info.headline), findsOneWidget);
     // 判据：映像路径 + "在运行根目录内"
@@ -77,11 +87,16 @@ void main() {
 
     // 点「去设置」要走回调
     var tapped = false;
-    await tester.pumpWidget(MaterialApp(
-      home: Scaffold(
-        body: ConfinementBanner(info: info, onOpenSettings: () => tapped = true),
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: ConfinementBanner(
+            info: info,
+            onOpenSettings: () => tapped = true,
+          ),
+        ),
       ),
-    ));
+    );
     await tester.tap(find.text('去设置'));
     expect(tapped, isTrue);
   });
@@ -101,7 +116,10 @@ void main() {
   });
 
   test('老后端没有这个端点（404）→ 当"不知道"，不许当成不受限也不许抛', () async {
-    expect(await _client({'error': 'not found'}, status: 404).confinement(), isNull);
+    expect(
+      await _client({'error': 'not found'}, status: 404).confinement(),
+      isNull,
+    );
     expect((await _client(_free).confinement())!.restricted, isFalse);
     expect((await _client(_restricted).confinement())!.restricted, isTrue);
   });

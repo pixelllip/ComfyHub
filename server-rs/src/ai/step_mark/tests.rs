@@ -22,8 +22,14 @@ fn 标记摘掉_正文一个字不少_环节按出现顺序() {
         &mut stripper,
         &["[步骤]正在分析请求[/步骤]我先看看需求。[步骤]正在读文件[/步骤]读一下工作流。"],
     );
-    assert_eq!(text, "我先看看需求。读一下工作流。", "标记本身不该出现在正文里");
-    assert_eq!(phases, vec!["正在分析请求".to_string(), "正在读文件".to_string()]);
+    assert_eq!(
+        text, "我先看看需求。读一下工作流。",
+        "标记本身不该出现在正文里"
+    );
+    assert_eq!(
+        phases,
+        vec!["正在分析请求".to_string(), "正在读文件".to_string()]
+    );
 }
 
 #[test]
@@ -77,8 +83,7 @@ fn 不按格式来时一个字都不吞() {
 #[test]
 fn 一条增量里连着好几个标记() {
     let mut stripper = StepStripper::new();
-    let (text, phases) =
-        stripper.push("[步骤]正在分析请求[/步骤][步骤]正在写文件[/步骤]写完了");
+    let (text, phases) = stripper.push("[步骤]正在分析请求[/步骤][步骤]正在写文件[/步骤]写完了");
     assert_eq!(text, "写完了");
     assert_eq!(
         phases,

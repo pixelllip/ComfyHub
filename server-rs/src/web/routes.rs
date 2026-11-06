@@ -86,7 +86,11 @@ pub struct AppState {
 }
 
 impl AppState {
-    pub fn new(conn: Connection, db_path: impl Into<String>, media_dir: impl Into<std::path::PathBuf>) -> Self {
+    pub fn new(
+        conn: Connection,
+        db_path: impl Into<String>,
+        media_dir: impl Into<std::path::PathBuf>,
+    ) -> Self {
         Self {
             conn: Arc::new(Mutex::new(conn)),
             db_path: db_path.into(),
@@ -145,7 +149,10 @@ impl AppState {
     where
         F: FnOnce(&Connection) -> rusqlite::Result<T>,
     {
-        let guard = self.conn.lock().map_err(|_| ApiError::internal("连接锁已中毒"))?;
+        let guard = self
+            .conn
+            .lock()
+            .map_err(|_| ApiError::internal("连接锁已中毒"))?;
         f(&guard).map_err(ApiError::from)
     }
 
@@ -156,7 +163,10 @@ impl AppState {
     where
         F: FnOnce(&rusqlite::Transaction<'_>) -> Result<T, crate::library::repo::WriteError>,
     {
-        let mut guard = self.conn.lock().map_err(|_| ApiError::internal("连接锁已中毒"))?;
+        let mut guard = self
+            .conn
+            .lock()
+            .map_err(|_| ApiError::internal("连接锁已中毒"))?;
         db::tx_immediate(&mut guard, f).map_err(ApiError::from)
     }
 }
@@ -208,7 +218,11 @@ where
         let raw = Path::<(String, String)>::from_request_parts(parts, state)
             .await
             .map_err(|_| ApiError::bad_request("非法的 id"))?;
-        let parse = |s: &str| s.trim().parse::<i64>().map_err(|_| ApiError::bad_request("非法的 id"));
+        let parse = |s: &str| {
+            s.trim()
+                .parse::<i64>()
+                .map_err(|_| ApiError::bad_request("非法的 id"))
+        };
         Ok(IdPair(parse(&raw.0 .0)?, parse(&raw.0 .1)?))
     }
 }
@@ -248,16 +262,21 @@ pub fn router(state: AppState) -> Router {
         .route("/api/media/{id}/poster", get(media_poster))
         .route("/api/media/{id}/prompt", get(media_prompt))
         .route("/api/prompts/{id}/media", get(prompt_media))
-    // 预设的"关联产物"：按**归一化后的提示词**匹配，所以能把自动捕获那条对上（2026-10-11）
-    .route("/api/presets/{id}/media", get(preset_media))
+        // 预设的"关联产物"：按**归一化后的提示词**匹配，所以能把自动捕获那条对上（2026-10-11）
+        .route("/api/presets/{id}/media", get(preset_media))
         .route("/api/media/upload", axum::routing::post(media_upload))
         // 捕获配置（本地那一半：读写 app_settings 里的一行 JSON）
-        .route("/api/capture/config", get(capture_config).put(put_capture_config))
+        .route(
+            "/api/capture/config",
+            get(capture_config).put(put_capture_config),
+        )
         // AI 端点第一批（P4 第 16 步）：provider 清单 —— **不含任何密钥**（AIH-012）
         .route("/api/ai/providers", get(ai_providers).post(create_provider))
         .route(
             "/api/ai/providers/{id}",
-            get(ai_provider).put(update_provider).delete(delete_provider),
+            get(ai_provider)
+                .put(update_provider)
+                .delete(delete_provider),
         )
         // 模型目录（P4 第 20 步 = Task 2）：能力声明的唯一真源（AIH-011），附件/思考强度都读它
         .route(
@@ -265,25 +284,39 @@ pub fn router(state: AppState) -> Router {
             get(ai_provider_models).put(put_provider_models),
         )
         // 会话与消息的**读**侧（P4 第 21 步）：AI 工作台打开第一件事就是这三条
-        .route("/api/ai/conversations", get(ai_conversations).post(create_conversation))
+        .route(
+            "/api/ai/conversations",
+            get(ai_conversations).post(create_conversation),
+        )
         .route(
             "/api/ai/conversations/{id}",
-            get(ai_conversation).patch(patch_conversation).delete(delete_conversation),
+            get(ai_conversation)
+                .patch(patch_conversation)
+                .delete(delete_conversation),
         )
         .route(
             "/api/ai/conversations/{id}/messages",
             get(ai_conversation_messages).post(append_message),
         )
         // Run 的生命周期（P4 第 28 步）：创建 202 → 事件流（SSE）→ 取消（AIH-020/021/022）
-        .route("/api/ai/conversations/{id}/runs", axum::routing::post(start_run))
+        .route(
+            "/api/ai/conversations/{id}/runs",
+            axum::routing::post(start_run),
+        )
         .route("/api/ai/runs/{id}", get(get_run))
         .route("/api/ai/runs/{id}/events", get(run_events))
         .route("/api/ai/runs/{id}/cancel", axum::routing::post(cancel_run))
         // 工具审批（P4 第 31 步，R8）：界面上的「批准 / 拒绝」两个按钮。
         // ⚠ 顺序要紧：执行器**先落 pending 行再发 `tool.requested`**，
         // 所以用户手快也点得到（否则那一次点击落空，只能等超时）。
-        .route("/api/ai/tool-calls/{callId}/approve", axum::routing::post(approve_tool_call))
-        .route("/api/ai/tool-calls/{callId}/deny", axum::routing::post(deny_tool_call))
+        .route(
+            "/api/ai/tool-calls/{callId}/approve",
+            axum::routing::post(approve_tool_call),
+        )
+        .route(
+            "/api/ai/tool-calls/{callId}/deny",
+            axum::routing::post(deny_tool_call),
+        )
         // run-kit 工件（P4 第 22 步）：手机 harness 的**全部规则类输入**（R12/R13 的第一次重建）
         .route("/api/ai/run-kit", get(ai_run_kit))
         .route("/api/ai/run-kit/status", get(ai_run_kit_status))
@@ -294,12 +327,21 @@ pub fn router(state: AppState) -> Router {
         // 同一个 Run 接着往下做（所以这里没有"取消"以外的分支，也不改 Run 的状态）。
         .route("/api/ai/runs/{id}/question", get(run_question))
         .route("/api/ai/questions/{questionId}", get(get_question))
-        .route("/api/ai/questions/{questionId}/answer", axum::routing::post(answer_question))
-        .route("/api/ai/questions/{questionId}/skip", axum::routing::post(skip_question))
+        .route(
+            "/api/ai/questions/{questionId}/answer",
+            axum::routing::post(answer_question),
+        )
+        .route(
+            "/api/ai/questions/{questionId}/skip",
+            axum::routing::post(skip_question),
+        )
         // 界面端点第一批（P4 第 33 步）：权限档 + 工具清单 + NSFW 开关。
         // 权限档决定"需审批的工具要不要等人点"，界面切不到它 = 第 31 步的闸门永远拦着。
         .route("/api/ai/tools", get(ai_tools))
-        .route("/api/ai/tools/policy", get(ai_tool_policy).put(put_tool_policy))
+        .route(
+            "/api/ai/tools/policy",
+            get(ai_tool_policy).put(put_tool_policy),
+        )
         .route("/api/ai/nsfw", get(ai_nsfw).put(put_nsfw))
         // `GET /api/net/urls`（P4 第 73 步）：这台桌面上有哪些**可达地址** ——
         // 「同步与连接」页的候选列表（回环 / 局域网 / Tailscale）。见 `net_urls.rs`。
@@ -308,27 +350,46 @@ pub fn router(state: AppState) -> Router {
         // DPAPI 不可用就失败（不落明文）/ 空值 = 不修改（清空只能 DELETE）/ env 来源只读。
         .route(
             "/api/ai/providers/{id}/credentials",
-            get(ai_provider_credential).put(put_provider_credential).delete(delete_provider_credential),
+            get(ai_provider_credential)
+                .put(put_provider_credential)
+                .delete(delete_provider_credential),
         )
         // 联网搜索（Keenable）的可选密钥：出厂免密钥可用，这里只是给想提额的用户一个只写入口
         .route(
             "/api/ai/web-search/credential",
-            get(ai_web_search_credential).put(put_web_search_credential).delete(delete_web_search_credential),
+            get(ai_web_search_credential)
+                .put(put_web_search_credential)
+                .delete(delete_web_search_credential),
         )
         // 界面端点第三批（P4 第 35 步）：**Skills 六条**。磁盘是真源、刻意不缓存 ——
         // "AI 注册完下一次回复就能用、用户删掉立刻消失"是需求（AGENTS §10）。
         // ⚠ `/skills/roots` 与 `/skills/{name}` 由 matchit 的静态优先规则分开，不会互相吃。
         .route("/api/ai/skills", get(ai_skills).post(create_skill))
         .route("/api/ai/skills/roots", get(ai_skill_roots))
-        .route("/api/ai/skills/rescan", axum::routing::post(ai_skill_rescan))
-        .route("/api/ai/skills/{name}", get(ai_skill_detail).delete(delete_skill))
+        .route(
+            "/api/ai/skills/rescan",
+            axum::routing::post(ai_skill_rescan),
+        )
+        .route(
+            "/api/ai/skills/{name}",
+            get(ai_skill_detail).delete(delete_skill),
+        )
         // 界面端点第四批（P4 第 36 步）：**长期记忆五条**。真源是 `<storage>\ai\memory.md`
         // （一行一条、用户能手改），界面上的保存 / 加一条 / 删几条 / 清空都打这里。
-        .route("/api/ai/memory", get(ai_memory).put(put_memory).delete(clear_memory))
-        .route("/api/ai/memory/entries", axum::routing::post(add_memory_entry))
+        .route(
+            "/api/ai/memory",
+            get(ai_memory).put(put_memory).delete(clear_memory),
+        )
+        .route(
+            "/api/ai/memory/entries",
+            axum::routing::post(add_memory_entry),
+        )
         // 单条 / 批量删除用 POST 而不是带 body 的 DELETE：Ktor 对 DELETE 带请求体的处理
         // 在各客户端上并不一致（Kotlin 侧就是这么注释的）—— 形状照抄，别"顺手改成 DELETE"。
-        .route("/api/ai/memory/delete", axum::routing::post(delete_memory_entries))
+        .route(
+            "/api/ai/memory/delete",
+            axum::routing::post(delete_memory_entries),
+        )
         // 界面端点第五批（P4 第 38 步）：**内置模型目录**的状态与同步。
         // 它是"出厂默认值"的唯一来源（冻结副本编译进二进制），用户改过的行**永不覆盖**。
         .route("/api/ai/builtin/status", get(ai_builtin_status))
@@ -347,7 +408,10 @@ pub fn router(state: AppState) -> Router {
             "/api/ai/capabilities/refresh",
             axum::routing::post(ai_capabilities_refresh),
         )
-        .route("/api/ai/capabilities/probe", axum::routing::post(ai_capabilities_probe))
+        .route(
+            "/api/ai/capabilities/probe",
+            axum::routing::post(ai_capabilities_probe),
+        )
         // 本机 ComfyUI 已保存的工作流文件（只读，用户 bug ⑤）—— **不能少任何一条目录来源**
         .route("/api/capture/workflows", get(capture_workflows))
         // 工作流原文（界面「选择现有工作流 → 看蓝图」按需拉）。**只读**，路径过读白名单。
@@ -360,12 +424,21 @@ pub fn router(state: AppState) -> Router {
         // 推送式捕获（第 49 步）：ComfyUI 自定义节点 / e2e 脚本把一次已跑完的运行推过来
         .route("/api/ingest/comfyui", axum::routing::post(ingest_comfyui))
         // 把本机 ComfyUI 里已保存的工作流文件批量读进库（界面上的「导入本机工作流」按钮）
-        .route("/api/capture/import-workflows", axum::routing::post(capture_import_workflows))
+        .route(
+            "/api/capture/import-workflows",
+            axum::routing::post(capture_import_workflows),
+        )
         // 把一个目录里已经生成好的产物导入画廊（PNG 内嵌的 prompt 会还原成提示词）
-        .route("/api/capture/import", axum::routing::post(capture_import_folder))
+        .route(
+            "/api/capture/import",
+            axum::routing::post(capture_import_folder),
+        )
         // 探测 ComfyUI 位置（只读）+ 用户点「使用这个目录」才写配置
         .route("/api/capture/locate", get(capture_locate))
-        .route("/api/capture/locate/apply", axum::routing::post(capture_locate_apply))
+        .route(
+            "/api/capture/locate/apply",
+            axum::routing::post(capture_locate_apply),
+        )
         // 工作流原文（前端按需拉：详情页的「查看工作流」弹窗）
         .route("/api/prompts/{id}/workflow", get(prompt_workflow))
         .route("/api/media/{id}/workflow", get(media_workflow))
@@ -406,7 +479,10 @@ pub fn router(state: AppState) -> Router {
         // ⚠ 顺序要紧：`.layer()` 只作用于**它之前**加进来的路由，所以这里必须排在
         // 所有 `.route()` / `.merge()` 之后（排在前面就会漏掉一半端点，而且不报错）。
         .merge(crate::mobile::auth::router())
-        .layer(axum::middleware::from_fn_with_state(state.clone(), crate::mobile::auth::gate))
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            crate::mobile::auth::gate,
+        ))
         // 未知路径也要给**同样形状**的错误体（默认 fallback 是空 body，界面只会显示 "HTTP 404"）
         .fallback(fallback_route)
         .with_state(state)
@@ -501,7 +577,12 @@ async fn media_poster(
         let root = state.project_root();
         let dest = poster.clone();
         let ok = tokio::task::spawn_blocking(move || {
-            crate::media::poster::write_video_poster(&root, &source, &dest, crate::media::poster::POSTER_SIZE)
+            crate::media::poster::write_video_poster(
+                &root,
+                &source,
+                &dest,
+                crate::media::poster::POSTER_SIZE,
+            )
         })
         .await
         .map_err(|e| ApiError::internal(format!("抽帧任务失败：{e}")))?;
@@ -573,7 +654,9 @@ async fn preset_media(
 }
 
 /// `GET /api/capture/config`
-async fn capture_config(State(state): State<AppState>) -> Result<Json<crate::comfy::capture::CaptureConfig>, ApiError> {
+async fn capture_config(
+    State(state): State<AppState>,
+) -> Result<Json<crate::comfy::capture::CaptureConfig>, ApiError> {
     Ok(Json(crate::comfy::capture::get_config(&state)?))
 }
 
@@ -593,7 +676,9 @@ async fn capture_workflows(
     State(state): State<AppState>,
     Query(query): Query<crate::comfy::comfy_dirs::WorkflowQuery>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    Ok(Json(crate::comfy::comfy_dirs::workflows_json(&state, query)?))
+    Ok(Json(crate::comfy::comfy_dirs::workflows_json(
+        &state, query,
+    )?))
 }
 
 /// `GET /api/capture/workflow?path=…` 的查询参数。
@@ -643,7 +728,9 @@ async fn capture_workflow_raw(
 ///
 /// ⚠ 与 `/jobs` 的分工照抄 Kotlin：这一条是"设置页 / 首屏"用的（带统计与最近 20 条记录），
 /// `/jobs` 是"右侧栏轮询"用的（只要队列与最近提交）。两条都真的去问一次 `/queue`。
-async fn capture_status(State(state): State<AppState>) -> Result<Json<serde_json::Value>, ApiError> {
+async fn capture_status(
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, ApiError> {
     Ok(Json(crate::comfy::capture::status_json(&state).await?))
 }
 
@@ -658,7 +745,9 @@ async fn capture_jobs(State(state): State<AppState>) -> Result<Json<serde_json::
 /// Kotlin 那边它同时是后台轮询与 `comfy_sync_history` 工具的实现。
 async fn capture_poll(State(state): State<AppState>) -> Result<Json<serde_json::Value>, ApiError> {
     let config = crate::comfy::capture::capture_config(&state)?;
-    Ok(Json(crate::comfy::capture_ingest::poll_once(&state, &config).await))
+    Ok(Json(
+        crate::comfy::capture_ingest::poll_once(&state, &config).await,
+    ))
 }
 
 /// `POST /api/ingest/comfyui`（P4 第 49 步）：外部推一条已跑完的运行过来。
@@ -666,7 +755,9 @@ async fn ingest_comfyui(
     State(state): State<AppState>,
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    Ok(Json(crate::comfy::capture_import::ingest_json(&state, &body).await?))
+    Ok(Json(
+        crate::comfy::capture_import::ingest_json(&state, &body).await?,
+    ))
 }
 
 /// `POST /api/layout/translate`：布局规格 + 意图 → 提示词（含五条校验的结果）。
@@ -684,7 +775,9 @@ async fn capture_import_workflows(
     State(state): State<AppState>,
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    Ok(Json(crate::comfy::capture_import::import_workflows(&state, &body).await?))
+    Ok(Json(
+        crate::comfy::capture_import::import_workflows(&state, &body).await?,
+    ))
 }
 
 /// `POST /api/capture/import`（P4 第 52 步）：导入一个目录里已生成好的产物。
@@ -692,11 +785,15 @@ async fn capture_import_folder(
     State(state): State<AppState>,
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    Ok(Json(crate::comfy::capture_import::import_folder_json(&state, &body).await?))
+    Ok(Json(
+        crate::comfy::capture_import::import_folder_json(&state, &body).await?,
+    ))
 }
 
 /// `GET /api/ai/providers` —— provider 清单（不含密钥，AIH-012）。
-async fn ai_providers(State(state): State<AppState>) -> Result<Json<Vec<crate::ai::ai::AiProviderDto>>, ApiError> {
+async fn ai_providers(
+    State(state): State<AppState>,
+) -> Result<Json<Vec<crate::ai::ai::AiProviderDto>>, ApiError> {
     Ok(Json(crate::ai::ai::list_providers(&state)?))
 }
 
@@ -706,7 +803,8 @@ async fn ai_provider(
     Path(id): Path<String>,
 ) -> Result<Json<crate::ai::ai::AiProviderDto>, ApiError> {
     let row = crate::ai::ai::require_provider_row(&state, &id)?;
-    let stored = crate::provider::credentials::read_store(&crate::ai::ai::credential_store_path(&state));
+    let stored =
+        crate::provider::credentials::read_store(&crate::ai::ai::credential_store_path(&state));
     let refs: Vec<String> = stored.keys().cloned().collect();
     Ok(Json(row.into_dto(&refs)))
 }
@@ -728,12 +826,15 @@ async fn create_provider(
         ));
     }
     let api = parse_api(body.api.as_deref())?;
-    let trust = crate::web::endpoint_guard::parse_trust(body.endpoint_trust.as_deref().unwrap_or(""))
-        .map(str::to_string)
-        .unwrap_or_else(|| {
-            crate::web::endpoint_guard::infer_trust(&crate::ai::ai::host_of(body.base_url.as_deref().unwrap_or("")))
+    let trust =
+        crate::web::endpoint_guard::parse_trust(body.endpoint_trust.as_deref().unwrap_or(""))
+            .map(str::to_string)
+            .unwrap_or_else(|| {
+                crate::web::endpoint_guard::infer_trust(&crate::ai::ai::host_of(
+                    body.base_url.as_deref().unwrap_or(""),
+                ))
                 .to_string()
-        });
+            });
     let dto = crate::ai::ai::AiProviderDto {
         id,
         display_name: crate::ai::ai::require_display_name(body.display_name.as_deref())?,
@@ -748,7 +849,10 @@ async fn create_provider(
         created_at: None,
         updated_at: None,
     };
-    Ok((StatusCode::CREATED, Json(crate::ai::ai::insert_provider(&state, &dto)?)))
+    Ok((
+        StatusCode::CREATED,
+        Json(crate::ai::ai::insert_provider(&state, &dto)?),
+    ))
 }
 
 /// `PUT /api/ai/providers/{id}` —— 乐观锁更新（AIH-007）。
@@ -767,12 +871,15 @@ async fn update_provider(
         }
     }
     let api = parse_api(body.api.as_deref())?;
-    let trust = crate::web::endpoint_guard::parse_trust(body.endpoint_trust.as_deref().unwrap_or(""))
-        .map(str::to_string)
-        .unwrap_or_else(|| {
-            crate::web::endpoint_guard::infer_trust(&crate::ai::ai::host_of(body.base_url.as_deref().unwrap_or("")))
+    let trust =
+        crate::web::endpoint_guard::parse_trust(body.endpoint_trust.as_deref().unwrap_or(""))
+            .map(str::to_string)
+            .unwrap_or_else(|| {
+                crate::web::endpoint_guard::infer_trust(&crate::ai::ai::host_of(
+                    body.base_url.as_deref().unwrap_or(""),
+                ))
                 .to_string()
-        });
+            });
     let revision = body
         .revision
         .ok_or_else(|| ApiError::ai("CONFIG_ERROR", "缺少 revision，请刷新后重试"))?;
@@ -789,7 +896,9 @@ async fn update_provider(
         created_at: None,
         updated_at: None,
     };
-    Ok(Json(crate::ai::ai::update_provider(&state, &dto, revision)?))
+    Ok(Json(crate::ai::ai::update_provider(
+        &state, &dto, revision,
+    )?))
 }
 
 /// `DELETE /api/ai/providers/{id}` —— 不存在 → 400 CONFIG_ERROR（**不是 404**）。
@@ -798,7 +907,10 @@ async fn delete_provider(
     Path(id): Path<String>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     if !crate::ai::ai::delete_provider(&state, &id)? {
-        return Err(ApiError::ai("CONFIG_ERROR", format!("Provider 不存在: {id}")));
+        return Err(ApiError::ai(
+            "CONFIG_ERROR",
+            format!("Provider 不存在: {id}"),
+        ));
     }
     Ok(Json(json!({ "deleted": true, "id": id })))
 }
@@ -834,7 +946,11 @@ async fn put_provider_models(
     for model in &body.models {
         crate::ai::ai::validate_model(model)?;
     }
-    Ok(Json(crate::ai::ai::replace_models(&state, &id, &body.models)?))
+    Ok(Json(crate::ai::ai::replace_models(
+        &state,
+        &id,
+        &body.models,
+    )?))
 }
 
 /// `GET /api/ai/providers/{id}/models` —— 模型目录（P4 第 20 步 = Task 2）。
@@ -847,7 +963,8 @@ async fn ai_provider_models(
     Path(provider_id): Path<String>,
 ) -> Result<Json<Vec<crate::ai::ai::AiModelDto>>, ApiError> {
     Ok(Json(crate::ai::ai::list_models(&state, &provider_id)?))
-}#[derive(Debug, Deserialize, Default)]
+}
+#[derive(Debug, Deserialize, Default)]
 struct ConversationQuery {
     /// Kotlin 只认 `1` 与 `true`（不区分大小写），别的值一律当 false。
     #[serde(rename = "includeArchived")]
@@ -908,7 +1025,9 @@ async fn ai_run_kit(
 }
 
 /// `GET /api/ai/run-kit/status` —— `{current, revoked}`（手机跑之前先问一句吊销）。
-async fn ai_run_kit_status(State(state): State<AppState>) -> Result<Json<serde_json::Value>, ApiError> {
+async fn ai_run_kit_status(
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, ApiError> {
     Ok(Json(crate::ai::run_kit::status(&state)?))
 }
 
@@ -1004,7 +1123,9 @@ async fn media_path(
     let Some(path) = crate::media::media::resolve_media(state.media_dir(), &stored) else {
         return Err(ApiError::not_found(format!("产物 {id} 的文件不在盘上")));
     };
-    Ok(Json(serde_json::json!({ "path": path.display().to_string() })))
+    Ok(Json(
+        serde_json::json!({ "path": path.display().to_string() }),
+    ))
 }
 
 /// `GET /api/prompts/{id}/api-graph` —— **API 格式**节点图（提交给 ComfyUI 的那一份）。
@@ -1047,7 +1168,13 @@ fn workflow_response(text: Option<String>) -> Result<axum::response::Response, A
 async fn media_upload(
     State(state): State<AppState>,
     multipart: axum::extract::Multipart,
-) -> Result<(axum::http::StatusCode, Json<crate::media::media_upload::UploadResult>), ApiError> {
+) -> Result<
+    (
+        axum::http::StatusCode,
+        Json<crate::media::media_upload::UploadResult>,
+    ),
+    ApiError,
+> {
     crate::media::media_upload::upload(state, multipart).await
 }
 
@@ -1065,7 +1192,11 @@ async fn sync_changes(
     State(state): State<AppState>,
     Query(q): Query<SyncChangesQuery>,
 ) -> Result<Json<crate::mobile::sync::SyncChanges>, ApiError> {
-    Ok(Json(crate::mobile::sync::changes(&state, q.since.unwrap_or(0), q.limit.unwrap_or(500))?))
+    Ok(Json(crate::mobile::sync::changes(
+        &state,
+        q.since.unwrap_or(0),
+        q.limit.unwrap_or(500),
+    )?))
 }
 
 #[derive(Debug, Deserialize)]
@@ -1128,8 +1259,17 @@ struct BootstrapQuery {
 async fn create_conversation(
     State(state): State<AppState>,
     Json(body): Json<crate::ai::conversations::ConversationCreate>,
-) -> Result<(StatusCode, Json<crate::ai::conversations::AiConversationDto>), ApiError> {
-    Ok((StatusCode::CREATED, Json(crate::ai::conversations::create(&state, &body)?)))
+) -> Result<
+    (
+        StatusCode,
+        Json<crate::ai::conversations::AiConversationDto>,
+    ),
+    ApiError,
+> {
+    Ok((
+        StatusCode::CREATED,
+        Json(crate::ai::conversations::create(&state, &body)?),
+    ))
 }
 
 /// `PATCH /api/ai/conversations/{id}` —— 改标题 / 换模型 / 归档（缺的字段一律不改）。
@@ -1156,7 +1296,12 @@ async fn append_message(
     axum::extract::Path(id): axum::extract::Path<String>,
     Json(body): Json<crate::ai::conversations::MessageAppend>,
 ) -> Result<(StatusCode, Json<crate::ai::conversations::AiMessageDto>), ApiError> {
-    Ok((StatusCode::CREATED, Json(crate::ai::conversations::append_message(&state, &id, &body)?)))
+    Ok((
+        StatusCode::CREATED,
+        Json(crate::ai::conversations::append_message(
+            &state, &id, &body,
+        )?),
+    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -1238,7 +1383,11 @@ async fn approve_tool_call(
     axum::extract::Path(call_id): axum::extract::Path<String>,
 ) -> Result<Json<ToolApprovalResult>, ApiError> {
     let accepted = crate::ai::runs::resolve_approval(&state, &call_id, true)?;
-    Ok(Json(ToolApprovalResult { call_id, approved: true, accepted }))
+    Ok(Json(ToolApprovalResult {
+        call_id,
+        approved: true,
+        accepted,
+    }))
 }
 
 async fn deny_tool_call(
@@ -1246,7 +1395,11 @@ async fn deny_tool_call(
     axum::extract::Path(call_id): axum::extract::Path<String>,
 ) -> Result<Json<ToolApprovalResult>, ApiError> {
     let accepted = crate::ai::runs::resolve_approval(&state, &call_id, false)?;
-    Ok(Json(ToolApprovalResult { call_id, approved: false, accepted }))
+    Ok(Json(ToolApprovalResult {
+        call_id,
+        approved: false,
+        accepted,
+    }))
 }
 
 // ---------------------------------------------------------------------------
@@ -1336,8 +1489,16 @@ async fn answer_question(
             format!("提问不存在或已过期: {question_id}"),
         ));
     };
-    let index = body.option_index.filter(|i| *i >= 0 && (*i as usize) < row.options.len());
-    let text = match (index, body.answer.as_deref().map(str::trim).filter(|t| !t.is_empty())) {
+    let index = body
+        .option_index
+        .filter(|i| *i >= 0 && (*i as usize) < row.options.len());
+    let text = match (
+        index,
+        body.answer
+            .as_deref()
+            .map(str::trim)
+            .filter(|t| !t.is_empty()),
+    ) {
         // 点了按钮：答案就是那个选项的原文（不信任前端传来的文字 —— 它可能是改过的）
         (Some(i), _) => row.options[i as usize].clone(),
         (None, Some(text)) => text.to_string(),
@@ -1345,12 +1506,12 @@ async fn answer_question(
             let hint = if row.options.is_empty() {
                 "这一题没有选项，只能给 answer 文本".to_string()
             } else {
-                format!("要么给 optionIndex（0~{}），要么给 answer 文本", row.options.len() - 1)
+                format!(
+                    "要么给 optionIndex（0~{}），要么给 answer 文本",
+                    row.options.len() - 1
+                )
             };
-            return Err(ApiError::ai(
-                "CONFIG_ERROR",
-                format!("要给出回答：{hint}"),
-            ));
+            return Err(ApiError::ai("CONFIG_ERROR", format!("要给出回答：{hint}")));
         }
     };
     let indexes = body
@@ -1363,7 +1524,11 @@ async fn answer_question(
     let accepted = crate::ai::questions::record_answer(
         &state,
         &question_id,
-        &crate::ai::questions::Answer { answer: text.clone(), option_index: index, option_indexes: indexes },
+        &crate::ai::questions::Answer {
+            answer: text.clone(),
+            option_index: index,
+            option_indexes: indexes,
+        },
     )?;
     if accepted {
         // 事件让**所有**开着这条会话的界面都切成"已回答"（不只是点的那一个窗口）
@@ -1380,7 +1545,11 @@ async fn answer_question(
             &serde_json::Value::Object(payload),
         )?;
     }
-    Ok(Json(QuestionAnswerResult { question_id, accepted, answer: text }))
+    Ok(Json(QuestionAnswerResult {
+        question_id,
+        accepted,
+        answer: text,
+    }))
 }
 
 /// 用户跳过这条提问：**当作"没有回答"**放行。
@@ -1422,7 +1591,9 @@ async fn ai_tools(State(state): State<AppState>) -> Result<Json<serde_json::Valu
 }
 
 /// `GET /api/ai/tools/policy` —— 生效的策略（展开后的绝对路径 + 两条预算 + 权限档）。
-async fn ai_tool_policy(State(state): State<AppState>) -> Result<Json<serde_json::Value>, ApiError> {
+async fn ai_tool_policy(
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, ApiError> {
     Ok(Json(crate::ai::ai_settings::policy_json(&state)?))
 }
 
@@ -1467,7 +1638,10 @@ async fn ai_provider_credential(
     Path(provider_id): Path<String>,
 ) -> Result<Json<crate::ai::ai::CredentialStatus>, ApiError> {
     let provider = crate::ai::ai::require_provider_row(&state, &provider_id)?;
-    Ok(Json(describe_provider_credential(&state, provider.credential_ref.as_deref())))
+    Ok(Json(describe_provider_credential(
+        &state,
+        provider.credential_ref.as_deref(),
+    )))
 }
 
 /// `PUT /api/ai/providers/{id}/credentials`。
@@ -1483,7 +1657,10 @@ async fn put_provider_credential(
 ) -> Result<Json<crate::ai::ai::CredentialStatus>, ApiError> {
     let provider = crate::ai::ai::require_provider_row(&state, &provider_id)?;
     let reference = provider.credential_ref.ok_or_else(|| {
-        ApiError::ai("CONFIG_ERROR", "该 Provider 未设置凭据引用名（credentialRef）")
+        ApiError::ai(
+            "CONFIG_ERROR",
+            "该 Provider 未设置凭据引用名（credentialRef）",
+        )
     })?;
     if crate::provider::credentials::env_source(&reference).is_some() {
         return Err(ApiError::ai(
@@ -1493,9 +1670,15 @@ async fn put_provider_credential(
     }
     if body.value.trim().is_empty() {
         // 留空 = 不修改（AIH-012）；清除请用 DELETE
-        return Ok(Json(crate::provider::credentials::describe_now(&state, &reference)));
+        return Ok(Json(crate::provider::credentials::describe_now(
+            &state, &reference,
+        )));
     }
-    Ok(Json(crate::provider::credentials::set(&state, &reference, &body.value)?))
+    Ok(Json(crate::provider::credentials::set(
+        &state,
+        &reference,
+        &body.value,
+    )?))
 }
 
 /// `DELETE /api/ai/providers/{id}/credentials`（env 来源与 Kotlin 一样**拒绝**）。
@@ -1505,7 +1688,10 @@ async fn delete_provider_credential(
 ) -> Result<Json<crate::ai::ai::CredentialStatus>, ApiError> {
     let provider = crate::ai::ai::require_provider_row(&state, &provider_id)?;
     let reference = provider.credential_ref.ok_or_else(|| {
-        ApiError::ai("CONFIG_ERROR", "该 Provider 未设置凭据引用名（credentialRef）")
+        ApiError::ai(
+            "CONFIG_ERROR",
+            "该 Provider 未设置凭据引用名（credentialRef）",
+        )
     })?;
     if crate::provider::credentials::env_source(&reference).is_some() {
         return Err(ApiError::ai(
@@ -1513,14 +1699,19 @@ async fn delete_provider_credential(
             format!("凭据 {reference} 由环境变量提供，无法在应用内移除"),
         ));
     }
-    Ok(Json(crate::provider::credentials::unset(&state, &reference)?))
+    Ok(Json(crate::provider::credentials::unset(
+        &state, &reference,
+    )?))
 }
 
 /// `GET /api/ai/web-search/credential` —— 联网搜索那把可选 key 的状态。
 async fn ai_web_search_credential(
     State(state): State<AppState>,
 ) -> Result<Json<crate::ai::ai::CredentialStatus>, ApiError> {
-    Ok(Json(crate::provider::credentials::describe_now(&state, crate::provider::credentials::KEENABLE_REF)))
+    Ok(Json(crate::provider::credentials::describe_now(
+        &state,
+        crate::provider::credentials::KEENABLE_REF,
+    )))
 }
 
 /// `PUT /api/ai/web-search/credential`（报错文案与 provider 那条**刻意不同**：
@@ -1540,9 +1731,15 @@ async fn put_web_search_credential(
         ));
     }
     if body.value.trim().is_empty() {
-        return Ok(Json(crate::provider::credentials::describe_now(&state, reference)));
+        return Ok(Json(crate::provider::credentials::describe_now(
+            &state, reference,
+        )));
     }
-    Ok(Json(crate::provider::credentials::set(&state, reference, &body.value)?))
+    Ok(Json(crate::provider::credentials::set(
+        &state,
+        reference,
+        &body.value,
+    )?))
 }
 
 /// `DELETE /api/ai/web-search/credential`。
@@ -1556,11 +1753,16 @@ async fn delete_web_search_credential(
             format!("密钥 {reference} 由环境变量提供，无法在应用内移除"),
         ));
     }
-    Ok(Json(crate::provider::credentials::unset(&state, reference)?))
+    Ok(Json(crate::provider::credentials::unset(
+        &state, reference,
+    )?))
 }
 
 /// provider 的凭据状态：`credentialRef` 为空时是 `(false, "none", false)`（Kotlin 的 `describe(null)`）。
-fn describe_provider_credential(state: &AppState, reference: Option<&str>) -> crate::ai::ai::CredentialStatus {
+fn describe_provider_credential(
+    state: &AppState,
+    reference: Option<&str>,
+) -> crate::ai::ai::CredentialStatus {
     match reference {
         Some(reference) => crate::provider::credentials::describe_now(state, reference),
         None => crate::ai::ai::describe_credential(None, |_| None, |_| false),
@@ -1597,7 +1799,9 @@ fn skill_failed(failure: crate::ai::skills::SkillFailure) -> ApiError {
 }
 
 /// `GET /api/ai/skills` —— 全量清单（**含非法项**：带 `validationError` 的照样列出来，AIH-038）。
-async fn ai_skills(State(state): State<AppState>) -> Result<Json<Vec<crate::ai::skills::SkillDto>>, ApiError> {
+async fn ai_skills(
+    State(state): State<AppState>,
+) -> Result<Json<Vec<crate::ai::skills::SkillDto>>, ApiError> {
     Ok(Json(crate::ai::skills::list(&state)))
 }
 
@@ -1611,7 +1815,10 @@ async fn ai_skill_detail(
 ) -> Result<Json<SkillDetailDto>, ApiError> {
     match crate::ai::skills::read_detail(&state, &name).map_err(skill_failed)? {
         Some((skill, content)) => Ok(Json(SkillDetailDto { skill, content })),
-        None => Err(ApiError::ai("CONFIG_ERROR", format!("没有名为 {name} 的 skill"))),
+        None => Err(ApiError::ai(
+            "CONFIG_ERROR",
+            format!("没有名为 {name} 的 skill"),
+        )),
     }
 }
 
@@ -1699,7 +1906,9 @@ struct MemoryDeleteRequest {
 }
 
 /// `GET /api/ai/memory` —— 整篇（一行一条）+ 条数上限 + 文件路径。
-async fn ai_memory(State(state): State<AppState>) -> Result<Json<crate::ai::memory::MemoryDto>, ApiError> {
+async fn ai_memory(
+    State(state): State<AppState>,
+) -> Result<Json<crate::ai::memory::MemoryDto>, ApiError> {
     Ok(Json(crate::ai::memory::read_dto(&memory_dir(&state))))
 }
 
@@ -1708,7 +1917,9 @@ async fn put_memory(
     State(state): State<AppState>,
     Json(body): Json<MemoryUpdateRequest>,
 ) -> Result<Json<crate::ai::memory::MemoryDto>, ApiError> {
-    Ok(Json(crate::ai::memory::write(&memory_dir(&state), &body.content).map_err(memory_failed)?))
+    Ok(Json(
+        crate::ai::memory::write(&memory_dir(&state), &body.content).map_err(memory_failed)?,
+    ))
 }
 
 /// `POST /api/ai/memory/entries` —— 追加一条（界面的「+ 添加一条」，**不加日期前缀**）。
@@ -1717,7 +1928,8 @@ async fn add_memory_entry(
     Json(body): Json<MemoryEntryRequest>,
 ) -> Result<Json<crate::ai::memory::MemoryDto>, ApiError> {
     Ok(Json(
-        crate::ai::memory::append_user(&memory_dir(&state), &body.content).map_err(memory_failed)?,
+        crate::ai::memory::append_user(&memory_dir(&state), &body.content)
+            .map_err(memory_failed)?,
     ))
 }
 
@@ -1727,13 +1939,18 @@ async fn delete_memory_entries(
     Json(body): Json<MemoryDeleteRequest>,
 ) -> Result<Json<crate::ai::memory::MemoryDto>, ApiError> {
     Ok(Json(
-        crate::ai::memory::delete_entries(&memory_dir(&state), &body.indices).map_err(memory_failed)?,
+        crate::ai::memory::delete_entries(&memory_dir(&state), &body.indices)
+            .map_err(memory_failed)?,
     ))
 }
 
 /// `DELETE /api/ai/memory` —— 清空。
-async fn clear_memory(State(state): State<AppState>) -> Result<Json<crate::ai::memory::MemoryDto>, ApiError> {
-    Ok(Json(crate::ai::memory::clear(&memory_dir(&state)).map_err(memory_failed)?))
+async fn clear_memory(
+    State(state): State<AppState>,
+) -> Result<Json<crate::ai::memory::MemoryDto>, ApiError> {
+    Ok(Json(
+        crate::ai::memory::clear(&memory_dir(&state)).map_err(memory_failed)?,
+    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -1776,7 +1993,9 @@ async fn ai_builtin_sync(
 async fn ai_capabilities_status(
     State(state): State<AppState>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    Ok(Json(crate::ai::ai_settings::capability_status(&state, None)?))
+    Ok(Json(crate::ai::ai_settings::capability_status(
+        &state, None,
+    )?))
 }
 
 /// `PUT /api/ai/capabilities/probe-toggle` —— 允许/禁止**实测校准**（校准会发真实请求、花钱）。
@@ -1785,8 +2004,16 @@ async fn put_capabilities_probe_toggle(
     Json(body): Json<crate::ai::ai_settings::ProbeToggle>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     crate::ai::ai_settings::save_probe_enabled(&state, body.enabled)?;
-    let message = if body.enabled { "已允许实测校准" } else { "已关闭实测校准" }.to_string();
-    Ok(Json(crate::ai::ai_settings::capability_status(&state, Some(message))?))
+    let message = if body.enabled {
+        "已允许实测校准"
+    } else {
+        "已关闭实测校准"
+    }
+    .to_string();
+    Ok(Json(crate::ai::ai_settings::capability_status(
+        &state,
+        Some(message),
+    )?))
 }
 
 /// `POST /api/ai/capabilities/refresh` —— **立即从 models.dev 拉一次在线数据集**。
@@ -1867,7 +2094,11 @@ pub struct ApiError {
 
 impl ApiError {
     fn new(status: StatusCode, error: impl Into<String>, detail: Option<String>) -> Self {
-        Self { status, error: error.into(), detail }
+        Self {
+            status,
+            error: error.into(),
+            detail,
+        }
     }
 
     pub fn not_found(message: impl Into<String>) -> Self {
@@ -2004,15 +2235,19 @@ async fn net_urls(State(state): State<AppState>) -> Result<Json<serde_json::Valu
 
 async fn health(State(state): State<AppState>) -> Result<Json<serde_json::Value>, ApiError> {
     let storage_dir = storage_dir_of(&state);
-    let (engine, schema) = state.with(|conn| Ok((db::engine_info(conn)?, db::schema_version(conn)?)))?;
+    let (engine, schema) =
+        state.with(|conn| Ok((db::engine_info(conn)?, db::schema_version(conn)?)))?;
 
     // `database` 就是 Kotlin 那句 "SELECT 1" 的结果（ok / error: …），不是常量
     let database = match state.with(|conn| conn.query_row("SELECT 1", [], |r| r.get::<_, i64>(0))) {
         Ok(_) => "ok".to_string(),
         Err(e) => format!("error: {}", e.human()),
     };
-    let server_time: String =
-        state.with(|conn| conn.query_row("SELECT strftime('%Y-%m-%dT%H:%M:%fZ','now')", [], |r| r.get(0)))?;
+    let server_time: String = state.with(|conn| {
+        conn.query_row("SELECT strftime('%Y-%m-%dT%H:%M:%fZ','now')", [], |r| {
+            r.get(0)
+        })
+    })?;
 
     Ok(Json(json!({
         "status": if database == "ok" { "ok" } else { "degraded" },
@@ -2033,7 +2268,9 @@ async fn health(State(state): State<AppState>) -> Result<Json<serde_json::Value>
 /// 存在的理由（2026-09-29 用户 bug）：受限这件事原来只有 `doctor` 与工具文案会说，
 /// 界面上一处都看不到，于是模型如实转述成"input 目录权限不够"，用户去改 ACL —— 白忙。
 /// 受限是**环境事实**，得让人一眼看见，而且要附上"为什么"（后端映像在工作区内）。
-async fn system_confinement(State(state): State<AppState>) -> Result<Json<serde_json::Value>, ApiError> {
+async fn system_confinement(
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, ApiError> {
     Ok(Json(crate::infra::confinement::describe(&state)))
 }
 
@@ -2181,18 +2418,25 @@ async fn list_prompts(
 ///
 /// ⚠ `search_prompts`（工具）与 `/api/prompts`（界面）**共用这一份** —— 各写一份 SQL
 /// 的漂移不会有任何用例变红，只会让 AI 与界面看到两个不同的库。
-pub(crate) fn query_prompts(state: &AppState, q: &PromptQuery) -> Result<Paged<PromptDto>, ApiError> {
+pub(crate) fn query_prompts(
+    state: &AppState,
+    q: &PromptQuery,
+) -> Result<Paged<PromptDto>, ApiError> {
     let page = q.page.unwrap_or(1).max(1);
     let size = q.size.unwrap_or(20).clamp(1, 200);
     let offset = (page - 1) * size;
 
-    let terms: Vec<String> = q
-        .q
-        .as_deref()
-        .map(str::trim)
-        .filter(|text| !text.is_empty())
-        .map(|text| text.split_whitespace().take(8).map(|term| format!("%{term}%")).collect())
-        .unwrap_or_default();
+    let terms: Vec<String> =
+        q.q.as_deref()
+            .map(str::trim)
+            .filter(|text| !text.is_empty())
+            .map(|text| {
+                text.split_whitespace()
+                    .take(8)
+                    .map(|term| format!("%{term}%"))
+                    .collect()
+            })
+            .unwrap_or_default();
 
     let mut where_sql = String::from("WHERE 1 = 1");
     let mut params: Vec<rusqlite::types::Value> = Vec::new();
@@ -2240,7 +2484,9 @@ pub(crate) fn query_prompts(state: &AppState, q: &PromptQuery) -> Result<Paged<P
     let with_media = match media_filter {
         Some(_) => Some(state.with(|conn| {
             crate::media::collection::prompt_ids_with_media(conn).map_err(|e| {
-                rusqlite::Error::ToSqlConversionFailure(Box::new(std::io::Error::other(e.to_string())))
+                rusqlite::Error::ToSqlConversionFailure(Box::new(std::io::Error::other(
+                    e.to_string(),
+                )))
             })
         })?),
         None => None,
@@ -2278,7 +2524,10 @@ pub(crate) fn query_prompts(state: &AppState, q: &PromptQuery) -> Result<Paged<P
         list_params.push(rusqlite::types::Value::Integer(offset));
         let mut stmt = conn.prepare(&sql)?;
         let mut items = stmt
-            .query_map(rusqlite::params_from_iter(list_params.iter()), prompt_from_row)?
+            .query_map(
+                rusqlite::params_from_iter(list_params.iter()),
+                prompt_from_row,
+            )?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         for item in items.iter_mut() {
             item.tags = tags_of(conn, item.id)?;

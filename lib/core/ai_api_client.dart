@@ -353,14 +353,12 @@ class AiApiClient {
     ),
   );
 
-  Future<StyleCard> updateStyleCard(
-    int id,
-    Map<String, dynamic> body,
-  ) async => StyleCard.fromJson(
-    Map<String, dynamic>.from(
-      await _send('PUT', '/api/ai/style-cards/$id', body) as Map,
-    ),
-  );
+  Future<StyleCard> updateStyleCard(int id, Map<String, dynamic> body) async =>
+      StyleCard.fromJson(
+        Map<String, dynamic>.from(
+          await _send('PUT', '/api/ai/style-cards/$id', body) as Map,
+        ),
+      );
 
   Future<void> deleteCharacterCard(int id) async =>
       _send('DELETE', '/api/ai/character-cards/$id');

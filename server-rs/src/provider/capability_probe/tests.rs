@@ -19,7 +19,11 @@ struct FakeGateway {
 
 impl FakeGateway {
     fn new(plan: impl Fn(Option<&str>) -> (u16, &'static str) + Send + Sync + 'static) -> Self {
-        Self { calls: AtomicUsize::new(0), bodies: Mutex::new(Vec::new()), plan: Box::new(plan) }
+        Self {
+            calls: AtomicUsize::new(0),
+            bodies: Mutex::new(Vec::new()),
+            plan: Box::new(plan),
+        }
     }
 
     fn calls(&self) -> usize {
@@ -43,9 +47,11 @@ impl Transport for FakeGateway {
     ) -> ProbeResponse {
         self.calls.fetch_add(1, Ordering::SeqCst);
         self.bodies.lock().unwrap().push(body.to_string());
-        let effort = serde_json::from_str::<Value>(body)
-            .ok()
-            .and_then(|v| v.get("reasoning_effort").and_then(Value::as_str).map(str::to_string));
+        let effort = serde_json::from_str::<Value>(body).ok().and_then(|v| {
+            v.get("reasoning_effort")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        });
         let (status, text) = (self.plan)(effort.as_deref());
         ProbeResponse {
             status: Some(status),
@@ -81,7 +87,10 @@ fn 极小请求的形状与_kotlin_一致() {
     let parsed: Value = serde_json::from_str(&body).unwrap();
     assert_eq!(parsed["model"], "m");
     assert_eq!(parsed["messages"][0]["role"], "user");
-    assert_eq!(parsed["messages"][0]["content"], "ping", "极短 prompt（不是把用户的话发上去）");
+    assert_eq!(
+        parsed["messages"][0]["content"], "ping",
+        "极短 prompt（不是把用户的话发上去）"
+    );
     assert_eq!(parsed["max_tokens"], 256, "限制输出");
     assert!(parsed.get("reasoning_effort").is_none(), "基准请求不带档位");
 
@@ -143,15 +152,22 @@ fn 阶梯只含被接受的那档及其以下() {
     assert_eq!(ladder.get("off").map(String::as_str), Some("none"));
     assert_eq!(ladder.get("high").map(String::as_str), Some("high"));
     assert_eq!(ladder.get("low").map(String::as_str), Some("low"));
-    assert!(!ladder.contains_key("max"), "被拒的高档绝不写回：{ladder:?}");
+    assert!(
+        !ladder.contains_key("max"),
+        "被拒的高档绝不写回：{ladder:?}"
+    );
 }
 
 #[test]
 fn 与思考参数无关的_4xx_判据() {
-    assert!(mentions_thinking(r#"{"error":{"message":"Invalid reasoning_effort: max"}}"#));
+    assert!(mentions_thinking(
+        r#"{"error":{"message":"Invalid reasoning_effort: max"}}"#
+    ));
     assert!(mentions_thinking("unknown parameter: thinking"));
     assert!(mentions_thinking("bad EFFORT"));
-    assert!(!mentions_thinking(r#"{"error":{"message":"model not found"}}"#));
+    assert!(!mentions_thinking(
+        r#"{"error":{"message":"model not found"}}"#
+    ));
 }
 
 // ---- ② 最高档被拒、往下一档被接受 ----
@@ -160,7 +176,10 @@ fn 与思考参数无关的_4xx_判据() {
 async fn 最高档被拒就往下一档试_阶梯只含试过的() {
     let gateway = FakeGateway::new(|effort| {
         if effort == Some("max") {
-            (400, r#"{"error":{"message":"Invalid reasoning_effort: max"}}"#)
+            (
+                400,
+                r#"{"error":{"message":"Invalid reasoning_effort: max"}}"#,
+            )
         } else {
             (200, r#"{"id":"1"}"#)
         }
@@ -211,9 +230,19 @@ async fn 全部档位被拒就如实失败且不发明档位() {
         &rungs,
     )
     .await;
-    assert!(outcome.accepted_top.is_none(), "一个都没认 → acceptedTop 必须是 None");
-    assert!(outcome.ladder.is_none(), "失败时**不写回**（ladder 为 None，不是空表）");
-    assert!(outcome.message.contains("拒绝了全部"), "{}", outcome.message);
+    assert!(
+        outcome.accepted_top.is_none(),
+        "一个都没认 → acceptedTop 必须是 None"
+    );
+    assert!(
+        outcome.ladder.is_none(),
+        "失败时**不写回**（ladder 为 None，不是空表）"
+    );
+    assert!(
+        outcome.message.contains("拒绝了全部"),
+        "{}",
+        outcome.message
+    );
     assert_eq!(outcome.attempts, 4, "基准 + 三个档位都真试过");
 }
 
@@ -241,7 +270,10 @@ async fn 基准请求失败就不下结论() {
 async fn 与思考参数无关的_400_如实中止而不是继续降档() {
     let gateway = FakeGateway::new(|effort| match effort {
         None => (200, r#"{"id":"1"}"#),
-        Some(_) => (400, r#"{"error":{"message":"model not found: test-model"}}"#),
+        Some(_) => (
+            400,
+            r#"{"error":{"message":"model not found: test-model"}}"#,
+        ),
     });
     let rungs = rungs_for(&declared());
     let outcome = run_ladder(
@@ -255,13 +287,25 @@ async fn 与思考参数无关的_400_如实中止而不是继续降档() {
     )
     .await;
     assert!(outcome.ladder.is_none());
-    assert!(outcome.message.contains("与思考参数无关"), "{}", outcome.message);
-    assert_eq!(outcome.attempts, 2, "基准 + 一次 max（绝不把「模型名不对」当成「不支持 max」）");
+    assert!(
+        outcome.message.contains("与思考参数无关"),
+        "{}",
+        outcome.message
+    );
+    assert_eq!(
+        outcome.attempts, 2,
+        "基准 + 一次 max（绝不把「模型名不对」当成「不支持 max」）"
+    );
 }
 
 #[tokio::test]
 async fn 严格网关只认_max_completion_tokens_时按提示换字段重试() {
-    let gateway = FakeGateway::new(|_| (400, r#"{"error":{"message":"Use 'max_completion_tokens' instead of 'max_tokens'."}}"#));
+    let gateway = FakeGateway::new(|_| {
+        (
+            400,
+            r#"{"error":{"message":"Use 'max_completion_tokens' instead of 'max_tokens'."}}"#,
+        )
+    });
     let rungs = rungs_for(&declared());
     let outcome = run_ladder(
         &gateway,
@@ -332,15 +376,24 @@ fn 写回只动这一条别的条目一个字节不变() {
     .unwrap();
 
     // 别人的两行**原样在**（原文是压缩写法，不许被重排）
-    assert!(next.contains("\"other-a\": { \"tools\": false },"), "{next}");
-    assert!(next.contains("\"other-b\": { \"modalities\": [\"text\", \"image\"] }"), "{next}");
+    assert!(
+        next.contains("\"other-a\": { \"tools\": false },"),
+        "{next}"
+    );
+    assert!(
+        next.contains("\"other-b\": { \"modalities\": [\"text\", \"image\"] }"),
+        "{next}"
+    );
     assert!(next.contains("\"source\": \"custom\""));
 
     // 目标那一条被换成新的档位，且**大小写按原文**（`TARGET` 没被改成小写）
     let parsed: Value = serde_json::from_str(&next).unwrap();
     let entry = &parsed["entries"]["TARGET"];
     assert_eq!(entry["thinkingEfforts"]["high"], "high");
-    assert!(entry["thinkingEfforts"].get("max").is_none(), "旧档位不许留下");
+    assert!(
+        entry["thinkingEfforts"].get("max").is_none(),
+        "旧档位不许留下"
+    );
     assert_eq!(entry["thinkingFormat"], "deepseek");
     assert_eq!(entry["reasoning"], true, "没碰的维度原样保留");
     assert!(next.contains("\"TARGET\": {"), "键名的大小写按原文：{next}");
@@ -369,9 +422,17 @@ fn 新增一条时不碰已有条目() {
     )
     .unwrap();
     let parsed: Value = serde_json::from_str(&next).unwrap();
-    assert_eq!(parsed["entries"]["other"]["tools"], false, "别人的条目原样保留");
-    assert_eq!(parsed["entries"]["brand-new"]["thinkingEfforts"]["off"], "none");
-    assert!(parsed["entries"]["brand-new"].get("thinkingFormat").is_none());
+    assert_eq!(
+        parsed["entries"]["other"]["tools"], false,
+        "别人的条目原样保留"
+    );
+    assert_eq!(
+        parsed["entries"]["brand-new"]["thinkingEfforts"]["off"],
+        "none"
+    );
+    assert!(parsed["entries"]["brand-new"]
+        .get("thinkingFormat")
+        .is_none());
     assert_eq!(parsed["source"], "custom");
 }
 
@@ -393,7 +454,10 @@ fn 嵌套对象与转义字符串里的_entries_不会认错() {
     .unwrap();
     assert!(next.contains(r#""other":{"entries":{"x":1}}"#), "{next}");
     let parsed: Value = serde_json::from_str(&next).unwrap();
-    assert_eq!(parsed["entries"]["TARGET"]["thinkingEfforts"]["off"], "none");
+    assert_eq!(
+        parsed["entries"]["TARGET"]["thinkingEfforts"]["off"],
+        "none"
+    );
 }
 
 // ---- ⑤ 坏 JSON：如实报错、不覆盖 ----
@@ -412,14 +476,23 @@ fn 坏_json_如实报错且一个字节都不覆盖() {
     )
     .unwrap_err();
     assert!(err.contains("不是合法 JSON"), "{err}");
-    assert_eq!(std::fs::read_to_string(&file).unwrap(), broken, "坏文件不许被覆盖");
+    assert_eq!(
+        std::fs::read_to_string(&file).unwrap(),
+        broken,
+        "坏文件不许被覆盖"
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
 fn 形状不对的_json_也拒绝覆盖() {
     // 顶层不是对象 / `entries` 不是对象 → 拒绝（改下去只会把用户的文件弄坏）
-    for raw in [r#"[]"#, r#"{"entries": 3}"#, r#"{"entries": []}"#, "不是 JSON"] {
+    for raw in [
+        r#"[]"#,
+        r#"{"entries": 3}"#,
+        r#"{"entries": []}"#,
+        "不是 JSON",
+    ] {
         let err = upsert_entry_text(raw, "m", &default_entry()).unwrap_err();
         let refuses = err.contains("拒绝覆盖") || err.contains("不是合法 JSON");
         assert!(refuses, "{raw} → {err}");
@@ -462,7 +535,11 @@ fn 条目不存在时新建一份文件() {
 #[test]
 fn 写盘是临时文件加_rename() {
     let dir = temp_dir("atomic");
-    std::fs::write(dir.join(CUSTOM_FILE), r#"{"entries":{"m":{"tools":false}}}"#).unwrap();
+    std::fs::write(
+        dir.join(CUSTOM_FILE),
+        r#"{"entries":{"m":{"tools":false}}}"#,
+    )
+    .unwrap();
     write_entry(
         &dir,
         "m",
@@ -550,7 +627,9 @@ async fn 端到端_只打推理模型并写回_custom_json() {
             (200, r#"{"id":"1"}"#)
         }
     });
-    let response = probe(&state, &dir, &ProbeRequest::default(), &gateway).await.unwrap();
+    let response = probe(&state, &dir, &ProbeRequest::default(), &gateway)
+        .await
+        .unwrap();
 
     // 只有 `think-a`（reasoning && enabled）被打；`plain-b` / `off-c` 一个请求都没有
     let outcomes = response["outcomes"].as_array().unwrap();
@@ -596,16 +675,25 @@ async fn 端到端_全部被拒时_custom_json_一个字节都不改() {
         None => (200, r#"{"id":"1"}"#),
         Some(_) => (400, r#"{"error":{"message":"unknown reasoning effort"}}"#),
     });
-    let response = probe(&state, &dir, &ProbeRequest::default(), &gateway).await.unwrap();
+    let response = probe(&state, &dir, &ProbeRequest::default(), &gateway)
+        .await
+        .unwrap();
 
     let outcomes = response["outcomes"].as_array().unwrap();
     assert_eq!(outcomes.len(), 1);
     assert_eq!(outcomes[0]["ok"], false);
     assert_eq!(outcomes[0]["written"], false);
-    assert!(outcomes[0].get("acceptedTop").is_none(), "不发明档位：{response}");
+    assert!(
+        outcomes[0].get("acceptedTop").is_none(),
+        "不发明档位：{response}"
+    );
     assert!(outcomes[0].get("ladder").is_none());
     assert_eq!(response["ok"], false);
-    assert_eq!(std::fs::read_to_string(dir.join(CUSTOM_FILE)).unwrap(), before, "一个字都不许改");
+    assert_eq!(
+        std::fs::read_to_string(dir.join(CUSTOM_FILE)).unwrap(),
+        before,
+        "一个字都不许改"
+    );
     let _ = std::fs::remove_dir_all(&root);
 }
 
@@ -618,11 +706,22 @@ async fn 端到端_坏_custom_json_当场如实报错且不开始探测() {
     std::fs::write(dir.join(CUSTOM_FILE), "{ 这不是 JSON").unwrap();
 
     let gateway = FakeGateway::new(|_| (200, r#"{"id":"1"}"#));
-    let response = probe(&state, &dir, &ProbeRequest::default(), &gateway).await.unwrap();
+    let response = probe(&state, &dir, &ProbeRequest::default(), &gateway)
+        .await
+        .unwrap();
     assert_eq!(response["ok"], false);
     assert_eq!(gateway.calls(), 0, "写不回去就别开始花钱");
-    assert!(response["message"].as_str().unwrap().contains("不是合法 JSON"), "{response}");
-    assert_eq!(std::fs::read_to_string(dir.join(CUSTOM_FILE)).unwrap(), "{ 这不是 JSON");
+    assert!(
+        response["message"]
+            .as_str()
+            .unwrap()
+            .contains("不是合法 JSON"),
+        "{response}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.join(CUSTOM_FILE)).unwrap(),
+        "{ 这不是 JSON"
+    );
     let _ = std::fs::remove_dir_all(&root);
 }
 
@@ -632,7 +731,11 @@ async fn 端到端_指定不存在的模型不发明条目() {
     let dir = root.join("capabilities");
     let state = seeded_state(&dir);
     enable_probe(&state);
-    std::fs::write(dir.join(CUSTOM_FILE), r#"{"entries":{"other":{"tools":false}}}"#).unwrap();
+    std::fs::write(
+        dir.join(CUSTOM_FILE),
+        r#"{"entries":{"other":{"tools":false}}}"#,
+    )
+    .unwrap();
 
     let gateway = FakeGateway::new(|_| (200, r#"{"id":"1"}"#));
     let request = ProbeRequest {
@@ -687,7 +790,11 @@ async fn 端到端_一个模型失败不影响另一个() {
             let model = parsed["model"].as_str().unwrap().to_string();
             self.seen.lock().unwrap().push(model.clone());
             if model == "think-0" {
-                ProbeResponse { status: Some(500), body: "boom".into(), detail: String::new() }
+                ProbeResponse {
+                    status: Some(500),
+                    body: "boom".into(),
+                    detail: String::new(),
+                }
             } else if parsed["reasoning_effort"] == "max" {
                 ProbeResponse {
                     status: Some(400),
@@ -699,8 +806,12 @@ async fn 端到端_一个模型失败不影响另一个() {
             }
         }
     }
-    let transport = Flaky { seen: Mutex::new(Vec::new()) };
-    let response = probe(&state, &dir, &ProbeRequest::default(), &transport).await.unwrap();
+    let transport = Flaky {
+        seen: Mutex::new(Vec::new()),
+    };
+    let response = probe(&state, &dir, &ProbeRequest::default(), &transport)
+        .await
+        .unwrap();
     // 真的两个都跑到了（第一个炸了之后没有提前收队），而且第二个**真的降过档**
     assert_eq!(
         transport.seen.lock().unwrap().clone(),
@@ -742,16 +853,27 @@ async fn 端到端_非_openai_completions_的上游诚实跳过() {
     enable_probe(&state);
     state
         .write(|tx| {
-            tx.execute("UPDATE ai_providers SET api='anthropic-messages' WHERE id='fake'", [])?;
+            tx.execute(
+                "UPDATE ai_providers SET api='anthropic-messages' WHERE id='fake'",
+                [],
+            )?;
             Ok(())
         })
         .unwrap();
     let gateway = FakeGateway::new(|_| (200, r#"{"id":"1"}"#));
-    let response = probe(&state, &dir, &ProbeRequest::default(), &gateway).await.unwrap();
+    let response = probe(&state, &dir, &ProbeRequest::default(), &gateway)
+        .await
+        .unwrap();
     let outcomes = response["outcomes"].as_array().unwrap();
     assert_eq!(outcomes.len(), 1);
     assert_eq!(outcomes[0]["skipped"], true);
-    assert!(outcomes[0]["message"].as_str().unwrap().contains("只支持 OpenAI 兼容"), "{response}");
+    assert!(
+        outcomes[0]["message"]
+            .as_str()
+            .unwrap()
+            .contains("只支持 OpenAI 兼容"),
+        "{response}"
+    );
     assert_eq!(gateway.calls(), 0, "协议不支持就别发请求");
     let _ = std::fs::remove_dir_all(&root);
 }
@@ -779,7 +901,9 @@ async fn 端到端_每_provider_最多八个模型() {
         })
         .unwrap();
     let gateway = FakeGateway::new(|_| (200, r#"{"id":"1"}"#));
-    let response = probe(&state, &dir, &ProbeRequest::default(), &gateway).await.unwrap();
+    let response = probe(&state, &dir, &ProbeRequest::default(), &gateway)
+        .await
+        .unwrap();
     assert_eq!(
         response["outcomes"].as_array().unwrap().len(),
         MAX_MODELS_PER_PROVIDER,

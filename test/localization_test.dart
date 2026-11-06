@@ -15,20 +15,25 @@ import 'package:viewer/core/settings_store.dart';
 import 'package:viewer/pages/ai_home_page.dart';
 
 void main() {
-  testWidgets('App 装上中文 Material 本地化：选择菜单是「复制 / 全选」而不是 Copy / Select all',
-      (tester) async {
+  testWidgets('App 装上中文 Material 本地化：选择菜单是「复制 / 全选」而不是 Copy / Select all', (
+    tester,
+  ) async {
     tester.view.physicalSize = const Size(1600, 1100);
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
 
     // 关掉"启动时自动拉起服务"，免得测试真去连本机 MySQL / 后端
-    SharedPreferences.setMockInitialValues({'comfyhub.autoStartBackend': false});
+    SharedPreferences.setMockInitialValues({
+      'comfyhub.autoStartBackend': false,
+    });
     final settings = SettingsStore();
     await settings.load();
     final launcher = BackendLauncher(settings);
     addTearDown(launcher.dispose);
 
-    await tester.pumpWidget(ComfyHubApp(settings: settings, launcher: launcher));
+    await tester.pumpWidget(
+      ComfyHubApp(settings: settings, launcher: launcher),
+    );
     await tester.pumpAndSettle();
 
     // 主界面现在落在 AI 工作台（AIH-001），中文本地化断言与落地页无关

@@ -19,7 +19,9 @@ const MAX_CHUNK: u32 = 96 * 1024 * 1024;
 /// 取用时只按 `prompt` / `workflow` 两个键，顺序不影响语义）。
 pub fn read_text_chunks(path: &Path) -> BTreeMap<String, String> {
     let mut out = BTreeMap::new();
-    let Ok(bytes) = std::fs::read(path) else { return out };
+    let Ok(bytes) = std::fs::read(path) else {
+        return out;
+    };
     if bytes.len() < 8 || bytes[..8] != SIGNATURE {
         return out;
     }
@@ -59,7 +61,10 @@ pub fn read_text_chunks(path: &Path) -> BTreeMap<String, String> {
 }
 
 fn index_of_zero(data: &[u8], from: usize) -> Option<usize> {
-    data.iter().skip(from).position(|b| *b == 0).map(|i| i + from)
+    data.iter()
+        .skip(from)
+        .position(|b| *b == 0)
+        .map(|i| i + from)
 }
 
 fn put(out: &mut BTreeMap<String, String>, key: &str, value: String) {
@@ -73,7 +78,9 @@ fn put(out: &mut BTreeMap<String, String>, key: &str, value: String) {
 
 /// `tEXt`: keyword \0 text（ComfyUI 实际写 UTF-8）
 fn parse_t_ext(data: &[u8], out: &mut BTreeMap<String, String>) {
-    let Some(sep) = index_of_zero(data, 0) else { return };
+    let Some(sep) = index_of_zero(data, 0) else {
+        return;
+    };
     if sep == 0 {
         return;
     }
@@ -84,7 +91,9 @@ fn parse_t_ext(data: &[u8], out: &mut BTreeMap<String, String>) {
 
 /// `zTXt`: keyword \0 method(1) zlib(text)
 fn parse_z_txt(data: &[u8], out: &mut BTreeMap<String, String>) {
-    let Some(sep) = index_of_zero(data, 0) else { return };
+    let Some(sep) = index_of_zero(data, 0) else {
+        return;
+    };
     if sep == 0 || sep + 2 > data.len() {
         return;
     }
@@ -96,16 +105,22 @@ fn parse_z_txt(data: &[u8], out: &mut BTreeMap<String, String>) {
 
 /// `iTXt`: keyword \0 compFlag(1) compMethod(1) lang \0 translated \0 text
 fn parse_i_txt(data: &[u8], out: &mut BTreeMap<String, String>) {
-    let Some(sep) = index_of_zero(data, 0) else { return };
+    let Some(sep) = index_of_zero(data, 0) else {
+        return;
+    };
     if sep == 0 || sep + 2 > data.len() {
         return;
     }
     let key = String::from_utf8_lossy(&data[..sep]).to_string();
     let compressed = data[sep + 1] == 1;
     let mut cursor = sep + 3;
-    let Some(lang_end) = index_of_zero(data, cursor) else { return };
+    let Some(lang_end) = index_of_zero(data, cursor) else {
+        return;
+    };
     cursor = lang_end + 1;
-    let Some(trans_end) = index_of_zero(data, cursor) else { return };
+    let Some(trans_end) = index_of_zero(data, cursor) else {
+        return;
+    };
     cursor = trans_end + 1;
     if cursor > data.len() {
         return;

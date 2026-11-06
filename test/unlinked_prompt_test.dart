@@ -28,93 +28,100 @@ class _FakeLibrary {
   final List<int> deleted = [];
 
   MockClient client() => MockClient((request) async {
-        final path = request.url.path;
-        final params = request.url.queryParameters;
-        requests.add('${request.method} $path'
-            '${request.url.hasQuery ? '?${request.url.query}' : ''}');
+    final path = request.url.path;
+    final params = request.url.queryParameters;
+    requests.add(
+      '${request.method} $path'
+      '${request.url.hasQuery ? '?${request.url.query}' : ''}',
+    );
 
-        Object? body;
-        var status = 200;
+    Object? body;
+    var status = 200;
 
-        if (path == '/api/prompts') {
-          final hasMedia = params['hasMedia'];
-          var items = prompts;
-          if (hasMedia == '0') {
-            items = prompts.where((p) => (p['mediaCount'] as int) == 0).toList();
-          } else if (hasMedia == '1') {
-            items = prompts.where((p) => (p['mediaCount'] as int) > 0).toList();
-          }
-          final size = int.tryParse(params['size'] ?? '24') ?? 24;
-          final page = int.tryParse(params['page'] ?? '1') ?? 1;
-          final start = (page - 1) * size;
-          final slice = start >= items.length
-              ? const <Map<String, dynamic>>[]
-              : items.sublist(start, (start + size).clamp(0, items.length));
-          body = {
-            'items': slice,
-            'total': items.length,
-            'page': page,
-            'size': size,
-            'pages': items.isEmpty ? 0 : ((items.length + size - 1) ~/ size),
-          };
-        } else if (RegExp(r'^/api/prompts/\d+$').hasMatch(path)) {
-          final id = int.parse(path.split('/').last);
-          deleted.add(id);
-          prompts.removeWhere((p) => p['id'] == id);
-          body = {'deleted': true, 'id': id};
-        } else if (path == '/api/tags' || path == '/api/tags/categories') {
-          body = <Object>[];
-        } else if (path == '/api/stats') {
-          body = {
-            'prompts': prompts.length,
-            'media': 0,
-            'tags': 0,
-            'favoritePrompts': 0,
-            'favoriteMedia': 0,
-            'byKind': <String, int>{},
-            'byMediaKind': <String, int>{},
-          };
-        } else {
-          status = 404;
-          body = {'error': 'not found: $path'};
-        }
+    if (path == '/api/prompts') {
+      final hasMedia = params['hasMedia'];
+      var items = prompts;
+      if (hasMedia == '0') {
+        items = prompts.where((p) => (p['mediaCount'] as int) == 0).toList();
+      } else if (hasMedia == '1') {
+        items = prompts.where((p) => (p['mediaCount'] as int) > 0).toList();
+      }
+      final size = int.tryParse(params['size'] ?? '24') ?? 24;
+      final page = int.tryParse(params['page'] ?? '1') ?? 1;
+      final start = (page - 1) * size;
+      final slice = start >= items.length
+          ? const <Map<String, dynamic>>[]
+          : items.sublist(start, (start + size).clamp(0, items.length));
+      body = {
+        'items': slice,
+        'total': items.length,
+        'page': page,
+        'size': size,
+        'pages': items.isEmpty ? 0 : ((items.length + size - 1) ~/ size),
+      };
+    } else if (RegExp(r'^/api/prompts/\d+$').hasMatch(path)) {
+      final id = int.parse(path.split('/').last);
+      deleted.add(id);
+      prompts.removeWhere((p) => p['id'] == id);
+      body = {'deleted': true, 'id': id};
+    } else if (path == '/api/tags' || path == '/api/tags/categories') {
+      body = <Object>[];
+    } else if (path == '/api/stats') {
+      body = {
+        'prompts': prompts.length,
+        'media': 0,
+        'tags': 0,
+        'favoritePrompts': 0,
+        'favoriteMedia': 0,
+        'byKind': <String, int>{},
+        'byMediaKind': <String, int>{},
+      };
+    } else {
+      status = 404;
+      body = {'error': 'not found: $path'};
+    }
 
-        return http.Response(
-          jsonEncode(body),
-          status,
-          headers: {'content-type': 'application/json; charset=utf-8'},
-        );
-      });
+    return http.Response(
+      jsonEncode(body),
+      status,
+      headers: {'content-type': 'application/json; charset=utf-8'},
+    );
+  });
 }
 
 Map<String, dynamic> _prompt(int id, {int mediaCount = 0}) => {
-      'id': id,
-      'title': '提示词 $id',
-      'kind': 'IMAGE',
-      'positivePrompt': 'prompt body $id',
-      'favorite': false,
-      'mediaCount': mediaCount,
-      'tags': <Object>[],
-    };
+  'id': id,
+  'title': '提示词 $id',
+  'kind': 'IMAGE',
+  'positivePrompt': 'prompt body $id',
+  'favorite': false,
+  'mediaCount': mediaCount,
+  'tags': <Object>[],
+};
 
-Future<(LibraryStore, _FakeLibrary)> _makeStore(List<Map<String, dynamic>> prompts) async {
+Future<(LibraryStore, _FakeLibrary)> _makeStore(
+  List<Map<String, dynamic>> prompts,
+) async {
   SharedPreferences.setMockInitialValues({});
   final settings = SettingsStore();
   await settings.load();
   final fake = _FakeLibrary(prompts);
-  final store = LibraryStore(settings, api: ApiClient(settings.baseUrl, client: fake.client()));
+  final store = LibraryStore(
+    settings,
+    api: ApiClient(settings.baseUrl, client: fake.client()),
+  );
   await store.refreshAll();
   return (store, fake);
 }
 
 Widget _wrap(LibraryStore store) => MultiProvider(
-      providers: [
-        ChangeNotifierProvider<LibraryStore>.value(value: store),
-        // 预设页的筛选栏要读 `SettingsStore`（折叠状态记在它里面）
-        ChangeNotifierProvider<SettingsStore>.value(value: store.settings),
-      ],
-      child: const MaterialApp(home: PromptsPage()),
-    );
+  providers: [
+    ChangeNotifierProvider<LibraryStore>.value(value: store),
+    // 预设页的筛选栏要读 `SettingsStore`（折叠状态记在它里面）
+    ChangeNotifierProvider<SettingsStore>.value(value: store.settings),
+  ],
+  child: const MaterialApp(home: PromptsPage()),
+);
 
 void main() {
   testWidgets('没有关联产物的提示词上要能看到「未关联」标记', (tester) async {
@@ -138,7 +145,10 @@ void main() {
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
 
-    final (store, fake) = await _makeStore([_prompt(1), _prompt(2, mediaCount: 3)]);
+    final (store, fake) = await _makeStore([
+      _prompt(1),
+      _prompt(2, mediaCount: 3),
+    ]);
     await tester.pumpWidget(_wrap(store));
     await tester.pumpAndSettle();
 

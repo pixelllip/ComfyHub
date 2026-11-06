@@ -66,11 +66,29 @@ impl ApiPortState {
         Some(Self {
             port,
             pid: value.get("pid").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
-            host: value.get("host").and_then(|v| v.as_str()).unwrap_or("127.0.0.1").to_string(),
-            url: value.get("url").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-            started_at: value.get("startedAt").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-            requested_port: value.get("requestedPort").and_then(|v| v.as_u64()).unwrap_or(0) as u16,
-            fell_back: value.get("fellBack").and_then(|v| v.as_bool()).unwrap_or(false),
+            host: value
+                .get("host")
+                .and_then(|v| v.as_str())
+                .unwrap_or("127.0.0.1")
+                .to_string(),
+            url: value
+                .get("url")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
+            started_at: value
+                .get("startedAt")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
+            requested_port: value
+                .get("requestedPort")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0) as u16,
+            fell_back: value
+                .get("fellBack")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false),
         })
     }
 }
@@ -118,7 +136,11 @@ pub fn write(project_root: &Path, state: &ApiPortState) -> Option<PathBuf> {
                 target.display(),
                 state.port,
                 state.pid,
-                if attempt > 0 { format!("，重试 {attempt} 次") } else { String::new() }
+                if attempt > 0 {
+                    format!("，重试 {attempt} 次")
+                } else {
+                    String::new()
+                }
             );
             return Some(target);
         }
@@ -129,7 +151,10 @@ pub fn write(project_root: &Path, state: &ApiPortState) -> Option<PathBuf> {
         }
         std::thread::sleep(std::time::Duration::from_millis(200 * (attempt + 1)));
     }
-    eprintln!("[api-port] 写端口状态文件失败（试了 5 次），服务照常运行：{}", target.display());
+    eprintln!(
+        "[api-port] 写端口状态文件失败（试了 5 次），服务照常运行：{}",
+        target.display()
+    );
     let _ = std::fs::remove_file(&tmp);
     None
 }
@@ -146,7 +171,9 @@ pub fn read(project_root: &Path) -> Option<ApiPortState> {
 /// 场景：用户点「重启」，新的后端已经起来并写好了新文件，这时旧进程的收尾才跑完；
 /// 无条件删会把**新进程的**记录删掉，前端随后就再也找不到后端了。
 pub fn delete_if_owned(project_root: &Path, pid: u32) -> bool {
-    let mine = read(project_root).map(|state| state.pid == pid).unwrap_or(false);
+    let mine = read(project_root)
+        .map(|state| state.pid == pid)
+        .unwrap_or(false);
     if !mine {
         eprintln!("[api-port] 端口状态文件不属于本进程（pid 不匹配），保留不删");
         return false;

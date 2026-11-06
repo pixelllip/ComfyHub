@@ -30,9 +30,11 @@ use axum::{
 };
 use rusqlite::{params, OptionalExtension};
 
-use crate::web::inputs::{Deleted, FavoriteInput, FavoriteResult, PromptInput, TagInput, TagNamesInput};
-use crate::web::models::{prompt_from_row, tag_from_row, PromptDto, TagDto};
 use crate::library::repo::{self, WriteError};
+use crate::web::inputs::{
+    Deleted, FavoriteInput, FavoriteResult, PromptInput, TagInput, TagNamesInput,
+};
+use crate::web::models::{prompt_from_row, tag_from_row, PromptDto, TagDto};
 use crate::web::routes::{ApiError, AppState, Id, IdPair};
 
 /// 写端点的路由表（**不在这里 `with_state`**：要和读端点那份 merge 之后再统一上状态，
@@ -42,7 +44,10 @@ pub fn write_router() -> Router<AppState> {
         .route("/api/tags", post(create_tag))
         .route("/api/tags/{id}", put(update_tag).delete(delete_tag))
         .route("/api/prompts", post(create_prompt))
-        .route("/api/prompts/{id}", put(update_prompt).delete(delete_prompt))
+        .route(
+            "/api/prompts/{id}",
+            put(update_prompt).delete(delete_prompt),
+        )
         .route("/api/prompts/{id}/favorite", post(favorite))
         .route("/api/prompts/{id}/duplicate", post(duplicate))
         .route("/api/prompts/{id}/tags", post(add_tags))
@@ -135,7 +140,6 @@ async fn delete_media(
     Ok(Json(Deleted { deleted: id }))
 }
 
-
 impl From<WriteError> for ApiError {
     fn from(e: WriteError) -> Self {
         match e {
@@ -150,8 +154,12 @@ impl From<WriteError> for ApiError {
 fn read_tag(state: &AppState, id: i64) -> Result<Json<TagDto>, ApiError> {
     state
         .with(|conn| {
-            conn.query_row("SELECT * FROM tags WHERE id = ?1", params![id], tag_from_row)
-                .optional()
+            conn.query_row(
+                "SELECT * FROM tags WHERE id = ?1",
+                params![id],
+                tag_from_row,
+            )
+            .optional()
         })?
         .map(Json)
         .ok_or_else(|| ApiError::not_found(format!("标签 {id} 不存在")))
@@ -161,7 +169,11 @@ fn read_prompt(state: &AppState, id: i64) -> Result<Json<PromptDto>, ApiError> {
     state
         .with(|conn| {
             let prompt = conn
-                .query_row("SELECT * FROM prompts WHERE id = ?1", params![id], prompt_from_row)
+                .query_row(
+                    "SELECT * FROM prompts WHERE id = ?1",
+                    params![id],
+                    prompt_from_row,
+                )
                 .optional()?;
             match prompt {
                 Some(mut p) => {
@@ -185,8 +197,13 @@ async fn create_tag(
     Json(input): Json<TagInput>,
 ) -> Result<(StatusCode, Json<TagDto>), ApiError> {
     let id = state.write(|tx| {
-        let id = repo::ensure_tag(tx, &input.name, input.category.as_deref(), input.color.as_deref())?
-            .ok_or_else(|| WriteError::Validation("标签名不能为空".into()))?;
+        let id = repo::ensure_tag(
+            tx,
+            &input.name,
+            input.category.as_deref(),
+            input.color.as_deref(),
+        )?
+        .ok_or_else(|| WriteError::Validation("标签名不能为空".into()))?;
         repo::update_tag(tx, id, &input)?;
         Ok(id)
     })?;
@@ -206,10 +223,7 @@ async fn update_tag(
     read_tag(&state, id)
 }
 
-async fn delete_tag(
-    State(state): State<AppState>,
-    Id(id): Id,
-) -> Result<Json<Deleted>, ApiError> {
+async fn delete_tag(State(state): State<AppState>, Id(id): Id) -> Result<Json<Deleted>, ApiError> {
     let ok = state.write(|tx| repo::delete_tag(tx, id))?;
     if !ok {
         return Err(ApiError::not_found(format!("标签 {id} 不存在")));
@@ -265,7 +279,10 @@ async fn favorite(
     if !ok {
         return Err(ApiError::not_found(format!("提示词 {id} 不存在")));
     }
-    Ok(Json(FavoriteResult { id, favorite: body.favorite }))
+    Ok(Json(FavoriteResult {
+        id,
+        favorite: body.favorite,
+    }))
 }
 
 async fn duplicate(
@@ -275,7 +292,11 @@ async fn duplicate(
     // 先把源读齐（DTO + 标签），再在**一个写事务里**建副本
     let source = state.with(|conn| {
         let prompt = conn
-            .query_row("SELECT * FROM prompts WHERE id = ?1", params![id], prompt_from_row)
+            .query_row(
+                "SELECT * FROM prompts WHERE id = ?1",
+                params![id],
+                prompt_from_row,
+            )
             .optional()?;
         let Some(mut p) = prompt else { return Ok(None) };
         p.tags = crate::web::routes::tags_of(conn, p.id)?;
@@ -287,7 +308,14 @@ async fn duplicate(
     };
     let tags = prompt.tags.clone();
     let new_id = state.write(|tx| {
-        repo::duplicate_prompt(tx, id, &repo::PromptWithTags { prompt: prompt.clone(), tags: tags.clone() })
+        repo::duplicate_prompt(
+            tx,
+            id,
+            &repo::PromptWithTags {
+                prompt: prompt.clone(),
+                tags: tags.clone(),
+            },
+        )
     })?;
     let dto = read_prompt(&state, new_id)?;
     Ok((StatusCode::CREATED, dto))
@@ -300,7 +328,9 @@ async fn add_tags(
 ) -> Result<Json<PromptDto>, ApiError> {
     let exists = state.with(|conn| {
         Ok(conn
-            .query_row("SELECT id FROM prompts WHERE id = ?1", params![id], |row| row.get::<_, i64>(0))
+            .query_row("SELECT id FROM prompts WHERE id = ?1", params![id], |row| {
+                row.get::<_, i64>(0)
+            })
             .optional()?
             .is_some())
     })?;
@@ -320,7 +350,9 @@ async fn remove_tag(
 ) -> Result<Json<PromptDto>, ApiError> {
     let exists = state.with(|conn| {
         Ok(conn
-            .query_row("SELECT id FROM prompts WHERE id = ?1", params![id], |row| row.get::<_, i64>(0))
+            .query_row("SELECT id FROM prompts WHERE id = ?1", params![id], |row| {
+                row.get::<_, i64>(0)
+            })
             .optional()?
             .is_some())
     })?;

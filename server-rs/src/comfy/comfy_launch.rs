@@ -84,8 +84,8 @@ use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 
-use crate::web::routes::AppState;
 use crate::tools::tools::{str_arg, ToolFailure, ToolOutcome};
+use crate::web::routes::AppState;
 
 /// 等实例起来的上限（秒）：本机冷启动实测约 40~60s（加载自定义节点最慢）。
 const DEFAULT_WAIT_SECONDS: u64 = 120;
@@ -184,14 +184,15 @@ pub fn resolve_workspace(
     }
 
     let mut tried: Vec<String> = Vec::new();
-    let consider = |dir: Option<PathBuf>, label: &str, tried: &mut Vec<String>| -> Option<PathBuf> {
-        let dir = dir?;
-        if looks_runnable(&dir) {
-            return Some(dir);
-        }
-        tried.push(format!("{label}（{}）", dir.display()));
-        None
-    };
+    let consider =
+        |dir: Option<PathBuf>, label: &str, tried: &mut Vec<String>| -> Option<PathBuf> {
+            let dir = dir?;
+            if looks_runnable(&dir) {
+                return Some(dir);
+            }
+            tried.push(format!("{label}（{}）", dir.display()));
+            None
+        };
 
     let from_env = [
         "COMFYHUB_COMFY_WORKSPACE",
@@ -202,9 +203,19 @@ pub fn resolve_workspace(
     .into_iter()
     .find_map(|key| consider(crate::comfy::comfy_dirs::env_path(key), key, &mut tried));
     let found = from_env
-        .or_else(|| consider(Some(project_root.join("comfyui")), "项目内的 comfyui", &mut tried))
         .or_else(|| {
-            consider(Some(PathBuf::from("D:\\ComfyUI")), "常见位置 D:\\ComfyUI", &mut tried)
+            consider(
+                Some(project_root.join("comfyui")),
+                "项目内的 comfyui",
+                &mut tried,
+            )
+        })
+        .or_else(|| {
+            consider(
+                Some(PathBuf::from("D:\\ComfyUI")),
+                "常见位置 D:\\ComfyUI",
+                &mut tried,
+            )
         })
         .or_else(|| {
             consider(
@@ -214,15 +225,35 @@ pub fn resolve_workspace(
             )
         })
         // ComfyUI Desktop 的几套布局（有界探测，与"找产物目录"共用同一批函数）
-        .or_else(|| consider(crate::comfy::comfy_dirs::search_user_profile(), "用户目录下的 ComfyUI", &mut tried))
         .or_else(|| {
-            consider(crate::comfy::comfy_dirs::search_desktop_installs(), "ComfyUI Desktop 的实例", &mut tried)
+            consider(
+                crate::comfy::comfy_dirs::search_user_profile(),
+                "用户目录下的 ComfyUI",
+                &mut tried,
+            )
         })
         .or_else(|| {
-            consider(crate::comfy::comfy_dirs::search_desktop_packages(), "便携包 / 整合包", &mut tried)
+            consider(
+                crate::comfy::comfy_dirs::search_desktop_installs(),
+                "ComfyUI Desktop 的实例",
+                &mut tried,
+            )
+        })
+        .or_else(|| {
+            consider(
+                crate::comfy::comfy_dirs::search_desktop_packages(),
+                "便携包 / 整合包",
+                &mut tried,
+            )
         })
         // 最后退回"任何形态"那一档（能跑就用；跑不了只能如实报）
-        .or_else(|| consider(crate::comfy::comfy_dirs::find_home(project_root, configured_output), "已配置的目录", &mut tried));
+        .or_else(|| {
+            consider(
+                crate::comfy::comfy_dirs::find_home(project_root, configured_output),
+                "已配置的目录",
+                &mut tried,
+            )
+        });
 
     found.ok_or_else(|| {
         ToolFailure::new(
@@ -270,12 +301,20 @@ pub fn plan_with(
 ) -> Result<LaunchPlan, ToolFailure> {
     let python = resolve_python(&workspace)?;
     // 三个路径参数**复用 launch_comfyui 那一份**（同一个真源）
-    let prepared = crate::tools::mcp::prepare_launch_with(&json!({ "extra_args": extra_args }), desktop.cloned());
+    let prepared = crate::tools::mcp::prepare_launch_with(
+        &json!({ "extra_args": extra_args }),
+        desktop.cloned(),
+    );
     let mut args: Vec<String> = prepared
         .args
         .get("extra_args")
         .and_then(Value::as_array)
-        .map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect())
+        .map(|a| {
+            a.iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect()
+        })
         .unwrap_or_default();
     if !args.iter().any(|a| a == "--port") {
         args.push("--port".into());
@@ -285,7 +324,10 @@ pub fn plan_with(
     std::fs::create_dir_all(&run_dir).map_err(|e| {
         ToolFailure::new(
             "COMFY_START_FAILED",
-            format!("建不出 {}：{e}（日志与 pid 都要落在这里）", run_dir.display()),
+            format!(
+                "建不出 {}：{e}（日志与 pid 都要落在这里）",
+                run_dir.display()
+            ),
         )
     })?;
     Ok(LaunchPlan {
@@ -333,11 +375,17 @@ pub fn ensure_writable(
 ) -> Result<(), ToolFailure> {
     let mut blocked: Vec<String> = Vec::new();
     if !writable(&plan.workspace) {
-        blocked.push(format!("工作区 {}（实例起手就要写它的 temp/）", plan.workspace.display()));
+        blocked.push(format!(
+            "工作区 {}（实例起手就要写它的 temp/）",
+            plan.workspace.display()
+        ));
     }
     if let Some(out) = output_dir {
         if !writable(out) {
-            blocked.push(format!("产物目录 {}（跑出来的图要落在这里）", out.display()));
+            blocked.push(format!(
+                "产物目录 {}（跑出来的图要落在这里）",
+                out.display()
+            ));
         }
     }
     if blocked.is_empty() {
@@ -390,8 +438,12 @@ pub fn ensure_writable(
 
 /// `comfy_start`：把实例起到"`/system_stats` 真的答话"为止。
 pub async fn start(state: &AppState, arguments: &Value) -> Result<ToolOutcome, ToolFailure> {
-    let config = crate::comfy::capture::capture_config(state)
-        .map_err(|e| ToolFailure::new("CONFIG_ERROR", format!("读 ComfyUI 配置失败：{}", e.human())))?;
+    let config = crate::comfy::capture::capture_config(state).map_err(|e| {
+        ToolFailure::new(
+            "CONFIG_ERROR",
+            format!("读 ComfyUI 配置失败：{}", e.human()),
+        )
+    })?;
     let base = config.comfy_url.trim().trim_end_matches('/').to_string();
 
     // 已经在跑就**不重复起**（同一端口硬起第二个必失败，而用户其实只想用它）。
@@ -405,7 +457,12 @@ pub async fn start(state: &AppState, arguments: &Value) -> Result<ToolOutcome, T
     let extra: Vec<String> = arguments
         .get("extraArgs")
         .and_then(Value::as_array)
-        .map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect())
+        .map(|a| {
+            a.iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect()
+        })
         .unwrap_or_default();
     let port = port_of(&base);
     let workspace = resolve_workspace(
@@ -414,7 +471,13 @@ pub async fn start(state: &AppState, arguments: &Value) -> Result<ToolOutcome, T
         str_arg(arguments, "workspace").as_deref(),
     )?;
     let desktop = crate::tools::mcp::desktop(None);
-    let plan = plan_with(&state.project_root(), workspace, port, &extra, desktop.as_ref())?;
+    let plan = plan_with(
+        &state.project_root(),
+        workspace,
+        port,
+        &extra,
+        desktop.as_ref(),
+    )?;
     // 先确认"子进程写得进它自己的目录"（写不进就别白起一个卡死的实例，见 ensure_writable）
     let output_dir = desktop.as_ref().and_then(|d| d.output_dir.clone());
     // 顺手留证：探一次就把"本进程受不受限"落到 `.run\confinement.json`，doctor 靠它报出来 ——
@@ -440,7 +503,8 @@ pub async fn start(state: &AppState, arguments: &Value) -> Result<ToolOutcome, T
     match outcome {
         Ok(stats) => {
             let known = crate::tools::mcp::mounted_input_dir(&plan.args);
-            let mut out = running_outcome(&base, &stats, Some((&plan, pid, started.elapsed())), known);
+            let mut out =
+                running_outcome(&base, &stats, Some((&plan, pid, started.elapsed())), known);
             if let Some(note) = &plan.note {
                 out.payload["note"] = json!(note);
                 out.content.push('\n');
@@ -459,11 +523,18 @@ pub async fn start(state: &AppState, arguments: &Value) -> Result<ToolOutcome, T
 
 /// `comfy_stop`：停**我们自己起的**那一个实例。
 pub async fn stop(state: &AppState) -> Result<ToolOutcome, ToolFailure> {
-    let config = crate::comfy::capture::capture_config(state)
-        .map_err(|e| ToolFailure::new("CONFIG_ERROR", format!("读 ComfyUI 配置失败：{}", e.human())))?;
+    let config = crate::comfy::capture::capture_config(state).map_err(|e| {
+        ToolFailure::new(
+            "CONFIG_ERROR",
+            format!("读 ComfyUI 配置失败：{}", e.human()),
+        )
+    })?;
     let base = config.comfy_url.trim().trim_end_matches('/').to_string();
     let port = port_of(&base);
-    let pid_file = state.project_root().join(".run").join(format!("comfyui-{port}.pid"));
+    let pid_file = state
+        .project_root()
+        .join(".run")
+        .join(format!("comfyui-{port}.pid"));
     let pid = read_pid_file(&pid_file).ok_or_else(|| {
         ToolFailure::new(
             "COMFY_NOT_OURS",
@@ -533,7 +604,9 @@ pub async fn stop(state: &AppState) -> Result<ToolOutcome, ToolFailure> {
 
 /// 问一次 `GET /system_stats`；答话就是"实例起来了"（连不上 / 非 200 → `None`）。
 async fn probe(base: &str) -> Option<Value> {
-    crate::comfy::comfy_client::get_json(&format!("{base}/system_stats")).await.ok()
+    crate::comfy::comfy_client::get_json(&format!("{base}/system_stats"))
+        .await
+        .ok()
 }
 
 /// 一直在等，直到实例答话（或子进程提前退出 / 超时）。
@@ -585,9 +658,9 @@ fn spawn_detached(plan: &LaunchPlan) -> Result<std::process::Child, ToolFailure>
             format!("建不出日志文件 {}：{e}", plan.log.display()),
         )
     })?;
-    let err_log = log.try_clone().map_err(|e| {
-        ToolFailure::new("COMFY_START_FAILED", format!("复制日志句柄失败：{e}"))
-    })?;
+    let err_log = log
+        .try_clone()
+        .map_err(|e| ToolFailure::new("COMFY_START_FAILED", format!("复制日志句柄失败：{e}")))?;
     let mut command = std::process::Command::new(&plan.python);
     command
         .arg("main.py")
@@ -726,7 +799,11 @@ fn write_launch_record(plan: &LaunchPlan, pid: u32) -> std::io::Result<()> {
 
 /// 读那次启动的留档（没有 / 不是 JSON 就是 `None`）。
 pub fn read_launch_record(project_root: &Path, port: u16) -> Option<Value> {
-    let path = record_file_of(&project_root.join(".run").join(format!("comfyui-{port}.pid")));
+    let path = record_file_of(
+        &project_root
+            .join(".run")
+            .join(format!("comfyui-{port}.pid")),
+    );
     let text = std::fs::read_to_string(path).ok()?;
     serde_json::from_str::<Value>(&text).ok()
 }
@@ -738,7 +815,9 @@ pub fn read_launch_record(project_root: &Path, port: u16) -> Option<Value> {
 /// 用户自己用 ComfyUI Desktop 起的实例我们没起过 → `None`；那条路靠**直接问实例**
 /// （`image_edit::target_input_dir` 的探测），而不是靠猜。
 pub fn launched_input_dir(project_root: &Path, port: u16) -> Option<PathBuf> {
-    let pid_file = project_root.join(".run").join(format!("comfyui-{port}.pid"));
+    let pid_file = project_root
+        .join(".run")
+        .join(format!("comfyui-{port}.pid"));
     let pid = read_pid_file(&pid_file)?;
     let image = process_image_name(pid)?;
     if !image.to_ascii_lowercase().contains("python") {

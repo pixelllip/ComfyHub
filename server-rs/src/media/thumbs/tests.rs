@@ -23,7 +23,11 @@ fn thumbnail_is_scaled_to_max_edge_and_never_upscaled() {
     let dest = dir.join("big.jpg");
     assert!(write_thumbnail(&big, &dest).unwrap());
     let out = image::open(&dest).unwrap();
-    assert_eq!((out.width(), out.height()), (512, 256), "最长边压到 512，比例保持");
+    assert_eq!(
+        (out.width(), out.height()),
+        (512, 256),
+        "最长边压到 512，比例保持"
+    );
 
     // 小图不放大（放大只会更糊）
     let small = png_with_alpha(&dir, "small.png", 100, 80);
@@ -45,7 +49,10 @@ fn transparent_pixels_are_composited_on_the_dark_backdrop_not_black() {
     let out = image::open(&dest).unwrap().to_rgb8();
     let px = out.get_pixel(0, 0);
     // 半透明红叠在 #1E1E22 上 ≈ (142,15,17)；关键是**不能是纯黑 (0,0,0)**
-    assert!(px[0] > 100 && px[1] < 60 && px[2] < 60, "像素={px:?}（黑块就是没铺底色）");
+    assert!(
+        px[0] > 100 && px[1] < 60 && px[2] < 60,
+        "像素={px:?}（黑块就是没铺底色）"
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -62,5 +69,9 @@ fn undecodable_files_report_false_instead_of_panicking() {
 #[test]
 fn thumb_path_lives_next_to_media_dir() {
     let path = thumb_path(Path::new("D:/root/storage/media"), 42);
-    assert!(path.ends_with("thumbs/42.jpg") || path.ends_with("thumbs\\42.jpg"), "{}", path.display());
+    assert!(
+        path.ends_with("thumbs/42.jpg") || path.ends_with("thumbs\\42.jpg"),
+        "{}",
+        path.display()
+    );
 }

@@ -26,13 +26,14 @@ import 'package:viewer/widgets/app_menu.dart';
 /// 每次创建 Run 的请求体（按顺序）。
 final List<Map<String, dynamic>> runBodies = [];
 
-String _sse(int seq, String type, String dataJson) => 'id: $seq\nevent: $type\ndata: $dataJson\n\n';
+String _sse(int seq, String type, String dataJson) =>
+    'id: $seq\nevent: $type\ndata: $dataJson\n\n';
 
 http.Response _sseResponse(String body) => http.Response.bytes(
-      utf8.encode(body),
-      200,
-      headers: {'content-type': 'text/event-stream; charset=utf-8'},
-    );
+  utf8.encode(body),
+  200,
+  headers: {'content-type': 'text/event-stream; charset=utf-8'},
+);
 
 /// 假后端：模型声明了 reasoning + high/max，但**没有声明 off**。
 MockClient _backend() {
@@ -50,8 +51,12 @@ MockClient _backend() {
           'endpointTrust': 'loopback',
           'enabled': true,
           'revision': 1,
-          'credential': {'configured': true, 'source': 'managed', 'writable': true},
-        }
+          'credential': {
+            'configured': true,
+            'source': 'managed',
+            'writable': true,
+          },
+        },
       ];
     } else if (path == '/api/ai/providers/local-gw/models') {
       body = [
@@ -66,7 +71,7 @@ MockClient _backend() {
           'thinkingFormat': 'openai',
           'capabilitySource': 'manual',
           'enabled': true,
-        }
+        },
       ];
     } else if (path == '/api/ai/conversations' && request.method == 'POST') {
       body = {
@@ -81,13 +86,21 @@ MockClient _backend() {
     } else if (path == '/api/ai/conversations/c1/runs') {
       runBodies.add(jsonDecode(request.body) as Map<String, dynamic>);
       runCount++;
-      body = {'runId': 'r$runCount', 'assistantMessageId': 'a$runCount', 'userMessageId': 'u1'};
+      body = {
+        'runId': 'r$runCount',
+        'assistantMessageId': 'a$runCount',
+        'userMessageId': 'u1',
+      };
     } else if (path.startsWith('/api/ai/runs/') && path.endsWith('/events')) {
       final runId = path.split('/')[4];
       return _sseResponse(
         _sse(1, 'run.started', '{"runId":"$runId"}') +
             _sse(2, 'text.delta', '{"messageId":"a$runCount","text":"好"}') +
-            _sse(3, 'message.completed', '{"messageId":"a$runCount","text":"好"}') +
+            _sse(
+              3,
+              'message.completed',
+              '{"messageId":"a$runCount","text":"好"}',
+            ) +
             _sse(4, 'run.completed', '{"runId":"$runId"}'),
       );
     } else if (path == '/api/ai/conversations/c1/messages') {
@@ -113,13 +126,15 @@ Future<AiWorkspaceStore> _store(WidgetTester tester) async {
   final store = AiWorkspaceStore(
     api: AiApiClient(settings.baseUrl, client: _backend()),
   );
-  await tester.pumpWidget(MultiProvider(
-    providers: [
-      ChangeNotifierProvider<SettingsStore>.value(value: settings),
-      ChangeNotifierProvider<AiWorkspaceStore>.value(value: store),
-    ],
-    child: const MaterialApp(home: AiHomePage()),
-  ));
+  await tester.pumpWidget(
+    MultiProvider(
+      providers: [
+        ChangeNotifierProvider<SettingsStore>.value(value: settings),
+        ChangeNotifierProvider<AiWorkspaceStore>.value(value: store),
+      ],
+      child: const MaterialApp(home: AiHomePage()),
+    ),
+  );
   await tester.pumpAndSettle();
   return store;
 }
@@ -139,12 +154,19 @@ void main() {
     );
     final options = model.selectableEfforts;
     expect(options.first, AiReasoningEffort.off, reason: '「默认」必须排在最前');
-    expect(options, containsAll([AiReasoningEffort.high, AiReasoningEffort.max]));
+    expect(
+      options,
+      containsAll([AiReasoningEffort.high, AiReasoningEffort.max]),
+    );
     // 没声明的档位仍然不出现（不猜、不降级）
     expect(options, isNot(contains(AiReasoningEffort.low)));
     expect(options, isNot(contains(AiReasoningEffort.medium)));
     expect(options, isNot(contains(AiReasoningEffort.minimal)));
-    expect(model.thinkingEfforts.containsKey('off'), isFalse, reason: '模型声明不需要为了「默认」而改动');
+    expect(
+      model.thinkingEfforts.containsKey('off'),
+      isFalse,
+      reason: '模型声明不需要为了「默认」而改动',
+    );
 
     // 完全没声明推理能力的模型：一个档位都不给（后端也会拒）
     const plain = AiModel(providerId: 'p', id: 'm', displayName: 'M');

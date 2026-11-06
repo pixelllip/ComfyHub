@@ -18,7 +18,11 @@ fn specs_only_include_implemented_tools() {
             spec.name
         );
         assert!(!spec.description.is_empty());
-        assert!(spec.parameters.is_object(), "{} 的 schema 必须是对象", spec.name);
+        assert!(
+            spec.parameters.is_object(),
+            "{} 的 schema 必须是对象",
+            spec.name
+        );
         // 用户 2026-10-21：工具卡要显示"为什么调用"。schema 里没这个可选字段，
         // 模型就算想写也会被 `additionalProperties:false` 拒掉。
         assert_eq!(
@@ -28,23 +32,40 @@ fn specs_only_include_implemented_tools() {
         );
     }
     assert!(specs.iter().any(|s| s.name == "list_skills"));
-    assert!(specs.iter().any(|s| s.name == "ask_user_question"), "提问闸门已搬，应当下发");
+    assert!(
+        specs.iter().any(|s| s.name == "ask_user_question"),
+        "提问闸门已搬，应当下发"
+    );
     // 参考图搜索（2026-11-04）：按 Danbooru tag 找真实图、下载成本机附件
     assert!(specs.iter().any(|s| s.name == "reference_image_search"));
     // 联网三件 + 定向查询（P4 第 64 步）：**应当**出现在清单里 ——
     // 系统提示第 17 条点名的那四个工具到这一步才真的下发给模型（在此之前那一节指向
     // 的是模型看不见的工具，等于一句空话）。
     for expected in ["web_search", "web_fetch", "civitai_search", "find_model"] {
-        assert!(specs.iter().any(|s| s.name == expected), "{expected} 应当下发：{:?}", specs.iter().map(|s| &s.name).collect::<Vec<_>>());
+        assert!(
+            specs.iter().any(|s| s.name == expected),
+            "{expected} 应当下发：{:?}",
+            specs.iter().map(|s| &s.name).collect::<Vec<_>>()
+        );
     }
     // 配方三件（P4 第 67 步）已经实现 → 与桌面那两件一样，必须同时出现在提示词与请求里
     // （在此之前那两条 `absent` 断言是对的：没实现的一律不许下发）
-    for expected in ["comfy_learn_workflow", "comfy_list_recipes", "comfy_bind_recipe"] {
-        assert!(specs.iter().any(|s| s.name == expected), "{expected} 应当下发");
+    for expected in [
+        "comfy_learn_workflow",
+        "comfy_list_recipes",
+        "comfy_bind_recipe",
+    ] {
+        assert!(
+            specs.iter().any(|s| s.name == expected),
+            "{expected} 应当下发"
+        );
     }
     // 2026-10-21：带 TextGenerate 的工作流由 AI 自己写终稿，`positivePrompt` 必须下发给模型，
     // 否则 skill 里写的流程模型根本调不到。
-    let submit = specs.iter().find(|s| s.name == "comfy_submit").expect("comfy_submit 应当下发");
+    let submit = specs
+        .iter()
+        .find(|s| s.name == "comfy_submit")
+        .expect("comfy_submit 应当下发");
     assert_eq!(
         submit.parameters["properties"]["positivePrompt"]["type"], "string",
         "comfy_submit 少了 positivePrompt"
@@ -80,7 +101,10 @@ fn 联网额度只认联网类工具且只在成功时计数() {
     for _ in 2..crate::tools::policy::MAX_WEB_QUERIES_PER_RUN {
         session.spend_call("danbooru_lookup");
     }
-    assert_eq!(session.web_queries_in_window, crate::tools::policy::MAX_WEB_QUERIES_PER_RUN);
+    assert_eq!(
+        session.web_queries_in_window,
+        crate::tools::policy::MAX_WEB_QUERIES_PER_RUN
+    );
     assert!(!session.has_web_queries_left());
 
     // 用户真答了提问 → 联网额度也归零（与总调用额度同一档重置）
@@ -100,8 +124,14 @@ fn 命中缓存的那一次不占联网与_comfy_额度() {
     session.spend_cached_call("web_search");
     session.spend_cached_call("comfy_get_status");
     assert_eq!(session.web_queries_in_window, 0, "没发请求就不该占联网额度");
-    assert_eq!(session.comfy_queries_in_window, 0, "同上：没问 ComfyUI 就不该占它的额度");
-    assert_eq!(session.calls, 2, "总调用额度照记：命中同样多一轮往返、同样烧上下文");
+    assert_eq!(
+        session.comfy_queries_in_window, 0,
+        "同上：没问 ComfyUI 就不该占它的额度"
+    );
+    assert_eq!(
+        session.calls, 2,
+        "总调用额度照记：命中同样多一轮往返、同样烧上下文"
+    );
     assert_eq!(session.calls_in_window, 2);
 
     // 与"真跑成功"那一档对照：同名的真跑是要占的
@@ -141,20 +171,34 @@ fn comfy_查询额度只认_comfy_类工具且只在成功时计数() {
     for _ in 3..crate::tools::policy::MAX_COMFY_QUERIES_PER_RUN {
         session.spend_call("comfy_get_status");
     }
-    assert_eq!(session.comfy_queries_in_window, crate::tools::policy::MAX_COMFY_QUERIES_PER_RUN);
+    assert_eq!(
+        session.comfy_queries_in_window,
+        crate::tools::policy::MAX_COMFY_QUERIES_PER_RUN
+    );
     assert!(!session.has_comfy_queries_left(), "到上限后预检必须拦得住");
-    assert!(session.has_web_queries_left(), "拦住 ComfyUI 那档不该连累联网额度");
+    assert!(
+        session.has_web_queries_left(),
+        "拦住 ComfyUI 那档不该连累联网额度"
+    );
 
     // ★ **提交不算查询**（2026-09-27 活实例实测出来的那条）：
     //   额度用光之后 `comfy_submit` 必须**照样能走** —— 否则"AI 自己搭一份工作流"这条
     //   正路会在最后一步被挡住（当时它侦察花掉 9 次，工作流写好了却提交不出去）。
     assert!(!crate::ai::ai_settings::is_comfy_query("comfy_submit"));
-    assert_eq!(crate::ai::ai_settings::category_of("comfy_submit"), "comfy", "界面分组照旧归 comfy");
+    assert_eq!(
+        crate::ai::ai_settings::category_of("comfy_submit"),
+        "comfy",
+        "界面分组照旧归 comfy"
+    );
     let before = session.comfy_queries_in_window;
     let calls_before = session.calls_in_window;
     session.spend_call("comfy_submit");
     assert_eq!(session.comfy_queries_in_window, before, "提交不占这份额度");
-    assert_eq!(session.calls_in_window, calls_before + 1, "但总调用额度照旧要记");
+    assert_eq!(
+        session.calls_in_window,
+        calls_before + 1,
+        "但总调用额度照旧要记"
+    );
     // 同理：`comfy_use_media` / `comfy_make_mask` 是**写**（投放像素/遮罩），也不算"查询"？
     // —— 不，它们**算**（与 Kotlin 的 ToolCategory.COMFY 一致，而且它们会真的碰实例）。
     assert!(crate::ai::ai_settings::is_comfy_query("comfy_use_media"));
@@ -205,7 +249,12 @@ fn file_tool_defaults_match_the_kotlin_registry() {
     assert!(!is_mutating("read_file"));
     assert!(!is_mutating("list_dir"));
     // comfy 查询 / 同步四件（P4 第 41~43 步）
-    for name in ["comfy_get_run", "comfy_get_status", "comfy_list_workflows", "comfy_load_workflow"] {
+    for name in [
+        "comfy_get_run",
+        "comfy_get_status",
+        "comfy_list_workflows",
+        "comfy_load_workflow",
+    ] {
         assert!(is_implemented(name), "{name} 应当已实现");
         assert_eq!(default_access(name), "ALLOW", "{name} 的出厂档");
         assert!(!is_mutating(name), "{name} 是只读的");
@@ -216,7 +265,11 @@ fn file_tool_defaults_match_the_kotlin_registry() {
     assert!(is_mutating("comfy_sync_history"));
     // `comfy_submit`（P4 第 48 步，R10）：**会烧显卡时间** → 出厂 ASK，一个字都不能松
     assert!(is_implemented("comfy_submit"));
-    assert_eq!(default_access("comfy_submit"), "ASK", "提交必须默认要用户批准");
+    assert_eq!(
+        default_access("comfy_submit"),
+        "ASK",
+        "提交必须默认要用户批准"
+    );
     assert!(is_mutating("comfy_submit"));
     // `comfy_env_report`（本机模型清单对账）：**只读**，出厂 ALLOW ——
     // 它不属于 COMFY 那一类（只扫盘 + 问一次 /object_info），不该吃掉查询预算
@@ -259,11 +312,18 @@ fn file_tool_defaults_match_the_kotlin_registry() {
     // 配方三件（P4 第 67 步）：学是**会写本机配方库**的（所以 mutating=true），
     // 但出厂档与 Kotlin 一致是 ALLOW（知识积累不该每一步都等批准）；
     // 列与绑只读（绑**只报不改**：它不提交、不写文件）。
-    for name in ["comfy_learn_workflow", "comfy_list_recipes", "comfy_bind_recipe"] {
+    for name in [
+        "comfy_learn_workflow",
+        "comfy_list_recipes",
+        "comfy_bind_recipe",
+    ] {
         assert!(is_implemented(name), "{name} 已经搬过来了");
         assert_eq!(default_access(name), "ALLOW", "{name} 的出厂档");
     }
-    assert!(is_mutating("comfy_learn_workflow"), "学会往本机配方库写一行");
+    assert!(
+        is_mutating("comfy_learn_workflow"),
+        "学会往本机配方库写一行"
+    );
     assert!(!is_mutating("comfy_list_recipes"));
     assert!(!is_mutating("comfy_bind_recipe"), "绑只报不改");
 }
@@ -273,10 +333,14 @@ fn file_tool_defaults_match_the_kotlin_registry() {
 fn deny_hides_a_tool_from_the_model_but_not_from_the_settings_page() {
     let mut config = crate::tools::policy::ToolPolicyConfig::default();
     config.overrides.insert("write_file".into(), "deny".into());
-    let policy = crate::tools::policy::ToolPolicy::new(std::path::PathBuf::from(r"D:\proj"), config);
+    let policy =
+        crate::tools::policy::ToolPolicy::new(std::path::PathBuf::from(r"D:\proj"), config);
 
     let sent: Vec<&str> = catalog(&policy).iter().map(|t| t.name).collect();
-    assert!(!sent.contains(&"write_file"), "被禁用的工具不该下发给模型：{sent:?}");
+    assert!(
+        !sent.contains(&"write_file"),
+        "被禁用的工具不该下发给模型：{sent:?}"
+    );
     let listed: Vec<&str> = implemented().iter().map(|t| t.name).collect();
     assert!(
         listed.contains(&"write_file"),
@@ -394,7 +458,11 @@ fn 带图提问把设定图裁成附件_选项图与文字对齐() {
         .and_then(|rest| rest.strip_suffix("/file"))
         .expect("裁图地址必须是附件原址");
     let crop = attachments::get(&state, crop_id).unwrap().unwrap();
-    assert_eq!((crop.width, crop.height), (Some(10), Some(10)), "裁的必须是左半块");
+    assert_eq!(
+        (crop.width, crop.height),
+        (Some(10), Some(10)),
+        "裁的必须是左半块"
+    );
     assert_eq!(crop.name, "问题「刘海是哪一种？」.png");
 
     // 非 http(s) 的选项图直接报参数错（别把 file:// 之类塞给 <img>）

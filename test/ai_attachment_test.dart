@@ -31,13 +31,14 @@ int uploadCalls = 0;
 /// 最近一次上传的 multipart 原始字节（用来断言"粘上来的图真的变成了 PNG"）。
 Uint8List? lastUploadBody;
 
-String _sse(int seq, String type, String dataJson) => 'id: $seq\nevent: $type\ndata: $dataJson\n\n';
+String _sse(int seq, String type, String dataJson) =>
+    'id: $seq\nevent: $type\ndata: $dataJson\n\n';
 
 http.Response _sseResponse(String body) => http.Response.bytes(
-      utf8.encode(body),
-      200,
-      headers: {'content-type': 'text/event-stream; charset=utf-8'},
-    );
+  utf8.encode(body),
+  200,
+  headers: {'content-type': 'text/event-stream; charset=utf-8'},
+);
 
 /// 假后端：
 ///  - 上传返回 [uploadItems]（模拟后端按签名判定后的结果）；
@@ -67,8 +68,12 @@ MockClient _backend({
           'endpointTrust': 'loopback',
           'enabled': true,
           'revision': 1,
-          'credential': {'configured': true, 'source': 'managed', 'writable': true},
-        }
+          'credential': {
+            'configured': true,
+            'source': 'managed',
+            'writable': true,
+          },
+        },
       ];
     } else if (path == '/api/ai/providers/local-gw/models') {
       body = [
@@ -78,13 +83,13 @@ MockClient _backend({
           'displayName': '看得见图的模型',
           'inputModalities': ['text', 'image'],
           'attachmentTransports': {
-            'image': ['inline_base64']
+            'image': ['inline_base64'],
           },
           'tools': true,
           'reasoning': false,
           'capabilitySource': 'manual',
           'enabled': true,
-        }
+        },
       ];
     } else if (path == '/api/ai/attachments' && request.method == 'POST') {
       uploadCalls++;
@@ -106,17 +111,29 @@ MockClient _backend({
     } else if (path == '/api/ai/conversations') {
       body = <Object>[];
     } else if (path == '/api/ai/preflight') {
-      body = {'allowed': preflightAllowed, 'blockers': const [], 'items': preflightItems};
+      body = {
+        'allowed': preflightAllowed,
+        'blockers': const [],
+        'items': preflightItems,
+      };
     } else if (path == '/api/ai/conversations/c1/runs') {
       runBodies.add(jsonDecode(request.body) as Map<String, dynamic>);
       runCount++;
-      body = {'runId': 'r$runCount', 'assistantMessageId': 'a$runCount', 'userMessageId': 'u$runCount'};
+      body = {
+        'runId': 'r$runCount',
+        'assistantMessageId': 'a$runCount',
+        'userMessageId': 'u$runCount',
+      };
     } else if (path.startsWith('/api/ai/runs/') && path.endsWith('/events')) {
       final runId = path.split('/')[4];
       return _sseResponse(
         _sse(1, 'run.started', '{"runId":"$runId"}') +
             _sse(2, 'text.delta', '{"messageId":"a$runCount","text":"我看到了"}') +
-            _sse(3, 'message.completed', '{"messageId":"a$runCount","text":"我看到了"}') +
+            _sse(
+              3,
+              'message.completed',
+              '{"messageId":"a$runCount","text":"我看到了"}',
+            ) +
             _sse(4, 'run.completed', '{"runId":"$runId"}'),
       );
     } else if (path == '/api/ai/conversations/c1/messages') {
@@ -132,7 +149,11 @@ MockClient _backend({
           'parts': [
             {'type': 'text', 'text': '看看这张图'},
             for (final item in uploadItems)
-              {'type': 'attachment', 'text': item['name'], 'attachmentId': item['id']},
+              {
+                'type': 'attachment',
+                'text': item['name'],
+                'attachmentId': item['id'],
+              },
           ],
         },
         {
@@ -166,14 +187,18 @@ Future<AiWorkspaceStore> _pump(
   SharedPreferences.setMockInitialValues({});
   final settings = SettingsStore();
   await settings.load();
-  final store = AiWorkspaceStore(api: AiApiClient(settings.baseUrl, client: client));
-  await tester.pumpWidget(MultiProvider(
-    providers: [
-      ChangeNotifierProvider<SettingsStore>.value(value: settings),
-      ChangeNotifierProvider<AiWorkspaceStore>.value(value: store),
-    ],
-    child: const MaterialApp(home: AiHomePage()),
-  ));
+  final store = AiWorkspaceStore(
+    api: AiApiClient(settings.baseUrl, client: client),
+  );
+  await tester.pumpWidget(
+    MultiProvider(
+      providers: [
+        ChangeNotifierProvider<SettingsStore>.value(value: settings),
+        ChangeNotifierProvider<AiWorkspaceStore>.value(value: store),
+      ],
+      child: const MaterialApp(home: AiHomePage()),
+    ),
+  );
   await tester.pumpAndSettle();
   return store;
 }
@@ -187,14 +212,19 @@ Future<AiWorkspaceStore> _pump(
   return (name: name, path: f.path);
 }
 
-Map<String, dynamic> _dto(String id, String name, String kind, {int size = 2048}) => {
-      'id': id,
-      'name': name,
-      'kind': kind,
-      'modality': kind,
-      'mimeType': kind == 'image' ? 'image/png' : 'video/mp4',
-      'sizeBytes': size,
-    };
+Map<String, dynamic> _dto(
+  String id,
+  String name,
+  String kind, {
+  int size = 2048,
+}) => {
+  'id': id,
+  'name': name,
+  'kind': kind,
+  'modality': kind,
+  'mimeType': kind == 'image' ? 'image/png' : 'video/mp4',
+  'sizeBytes': size,
+};
 
 /// 找到托盘 / 气泡里指向某个附件的网络图片。
 ///
@@ -289,7 +319,16 @@ Uint8List _tinyBmp() {
       .toBytes();
 }
 
-const List<int> _pngSignature = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
+const List<int> _pngSignature = [
+  0x89,
+  0x50,
+  0x4E,
+  0x47,
+  0x0D,
+  0x0A,
+  0x1A,
+  0x0A,
+];
 
 bool _containsSignature(Uint8List haystack) {
   for (var i = 0; i + _pngSignature.length <= haystack.length; i++) {
@@ -313,7 +352,10 @@ void main() {
   });
 
   testWidgets('上传图片后托盘显示缩略图，发送时带上 attachmentIds', (tester) async {
-    final store = await _pump(tester, client: _backend(uploadItems: [_dto('att-1', 'cat.png', 'image')]));
+    final store = await _pump(
+      tester,
+      client: _backend(uploadItems: [_dto('att-1', 'cat.png', 'image')]),
+    );
 
     await tester.runAsync(() => store.attachFiles([_tempFile('cat.png')]));
     await tester.pumpAndSettle();
@@ -322,7 +364,8 @@ void main() {
     expect(store.attachments.single.id, 'att-1');
     // 图片：缩略图来自后端 /thumb（不是原图）
     expect(
-      thumbUrls(tester).any((u) => u.endsWith('/api/ai/attachments/att-1/thumb')),
+      thumbUrls(tester)
+          .any((u) => u.endsWith('/api/ai/attachments/att-1/thumb')),
       isTrue,
       reason: '图片附件在托盘里要显示缩略图',
     );
@@ -335,7 +378,8 @@ void main() {
     // 发出去之后托盘清空，但气泡里还能看到自己发了什么
     expect(store.attachments, isEmpty);
     expect(
-      thumbUrls(tester).any((u) => u.endsWith('/api/ai/attachments/att-1/thumb')),
+      thumbUrls(tester)
+          .any((u) => u.endsWith('/api/ai/attachments/att-1/thumb')),
       isTrue,
       reason: '用户消息气泡里也要显示附件缩略图',
     );
@@ -344,21 +388,30 @@ void main() {
   testWidgets('非图片附件：视频用预览帧 + 播放角标，音频/文档落回文件图标', (tester) async {
     final store = await _pump(
       tester,
-      client: _backend(uploadItems: [
-        _dto('vid-1', 'clip.mp4', 'video'),
-        _dto('doc-1', 'brief.pdf', 'document'),
-      ]),
+      client: _backend(
+        uploadItems: [
+          _dto('vid-1', 'clip.mp4', 'video'),
+          _dto('doc-1', 'brief.pdf', 'document'),
+        ],
+      ),
     );
 
-    await tester.runAsync(() => store.attachFiles([_tempFile('clip.mp4'), _tempFile('brief.pdf')]));
+    await tester.runAsync(
+      () => store.attachFiles([_tempFile('clip.mp4'), _tempFile('brief.pdf')]),
+    );
     await tester.pumpAndSettle();
 
     expect(
-      thumbUrls(tester).any((u) => u.endsWith('/api/ai/attachments/vid-1/thumb')),
+      thumbUrls(tester)
+          .any((u) => u.endsWith('/api/ai/attachments/vid-1/thumb')),
       isTrue,
       reason: '视频要取预览帧当封面',
     );
-    expect(find.byIcon(Icons.play_circle_fill), findsOneWidget, reason: '要有播放角标，别让人以为是静态图');
+    expect(
+      find.byIcon(Icons.play_circle_fill),
+      findsOneWidget,
+      reason: '要有播放角标，别让人以为是静态图',
+    );
     // 文档没有画面：托盘里落回文件图标
     expect(find.byIcon(Icons.description_outlined), findsOneWidget);
   });
@@ -376,7 +429,7 @@ void main() {
             'allowed': false,
             'blockers': ['文件 huge.png 超过内联发送上限（8 MB），请先压缩或换一张更小的图'],
             'attachmentId': 'att-9',
-          }
+          },
         ],
       ),
     );
@@ -401,7 +454,10 @@ void main() {
   });
 
   testWidgets('上传失败：如实报错，附件不进托盘（也不会把文字发出去）', (tester) async {
-    final store = await _pump(tester, client: _backend(uploadItems: const [], uploadStatus: 400));
+    final store = await _pump(
+      tester,
+      client: _backend(uploadItems: const [], uploadStatus: 400),
+    );
 
     await tester.runAsync(() => store.attachFiles([_tempFile('a.bin')]));
     await tester.pumpAndSettle();
@@ -422,7 +478,9 @@ void main() {
       ),
     );
 
-    await tester.runAsync(() => store.attachFiles([_tempFile('ok.png'), _tempFile('bad.bin')]));
+    await tester.runAsync(
+      () => store.attachFiles([_tempFile('ok.png'), _tempFile('bad.bin')]),
+    );
     await tester.pumpAndSettle();
 
     expect(store.attachments.single.id, 'att-2');
@@ -436,12 +494,7 @@ void main() {
 
   testWidgets('Ctrl+V 粘截图：位图转成 PNG 后挂成附件', (tester) async {
     // 截图的真实形状：剪贴板里**没有文件**，只有一张位图。
-    _mockClipboard(
-      image: {
-        'format': 'bmp',
-        'bytes': _tinyBmp(),
-      },
-    );
+    _mockClipboard(image: {'format': 'bmp', 'bytes': _tinyBmp()});
     final store = await _pump(
       tester,
       client: _backend(uploadItems: [_dto('att-clip', '剪贴板图片.png', 'image')]),
@@ -451,11 +504,7 @@ void main() {
 
     expect(uploadCalls, 1, reason: '★ 截图必须走上传，而不是"什么都没发生"');
     // 上游只收 png/jpeg/webp/gif：BMP 必须在这里转掉（否则网关卡在签名上）
-    expect(
-      lastUploadBody,
-      isNotNull,
-      reason: '上传请求要真的发出去',
-    );
+    expect(lastUploadBody, isNotNull, reason: '上传请求要真的发出去');
     expect(
       _containsSignature(lastUploadBody!),
       isTrue,
@@ -463,7 +512,8 @@ void main() {
     );
     expect(store.attachments.single.id, 'att-clip');
     expect(
-      thumbUrls(tester).any((u) => u.endsWith('/api/ai/attachments/att-clip/thumb')),
+      thumbUrls(tester)
+          .any((u) => u.endsWith('/api/ai/attachments/att-clip/thumb')),
       isTrue,
     );
   });

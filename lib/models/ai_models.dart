@@ -1162,8 +1162,9 @@ class AiAttachmentCacheStats {
             const [],
       );
 
-  int bytesOf(String origin) =>
-      byOrigin.where((o) => o.origin == origin).fold(0, (sum, o) => sum + o.bytes);
+  int bytesOf(String origin) => byOrigin
+      .where((o) => o.origin == origin)
+      .fold(0, (sum, o) => sum + o.bytes);
 }
 
 class AiAttachmentOriginStats {

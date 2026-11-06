@@ -72,8 +72,8 @@ use rusqlite::{Connection, OptionalExtension, Transaction};
 use serde_json::{json, Map, Value};
 
 use crate::ai::conversations::{AiMessagePartDto, MessageAppend};
-use crate::web::routes::{ApiError, AppState};
 use crate::mobile::sync::PushItem;
+use crate::web::routes::{ApiError, AppState};
 
 // ---------------------------------------------------------------------------
 //  状态与常量
@@ -180,11 +180,17 @@ pub struct Job {
 /// ⚠ 顺序不能倒：行**必须先落库**，"受理了但还没跑完不会丢"才成立 —— 手机收到
 /// `applied` 就会把那行 outbox 删掉（`SyncPushClient` 的纪律），此后账只在桌面这一侧。
 pub fn accept(state: &AppState, item: &PushItem) -> Result<Accepted, Reject> {
-    let reject = |code: &str, message: String| Reject { code: code.to_string(), message };
+    let reject = |code: &str, message: String| Reject {
+        code: code.to_string(),
+        message,
+    };
 
     if let Some(op) = item.op.as_deref() {
         if op != "upsert" {
-            return Err(reject("UNSUPPORTED_OP", format!("submit_job 只支持 upsert，收到 {op}")));
+            return Err(reject(
+                "UNSUPPORTED_OP",
+                format!("submit_job 只支持 upsert，收到 {op}"),
+            ));
         }
     }
     let mut parsed = parse_payload(item)?;
@@ -294,9 +300,15 @@ pub fn call_id_for(queue_id: &str) -> String {
 /// 用户看到的是"手机上说排队失败"，不如"桌面上批了、然后如实回一条失败原因"清楚。
 /// 形状错不一样：它**永远**不可能成功，重推只会让手机永远卡在队首。
 fn parse_payload(item: &PushItem) -> Result<ParsedPayload, Reject> {
-    let bad = |code: &str, message: String| Reject { code: code.to_string(), message };
+    let bad = |code: &str, message: String| Reject {
+        code: code.to_string(),
+        message,
+    };
     let Some(obj) = item.payload.as_object() else {
-        return Err(bad("BAD_PAYLOAD", "submit_job 的 payload 必须是对象（契约 §4.1）".to_string()));
+        return Err(bad(
+            "BAD_PAYLOAD",
+            "submit_job 的 payload 必须是对象（契约 §4.1）".to_string(),
+        ));
     };
 
     let text_of = |key: &str| -> Option<String> {
@@ -311,12 +323,18 @@ fn parse_payload(item: &PushItem) -> Result<ParsedPayload, Reject> {
     // （不一致的话"幂等键"就有两个说法，重推会变成两条完全不同的记录）
     let queue_id = text_of("queueId").unwrap_or_else(|| item.ref_id.trim().to_string());
     if queue_id.is_empty() {
-        return Err(bad("BAD_PAYLOAD", "submit_job 缺 queueId（refId 也是空的）".to_string()));
+        return Err(bad(
+            "BAD_PAYLOAD",
+            "submit_job 缺 queueId（refId 也是空的）".to_string(),
+        ));
     }
     if queue_id != item.ref_id.trim() {
         return Err(bad(
             "REF_MISMATCH",
-            format!("refId（{}）与 payload.queueId（{queue_id}）不一致", item.ref_id),
+            format!(
+                "refId（{}）与 payload.queueId（{queue_id}）不一致",
+                item.ref_id
+            ),
         ));
     }
 
@@ -350,10 +368,17 @@ fn parse_payload(item: &PushItem) -> Result<ParsedPayload, Reject> {
         None | Some(Value::Null) => Map::new(),
         Some(Value::Object(map)) => map.clone(),
         Some(_) => {
-            return Err(bad("BAD_PAYLOAD", "submit_job 的 overrides 必须是对象（键 = `节点id.输入名`）".to_string()))
+            return Err(bad(
+                "BAD_PAYLOAD",
+                "submit_job 的 overrides 必须是对象（键 = `节点id.输入名`）".to_string(),
+            ))
         }
     };
-    let overrides_text = if overrides.is_empty() { None } else { Some(Value::Object(overrides.clone()).to_string()) };
+    let overrides_text = if overrides.is_empty() {
+        None
+    } else {
+        Some(Value::Object(overrides.clone()).to_string())
+    };
 
     Ok(ParsedPayload {
         queue_id,
@@ -376,15 +401,17 @@ fn parse_payload(item: &PushItem) -> Result<ParsedPayload, Reject> {
 fn resolve_source_ref(state: &AppState, source_ref: &str) -> Result<Option<i64>, Reject> {
     state
         .with(|conn| {
-            conn
-                .query_row(
-                    "SELECT id FROM prompts WHERE source_ref = ?1 ORDER BY id LIMIT 1",
-                    rusqlite::params![source_ref],
-                    |row| row.get::<_, i64>(0),
-                )
-                .optional()
+            conn.query_row(
+                "SELECT id FROM prompts WHERE source_ref = ?1 ORDER BY id LIMIT 1",
+                rusqlite::params![source_ref],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()
         })
-        .map_err(|e| Reject { code: "DB_ERROR".to_string(), message: format!("查工作流失败：{}", e.human()) })
+        .map_err(|e| Reject {
+            code: "DB_ERROR".to_string(),
+            message: format!("查工作流失败：{}", e.human()),
+        })
 }
 
 // ---------------------------------------------------------------------------
@@ -399,7 +426,11 @@ pub enum JobReport {
     /// 这次调用没有需要它做的事（已经终态 / 别的 worker 正在提交它）。
     NotWaiting,
     /// 走完了整条链路（成功或失败都在账上，回执也会发）。
-    Finished { state: String, ok: bool, media_ids: Vec<i64> },
+    Finished {
+        state: String,
+        ok: bool,
+        media_ids: Vec<i64>,
+    },
 }
 
 /// 起一个后台 worker（**只在 `accept` 里调**；测试直接调 [`run_job`] 自己控制时长）。
@@ -407,8 +438,18 @@ pub fn start(state: &AppState, queue_id: &str) {
     let state = state.clone();
     let queue_id = queue_id.to_string();
     tokio::spawn(async move {
-        let report = run_job(&state, &queue_id, Duration::from_secs(APPROVAL_TIMEOUT_SECONDS)).await;
-        if let JobReport::Finished { state: terminal, ok, media_ids } = &report {
+        let report = run_job(
+            &state,
+            &queue_id,
+            Duration::from_secs(APPROVAL_TIMEOUT_SECONDS),
+        )
+        .await;
+        if let JobReport::Finished {
+            state: terminal,
+            ok,
+            media_ids,
+        } = &report
+        {
             eprintln!(
                 "[submit-queue] queueId={queue_id} 收尾：state={terminal} ok={ok} mediaIds={:?}",
                 media_ids
@@ -431,7 +472,9 @@ pub async fn run_job(state: &AppState, queue_id: &str, approval_timeout: Duratio
 }
 
 async fn run_inner(state: &AppState, queue_id: &str, approval_timeout: Duration) -> JobReport {
-    let Some(job) = load(state, queue_id) else { return JobReport::Missing };
+    let Some(job) = load(state, queue_id) else {
+        return JobReport::Missing;
+    };
     if job.state != STATE_AWAITING_APPROVAL {
         // 已经终态，或者另一个 worker 已经认领走了 —— 这一次什么都不用做。
         return JobReport::NotWaiting;
@@ -471,7 +514,10 @@ async fn run_inner(state: &AppState, queue_id: &str, approval_timeout: Duration)
             }
             Ok(None) => return JobReport::NotWaiting,
             Err(error) => {
-                eprintln!("[submit-queue] queueId={queue_id} 读审批状态失败：{}", error.human());
+                eprintln!(
+                    "[submit-queue] queueId={queue_id} 读审批状态失败：{}",
+                    error.human()
+                );
                 return JobReport::NotWaiting;
             }
         }
@@ -571,7 +617,11 @@ async fn execute(state: &AppState, job: &Job) -> Terminal {
         }
     };
     let Some(prompt_id) = job.prompt_id else {
-        return Terminal::failed(code::TOOL_ERROR, "受理时没有解析出 promptId（内存里的行不该出现这种）", 0);
+        return Terminal::failed(
+            code::TOOL_ERROR,
+            "受理时没有解析出 promptId（内存里的行不该出现这种）",
+            0,
+        );
     };
 
     let mut arguments = Map::new();
@@ -582,12 +632,25 @@ async fn execute(state: &AppState, job: &Job) -> Terminal {
     arguments.insert("nsfw".into(), json!(job.nsfw));
     // 等生成的上限与桌面工具同一条（`DEFAULT_WAIT_SECONDS`）；等不到就如实报 timeout。
     arguments.insert("wait".into(), json!(true));
-    arguments.insert("waitSeconds".into(), json!(crate::workflow::workflow_submit::DEFAULT_WAIT_SECONDS));
+    arguments.insert(
+        "waitSeconds".into(),
+        json!(crate::workflow::workflow_submit::DEFAULT_WAIT_SECONDS),
+    );
 
-    let outcome = match crate::workflow::workflow_submit::tool_submit(state, &policy, &Value::Object(arguments)).await {
+    let outcome = match crate::workflow::workflow_submit::tool_submit(
+        state,
+        &policy,
+        &Value::Object(arguments),
+    )
+    .await
+    {
         Ok(outcome) => outcome,
         Err(failure) => {
-            return Terminal::failed(&failure.code, &failure.message, elapsed_start.elapsed().as_millis() as i64)
+            return Terminal::failed(
+                &failure.code,
+                &failure.message,
+                elapsed_start.elapsed().as_millis() as i64,
+            )
         }
     };
     classify(&outcome.payload, elapsed_start.elapsed().as_millis() as i64)
@@ -599,15 +662,31 @@ async fn execute(state: &AppState, job: &Job) -> Terminal {
 /// 它已经进了 ComfyUI 队列，产物跑完会被后台捕获收进画廊，所以回执的 `ok = true` +
 /// 稳定码 [`code::TIMEOUT`]，正文说清"还没跑完、稍后看画廊"。
 fn classify(payload: &Value, elapsed_ms: i64) -> Terminal {
-    let status = payload.get("status").and_then(Value::as_str).unwrap_or_default();
+    let status = payload
+        .get("status")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
     let media_ids: Vec<i64> = payload
         .get("mediaIds")
         .and_then(Value::as_array)
         .map(|items| items.iter().filter_map(Value::as_i64).collect())
         .unwrap_or_default();
-    let run_key = payload.get("runKey").and_then(Value::as_str).map(str::to_string);
-    let tool_message = payload.get("message").and_then(Value::as_str).unwrap_or_default().trim().to_string();
-    let error = payload.get("error").and_then(Value::as_str).unwrap_or_default().trim().to_string();
+    let run_key = payload
+        .get("runKey")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let tool_message = payload
+        .get("message")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    let error = payload
+        .get("error")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .trim()
+        .to_string();
 
     if !media_ids.is_empty() {
         return Terminal {
@@ -657,7 +736,11 @@ fn classify(payload: &Value, elapsed_ms: i64) -> Terminal {
             code::TOOL_ERROR,
             &format!(
                 "这次提交没有拿到明确的结果（status={other}）：{}",
-                if tool_message.is_empty() { "没有更多信息" } else { &tool_message }
+                if tool_message.is_empty() {
+                    "没有更多信息"
+                } else {
+                    &tool_message
+                }
             ),
             elapsed_ms,
         ),
@@ -695,7 +778,9 @@ fn deliver_now(state: &AppState, queue_id: &str) {
 /// 会话不存在 → `Ok(false)` + `reply_state='blocked'` + `reply_error`
 /// （**保留队列**：手机那条会话多是还没上行到桌面，等它同步上来再补发）。
 fn deliver_reply(state: &AppState, queue_id: &str) -> Result<bool, ApiError> {
-    let Some(job) = load(state, queue_id) else { return Ok(false) };
+    let Some(job) = load(state, queue_id) else {
+        return Ok(false);
+    };
     if job.reply_state == "delivered" {
         return Ok(true);
     }
@@ -707,7 +792,11 @@ fn deliver_reply(state: &AppState, queue_id: &str) -> Result<bool, ApiError> {
     // ① 这个 id 已经在了 = 送过（上一轮成功但没来得及改 reply_state，或者循环重复扫到）
     let existed = state.with(|conn| {
         Ok(conn
-            .query_row("SELECT 1 FROM ai_messages WHERE id = ?1", rusqlite::params![message_id], |_| Ok(()))
+            .query_row(
+                "SELECT 1 FROM ai_messages WHERE id = ?1",
+                rusqlite::params![message_id],
+                |_| Ok(()),
+            )
             .optional()?
             .is_some())
     })?;
@@ -801,7 +890,11 @@ fn compose_reply(job: &Job, queue_id: &str) -> (String, String, Value) {
     if let Some(code) = job.outcome_code.as_ref().filter(|c| !c.trim().is_empty()) {
         payload.insert("code".into(), json!(code));
     }
-    if let Some(message) = job.outcome_message.as_ref().filter(|m| !m.trim().is_empty()) {
+    if let Some(message) = job
+        .outcome_message
+        .as_ref()
+        .filter(|m| !m.trim().is_empty())
+    {
         payload.insert("error".into(), json!(message));
     }
     payload.insert("elapsedMs".into(), json!(job_elapsed_ms(job)));
@@ -882,7 +975,8 @@ fn read_job(conn: &Connection, queue_id: &str) -> rusqlite::Result<Option<Job>> 
                     .and_then(|text| serde_json::from_str::<Vec<i64>>(text).ok())
                     .unwrap_or_default(),
                 elapsed_ms: row.get::<_, Option<i64>>("elapsed_ms")?.unwrap_or(0),
-                reply_state: row.get("reply_state")?,                reply_error: row.get("reply_error")?,
+                reply_state: row.get("reply_state")?,
+                reply_error: row.get("reply_error")?,
             })
         },
     )
@@ -892,13 +986,12 @@ fn read_job(conn: &Connection, queue_id: &str) -> rusqlite::Result<Option<Job>> 
 /// `(state, approval)` —— 审批闸门读的就是这两个字段。
 fn approval_of(state: &AppState, queue_id: &str) -> Result<Option<(String, String)>, ApiError> {
     state.with(|conn| {
-        conn
-            .query_row(
-                "SELECT state, approval FROM submit_jobs WHERE queue_id = ?1",
-                rusqlite::params![queue_id],
-                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
-            )
-            .optional()
+        conn.query_row(
+            "SELECT state, approval FROM submit_jobs WHERE queue_id = ?1",
+            rusqlite::params![queue_id],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+        )
+        .optional()
     })
 }
 
@@ -1010,7 +1103,10 @@ fn start_heartbeat(state: AppState, queue_id: String) -> tokio::task::JoinHandle
             match beat {
                 Ok(0) => break, // 已经终态（或行没了）：心跳没意义了
                 Ok(_) => {}
-                Err(error) => eprintln!("[submit-queue] queueId={queue_id} 心跳失败：{}", error.human()),
+                Err(error) => eprintln!(
+                    "[submit-queue] queueId={queue_id} 心跳失败：{}",
+                    error.human()
+                ),
             }
         }
     })
@@ -1058,13 +1154,21 @@ pub fn pending_approvals(conn: &Connection) -> rusqlite::Result<Vec<Value>> {
                 "runId".into(),
                 json!(row.get::<_, Option<String>>("run_id")?.unwrap_or_default()),
             );
-            out.insert("conversationId".into(), json!(row.get::<_, String>("conversation_id")?));
+            out.insert(
+                "conversationId".into(),
+                json!(row.get::<_, String>("conversation_id")?),
+            );
             // 名字就是它真正要干的事：批准 = 让桌面**真的提交**（R10 那条链路）。
             out.insert("name".into(), json!("comfy_submit"));
-            out.insert("argumentsJson".into(), json!(Value::Object(arguments).to_string()));
+            out.insert(
+                "argumentsJson".into(),
+                json!(Value::Object(arguments).to_string()),
+            );
             out.insert(
                 "askedAt".into(),
-                match crate::infra::iso_time::iso_time(row.get::<_, Option<String>>("created_at")?.as_deref()) {
+                match crate::infra::iso_time::iso_time(
+                    row.get::<_, Option<String>>("created_at")?.as_deref(),
+                ) {
                     Some(text) => Value::String(text),
                     None => Value::Null,
                 },
@@ -1080,7 +1184,11 @@ pub fn pending_approvals(conn: &Connection) -> rusqlite::Result<Vec<Value>> {
 /// 与工具审批**同一条语义**：`WHERE approval='pending'` 那一句是"决定只能下一次" ——
 /// 重复点返回 0，而且**没人能把已经批过的提交改成拒绝**（否则那种"我点错了、快撤"
 /// 会撤回一个已经在跑的命令）。
-pub fn resolve_approval_on(tx: &Transaction<'_>, call_id: &str, approved: bool) -> rusqlite::Result<usize> {
+pub fn resolve_approval_on(
+    tx: &Transaction<'_>,
+    call_id: &str,
+    approved: bool,
+) -> rusqlite::Result<usize> {
     tx.execute(
         "UPDATE submit_jobs
             SET approval = ?1, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
@@ -1277,9 +1385,12 @@ fn blocked_reply_count(state: &AppState) -> Result<usize, ApiError> {
 /// 还在等批准、且 `extra` 条件成立的那些 queueId。
 fn awaiting_ids(state: &AppState, extra: &str) -> Result<Vec<String>, ApiError> {
     state.with(|conn| {
-        let sql = format!("SELECT queue_id FROM submit_jobs WHERE state = 'awaiting_approval' {extra}");
+        let sql =
+            format!("SELECT queue_id FROM submit_jobs WHERE state = 'awaiting_approval' {extra}");
         let mut stmt = conn.prepare(&sql)?;
-        let rows = stmt.query_map([], |row| row.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
+        let rows = stmt
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(rows)
     })
 }
@@ -1326,7 +1437,9 @@ fn finalize_expired(
         .with(move |conn| {
             let mut stmt = conn.prepare(&sql)?;
             let rows = stmt
-                .query_map(rusqlite::params![from_state_owned, lease], |row| row.get::<_, String>(0))?
+                .query_map(rusqlite::params![from_state_owned, lease], |row| {
+                    row.get::<_, String>(0)
+                })?
                 .collect::<rusqlite::Result<Vec<_>>>()?;
             Ok(rows)
         })

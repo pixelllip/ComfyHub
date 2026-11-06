@@ -29,7 +29,8 @@ class NsfwStore extends ChangeNotifier {
   AiApiClient? _cached;
   String? _cachedFor;
 
-  NsfwStore({this.baseUrlProvider, AiApiClient? api, this.backendReady}) : _injected = api;
+  NsfwStore({this.baseUrlProvider, AiApiClient? api, this.backendReady})
+    : _injected = api;
 
   AiApiClient get _api {
     final injected = _injected;
@@ -80,7 +81,8 @@ class NsfwStore extends ChangeNotifier {
   }
 
   /// 这一条已经被看过（打开了详情页）：本次会话不再糊它。
-  bool isRevealed(String? key) => key != null && key.isNotEmpty && _revealed.contains(key);
+  bool isRevealed(String? key) =>
+      key != null && key.isNotEmpty && _revealed.contains(key);
 
   /// 用户点开了这一条（详情页）：把它解开（只对本次会话有效）。
   void reveal(String? key) {
@@ -110,7 +112,10 @@ class NsfwStore extends ChangeNotifier {
   }
 
   /// 写设置：`enabled` / `blur` 一起发（两个选项本来就放一起）。
-  Future<({bool ok, String message})> save({required bool enabled, required bool blur}) async {
+  Future<({bool ok, String message})> save({
+    required bool enabled,
+    required bool blur,
+  }) async {
     try {
       final saved = await _api.updateNsfwSettings(enabled: enabled, blur: blur);
       settings = saved;

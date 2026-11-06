@@ -7,7 +7,10 @@ use super::*;
 /// `askedAt` 是**数字毫秒**（与 `/api/ai/pending` 里审批那份的 ISO 文本刻意不同）。
 #[test]
 fn asked_at_是毫秒而脏数据回零() {
-    assert_eq!(asked_at_ms(Some("2026-09-24T14:41:29.647Z")), 1_790_260_889_647);
+    assert_eq!(
+        asked_at_ms(Some("2026-09-24T14:41:29.647Z")),
+        1_790_260_889_647
+    );
     assert_eq!(asked_at_ms(Some("2026-09-24T14:41:29Z")), 1_790_260_889_000);
     assert_eq!(asked_at_ms(Some("不是时间")), 0);
     assert_eq!(asked_at_ms(None), 0);
@@ -38,7 +41,12 @@ fn 可空键不出现而_group_id_空则回落到自己() {
         asked_at_ms: 1_790_260_889_647,
     };
     let json = q.to_json();
-    let keys: Vec<&str> = json.as_object().unwrap().keys().map(String::as_str).collect();
+    let keys: Vec<&str> = json
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
     for absent in [
         "header",
         "answer",
@@ -49,7 +57,10 @@ fn 可空键不出现而_group_id_空则回落到自己() {
     ] {
         assert!(!keys.contains(&absent), "{absent} 不该出现：{json}");
     }
-    assert_eq!(json["groupId"], "q1", "空 group_id 回落到 questionId（与 Kotlin 同）");
+    assert_eq!(
+        json["groupId"], "q1",
+        "空 group_id 回落到 questionId（与 Kotlin 同）"
+    );
     assert_eq!(json["askedAt"], 1_790_260_889_647_i64);
     assert_eq!(json["answered"], false);
 
@@ -63,7 +74,10 @@ fn 可空键不出现而_group_id_空则回落到自己() {
     assert_eq!(json["answered"], true);
     assert_eq!(json["answer"], "4:3");
     assert_eq!(json["optionIndex"], 0);
-    assert!(json.as_object().unwrap().get("optionIndexes").is_none(), "空的选项数组也不出现");
+    assert!(
+        json.as_object().unwrap().get("optionIndexes").is_none(),
+        "空的选项数组也不出现"
+    );
 }
 
 #[test]
@@ -77,10 +91,7 @@ fn 带图提问的图片字段只在真有图时出现() {
         total: 1,
         question: "刘海是哪一种？".into(),
         options: vec!["齐刘海".into(), "斜刘海".into()],
-        option_images: vec![
-            "/api/ai/attachments/a/file".into(),
-            String::new(),
-        ],
+        option_images: vec!["/api/ai/attachments/a/file".into(), String::new()],
         image_url: Some("/api/ai/attachments/crop/file".into()),
         allow_free_text: true,
         multi_select: false,
@@ -94,7 +105,10 @@ fn 带图提问的图片字段只在真有图时出现() {
     let json = q.to_json();
     assert_eq!(json["imageUrl"], "/api/ai/attachments/crop/file");
     assert_eq!(json["optionImages"][0], "/api/ai/attachments/a/file");
-    assert_eq!(json["optionImages"][1], "", "占位空串照原样保留：下标必须与选项对齐");
+    assert_eq!(
+        json["optionImages"][1], "",
+        "占位空串照原样保留：下标必须与选项对齐"
+    );
     assert_eq!(json["options"][1], "斜刘海");
 
     // 全空时整两个键都不出现（老形状不变）

@@ -63,12 +63,22 @@ struct FakeState {
 }
 
 /// 起一台**进程内的假 ComfyUI**，返回它的 base url。
-async fn fake_comfy(object_info: Value, history: Value) -> (String, Arc<Mutex<Vec<Value>>>, tokio::task::JoinHandle<()>) {
+async fn fake_comfy(
+    object_info: Value,
+    history: Value,
+) -> (String, Arc<Mutex<Vec<Value>>>, tokio::task::JoinHandle<()>) {
     let submitted: Arc<Mutex<Vec<Value>>> = Arc::new(Mutex::new(Vec::new()));
-    let shared = FakeState { object_info, history, submitted: submitted.clone() };
+    let shared = FakeState {
+        object_info,
+        history,
+        submitted: submitted.clone(),
+    };
 
     let app = Router::new()
-        .route("/object_info", get(|AxumState(s): AxumState<FakeState>| async move { Json(s.object_info) }))
+        .route(
+            "/object_info",
+            get(|AxumState(s): AxumState<FakeState>| async move { Json(s.object_info) }),
+        )
         .route(
             "/prompt",
             post(
@@ -90,17 +100,28 @@ async fn fake_comfy(object_info: Value, history: Value) -> (String, Arc<Mutex<Ve
                     // `/history` 回的是**当时提交的那张图**，不是夹具里写死的那张。
                     // 只有这样才能断言"入库解析出的提示词来自真正提交的图"。
                     let mut entry = template.clone();
-                    if let Some(graph) = s.submitted.lock().unwrap().first().and_then(|body| body.get("prompt")) {
+                    if let Some(graph) = s
+                        .submitted
+                        .lock()
+                        .unwrap()
+                        .first()
+                        .and_then(|body| body.get("prompt"))
+                    {
                         entry["prompt"]["prompt"] = graph.clone();
                     }
                     Json(json!({ id: entry }))
                 },
             ),
         )
-        .route("/queue", get(|| async { Json(json!({ "queue_running": [], "queue_pending": [] })) }))
+        .route(
+            "/queue",
+            get(|| async { Json(json!({ "queue_running": [], "queue_pending": [] })) }),
+        )
         .with_state(shared);
 
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("绑定假 ComfyUI");
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("绑定假 ComfyUI");
     let addr = listener.local_addr().expect("端口");
     let handle = tokio::spawn(async move {
         let _ = axum::serve(listener, app).await;
@@ -175,7 +196,8 @@ impl Fixture {
             max_per_poll: 20,
             download_fallback: true,
         };
-        comfyhub_server_rs::comfy::capture::save_capture_config(&state, config).expect("存捕获配置");
+        comfyhub_server_rs::comfy::capture::save_capture_config(&state, config)
+            .expect("存捕获配置");
         Self { state, dir }
     }
 
@@ -235,37 +257,69 @@ async fn submit_runs_the_workflow_then_ingests_the_product() {
         "wait": true,
         "waitSeconds": 20
     });
-    let outcome = comfyhub_server_rs::workflow::workflow_submit::tool_submit(&fixture.state, &fixture.policy(), &arguments)
-        .await
-        .expect("提交应当成功");
+    let outcome = comfyhub_server_rs::workflow::workflow_submit::tool_submit(
+        &fixture.state,
+        &fixture.policy(),
+        &arguments,
+    )
+    .await
+    .expect("提交应当成功");
 
     // ① 提交出去的那张图必须带上覆盖与补线
     let sent = submitted.lock().unwrap().clone();
     assert_eq!(sent.len(), 1, "只许提交一次");
     let graph = &sent[0]["prompt"];
-    assert_eq!(graph["3"]["inputs"]["steps"], json!(30), "覆盖没生效：{graph}");
+    assert_eq!(
+        graph["3"]["inputs"]["steps"],
+        json!(30),
+        "覆盖没生效：{graph}"
+    );
     assert_eq!(graph["6"]["inputs"]["text"], json!("a dog"));
     assert_eq!(graph["9"]["inputs"]["images"], json!(["3", 0]));
-    assert!(sent[0]["client_id"].as_str().map(|s| !s.is_empty()).unwrap_or(false), "要带 client_id");
+    assert!(
+        sent[0]["client_id"]
+            .as_str()
+            .map(|s| !s.is_empty())
+            .unwrap_or(false),
+        "要带 client_id"
+    );
 
     // ② 产物真的入库了，`mediaIds` 才可能出现
     let payload = &outcome.payload;
     assert_eq!(payload["promptId"], json!(101));
     assert_eq!(payload["runKey"], json!("comfy-run-1"));
     assert_eq!(payload["status"], json!("success"), "{payload}");
-    let media_ids = payload["mediaIds"].as_array().expect("mediaIds 必须是数组").clone();
+    let media_ids = payload["mediaIds"]
+        .as_array()
+        .expect("mediaIds 必须是数组")
+        .clone();
     assert_eq!(media_ids.len(), 1, "应当收进 1 个产物：{payload}");
     assert_eq!(payload["mediaCount"], json!(1));
-    assert!(payload["capturedPromptId"].as_i64().is_some(), "要有捕获后的提示词 id：{payload}");
+    assert!(
+        payload["capturedPromptId"].as_i64().is_some(),
+        "要有捕获后的提示词 id：{payload}"
+    );
     assert_eq!(payload["nsfw"], json!(false));
     assert_eq!(payload["nsfwMediaIds"], json!([]));
-    assert!(payload["idHint"].as_str().unwrap().contains("comfy_get_run"));
-    assert_eq!(payload["appliedOverrides"], json!(["3.steps ← 30", "6.text ← a dog", "9.images ← [3, 0]"]));
+    assert!(payload["idHint"]
+        .as_str()
+        .unwrap()
+        .contains("comfy_get_run"));
+    assert_eq!(
+        payload["appliedOverrides"],
+        json!(["3.steps ← 30", "6.text ← a dog", "9.images ← [3, 0]"])
+    );
 
     // ③ 库里那两条记录（capture_runs 收尾 + media_assets 关联到新提示词）
     let run_status: String = fixture
         .state
-        .with(|conn| conn.query_row("SELECT status FROM capture_runs WHERE run_key='comfy-run-1'", [], |r| r.get(0)))
+        .with(|conn| {
+            conn.query_row(
+                "SELECT status FROM capture_runs WHERE run_key='comfy-run-1'",
+                [],
+                |r| r.get(0),
+            )
+        })
         .unwrap();
     assert_eq!(run_status, "success");
     let (media_prompt, media_count): (i64, i64) = fixture
@@ -279,7 +333,10 @@ async fn submit_runs_the_workflow_then_ingests_the_product() {
             )
         })
         .unwrap();
-    assert!(media_prompt > 0 && media_count == 1, "产物要挂在那条新提示词上");
+    assert!(
+        media_prompt > 0 && media_count == 1,
+        "产物要挂在那条新提示词上"
+    );
     // 新提示词的正向提示词来自**提交出去的那张图**（模型改了 text，库里就该是新值）
     let positive: String = fixture
         .state
@@ -291,10 +348,17 @@ async fn submit_runs_the_workflow_then_ingests_the_product() {
             )
         })
         .unwrap();
-    assert_eq!(positive, "a dog", "入库解析出的正向提示词要来自真正提交的图");
+    assert_eq!(
+        positive, "a dog",
+        "入库解析出的正向提示词要来自真正提交的图"
+    );
 
     // ④ 提交记录（`/api/capture/jobs` 的 submissions[] 就是它）
-    let recorded = fixture.state.submissions.find("comfy-run-1").expect("要有提交记录");
+    let recorded = fixture
+        .state
+        .submissions
+        .find("comfy-run-1")
+        .expect("要有提交记录");
     assert_eq!(recorded["status"], json!("success"));
     assert_eq!(recorded["title"], json!("单元提交"));
 
@@ -309,15 +373,27 @@ async fn nsfw_flag_travels_into_the_library() {
     write_png(&fixture.dir.join("output").join("unit.png"), [200, 20, 60]);
 
     let arguments = json!({ "promptId": 101, "nsfw": true, "waitSeconds": 20 });
-    let outcome = comfyhub_server_rs::workflow::workflow_submit::tool_submit(&fixture.state, &fixture.policy(), &arguments)
-        .await
-        .expect("提交应当成功");
+    let outcome = comfyhub_server_rs::workflow::workflow_submit::tool_submit(
+        &fixture.state,
+        &fixture.policy(),
+        &arguments,
+    )
+    .await
+    .expect("提交应当成功");
     let media_id = outcome.payload["mediaIds"][0].as_i64().expect("有产物");
-    assert_eq!(outcome.payload["nsfwMediaIds"], json!([media_id]), "界面靠它决定打不打码");
+    assert_eq!(
+        outcome.payload["nsfwMediaIds"],
+        json!([media_id]),
+        "界面靠它决定打不打码"
+    );
     let nsfw: i64 = fixture
         .state
         .with(|conn| {
-            conn.query_row("SELECT nsfw FROM media_assets WHERE id = ?1", rusqlite::params![media_id], |r| r.get(0))
+            conn.query_row(
+                "SELECT nsfw FROM media_assets WHERE id = ?1",
+                rusqlite::params![media_id],
+                |r| r.get(0),
+            )
         })
         .unwrap();
     assert_eq!(nsfw, 1, "产物要带上 NSFW 标记");
@@ -339,13 +415,28 @@ async fn preflight_blocks_unknown_node_classes_before_anything_is_sent() {
     });
 
     let arguments = json!({ "promptId": 101, "waitSeconds": 20 });
-    let failure = comfyhub_server_rs::workflow::workflow_submit::tool_submit(&fixture.state, &fixture.policy(), &arguments)
-        .await
-        .expect_err("节点类不认识的图必须拒");
+    let failure = comfyhub_server_rs::workflow::workflow_submit::tool_submit(
+        &fixture.state,
+        &fixture.policy(),
+        &arguments,
+    )
+    .await
+    .expect_err("节点类不认识的图必须拒");
     assert_eq!(failure.code, "MODEL_NOT_LOADABLE");
-    assert!(failure.message.contains("实例里没有这些节点类"), "{}", failure.message);
-    assert!(failure.message.contains("Krea2CustomNode"), "{}", failure.message);
-    assert!(submitted.lock().unwrap().is_empty(), "预检拦下时**一个字节都不许发出去**");
+    assert!(
+        failure.message.contains("实例里没有这些节点类"),
+        "{}",
+        failure.message
+    );
+    assert!(
+        failure.message.contains("Krea2CustomNode"),
+        "{}",
+        failure.message
+    );
+    assert!(
+        submitted.lock().unwrap().is_empty(),
+        "预检拦下时**一个字节都不许发出去**"
+    );
 
     gateway.abort();
     fixture.finish();
@@ -364,17 +455,30 @@ async fn preflight_warns_about_models_it_cannot_see_but_still_submits() {
         "overrides": { "4.ckpt_name": "anima-base-v1.0.safetensors" },
         "waitSeconds": 20
     });
-    let outcome = comfyhub_server_rs::workflow::workflow_submit::tool_submit(&fixture.state, &fixture.policy(), &arguments)
-        .await
-        .expect("这一档现在不拦");
+    let outcome = comfyhub_server_rs::workflow::workflow_submit::tool_submit(
+        &fixture.state,
+        &fixture.policy(),
+        &arguments,
+    )
+    .await
+    .expect("这一档现在不拦");
     assert_eq!(submitted.lock().unwrap().len(), 1, "该提交还是要提交");
-    let warnings = outcome.payload["preflightWarnings"].as_array().expect("要带回警告");
-    let joined = warnings.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>().join("\n");
+    let warnings = outcome.payload["preflightWarnings"]
+        .as_array()
+        .expect("要带回警告");
+    let joined = warnings
+        .iter()
+        .filter_map(|v| v.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
     assert!(joined.contains("anima-base-v1.0.safetensors"), "{joined}");
     // ⚠ 文案 2026-09-30 由用户自己精简过（去掉了"没有拦"三个字）——
     //   "这一档不拦"这件事**由行为本身钉住**（上面那两条：提交照常发生、只提交一次），
     //   这里不再断言具体措辞。
-    assert!(joined.contains("看不到 1 个模型文件"), "要说清数量：{joined}");
+    assert!(
+        joined.contains("看不到 1 个模型文件"),
+        "要说清数量：{joined}"
+    );
 
     gateway.abort();
     fixture.finish();
@@ -398,18 +502,32 @@ async fn the_audit_blocks_pure_frontend_nodes_before_anything_is_sent() {
 
     // 覆盖也一起给上：overrides **改不了** class_type，审核看的是覆盖之后的那张图，照样得拦
     let arguments = json!({ "promptId": 101, "overrides": { "3.steps": 30 }, "waitSeconds": 20 });
-    let failure = comfyhub_server_rs::workflow::workflow_submit::tool_submit(&fixture.state, &fixture.policy(), &arguments)
-        .await
-        .expect_err("纯前端节点必须被审核拦下");
-    assert_eq!(failure.code, "MODEL_NOT_LOADABLE", "错误码与 Kotlin 同（`AiWorkflowSearch.submit`）");
-    assert!(failure.message.contains("纯前端节点"), "{}", failure.message);
+    let failure = comfyhub_server_rs::workflow::workflow_submit::tool_submit(
+        &fixture.state,
+        &fixture.policy(),
+        &arguments,
+    )
+    .await
+    .expect_err("纯前端节点必须被审核拦下");
+    assert_eq!(
+        failure.code, "MODEL_NOT_LOADABLE",
+        "错误码与 Kotlin 同（`AiWorkflowSearch.submit`）"
+    );
+    assert!(
+        failure.message.contains("纯前端节点"),
+        "{}",
+        failure.message
+    );
     assert!(failure.message.contains("rgthree"), "{}", failure.message);
     assert!(
         failure.message.contains("没有提交"),
         "被拒的话要说清「没有提交」：{}",
         failure.message
     );
-    assert!(submitted.lock().unwrap().is_empty(), "拦下时一个字节都不许发出去");
+    assert!(
+        submitted.lock().unwrap().is_empty(),
+        "拦下时一个字节都不许发出去"
+    );
 
     gateway.abort();
     fixture.finish();
@@ -432,21 +550,38 @@ async fn the_audit_warns_but_still_submits_on_the_post_override_graph() {
         "overrides": { "6.text": tags },
         "waitSeconds": 20
     });
-    let outcome = comfyhub_server_rs::workflow::workflow_submit::tool_submit(&fixture.state, &fixture.policy(), &arguments)
-        .await
-        .expect("非阻断的结论不许拦");
+    let outcome = comfyhub_server_rs::workflow::workflow_submit::tool_submit(
+        &fixture.state,
+        &fixture.policy(),
+        &arguments,
+    )
+    .await
+    .expect("非阻断的结论不许拦");
 
     // 提交照常发生，而且发出去的就是覆盖之后的那张图
     let sent = submitted.lock().unwrap().clone();
     assert_eq!(sent.len(), 1, "只许提交一次");
-    assert_eq!(sent[0]["prompt"]["6"]["inputs"]["text"], json!(tags), "覆盖要真的生效");
+    assert_eq!(
+        sent[0]["prompt"]["6"]["inputs"]["text"],
+        json!(tags),
+        "覆盖要真的生效"
+    );
 
     // 审核的非阻断结论进了 `preflightWarnings`（与"实例看不到模型文件"同一个通道）
-    let warnings = outcome.payload["preflightWarnings"].as_array().expect("要带回警告");
-    let joined = warnings.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>().join("\n");
+    let warnings = outcome.payload["preflightWarnings"]
+        .as_array()
+        .expect("要带回警告");
+    let joined = warnings
+        .iter()
+        .filter_map(|v| v.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
     // ⚠ 文案 2026-09-30 由用户自己精简过（去掉了"没有拦"）—— "不拦"这件事由上面那三条钉住
     //   （返回 Ok、只提交一次、发出去的是覆盖后的图），这里只钉结论本身。
-    assert!(joined.contains("Danbooru tag"), "提示词风格那一条要带回：{joined}");
+    assert!(
+        joined.contains("Danbooru tag"),
+        "提示词风格那一条要带回：{joined}"
+    );
     assert!(joined.contains("Krea 2"), "{joined}");
     assert!(joined.contains("🟠"), "非阻断的项用 🟠 标：{joined}");
     assert!(!joined.contains("🔴"), "没有阻断项时不许出现 🔴：{joined}");
@@ -464,13 +599,29 @@ async fn timeout_is_reported_as_timeout_not_failure() {
     let fixture = Fixture::new("timeout", &base);
 
     let arguments = json!({ "promptId": 101, "wait": true, "waitSeconds": 1 });
-    let outcome = comfyhub_server_rs::workflow::workflow_submit::tool_submit(&fixture.state, &fixture.policy(), &arguments)
-        .await
-        .expect("超时不是失败");
+    let outcome = comfyhub_server_rs::workflow::workflow_submit::tool_submit(
+        &fixture.state,
+        &fixture.policy(),
+        &arguments,
+    )
+    .await
+    .expect("超时不是失败");
     assert_eq!(submitted.lock().unwrap().len(), 1, "提交是发生了的");
-    assert_eq!(outcome.payload["status"], json!("timeout"), "{}", outcome.payload);
+    assert_eq!(
+        outcome.payload["status"],
+        json!("timeout"),
+        "{}",
+        outcome.payload
+    );
     assert_eq!(outcome.payload["mediaIds"], json!([]));
-    assert!(outcome.payload["hint"].as_str().unwrap().contains("还没跑完"), "{}", outcome.payload);
+    assert!(
+        outcome.payload["hint"]
+            .as_str()
+            .unwrap()
+            .contains("还没跑完"),
+        "{}",
+        outcome.payload
+    );
     let recorded = fixture.state.submissions.find("comfy-run-1").unwrap();
     assert_eq!(recorded["status"], json!("timeout"));
 
@@ -492,11 +643,19 @@ async fn without_an_api_graph_it_refuses_instead_of_guessing() {
         .unwrap();
 
     let arguments = json!({ "promptId": 101, "waitSeconds": 20 });
-    let failure = comfyhub_server_rs::workflow::workflow_submit::tool_submit(&fixture.state, &fixture.policy(), &arguments)
-        .await
-        .expect_err("没有 API 图就不能猜着提交");
+    let failure = comfyhub_server_rs::workflow::workflow_submit::tool_submit(
+        &fixture.state,
+        &fixture.policy(),
+        &arguments,
+    )
+    .await
+    .expect_err("没有 API 图就不能猜着提交");
     assert_eq!(failure.code, "NO_API_GRAPH");
-    assert!(failure.message.contains("没有 API 格式节点图"), "{}", failure.message);
+    assert!(
+        failure.message.contains("没有 API 格式节点图"),
+        "{}",
+        failure.message
+    );
     assert!(submitted.lock().unwrap().is_empty());
 
     gateway.abort();
@@ -508,9 +667,13 @@ async fn missing_arguments_are_reported_as_invalid() {
     let (base, _submitted, gateway) = fake_comfy(object_info(), history_with_output()).await;
     let fixture = Fixture::new("args", &base);
 
-    let failure = comfyhub_server_rs::workflow::workflow_submit::tool_submit(&fixture.state, &fixture.policy(), &json!({}))
-        .await
-        .expect_err("既没 promptId 也没 workflowPath");
+    let failure = comfyhub_server_rs::workflow::workflow_submit::tool_submit(
+        &fixture.state,
+        &fixture.policy(),
+        &json!({}),
+    )
+    .await
+    .expect_err("既没 promptId 也没 workflowPath");
     assert_eq!(failure.code, "INVALID_ARGUMENT");
     assert!(failure.message.contains("promptId"), "{}", failure.message);
 
@@ -523,7 +686,11 @@ async fn missing_arguments_are_reported_as_invalid() {
     .await
     .expect_err("不存在的输入要拒");
     assert_eq!(failure.code, "INVALID_ARGUMENT");
-    assert!(failure.message.contains("没有名为「nope」的输入"), "{}", failure.message);
+    assert!(
+        failure.message.contains("没有名为「nope」的输入"),
+        "{}",
+        failure.message
+    );
 
     gateway.abort();
     fixture.finish();

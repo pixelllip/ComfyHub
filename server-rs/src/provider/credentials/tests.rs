@@ -14,19 +14,29 @@ fn sanitize_照_kotlin_的四条判据() {
     // 空白
     let e = sanitize("   ").unwrap_err();
     assert_eq!(e.error, "CONFIG_ERROR");
-    assert_eq!(e.detail.as_deref(), Some("密钥不能为空；留空表示不修改已有密钥"));
+    assert_eq!(
+        e.detail.as_deref(),
+        Some("密钥不能为空；留空表示不修改已有密钥")
+    );
 
     // 带引号（含"单个引号字符"这种边界 —— Kotlin 的 startsWith/endsWith 也拒它）
     for raw in ["\"sk-abc\"", "'sk-abc'", "\"", "'"] {
         let e = sanitize(raw).unwrap_err();
-        assert_eq!(e.detail.as_deref(), Some("请只粘贴密钥本身，不要带引号"), "{raw}");
+        assert_eq!(
+            e.detail.as_deref(),
+            Some("请只粘贴密钥本身，不要带引号"),
+            "{raw}"
+        );
     }
     // 一边一个引号不算"带引号"（Kotlin 只认首尾同款）
     assert_eq!(sanitize("\"sk-abc'").unwrap(), "\"sk-abc'");
 
     // NAME=value 整行
     let e = sanitize("OPENAI_API_KEY=sk-abc").unwrap_err();
-    assert_eq!(e.detail.as_deref(), Some("请只粘贴密钥的值，不要粘贴 NAME=value 这种整行"));
+    assert_eq!(
+        e.detail.as_deref(),
+        Some("请只粘贴密钥的值，不要粘贴 NAME=value 这种整行")
+    );
     // `^[A-Za-z_][A-Za-z0-9_]*$` 也认得下划线开头的名字
     assert_eq!(
         sanitize("_A1=x").unwrap_err().detail.as_deref(),

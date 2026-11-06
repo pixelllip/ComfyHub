@@ -15,7 +15,10 @@ fn 出厂白名单与_kotlin_一致() {
     assert_eq!(p.write_roots, vec![PathBuf::from(r"D:\proj\comfyui")]);
     assert_eq!(
         p.read_roots,
-        vec![PathBuf::from(r"D:\proj\comfyui"), PathBuf::from(r"D:\proj\storage")]
+        vec![
+            PathBuf::from(r"D:\proj\comfyui"),
+            PathBuf::from(r"D:\proj\storage")
+        ]
     );
     assert_eq!(p.permission_mode, PERMISSION_ASK);
     assert!(!p.full_permission());
@@ -23,7 +26,9 @@ fn 出厂白名单与_kotlin_一致() {
 
 #[test]
 fn 白名单展开认相对与绝对两种写法() {
-    let p = policy(r#"{"writeRoots":["comfyui","D:\\other\\out","a/../b"],"readRoots":["  storage  "],"permissionMode":"full"}"#);
+    let p = policy(
+        r#"{"writeRoots":["comfyui","D:\\other\\out","a/../b"],"readRoots":["  storage  "],"permissionMode":"full"}"#,
+    );
     assert_eq!(
         p.write_roots,
         vec![
@@ -39,8 +44,14 @@ fn 白名单展开认相对与绝对两种写法() {
 #[test]
 fn 权限档认不出来就回落询问() {
     // 配置写坏（比如拼成 "FULL "、或者老库里塞了别的词）不能放开权限
-    assert_eq!(policy(r#"{"permissionMode":"FULL "}"#).permission_mode, PERMISSION_ASK);
-    assert_eq!(policy(r#"{"permissionMode":"whatever"}"#).permission_mode, PERMISSION_ASK);
+    assert_eq!(
+        policy(r#"{"permissionMode":"FULL "}"#).permission_mode,
+        PERMISSION_ASK
+    );
+    assert_eq!(
+        policy(r#"{"permissionMode":"whatever"}"#).permission_mode,
+        PERMISSION_ASK
+    );
     assert!(policy(r#"{"permissionMode":"full"}"#).full_permission());
 }
 
@@ -51,9 +62,21 @@ fn 生效权限按权限档放宽但不动_deny() {
     assert_eq!(ask.access_for("list_skills", "ALLOW"), ToolAccess::Allow);
 
     let full = policy(r#"{"permissionMode":"full"}"#);
-    assert_eq!(full.access_for("web_search", "ASK"), ToolAccess::Allow, "全权限档下 ask 变 allow");
-    assert_eq!(full.access_for("x", "DENY"), ToolAccess::Deny, "deny 是禁用，不放宽");
-    assert_eq!(full.access_for("x", "???"), ToolAccess::Allow, "认不出的出厂档当 ask 处理");
+    assert_eq!(
+        full.access_for("web_search", "ASK"),
+        ToolAccess::Allow,
+        "全权限档下 ask 变 allow"
+    );
+    assert_eq!(
+        full.access_for("x", "DENY"),
+        ToolAccess::Deny,
+        "deny 是禁用，不放宽"
+    );
+    assert_eq!(
+        full.access_for("x", "???"),
+        ToolAccess::Allow,
+        "认不出的出厂档当 ask 处理"
+    );
 }
 
 #[test]
@@ -85,13 +108,19 @@ fn 工具预算的出厂值与_kotlin_一致() {
 /// 2026-09-28：用户库里那份"16"是**旧默认值落库**的，不升级它，默认怎么改都不生效。
 #[test]
 fn 旧出厂值_deprecated_16_要升到新默认而不是永远锁着() {
-    let mut old = ToolPolicyConfig { max_tool_steps: LEGACY_DEFAULT_MAX_TOOL_STEPS, ..Default::default() };
+    let mut old = ToolPolicyConfig {
+        max_tool_steps: LEGACY_DEFAULT_MAX_TOOL_STEPS,
+        ..Default::default()
+    };
     migrate_legacy_max_tool_steps(&mut old);
     assert_eq!(old.max_tool_steps, DEFAULT_MAX_TOOL_STEPS);
 
     // 用户自己挑的值一个都不许动（设置页里 8 / 12 / 40 都是可选值）
     for chosen in [8, 12, 20, 40] {
-        let mut custom = ToolPolicyConfig { max_tool_steps: chosen, ..Default::default() };
+        let mut custom = ToolPolicyConfig {
+            max_tool_steps: chosen,
+            ..Default::default()
+        };
         migrate_legacy_max_tool_steps(&mut custom);
         assert_eq!(custom.max_tool_steps, chosen);
     }
@@ -121,13 +150,23 @@ fn 升级会写回库并且只做一次() {
     let state = AppState::new(conn, ":memory:", crate::infra::testpaths::scratch("media"));
 
     let first = ToolPolicy::load(&state).unwrap();
-    assert_eq!(first.config.max_tool_steps, DEFAULT_MAX_TOOL_STEPS, "旧出厂值要当没设过");
+    assert_eq!(
+        first.config.max_tool_steps, DEFAULT_MAX_TOOL_STEPS,
+        "旧出厂值要当没设过"
+    );
     // 写回库：别的键（我们这一版不认识的 maxReadBytes 等）一个都不能丢
     let stored: String = state
-        .with(|conn| conn.query_row("SELECT v FROM app_settings WHERE k = ?1", [KEY], |r| r.get(0)))
+        .with(|conn| {
+            conn.query_row("SELECT v FROM app_settings WHERE k = ?1", [KEY], |r| {
+                r.get(0)
+            })
+        })
         .unwrap();
     assert!(stored.contains("\"maxToolSteps\":25"), "{stored}");
-    assert!(stored.contains("maxReadBytes"), "合并写回，不许把别的键删掉：{stored}");
+    assert!(
+        stored.contains("maxReadBytes"),
+        "合并写回，不许把别的键删掉：{stored}"
+    );
 
     // 用户明确选了 16（标记已落）→ 第二次读**不许**再改
     state
@@ -140,7 +179,10 @@ fn 升级会写回库并且只做一次() {
         })
         .unwrap();
     let second = ToolPolicy::load(&state).unwrap();
-    assert_eq!(second.config.max_tool_steps, 16, "标记落过之后，用户挑的值就是最终答案");
+    assert_eq!(
+        second.config.max_tool_steps, 16,
+        "标记落过之后，用户挑的值就是最终答案"
+    );
 }
 
 // ------------------------------------------------------------------
@@ -167,7 +209,11 @@ fn 写只能在写白名单里读只能在读白名单里() {
     let p = policy_at(&root, "{}");
     // 写：出厂只有 comfyui
     let inside = p.resolve_write("comfyui/a/b.txt").unwrap();
-    assert!(inside.starts_with(root.join("comfyui")), "{}", inside.display());
+    assert!(
+        inside.starts_with(root.join("comfyui")),
+        "{}",
+        inside.display()
+    );
     // 不存在也照样解析（write_file 的目标通常还不存在）
     assert!(inside.ends_with("b.txt"));
     // storage 是**读**白名单，不是写白名单
@@ -178,7 +224,10 @@ fn 写只能在写白名单里读只能在读白名单里() {
     assert!(p.resolve_read("storage/x.txt").is_ok());
     assert!(p.resolve_read("comfyui/x.txt").is_ok());
     // 项目根之外
-    assert_eq!(p.resolve_read("../outside.txt").unwrap_err().code, "PATH_DENIED");
+    assert_eq!(
+        p.resolve_read("../outside.txt").unwrap_err().code,
+        "PATH_DENIED"
+    );
     // 空路径是参数错，不是越界
     assert_eq!(p.resolve_write("   ").unwrap_err().code, "INVALID_ARGUMENT");
     std::fs::remove_dir_all(&root).ok();
@@ -190,16 +239,28 @@ fn 禁段与用户白名单无关() {
     // 用户把白名单放宽到**项目根**（最宽的一种写法）
     let p = policy_at(&root, r#"{"writeRoots":["."],"readRoots":["."]}"#);
     assert!(p.resolve_write("comfyui/ok.txt").is_ok());
-    for bad in [".git/config", ".run/x.log", "node_modules/a/b.js", ".mysql/data/x"] {
+    for bad in [
+        ".git/config",
+        ".run/x.log",
+        "node_modules/a/b.js",
+        ".mysql/data/x",
+    ] {
         let err = p.resolve_write(bad).unwrap_err();
         assert_eq!(err.code, "PATH_DENIED", "{bad} 竟然放行了");
-        assert!(err.message.contains("运行期数据 / 依赖目录"), "{}", err.message);
+        assert!(
+            err.message.contains("运行期数据 / 依赖目录"),
+            "{}",
+            err.message
+        );
         // 读也一样拒（措辞要跟 verb 对上，别让"读被拒"看起来像"能读不能改"）
         let read_err = p.resolve_read(bad).unwrap_err();
         assert!(read_err.message.contains("拒绝读"), "{}", read_err.message);
     }
     // 大小写不敏感（Windows 上 `.GIT` 一样要拒）
-    assert_eq!(p.resolve_write(".GIT/config").unwrap_err().code, "PATH_DENIED");
+    assert_eq!(
+        p.resolve_write(".GIT/config").unwrap_err().code,
+        "PATH_DENIED"
+    );
     std::fs::remove_dir_all(&root).ok();
 }
 
@@ -225,14 +286,28 @@ fn 自动发现的目录只放宽读() {
     let p = policy_at(&root, "{}").with_auto_read_roots(vec![outside.clone()]);
     // 读：自动发现的目录可以（用户 bug ④）
     assert!(p
-        .resolve_read(&outside.join("user").join("default").join("workflows").join("a.json").display().to_string())
+        .resolve_read(
+            &outside
+                .join("user")
+                .join("default")
+                .join("workflows")
+                .join("a.json")
+                .display()
+                .to_string()
+        )
         .is_ok());
     // 写：**一点都没放宽**（那只放宽读）
-    let err = p.resolve_write(&outside.join("x.json").display().to_string()).unwrap_err();
+    let err = p
+        .resolve_write(&outside.join("x.json").display().to_string())
+        .unwrap_err();
     assert_eq!(err.code, "PATH_DENIED");
     // 去重 + 保序（Kotlin `.distinct()`）
-    let dup = policy_at(&root, "{}").with_auto_read_roots(vec![root.join("storage"), outside.clone()]);
-    assert_eq!(dup.effective_read_roots(), vec![root.join("comfyui"), root.join("storage"), outside]);
+    let dup =
+        policy_at(&root, "{}").with_auto_read_roots(vec![root.join("storage"), outside.clone()]);
+    assert_eq!(
+        dup.effective_read_roots(),
+        vec![root.join("comfyui"), root.join("storage"), outside]
+    );
     std::fs::remove_dir_all(&root).ok();
 }
 
@@ -244,7 +319,11 @@ fn 真实路径解掉符号链接与逐字前缀() {
     std::fs::write(root.join("comfyui").join("sub").join("a.txt"), b"x").unwrap();
     let resolved = p.resolve_write("comfyui/sub/a.txt").unwrap();
     // Windows 的 canonicalize 会给 `\\?\D:\…`，闸门内部必须已经去掉那个前缀
-    assert!(!resolved.to_string_lossy().starts_with(r"\\?\"), "{}", resolved.display());
+    assert!(
+        !resolved.to_string_lossy().starts_with(r"\\?\"),
+        "{}",
+        resolved.display()
+    );
     // 词法上的 `..` 要被消掉（`comfyui/../comfyui/a.txt` 仍然合法）
     assert!(p.resolve_write("comfyui/../comfyui/b.txt").is_ok());
     // 但消完落在白名单外就要拒

@@ -31,24 +31,23 @@ Map<String, dynamic> _media({
   int? collectionId,
   int collectionSize = 1,
   List<int> preview = const [],
-}) =>
-    {
-      'id': id,
-      'kind': 'IMAGE',
-      'title': 'shot-$id.png',
-      'originalName': 'shot-$id.png',
-      'storedName': 's$id.png',
-      'mimeType': 'image/png',
-      'sizeBytes': 1024,
-      'favorite': false,
-      'source': 'ComfyUI',
-      'createdAt': '2026-10-18T01:00:00.000Z',
-      'fileUrl': '/api/media/$id/file',
-      'thumbUrl': '/api/media/$id/thumb',
-      'collectionId': collectionId,
-      'collectionSize': collectionSize,
-      'collectionPreview': preview,
-    };
+}) => {
+  'id': id,
+  'kind': 'IMAGE',
+  'title': 'shot-$id.png',
+  'originalName': 'shot-$id.png',
+  'storedName': 's$id.png',
+  'mimeType': 'image/png',
+  'sizeBytes': 1024,
+  'favorite': false,
+  'source': 'ComfyUI',
+  'createdAt': '2026-10-18T01:00:00.000Z',
+  'fileUrl': '/api/media/$id/file',
+  'thumbUrl': '/api/media/$id/thumb',
+  'collectionId': collectionId,
+  'collectionSize': collectionSize,
+  'collectionPreview': preview,
+};
 
 /// 测试里记下"新建集合"这一路请求（拖拽落点的断言吃它）。
 final List<Map<String, dynamic>> createdCollections = [];
@@ -57,94 +56,97 @@ final List<Map<String, dynamic>> createdCollections = [];
 final List<({int id, Map<String, dynamic> body})> patchedMedia = [];
 
 http.Client _client() => MockClient((request) async {
-      final path = request.url.path;
-      Object? body;
-      var status = 200;
-      final patch = RegExp(r'^/api/media/(\d+)$').firstMatch(path);
-      if (request.method == 'PATCH' && patch != null) {
-        patchedMedia.add((
-          id: int.parse(patch.group(1)!),
-          body: Map<String, dynamic>.from(jsonDecode(request.body) as Map),
-        ));
-        body = _media(id: int.parse(patch.group(1)!));
-      } else if (request.method == 'POST' && path == '/api/media/collections') {
-        final sent = Map<String, dynamic>.from(jsonDecode(request.body) as Map);
-        createdCollections.add(sent);
-        status = 201;
-        body = {
-          'id': 77,
-          'kind': 'IMAGE',
-          'origin': 'manual',
-          'size': (sent['mediaIds'] as List).length,
-        };
-      } else if (path == '/api/media') {
-        // 按 collectionId 列成员要**如实**回那一组的成员：集合 9 是 {2,3,4}。
-        // 假后端在这里含糊，用例就会对着一个不真实的成员表下断言。
-        if (request.url.queryParameters['collectionId'] == '9') {
-          body = {
-            'items': [_media(id: 2), _media(id: 3), _media(id: 4)],
-            'total': 3,
-            'page': 1,
-            'size': 500,
-            'pages': 1,
-          };
-          return http.Response(
-            jsonEncode(body),
-            status,
-            headers: {'content-type': 'application/json; charset=utf-8'},
-          );
-        }
-        body = {
-          'items': [
-            _media(id: 1),
-            _media(id: 2, collectionId: 9, collectionSize: 3, preview: [2, 3, 4]),
-          ],
-          'total': 2,
-          'page': 1,
-          'size': 24,
-          'pages': 1,
-        };
-      } else if (path == '/api/tags' || path == '/api/tags/categories') {
-        body = <Object>[];
-      } else if (path == '/api/stats') {
-        body = {
-          'prompts': 0,
-          'media': 2,
-          'tags': 0,
-          'favoritePrompts': 0,
-          'favoriteMedia': 0,
-          'byKind': <String, int>{},
-          'byMediaKind': <String, int>{},
-        };
-      } else if (path == '/api/prompts') {
-        body = {'items': <Object>[], 'total': 0, 'page': 1, 'size': 24, 'pages': 0};
-      } else {
-        status = 404;
-        body = {'error': 'not found: $path'};
-      }
+  final path = request.url.path;
+  Object? body;
+  var status = 200;
+  final patch = RegExp(r'^/api/media/(\d+)$').firstMatch(path);
+  if (request.method == 'PATCH' && patch != null) {
+    patchedMedia.add((
+      id: int.parse(patch.group(1)!),
+      body: Map<String, dynamic>.from(jsonDecode(request.body) as Map),
+    ));
+    body = _media(id: int.parse(patch.group(1)!));
+  } else if (request.method == 'POST' && path == '/api/media/collections') {
+    final sent = Map<String, dynamic>.from(jsonDecode(request.body) as Map);
+    createdCollections.add(sent);
+    status = 201;
+    body = {
+      'id': 77,
+      'kind': 'IMAGE',
+      'origin': 'manual',
+      'size': (sent['mediaIds'] as List).length,
+    };
+  } else if (path == '/api/media') {
+    // 按 collectionId 列成员要**如实**回那一组的成员：集合 9 是 {2,3,4}。
+    // 假后端在这里含糊，用例就会对着一个不真实的成员表下断言。
+    if (request.url.queryParameters['collectionId'] == '9') {
+      body = {
+        'items': [_media(id: 2), _media(id: 3), _media(id: 4)],
+        'total': 3,
+        'page': 1,
+        'size': 500,
+        'pages': 1,
+      };
       return http.Response(
         jsonEncode(body),
         status,
         headers: {'content-type': 'application/json; charset=utf-8'},
       );
-    });
+    }
+    body = {
+      'items': [
+        _media(id: 1),
+        _media(id: 2, collectionId: 9, collectionSize: 3, preview: [2, 3, 4]),
+      ],
+      'total': 2,
+      'page': 1,
+      'size': 24,
+      'pages': 1,
+    };
+  } else if (path == '/api/tags' || path == '/api/tags/categories') {
+    body = <Object>[];
+  } else if (path == '/api/stats') {
+    body = {
+      'prompts': 0,
+      'media': 2,
+      'tags': 0,
+      'favoritePrompts': 0,
+      'favoriteMedia': 0,
+      'byKind': <String, int>{},
+      'byMediaKind': <String, int>{},
+    };
+  } else if (path == '/api/prompts') {
+    body = {'items': <Object>[], 'total': 0, 'page': 1, 'size': 24, 'pages': 0};
+  } else {
+    status = 404;
+    body = {'error': 'not found: $path'};
+  }
+  return http.Response(
+    jsonEncode(body),
+    status,
+    headers: {'content-type': 'application/json; charset=utf-8'},
+  );
+});
 
 Future<(LibraryStore, SettingsStore)> _seed() async {
   SharedPreferences.setMockInitialValues({});
   final settings = SettingsStore();
   await settings.load();
-  final store = LibraryStore(settings, api: ApiClient(settings.baseUrl, client: _client()));
+  final store = LibraryStore(
+    settings,
+    api: ApiClient(settings.baseUrl, client: _client()),
+  );
   await store.refreshMedia();
   return (store, settings);
 }
 
 Widget _app(LibraryStore store, SettingsStore settings) => MultiProvider(
-      providers: [
-        ChangeNotifierProvider<LibraryStore>.value(value: store),
-        ChangeNotifierProvider<SettingsStore>.value(value: settings),
-      ],
-      child: const MaterialApp(home: GalleryPage()),
-    );
+  providers: [
+    ChangeNotifierProvider<LibraryStore>.value(value: store),
+    ChangeNotifierProvider<SettingsStore>.value(value: settings),
+  ],
+  child: const MaterialApp(home: GalleryPage()),
+);
 
 void main() {
   setUp(() {
@@ -208,7 +210,11 @@ void main() {
     await tester.tap(find.byType(CollectionThumb));
     await tester.pumpAndSettle();
 
-    expect(find.textContaining('这一组（3 张）'), findsOneWidget, reason: '要点开文件夹列成员');
+    expect(
+      find.textContaining('这一组（3 张）'),
+      findsOneWidget,
+      reason: '要点开文件夹列成员',
+    );
     expect(
       find.textContaining('长按可多选'),
       findsOneWidget,
@@ -247,10 +253,16 @@ void main() {
     await gesture.up();
     await tester.pumpAndSettle();
 
-    final moved = patchedMedia.where((call) => call.body['collectionId'] == 9).toList();
+    final moved = patchedMedia
+        .where((call) => call.body['collectionId'] == 9)
+        .toList();
     expect(moved, isNotEmpty, reason: '★ 松手必须真的把这一格并进目标所在的集合');
     expect(moved.first.id, 1);
-    expect(store.media.items.any((m) => m.id == 1), isTrue, reason: '移动的是归属，不是删东西');
+    expect(
+      store.media.items.any((m) => m.id == 1),
+      isTrue,
+      reason: '移动的是归属，不是删东西',
+    );
   });
 
   testWidgets('桌面：拖**集合格子**到散图上 = 当场新建一组，且含**整组**', (tester) async {
@@ -272,12 +284,15 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(createdCollections, hasLength(1), reason: '目标没有集合 → 当场新建一个');
-    final ids = (createdCollections.single['mediaIds'] as List).cast<int>().toSet();
-    expect(
-      ids,
-      {1, 2, 3, 4},
-      reason: '★ 新建的组要含"拖过来的整组（2/3/4）"加上目标（1）—— 动整组，不是只动封面',
-    );
+    final ids = (createdCollections.single['mediaIds'] as List)
+        .cast<int>()
+        .toSet();
+    expect(ids, {
+      1,
+      2,
+      3,
+      4,
+    }, reason: '★ 新建的组要含"拖过来的整组（2/3/4）"加上目标（1）—— 动整组，不是只动封面');
   });
 
   testWidgets('弹窗里把成员**拖出弹窗外**：弹窗让开，松手落到底部条 = 移出集合', (tester) async {
@@ -292,7 +307,9 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.textContaining('这一组（3 张）'), findsOneWidget);
 
-    final from = tester.getCenter(find.byKey(const Key('folder-member-thumb')).first);
+    final from = tester.getCenter(
+      find.byKey(const Key('folder-member-thumb')).first,
+    );
 
     final gesture = await tester.startGesture(from);
     await tester.pump();
@@ -361,11 +378,7 @@ void main() {
         .where((call) => call.body['clearCollection'] == true)
         .map((call) => call.id)
         .toSet();
-    expect(
-      cleared,
-      {2, 3},
-      reason: '★ 勾了两张，拖其中一张要**两张一起**移出集合（不是只搬被拖的那一张）',
-    );
+    expect(cleared, {2, 3}, reason: '★ 勾了两张，拖其中一张要**两张一起**移出集合（不是只搬被拖的那一张）');
   });
 
   testWidgets('宽屏：停靠面板**不会让开**；拖到空地上松手 = 直接移出集合', (tester) async {
@@ -385,7 +398,9 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.textContaining('这一组（3 张）'), findsOneWidget, reason: '前提：面板开着');
 
-    final from = tester.getCenter(find.byKey(const Key('folder-member-thumb')).first);
+    final from = tester.getCenter(
+      find.byKey(const Key('folder-member-thumb')).first,
+    );
     final gesture = await tester.startGesture(from);
     await tester.pump();
     await gesture.moveBy(const Offset(0, 40));
@@ -425,7 +440,9 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.textContaining('这一组（3 张）'), findsOneWidget);
 
-    final from = tester.getCenter(find.byKey(const Key('folder-member-thumb')).first);
+    final from = tester.getCenter(
+      find.byKey(const Key('folder-member-thumb')).first,
+    );
     final gesture = await tester.startGesture(from);
     await tester.pump();
     await gesture.moveBy(const Offset(0, 40));
@@ -477,7 +494,9 @@ void main() {
     await gesture.up();
     await tester.pumpAndSettle();
 
-    final into = patchedMedia.where((call) => call.body['collectionId'] == 9).toList();
+    final into = patchedMedia
+        .where((call) => call.body['collectionId'] == 9)
+        .toList();
     expect(into, isNotEmpty, reason: '★ 拖到面板上必须真的加进这一组');
     expect(into.first.id, 1, reason: '被加进去的是拖过来的那一张');
   });
@@ -674,8 +693,16 @@ void main() {
     });
     final restored = SettingsStore();
     await restored.load();
-    expect(restored.collectionDetailWide, CollectionDetailStyle.popup, reason: '宽屏那条要能读回来');
-    expect(restored.collectionDetailNarrow, CollectionDetailStyle.dock, reason: '窄屏那条要能读回来');
+    expect(
+      restored.collectionDetailWide,
+      CollectionDetailStyle.popup,
+      reason: '宽屏那条要能读回来',
+    );
+    expect(
+      restored.collectionDetailNarrow,
+      CollectionDetailStyle.dock,
+      reason: '窄屏那条要能读回来',
+    );
 
     // 手改坏 / 老版本写的值 → 回**默认**（= 改之前写死在代码里的行为），绝不抛：
     // 它在 App 启动路径上，抛了就是白屏（与 `AppThemeMode.parse` 同一条纪律）。
@@ -712,7 +739,10 @@ Finder _folderTitle() => find.textContaining('这一组（3 张）');
 /// ⇔ "是不是弹窗形态"。把形态改回去（比如给停靠也铺一层虚化背景），这条立刻红。
 bool _isPopupForm(WidgetTester tester) =>
     find.byType(BackdropFilter).evaluate().isNotEmpty ||
-    find.ancestor(of: _folderTitle(), matching: find.byType(Visibility)).evaluate().isNotEmpty;
+    find
+        .ancestor(of: _folderTitle(), matching: find.byType(Visibility))
+        .evaluate()
+        .isNotEmpty;
 
 /// 停靠形态的**几何证据**（结构判据之外的第二条腿）：
 ///
@@ -740,10 +770,25 @@ void _expectDockedGeometry(WidgetTester tester) {
 /// 所以它的矩形就是弹窗的矩形）**水平居中**、明显窄于窗口、也不占满高度。
 void _expectCenteredPopup(WidgetTester tester) {
   final window = tester.view.physicalSize / tester.view.devicePixelRatio;
-  final layer = find.ancestor(of: _folderTitle(), matching: find.byType(Visibility));
-  expect(layer, findsOneWidget, reason: '弹窗形态的面板一定在 `_folderLayer` 的 Visibility 里');
+  final layer = find.ancestor(
+    of: _folderTitle(),
+    matching: find.byType(Visibility),
+  );
+  expect(
+    layer,
+    findsOneWidget,
+    reason: '弹窗形态的面板一定在 `_folderLayer` 的 Visibility 里',
+  );
   final popup = tester.getRect(layer);
   expect(popup.center.dx, closeTo(window.width / 2, 1), reason: '弹窗要水平居中');
-  expect(popup.width, lessThan(window.width * 0.95), reason: '弹窗是"限制大小"的浮层，不占满宽');
-  expect(popup.height, lessThan(window.height * 0.95), reason: '弹窗不占满高（那是停靠面板的样子）');
+  expect(
+    popup.width,
+    lessThan(window.width * 0.95),
+    reason: '弹窗是"限制大小"的浮层，不占满宽',
+  );
+  expect(
+    popup.height,
+    lessThan(window.height * 0.95),
+    reason: '弹窗不占满高（那是停靠面板的样子）',
+  );
 }

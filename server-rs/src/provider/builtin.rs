@@ -116,17 +116,25 @@ fn catalog() -> Result<BuiltinCatalog, ApiError> {
     let parsed: BuiltinCatalog = serde_json::from_str(CATALOG_JSON)
         .map_err(|e| ApiError::ai("CONFIG_ERROR", format!("内置模型目录不是合法 JSON：{e}")))?;
     if parsed.providers.is_empty() {
-        return Err(ApiError::ai("CONFIG_ERROR", "内置模型目录里没有任何 provider"));
+        return Err(ApiError::ai(
+            "CONFIG_ERROR",
+            "内置模型目录里没有任何 provider",
+        ));
     }
     if parsed.providers.iter().any(|p| p.models.is_empty()) {
-        return Err(ApiError::ai("CONFIG_ERROR", "内置模型目录里有 provider 没有任何模型"));
+        return Err(ApiError::ai(
+            "CONFIG_ERROR",
+            "内置模型目录里有 provider 没有任何模型",
+        ));
     }
     Ok(parsed)
 }
 
 /// 目录版本（取自资源里的 `version` 字段，**不另硬编码一份**）。
 pub fn catalog_version() -> String {
-    catalog().map(|c| c.version).unwrap_or_else(|_| UNKNOWN_VERSION.to_string())
+    catalog()
+        .map(|c| c.version)
+        .unwrap_or_else(|_| UNKNOWN_VERSION.to_string())
 }
 
 /// 目录里的第一个 provider（现在只有一个）。
@@ -161,7 +169,9 @@ impl SeedMode {
         match raw.map(|m| m.trim().to_lowercase()) {
             None => Ok(Self::AddMissing),
             Some(m) if m.is_empty() || m == "add-missing" => Ok(Self::AddMissing),
-            Some(m) if m == "refresh-capabilities" || m == "refresh" => Ok(Self::RefreshCapabilities),
+            Some(m) if m == "refresh-capabilities" || m == "refresh" => {
+                Ok(Self::RefreshCapabilities)
+            }
             Some(other) => Err(ApiError::ai(
                 "CONFIG_ERROR",
                 format!("未知的同步模式：{other}（可选 add-missing / refresh-capabilities）"),
@@ -236,7 +246,10 @@ pub struct SeedPlan {
 
 /// `AiSeeder.planSeed`：**库里多出来的 model_id 不属于这三类里的任何一类** ——
 /// 直接忽略，也就是永远不删、不改（这是刻意的）。
-pub fn plan_seed(catalog: &[BuiltinModel], existing: &std::collections::BTreeMap<String, AiModelDto>) -> SeedPlan {
+pub fn plan_seed(
+    catalog: &[BuiltinModel],
+    existing: &std::collections::BTreeMap<String, AiModelDto>,
+) -> SeedPlan {
     let mut plan = SeedPlan::default();
     for model in catalog {
         match existing.get(&model.id) {
@@ -279,7 +292,11 @@ pub fn decide_actions(mode: SeedMode, plan: &SeedPlan) -> (Vec<String>, Vec<Stri
 ///
 /// `capability_source` 默认 `builtin`（对齐那条路要按"目录来的"记，否则
 /// `capabilityDiffers` 会把每一行都判成"不一致" → 每次对齐都白写一遍）。
-pub fn to_model_dto(model: &BuiltinModel, provider_id: &str, capability_source: Option<&str>) -> AiModelDto {
+pub fn to_model_dto(
+    model: &BuiltinModel,
+    provider_id: &str,
+    capability_source: Option<&str>,
+) -> AiModelDto {
     AiModelDto {
         provider_id: provider_id.to_string(),
         id: model.id.clone(),
@@ -321,7 +338,10 @@ fn to_provider_dto(provider: &BuiltinProvider) -> Result<AiProviderDto, ApiError
         })?;
     let trust = crate::web::endpoint_guard::parse_trust(&provider.endpoint_trust)
         .map(str::to_string)
-        .unwrap_or_else(|| crate::web::endpoint_guard::infer_trust(&crate::ai::ai::host_of(&provider.base_url)).to_string());
+        .unwrap_or_else(|| {
+            crate::web::endpoint_guard::infer_trust(&crate::ai::ai::host_of(&provider.base_url))
+                .to_string()
+        });
     Ok(AiProviderDto {
         id: crate::ai::ai::require_provider_id(Some(&provider.id))?,
         display_name: crate::ai::ai::require_display_name(Some(&provider.display_name))?,
@@ -342,7 +362,10 @@ fn to_provider_dto(provider: &BuiltinProvider) -> Result<AiProviderDto, ApiError
 // ---------------------------------------------------------------------------
 
 /// 库里该 provider 的模型（键为 model_id）；provider 不存在 → `None`。
-fn existing_models(state: &AppState, id: &str) -> Result<Option<std::collections::BTreeMap<String, AiModelDto>>, ApiError> {
+fn existing_models(
+    state: &AppState,
+    id: &str,
+) -> Result<Option<std::collections::BTreeMap<String, AiModelDto>>, ApiError> {
     if crate::ai::ai::get_provider_row(state, id)?.is_none() {
         return Ok(None);
     }
@@ -457,7 +480,11 @@ fn insert_all(
     mode: SeedMode,
 ) -> Result<BuiltinSyncResult, ApiError> {
     let dto = to_provider_dto(provider)?;
-    let models: Vec<AiModelDto> = provider.models.iter().map(|m| to_model_dto(m, id, None)).collect();
+    let models: Vec<AiModelDto> = provider
+        .models
+        .iter()
+        .map(|m| to_model_dto(m, id, None))
+        .collect();
     for model in &models {
         crate::ai::ai::validate_model(model)?;
     }

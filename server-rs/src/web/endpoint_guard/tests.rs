@@ -7,11 +7,20 @@ use super::*;
 /// 红线：**任何**信任档都不放行（这条错了就是 SSRF）。
 #[test]
 fn red_lines_are_blocked_in_every_trust_level() {
-    for host in ["169.254.169.254", "metadata.google.internal", "metadata.goog", "0.0.0.0", "::"] {
+    for host in [
+        "169.254.169.254",
+        "metadata.google.internal",
+        "metadata.goog",
+        "0.0.0.0",
+        "::",
+    ] {
         assert_eq!(scope_of(host), Scope::Blocked, "{host} 必须是红线");
         for trust in ["public", "loopback", "private-network", "unsafe-any"] {
             let err = assert_allowed(host, trust).unwrap_err();
-            assert_eq!(err, "该地址属于云元数据/保留地址，已拒绝", "{host} / {trust}");
+            assert_eq!(
+                err, "该地址属于云元数据/保留地址，已拒绝",
+                "{host} / {trust}"
+            );
         }
     }
 }
@@ -81,5 +90,8 @@ fn inferred_trust_matches_the_scope() {
 #[test]
 fn the_error_message_names_the_scope() {
     let err = assert_allowed("127.0.0.1", "public").unwrap_err();
-    assert_eq!(err, "端点信任级别 public 不允许访问主机 127.0.0.1（当前判定：LOOPBACK）");
+    assert_eq!(
+        err,
+        "端点信任级别 public 不允许访问主机 127.0.0.1（当前判定：LOOPBACK）"
+    );
 }

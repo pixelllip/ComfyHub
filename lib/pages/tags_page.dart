@@ -55,11 +55,16 @@ class _TagsPageState extends State<TagsPage> {
           (t.category ?? '').toLowerCase().contains(q);
     }).toList();
 
-    tags.sort((a, b) => switch (_sort) {
-          'name' => a.name.compareTo(b.name),
-          'newest' => b.id.compareTo(a.id),
-          _ => b.useCount != a.useCount ? b.useCount - a.useCount : a.name.compareTo(b.name),
-        });
+    tags.sort(
+      (a, b) => switch (_sort) {
+        'name' => a.name.compareTo(b.name),
+        'newest' => b.id.compareTo(a.id),
+        _ =>
+          b.useCount != a.useCount
+              ? b.useCount - a.useCount
+              : a.name.compareTo(b.name),
+      },
+    );
 
     return Scaffold(
       appBar: AppBar(
@@ -83,8 +88,7 @@ class _TagsPageState extends State<TagsPage> {
       ),
       body: Column(
         children: [
-          if (phone)
-            CollapsingPageTitle(title: '标签', progress: _titleProgress),
+          if (phone) CollapsingPageTitle(title: '标签', progress: _titleProgress),
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 12, 16, 6),
             child: Column(
@@ -120,13 +124,27 @@ class _TagsPageState extends State<TagsPage> {
                       tooltip: '排序',
                       onSelected: (v) => setState(() => _sort = v),
                       options: const [
-                        MenuOption(value: 'popular', icon: Icons.trending_up, label: '按使用频率'),
-                        MenuOption(value: 'name', icon: Icons.sort_by_alpha, label: '按名称'),
-                        MenuOption(value: 'newest', icon: Icons.schedule, label: '按创建时间'),
+                        MenuOption(
+                          value: 'popular',
+                          icon: Icons.trending_up,
+                          label: '按使用频率',
+                        ),
+                        MenuOption(
+                          value: 'name',
+                          icon: Icons.sort_by_alpha,
+                          label: '按名称',
+                        ),
+                        MenuOption(
+                          value: 'newest',
+                          icon: Icons.schedule,
+                          label: '按创建时间',
+                        ),
                       ],
                       button: (context, controller, isOpen) => InkWell(
                         borderRadius: BorderRadius.circular(8),
-                        onTap: () => controller.isOpen ? controller.close() : controller.open(),
+                        onTap: () => controller.isOpen
+                            ? controller.close()
+                            : controller.open(),
                         child: Chip(
                           avatar: const Icon(Icons.sort, size: 16),
                           label: Text(switch (_sort) {
@@ -146,143 +164,168 @@ class _TagsPageState extends State<TagsPage> {
             child: ScrollTitleListener(
               progress: _titleProgress,
               child: store.loadingTags && store.tags.isEmpty
-                ? const Center(child: CircularProgressIndicator())
-                : tags.isEmpty
-                    ? EmptyState(
-                        icon: Icons.sell_outlined,
-                        title: _query.isEmpty ? '还没有标签' : '没有匹配的标签',
-                        subtitle: '标签是提示词的检索维度，建议按「风格 / 角色 / 画质」分类管理',
-                        action: FilledButton.icon(
-                          onPressed: () => _editTag(context, null),
-                          icon: const Icon(Icons.add),
-                          label: const Text('新建标签'),
-                        ),
-                      )
-                    : LayoutBuilder(
-                        builder: (context, constraints) {
-                          // 列数 = 可用宽度 / [kTagCardMinWidth]（328 = 360 窗口的一列）。
-                          //
-                          // ⚠ 这里刻意**不用**通用的 550（用户 2026-10-12：
-                          // "标签页的卡片宽度过大，缩小为原来一半"）：标签卡里只有
-                          // 一个名字 + 一行分类/说明 + 一个计数 + 两个按钮，
-                          // 按 550 分列时在 1440 窗口上每张 ≈656 宽，名字只占左边
-                          // 一小截、右边全是空的。现在以"360 窗口下能完整显示
-                          // 16 个英文字符"为下限，宽窗口按这个下限分列。
-                          //
-                          // 卡片高度固定，所以直接用 GridView（`mainAxisExtent`），
-                          // 不用 `AdaptiveColumnList` —— 那个是给"每行等高"的卡片用的。
-                          final columns = adaptiveColumnCount(
-                            constraints.maxWidth,
-                            // **下限就是 360 宽窗口下的一列**（用户 2026-11-05）：
-                            // 再窄卡片就放不下 16 个英文字符的标签名了。
-                            minColumnWidth: kTagCardMinWidth,
-                          );
-                          return GridView.builder(
-                            padding: const EdgeInsets.fromLTRB(16, 4, 16, 96),
-                            // 卡片外层 RepaintBoundary 由 delegate 自动加；
-                            // keep-alive 对标签卡没用，关掉省一层包装
-                            addAutomaticKeepAlives: false,
-                            gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                              crossAxisCount: columns,
-                              crossAxisSpacing: 8,
-                              mainAxisSpacing: 8,
-                              mainAxisExtent: 78,
-                            ),
-                            itemCount: tags.length,
-                            itemBuilder: (context, i) {
-                              final tag = tags[i];
-                              final color = parseHexColor(tag.color) ?? tagColor(tag.name);
-                              return Card(
-                                child: ListTile(
-                                  // 左右内边距收一点：标题要多留出一个 16 字符英文名
-                                  // 的位置（两枚按钮 + 计数在右边很占地方）。
-                                  contentPadding:
-                                      const EdgeInsets.only(left: 10, right: 2),
-                                  horizontalTitleGap: 8,
-                                  leading: Container(
-                                    width: 12,
-                                    height: 12,
-                                    decoration:
-                                        BoxDecoration(color: color, shape: BoxShape.circle),
-                                  ),
-                                  title: Text(tag.name, maxLines: 1, overflow: TextOverflow.ellipsis),
-                                  subtitle: Text(
-                                    [
-                                      if ((tag.category ?? '').isNotEmpty) tag.category!,
-                                      if ((tag.description ?? '').isNotEmpty) tag.description!,
-                                    ].join(' · '),
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                  ),
-                                  trailing: Row(
-                                    mainAxisSize: MainAxisSize.min,
-                                    children: [
-                                      // 计数用紧凑胶囊而不是 Chip：Chip 的左右内边距
-                                      // 会把标题宽度吃掉一截（16 字符标签名就是这么被挤掉的）。
-                                      Container(
-                                        padding: const EdgeInsets.symmetric(
-                                            horizontal: 6, vertical: 2),
-                                        decoration: BoxDecoration(
-                                          color: Theme.of(context)
-                                              .colorScheme
-                                              .surfaceContainerHigh,
-                                          borderRadius: BorderRadius.circular(8),
-                                        ),
-                                        child: Text(
-                                          '${tag.useCount}',
-                                          style: Theme.of(context)
-                                              .textTheme
-                                              .labelSmall,
-                                        ),
-                                      ),
-                                      // 按钮**不许为了省宽度而缩小命中区**（用户
-                                      // 2026-11-05："标签卡片按钮太小，很难按到"）。
-                                      // 44 是视觉尺寸，默认的 padded 会把命中区补到 48；
-                                      // 省下来的宽度靠"计数不用 Chip + 卡片留白收紧"。
-                                      IconButton(
-                                        tooltip: '编辑',
-                                        icon: const Icon(Icons.edit_outlined, size: 20),
-                                        padding: EdgeInsets.zero,
-                                        constraints: const BoxConstraints(
-                                            minWidth: 44, minHeight: 44),
-                                        onPressed: () => _editTag(context, tag),
-                                      ),
-                                      IconButton(
-                                        tooltip: '删除',
-                                        icon: const Icon(Icons.delete_outline, size: 20),
-                                        padding: EdgeInsets.zero,
-                                        constraints: const BoxConstraints(
-                                            minWidth: 44, minHeight: 44),
-                                        onPressed: () async {
-                                          final ok = await confirmDialog(
-                                            context,
-                                            title: '删除标签',
-                                            message:
-                                                '删除「${tag.name}」会同时解除它在所有提示词和产物上的关联。',
-                                          );
-                                          if (!ok) return;
-                                          await store.api.deleteTag(tag.id);
-                                          await store.refreshAll();
-                                        },
-                                      ),
-                                    ],
-                                  ),
-                                  onTap: () async {
-                                    await Navigator.of(context).push(
-                                      MaterialPageRoute(
-                                        builder: (_) => TagResultsPage(tag: tag.name),
-                                      ),
-                                    );
-                                    if (context.mounted) {
-                                      context.read<LibraryStore>().refreshAll();
-                                    }
-                                  },
-                                ),
-                              );
-                            },
-                          );
-                        },
+                  ? const Center(child: CircularProgressIndicator())
+                  : tags.isEmpty
+                  ? EmptyState(
+                      icon: Icons.sell_outlined,
+                      title: _query.isEmpty ? '还没有标签' : '没有匹配的标签',
+                      subtitle: '标签是提示词的检索维度，建议按「风格 / 角色 / 画质」分类管理',
+                      action: FilledButton.icon(
+                        onPressed: () => _editTag(context, null),
+                        icon: const Icon(Icons.add),
+                        label: const Text('新建标签'),
                       ),
+                    )
+                  : LayoutBuilder(
+                      builder: (context, constraints) {
+                        // 列数 = 可用宽度 / [kTagCardMinWidth]（328 = 360 窗口的一列）。
+                        //
+                        // ⚠ 这里刻意**不用**通用的 550（用户 2026-10-12：
+                        // "标签页的卡片宽度过大，缩小为原来一半"）：标签卡里只有
+                        // 一个名字 + 一行分类/说明 + 一个计数 + 两个按钮，
+                        // 按 550 分列时在 1440 窗口上每张 ≈656 宽，名字只占左边
+                        // 一小截、右边全是空的。现在以"360 窗口下能完整显示
+                        // 16 个英文字符"为下限，宽窗口按这个下限分列。
+                        //
+                        // 卡片高度固定，所以直接用 GridView（`mainAxisExtent`），
+                        // 不用 `AdaptiveColumnList` —— 那个是给"每行等高"的卡片用的。
+                        final columns = adaptiveColumnCount(
+                          constraints.maxWidth,
+                          // **下限就是 360 宽窗口下的一列**（用户 2026-11-05）：
+                          // 再窄卡片就放不下 16 个英文字符的标签名了。
+                          minColumnWidth: kTagCardMinWidth,
+                        );
+                        return GridView.builder(
+                          padding: const EdgeInsets.fromLTRB(16, 4, 16, 96),
+                          // 卡片外层 RepaintBoundary 由 delegate 自动加；
+                          // keep-alive 对标签卡没用，关掉省一层包装
+                          addAutomaticKeepAlives: false,
+                          gridDelegate:
+                              SliverGridDelegateWithFixedCrossAxisCount(
+                                crossAxisCount: columns,
+                                crossAxisSpacing: 8,
+                                mainAxisSpacing: 8,
+                                mainAxisExtent: 78,
+                              ),
+                          itemCount: tags.length,
+                          itemBuilder: (context, i) {
+                            final tag = tags[i];
+                            final color =
+                                parseHexColor(tag.color) ?? tagColor(tag.name);
+                            return Card(
+                              child: ListTile(
+                                // 左右内边距收一点：标题要多留出一个 16 字符英文名
+                                // 的位置（两枚按钮 + 计数在右边很占地方）。
+                                contentPadding: const EdgeInsets.only(
+                                  left: 10,
+                                  right: 2,
+                                ),
+                                horizontalTitleGap: 8,
+                                leading: Container(
+                                  width: 12,
+                                  height: 12,
+                                  decoration: BoxDecoration(
+                                    color: color,
+                                    shape: BoxShape.circle,
+                                  ),
+                                ),
+                                title: Text(
+                                  tag.name,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                                subtitle: Text(
+                                  [
+                                    if ((tag.category ?? '').isNotEmpty)
+                                      tag.category!,
+                                    if ((tag.description ?? '').isNotEmpty)
+                                      tag.description!,
+                                  ].join(' · '),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                                trailing: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    // 计数用紧凑胶囊而不是 Chip：Chip 的左右内边距
+                                    // 会把标题宽度吃掉一截（16 字符标签名就是这么被挤掉的）。
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 6,
+                                        vertical: 2,
+                                      ),
+                                      decoration: BoxDecoration(
+                                        color: Theme.of(context)
+                                            .colorScheme
+                                            .surfaceContainerHigh,
+                                        borderRadius: BorderRadius.circular(8),
+                                      ),
+                                      child: Text(
+                                        '${tag.useCount}',
+                                        style: Theme.of(context)
+                                            .textTheme
+                                            .labelSmall,
+                                      ),
+                                    ),
+                                    // 按钮**不许为了省宽度而缩小命中区**（用户
+                                    // 2026-11-05："标签卡片按钮太小，很难按到"）。
+                                    // 44 是视觉尺寸，默认的 padded 会把命中区补到 48；
+                                    // 省下来的宽度靠"计数不用 Chip + 卡片留白收紧"。
+                                    IconButton(
+                                      tooltip: '编辑',
+                                      icon: const Icon(
+                                        Icons.edit_outlined,
+                                        size: 20,
+                                      ),
+                                      padding: EdgeInsets.zero,
+                                      constraints: const BoxConstraints(
+                                        minWidth: 44,
+                                        minHeight: 44,
+                                      ),
+                                      onPressed: () => _editTag(context, tag),
+                                    ),
+                                    IconButton(
+                                      tooltip: '删除',
+                                      icon: const Icon(
+                                        Icons.delete_outline,
+                                        size: 20,
+                                      ),
+                                      padding: EdgeInsets.zero,
+                                      constraints: const BoxConstraints(
+                                        minWidth: 44,
+                                        minHeight: 44,
+                                      ),
+                                      onPressed: () async {
+                                        final ok = await confirmDialog(
+                                          context,
+                                          title: '删除标签',
+                                          message:
+                                              '删除「${tag.name}」会同时解除它在所有提示词和产物上的关联。',
+                                        );
+                                        if (!ok) return;
+                                        await store.api.deleteTag(tag.id);
+                                        await store.refreshAll();
+                                      },
+                                    ),
+                                  ],
+                                ),
+                                onTap: () async {
+                                  await Navigator.of(context).push(
+                                    MaterialPageRoute(
+                                      builder: (_) =>
+                                          TagResultsPage(tag: tag.name),
+                                    ),
+                                  );
+                                  if (context.mounted) {
+                                    context.read<LibraryStore>().refreshAll();
+                                  }
+                                },
+                              ),
+                            );
+                          },
+                        );
+                      },
+                    ),
             ),
           ),
         ],
@@ -331,8 +374,14 @@ class _TagsPageState extends State<TagsPage> {
                     const Text('颜色'),
                     const SizedBox(width: 12),
                     for (final c in const [
-                      '#7C5CFF', '#4CAF50', '#2196F3', '#E91E63',
-                      '#FF9800', '#00BCD4', '#F44336', '#795548',
+                      '#7C5CFF',
+                      '#4CAF50',
+                      '#2196F3',
+                      '#E91E63',
+                      '#FF9800',
+                      '#00BCD4',
+                      '#F44336',
+                      '#795548',
                     ])
                       Padding(
                         padding: const EdgeInsets.only(right: 6),
@@ -345,7 +394,9 @@ class _TagsPageState extends State<TagsPage> {
                               color: parseHexColor(c),
                               shape: BoxShape.circle,
                               border: Border.all(
-                                color: colorHex == c ? Colors.white : Colors.transparent,
+                                color: colorHex == c
+                                    ? Colors.white
+                                    : Colors.transparent,
                                 width: 2,
                               ),
                             ),
@@ -358,7 +409,10 @@ class _TagsPageState extends State<TagsPage> {
             ),
           ),
           actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('取消'),
+            ),
             FilledButton(
               onPressed: () => Navigator.pop(ctx, true),
               child: const Text('保存'),
@@ -373,23 +427,32 @@ class _TagsPageState extends State<TagsPage> {
         if (tag == null) {
           await store.api.createTag(
             nameController.text.trim(),
-            category: categoryController.text.trim().isEmpty ? null : categoryController.text.trim(),
+            category: categoryController.text.trim().isEmpty
+                ? null
+                : categoryController.text.trim(),
             color: colorHex,
-            description: descController.text.trim().isEmpty ? null : descController.text.trim(),
+            description: descController.text.trim().isEmpty
+                ? null
+                : descController.text.trim(),
           );
         } else {
           await store.api.updateTag(
             tag.id,
             nameController.text.trim(),
-            category: categoryController.text.trim().isEmpty ? null : categoryController.text.trim(),
+            category: categoryController.text.trim().isEmpty
+                ? null
+                : categoryController.text.trim(),
             color: colorHex,
-            description: descController.text.trim().isEmpty ? null : descController.text.trim(),
+            description: descController.text.trim().isEmpty
+                ? null
+                : descController.text.trim(),
           );
         }
         await store.refreshAll();
       } catch (e) {
         if (context.mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('保存失败: $e')));
+          ScaffoldMessenger.of(context)
+              .showSnackBar(SnackBar(content: Text('保存失败: $e')));
         }
       }
     }

@@ -96,7 +96,11 @@ async fn send_json(state: &AppState, method: &str, path: &str, body: Value) -> (
 }
 
 async fn get_json(state: &AppState, path: &str) -> (StatusCode, Value) {
-    let request = Request::builder().method("GET").uri(path).body(Body::empty()).unwrap();
+    let request = Request::builder()
+        .method("GET")
+        .uri(path)
+        .body(Body::empty())
+        .unwrap();
     let response = router(state.clone()).oneshot(request).await.unwrap();
     let status = response.status();
     let bytes = response.into_body().collect().await.unwrap().to_bytes();
@@ -111,7 +115,10 @@ async fn upload(state: &AppState, files: &[(&str, &str, Vec<u8>)]) -> (StatusCod
     for (field, filename, bytes) in files {
         body.extend_from_slice(format!("--{BOUNDARY}\r\n").as_bytes());
         body.extend_from_slice(
-            format!("Content-Disposition: form-data; name=\"{field}\"; filename=\"{filename}\"\r\n").as_bytes(),
+            format!(
+                "Content-Disposition: form-data; name=\"{field}\"; filename=\"{filename}\"\r\n"
+            )
+            .as_bytes(),
         );
         body.extend_from_slice(b"Content-Type: application/octet-stream\r\n\r\n");
         body.extend_from_slice(bytes);
@@ -122,7 +129,10 @@ async fn upload(state: &AppState, files: &[(&str, &str, Vec<u8>)]) -> (StatusCod
     let request = Request::builder()
         .method("POST")
         .uri("/api/ai/attachments")
-        .header("content-type", format!("multipart/form-data; boundary={BOUNDARY}"))
+        .header(
+            "content-type",
+            format!("multipart/form-data; boundary={BOUNDARY}"),
+        )
         .body(Body::from(body))
         .unwrap();
     let response = router(state.clone()).oneshot(request).await.unwrap();
@@ -170,7 +180,9 @@ async fn recording_gateway() -> (String, Arc<Mutex<Vec<String>>>, tokio::task::J
     let store = seen.clone();
     let handle = tokio::spawn(async move {
         loop {
-            let Ok((mut socket, _)) = listener.accept().await else { break };
+            let Ok((mut socket, _)) = listener.accept().await else {
+                break;
+            };
             let store = store.clone();
             tokio::spawn(async move {
                 // ⚠ 与 `api_test/common.rs` 的 `read_request` 是**同一件事的两份实现**：
@@ -180,7 +192,9 @@ async fn recording_gateway() -> (String, Arc<Mutex<Vec<String>>>, tokio::task::J
                 // 而且这里还要靠整份 body 做断言，截断了断言会看起来像"功能坏了"。
                 // 那份助手的推导与实测记录在 `api_test/common.rs::read_request`；修的时候抄过来。
                 let mut buf = vec![0u8; 256 * 1024];
-                let Ok(n) = socket.read(&mut buf).await else { return };
+                let Ok(n) = socket.read(&mut buf).await else {
+                    return;
+                };
                 let request = String::from_utf8_lossy(&buf[..n]).to_string();
                 store.lock().unwrap().push(request);
                 let _ = socket
@@ -211,7 +225,10 @@ async fn 上传只认签名_谎报类型一律拒收() {
     assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
     assert_eq!(body["error"], json!("UNSUPPORTED_CONTENT"));
     assert!(
-        body["detail"].as_str().unwrap().contains("无法识别文件 evil.png"),
+        body["detail"]
+            .as_str()
+            .unwrap()
+            .contains("无法识别文件 evil.png"),
         "{body}"
     );
 
@@ -222,10 +239,22 @@ async fn 上传只认签名_谎报类型一律拒收() {
     assert_eq!(item["kind"], json!("image"));
     assert_eq!(item["modality"], json!("image"));
     assert_eq!(item["mimeType"], json!("image/png"));
-    assert_eq!((item["width"].as_i64(), item["height"].as_i64()), (Some(7), Some(5)));
-    assert!(item["sha256"].as_str().map(|s| s.len() == 64).unwrap_or(false), "{item}");
+    assert_eq!(
+        (item["width"].as_i64(), item["height"].as_i64()),
+        (Some(7), Some(5))
+    );
+    assert!(
+        item["sha256"]
+            .as_str()
+            .map(|s| s.len() == 64)
+            .unwrap_or(false),
+        "{item}"
+    );
     // 可空键不出现（Kotlin `explicitNulls = false`）
-    assert!(item.as_object().unwrap().get("hasPreview").is_none(), "{item}");
+    assert!(
+        item.as_object().unwrap().get("hasPreview").is_none(),
+        "{item}"
+    );
     let id = item["id"].as_str().unwrap().to_string();
 
     // ③ 缩略图：图片给 JPEG，带 `X-Thumbnail: 1`
@@ -236,16 +265,26 @@ async fn 上传只认签名_谎报类型一律拒收() {
     let response = router(state.clone()).oneshot(request).await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(response.headers().get("x-thumbnail").unwrap(), "1");
-    assert_eq!(response.headers().get("content-type").unwrap(), "image/jpeg");
+    assert_eq!(
+        response.headers().get("content-type").unwrap(),
+        "image/jpeg"
+    );
 
     // ④ 不存在的附件：400 + `CONFIG_ERROR` + detail（与 Kotlin 的 AiException 同一个信封）
     let (status, body) = get_json(&state, "/api/ai/attachments/nope").await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_eq!(body["error"], json!("CONFIG_ERROR"));
-    assert!(body["detail"].as_str().unwrap().contains("附件不存在"), "{body}");
+    assert!(
+        body["detail"].as_str().unwrap().contains("附件不存在"),
+        "{body}"
+    );
 
     // ⑤ 文本附件没有封面 → 204（界面退化成文件图标）
-    let (status, body) = upload(&state, &[("files", "notes.md", b"# hello\nworld\n".to_vec())]).await;
+    let (status, body) = upload(
+        &state,
+        &[("files", "notes.md", b"# hello\nworld\n".to_vec())],
+    )
+    .await;
     assert_eq!(status, StatusCode::CREATED, "{body}");
     let text_id = body["items"][0]["id"].as_str().unwrap().to_string();
     let request = Request::builder()
@@ -288,14 +327,19 @@ async fn 预检_逐个附件给结论且顺序与请求一致() {
     assert_eq!(items[0]["attachmentId"], json!(id));
     assert_eq!(items[1]["name"], json!("不存在"));
     assert!(
-        items[1]["blockers"][0].as_str().unwrap().contains("附件不存在或已被删除"),
+        items[1]["blockers"][0]
+            .as_str()
+            .unwrap()
+            .contains("附件不存在或已被删除"),
         "{body}"
     );
     // 第三个：按签名判成文档（前端说 image 不算数），而模型不支持文档 → 阻断
     assert_eq!(items[2]["name"], json!("p.pdf"));
     let third = items[2]["blockers"].as_array().unwrap();
     assert!(
-        third.iter().any(|b| b.as_str().unwrap().contains("未声明支持文档输入")),
+        third
+            .iter()
+            .any(|b| b.as_str().unwrap().contains("未声明支持文档输入")),
         "{body}"
     );
     // 顶层 blockers 是逐条的汇总
@@ -330,7 +374,10 @@ async fn 创建_run_之前拦住不支持的附件_上游零请求() {
 
     // **R9 的核心断言**：一个字节都没发出去
     tokio::time::sleep(std::time::Duration::from_millis(300)).await;
-    assert!(seen.lock().unwrap().is_empty(), "预检拦下时不许有任何上游请求");
+    assert!(
+        seen.lock().unwrap().is_empty(),
+        "预检拦下时不许有任何上游请求"
+    );
     // 用户消息也不该落库（在 append 之前就返回了）
     let count: i64 = state
         .with(|conn| conn.query_row("SELECT COUNT(*) FROM ai_messages", [], |r| r.get(0)))
@@ -385,7 +432,11 @@ async fn 支持的图片会被真的内联_发不出去的必须如实告知() {
             Ok(out)
         })
         .unwrap();
-    assert_eq!(parts.iter().filter(|p| p.0 == "attachment").count(), 2, "{parts:?}");
+    assert_eq!(
+        parts.iter().filter(|p| p.0 == "attachment").count(),
+        2,
+        "{parts:?}"
+    );
 
     // ② 发出去的请求体：图片是**真的内联块**，文本附件在"未随本次请求发送"里
     let mut request = String::new();
@@ -398,12 +449,27 @@ async fn 支持的图片会被真的内联_发不出去的必须如实告知() {
         }
     }
     assert!(!request.is_empty(), "应当真的发出了一次上游请求");
-    assert!(request.contains("\"type\":\"image_url\""), "图片要变成内联块：{request}");
-    assert!(request.contains("data:image/png;base64,"), "要带 data URL：{request}");
-    assert!(request.contains("data:image/png;base64,iVBORw0KGgo"), "PNG 的 base64 头要接在 data URL 后面：{request}");
-    assert!(request.contains("以下附件未随本次请求发送"), "文本附件要如实告知：{request}");
+    assert!(
+        request.contains("\"type\":\"image_url\""),
+        "图片要变成内联块：{request}"
+    );
+    assert!(
+        request.contains("data:image/png;base64,"),
+        "要带 data URL：{request}"
+    );
+    assert!(
+        request.contains("data:image/png;base64,iVBORw0KGgo"),
+        "PNG 的 base64 头要接在 data URL 后面：{request}"
+    );
+    assert!(
+        request.contains("以下附件未随本次请求发送"),
+        "文本附件要如实告知：{request}"
+    );
     assert!(request.contains("notes.md"), "{request}");
-    assert!(!request.contains("参考图.png（id="), "发出了的图片**不该**出现在未发送名单里：{request}");
+    assert!(
+        !request.contains("参考图.png（id="),
+        "发出了的图片**不该**出现在未发送名单里：{request}"
+    );
     // ③ 系统提示里那句"附带图片附件"要与事实一致（内联了才说有）
     assert!(request.contains("本次请求附带图片附件: 有"), "{request}");
     // ④ 附件 id 对照（用户 bug 2026-09-28「系统给不出可投放的附件 ID」）：
@@ -412,7 +478,10 @@ async fn 支持的图片会被真的内联_发不出去的必须如实告知() {
         request.contains("随本条消息内联的附件"),
         "内联了图片就要给附件 id 对照：{request}"
     );
-    assert!(request.contains(&format!("参考图.png=id:{id}")), "对照里要有 id 本身：{request}");
+    assert!(
+        request.contains(&format!("参考图.png=id:{id}")),
+        "对照里要有 id 本身：{request}"
+    );
 
     gateway.abort();
     let _ = std::fs::remove_dir_all(dir);
@@ -436,7 +505,11 @@ async fn 真实尺寸的照片不被请求体上限截断() {
         bytes.len()
     );
     let (status, body) = upload(&state, &[("files", "照片.png", bytes)]).await;
-    assert_eq!(status, StatusCode::CREATED, "真实尺寸的照片被请求体上限截断了：{body}");
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "真实尺寸的照片被请求体上限截断了：{body}"
+    );
     assert_eq!(body["items"][0]["kind"], json!("image"));
     assert_eq!(body["items"][0]["status"], json!("ready"));
 }
@@ -457,8 +530,7 @@ async fn 附件缓存统计与手动回收端点() {
     assert_eq!(stats["byOrigin"][0]["origin"], json!("upload"));
 
     // 手动 GC 不删"刚上传、还没引用"的图（1 小时宽限），只回一份可读报告
-    let (status, report) =
-        send_json(&state, "POST", "/api/ai/attachments/gc", json!({})).await;
+    let (status, report) = send_json(&state, "POST", "/api/ai/attachments/gc", json!({})).await;
     assert_eq!(status, StatusCode::OK, "{report}");
     assert_eq!(report["removed"], json!(0));
     assert_eq!(report["remaining"], json!(1));

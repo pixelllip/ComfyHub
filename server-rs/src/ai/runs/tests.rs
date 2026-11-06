@@ -12,7 +12,10 @@ fn sse_frame_matches_kotlin() {
         r#type: "text.delta".into(),
         payload: json!({"text": "你好"}),
     };
-    assert_eq!(e.to_sse(), "id: 7\nevent: text.delta\ndata: {\"text\":\"你好\"}\n\n");
+    assert_eq!(
+        e.to_sse(),
+        "id: 7\nevent: text.delta\ndata: {\"text\":\"你好\"}\n\n"
+    );
 }
 
 /// 坏 / 空的 `payload_json` → **空对象**（不是 `null`、不抛）。
@@ -21,7 +24,11 @@ fn bad_payload_becomes_empty_object() {
     assert_eq!(parse_payload(None), json!({}));
     assert_eq!(parse_payload(Some("   ")), json!({}));
     assert_eq!(parse_payload(Some("not json")), json!({}));
-    assert_eq!(parse_payload(Some("[1,2]")), json!({}), "数组不是事件 payload");
+    assert_eq!(
+        parse_payload(Some("[1,2]")),
+        json!({}),
+        "数组不是事件 payload"
+    );
     assert_eq!(parse_payload(Some(r#"{"a":1}"#)), json!({"a": 1}));
 }
 
@@ -57,11 +64,23 @@ fn null_columns_fall_back_to_missing_keys() {
         .unwrap();
     let mut rows = stmt.query([]).unwrap();
     let run = run_from_row(rows.next().unwrap().unwrap()).unwrap();
-    assert_eq!(run.status, "", "status NULL → 空串（Kotlin getString 也给空串）");
+    assert_eq!(
+        run.status, "",
+        "status NULL → 空串（Kotlin getString 也给空串）"
+    );
     assert!(run.provider_id.is_none() && run.completed_at.is_none());
     // 序列化之后**键整个不出现**（explicitNulls = false）
     let value = serde_json::to_value(&run).unwrap();
-    let mut keys: Vec<&str> = value.as_object().unwrap().keys().map(|s| s.as_str()).collect();
+    let mut keys: Vec<&str> = value
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(|s| s.as_str())
+        .collect();
     keys.sort_unstable(); // 键序由 serde_json 的 Map 决定，不承重；这里只钉"哪些键在"
-    assert_eq!(keys, vec!["conversationId", "id", "status"], "键集合：只有三个非空键");
+    assert_eq!(
+        keys,
+        vec!["conversationId", "id", "status"],
+        "键集合：只有三个非空键"
+    );
 }

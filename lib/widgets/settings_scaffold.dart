@@ -162,18 +162,18 @@ class SettingsAppBar extends StatelessWidget implements PreferredSizeWidget {
 /// 用 `BackButton` 而不是裸 `IconButton`：`tester.pageBack()` 与系统返回都
 /// 认这个类型；外圈靠 40×40 的按钮背景画，不会撑满 56 的 leading 槽。
 Widget _circleBackButton(ThemeData theme, {VoidCallback? onPressed}) => Center(
-      child: BackButton(
-        onPressed: onPressed,
-        style: IconButton.styleFrom(
-          backgroundColor: theme.colorScheme.surfaceContainerHigh,
-          foregroundColor: theme.colorScheme.onSurface,
-          minimumSize: const Size(40, 40),
-          maximumSize: const Size(40, 40),
-          padding: EdgeInsets.zero,
-          shape: const CircleBorder(),
-        ),
-      ),
-    );
+  child: BackButton(
+    onPressed: onPressed,
+    style: IconButton.styleFrom(
+      backgroundColor: theme.colorScheme.surfaceContainerHigh,
+      foregroundColor: theme.colorScheme.onSurface,
+      minimumSize: const Size(40, 40),
+      maximumSize: const Size(40, 40),
+      padding: EdgeInsets.zero,
+      shape: const CircleBorder(),
+    ),
+  ),
+);
 
 /// **正文自己排版**的设置页骨架（AI 模型与凭据 / AI 工具权限 / 逐工具权限）。
 ///

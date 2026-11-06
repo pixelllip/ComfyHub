@@ -361,7 +361,9 @@ impl ToolCallAccumulator {
 
     /// 这一轮是不是真收到了工具调用（只有一个空壳不算）。
     pub fn is_empty(&self) -> bool {
-        self.drafts.values().all(|d| d.name.is_none() && d.call_id.is_none())
+        self.drafts
+            .values()
+            .all(|d| d.name.is_none() && d.call_id.is_none())
     }
 
     /// 收口成 `(call_id, 完整调用)` 列表（按 index 升序）。
@@ -376,7 +378,11 @@ impl ToolCallAccumulator {
                 let id = draft.call_id.unwrap_or_else(|| format!("call_{index}"));
                 Some((
                     id.clone(),
-                    ToolCallRef { id, name, arguments: draft.arguments },
+                    ToolCallRef {
+                        id,
+                        name,
+                        arguments: draft.arguments,
+                    },
                 ))
             })
             .collect()
@@ -498,7 +504,9 @@ impl Adapter for OpenAiCompletionsAdapter {
                         let function = call.get("function");
                         out.push(StreamEvent::ToolCallDelta {
                             index,
-                            key: call_id.map(str::to_string).unwrap_or_else(|| index.to_string()),
+                            key: call_id
+                                .map(str::to_string)
+                                .unwrap_or_else(|| index.to_string()),
                             call_id: call_id.map(str::to_string),
                             name: function
                                 .and_then(|f| f.get("name"))
@@ -530,7 +538,10 @@ fn openai_message(turn: &ChatTurn) -> Value {
     let mut message = Map::new();
     message.insert("role".into(), json!(turn.role));
     if turn.role == "tool" {
-        message.insert("tool_call_id".into(), json!(turn.tool_call_id.clone().unwrap_or_default()));
+        message.insert(
+            "tool_call_id".into(),
+            json!(turn.tool_call_id.clone().unwrap_or_default()),
+        );
         message.insert("content".into(), json!(turn.content));
         return Value::Object(message);
     }
@@ -612,7 +623,10 @@ fn apply_openai_reasoning(root: &mut Map<String, Value>, r: &ReasoningRequest) {
                 root.insert("reasoning_effort".into(), json!(wire));
             }
             ThinkingFormat::Zai => {
-                root.insert("thinking".into(), json!({ "type": "enabled", "clear_thinking": false }));
+                root.insert(
+                    "thinking".into(),
+                    json!({ "type": "enabled", "clear_thinking": false }),
+                );
                 root.insert("reasoning_effort".into(), json!(wire));
             }
             ThinkingFormat::OpenRouter => {
@@ -804,7 +818,11 @@ impl Adapter for OpenAiResponsesAdapter {
             }
         }
         // usage 在 `response.completed` 里
-        if let Some(usage) = root.get("response").and_then(|r| r.get("usage")).filter(|v| !v.is_null()) {
+        if let Some(usage) = root
+            .get("response")
+            .and_then(|r| r.get("usage"))
+            .filter(|v| !v.is_null())
+        {
             out.push(StreamEvent::Usage(usage.clone()));
         }
 
@@ -833,9 +851,15 @@ impl Adapter for OpenAiResponsesAdapter {
                         .and_then(Value::as_str)
                         .map(str::to_string)
                         .unwrap_or_else(|| index.to_string()),
-                    call_id: root.get("item_id").and_then(Value::as_str).map(str::to_string),
+                    call_id: root
+                        .get("item_id")
+                        .and_then(Value::as_str)
+                        .map(str::to_string),
                     name: None,
-                    arguments_fragment: root.get("delta").and_then(Value::as_str).map(str::to_string),
+                    arguments_fragment: root
+                        .get("delta")
+                        .and_then(Value::as_str)
+                        .map(str::to_string),
                 });
             }
             // 函数调用**开始**：这里才有名字（参数随后分片来）
@@ -850,7 +874,10 @@ impl Adapter for OpenAiResponsesAdapter {
                                 .and_then(Value::as_str)
                                 .map(str::to_string)
                                 .unwrap_or_else(|| index.to_string()),
-                            call_id: item.get("call_id").and_then(Value::as_str).map(str::to_string),
+                            call_id: item
+                                .get("call_id")
+                                .and_then(Value::as_str)
+                                .map(str::to_string),
                             name: item.get("name").and_then(Value::as_str).map(str::to_string),
                             arguments_fragment: item
                                 .get("arguments")
@@ -922,7 +949,10 @@ fn mark_last_block_for_cache(messages: Option<&mut Value>) {
     let Some(last_message) = items.last_mut() else {
         return;
     };
-    let Some(blocks) = last_message.get_mut("content").and_then(Value::as_array_mut) else {
+    let Some(blocks) = last_message
+        .get_mut("content")
+        .and_then(Value::as_array_mut)
+    else {
         return;
     };
     if let Some(last_block) = blocks.last_mut() {
@@ -973,7 +1003,10 @@ impl Adapter for AnthropicMessagesAdapter {
         root.insert("model".into(), json!(model));
         root.insert("stream".into(), json!(true));
         // `max_tokens` 是**必填**：给一个保守默认值，别让用户看到一个没有线索的 400
-        root.insert("max_tokens".into(), json!(max_output_tokens.unwrap_or(4096)));
+        root.insert(
+            "max_tokens".into(),
+            json!(max_output_tokens.unwrap_or(4096)),
+        );
 
         let system = turns
             .iter()
@@ -1017,8 +1050,8 @@ impl Adapter for AnthropicMessagesAdapter {
                     }
                     for call in &turn.tool_calls {
                         // 参数在 Anthropic 这边是**对象**（completions 那边是字符串）
-                        let input: Value = serde_json::from_str(&call.arguments)
-                            .unwrap_or_else(|_| json!({}));
+                        let input: Value =
+                            serde_json::from_str(&call.arguments).unwrap_or_else(|_| json!({}));
                         blocks.push(json!({
                             "type": "tool_use",
                             "id": call.id,
@@ -1055,13 +1088,20 @@ impl Adapter for AnthropicMessagesAdapter {
             root.insert("tools".into(), Value::Array(specs));
         }
         // 思考：Anthropic 要的是**预算 token 数**，不是等级名
-        if let (Some(_), Some(budget)) = (reasoning.effort.as_ref(), reasoning.wire_value.as_ref()) {
+        if let (Some(_), Some(budget)) = (reasoning.effort.as_ref(), reasoning.wire_value.as_ref())
+        {
             if let Ok(tokens) = budget.parse::<i64>() {
-                root.insert("thinking".into(), json!({ "type": "enabled", "budget_tokens": tokens }));
+                root.insert(
+                    "thinking".into(),
+                    json!({ "type": "enabled", "budget_tokens": tokens }),
+                );
             } else {
                 // 等级名（low/high…）在 Anthropic 上表达不了 —— 按"最小可用预算"给，
                 // 并**不**假装它等于用户选的那个等级（宁可少给，也不要给出一个假的精确值）
-                root.insert("thinking".into(), json!({ "type": "enabled", "budget_tokens": 1024 }));
+                root.insert(
+                    "thinking".into(),
+                    json!({ "type": "enabled", "budget_tokens": 1024 }),
+                );
             }
         }
         Value::Object(root)
@@ -1137,7 +1177,10 @@ impl Adapter for AnthropicMessagesAdapter {
                                 .map(str::to_string)
                                 .unwrap_or_else(|| content_index(&root).to_string()),
                             call_id: block.get("id").and_then(Value::as_str).map(str::to_string),
-                            name: block.get("name").and_then(Value::as_str).map(str::to_string),
+                            name: block
+                                .get("name")
+                                .and_then(Value::as_str)
+                                .map(str::to_string),
                             arguments_fragment: None,
                         });
                     }

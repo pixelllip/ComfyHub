@@ -124,8 +124,10 @@ class _LocalServicesSettingsPageState extends State<LocalServicesSettingsPage> {
     }
   }
 
-  Future<void> _startLocalServices(BackendLauncher launcher,
-      {bool force = true}) async {
+  Future<void> _startLocalServices(
+    BackendLauncher launcher, {
+    bool force = true,
+  }) async {
     await launcher.ensureRunning(force: force);
     if (!mounted) return;
     if (launcher.isReady) {
@@ -153,9 +155,7 @@ class _LocalServicesSettingsPageState extends State<LocalServicesSettingsPage> {
                 itemCount: lines.length,
                 itemBuilder: (_, i) => Text(
                   lines[lines.length - 1 - i],
-                  style: Theme.of(ctx)
-                      .textTheme
-                      .labelSmall
+                  style: Theme.of(ctx).textTheme.labelSmall
                       ?.copyWith(fontFamily: 'monospace'),
                 ),
               );
@@ -163,7 +163,10 @@ class _LocalServicesSettingsPageState extends State<LocalServicesSettingsPage> {
           ),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('关闭')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('关闭'),
+          ),
         ],
       ),
     );
@@ -191,8 +194,8 @@ class _LocalServicesSettingsPageState extends State<LocalServicesSettingsPage> {
     final statusColor = launcher.isReady
         ? colors.success
         : (launcher.phase == StartupPhase.failed
-            ? theme.colorScheme.error
-            : theme.colorScheme.primary);
+              ? theme.colorScheme.error
+              : theme.colorScheme.primary);
     final tail = launcher.logLines.length > 4
         ? launcher.logLines.sublist(launcher.logLines.length - 4)
         : launcher.logLines;
@@ -213,7 +216,8 @@ class _LocalServicesSettingsPageState extends State<LocalServicesSettingsPage> {
                     value: settings.autoStartBackend,
                     onChanged: settings.setAutoStartBackend,
                     title: '启动 App 时自动拉起服务',
-                    subtitle: '启动前先确认数据库可用。数据库现在是本地 SQLite 文件，'
+                    subtitle:
+                        '启动前先确认数据库可用。数据库现在是本地 SQLite 文件，'
                         '后端会自己建，所以这一步通常只是一次健康检查。',
                   ),
                   SettingsSwitchRow(
@@ -224,7 +228,8 @@ class _LocalServicesSettingsPageState extends State<LocalServicesSettingsPage> {
                       if (!value) await launcher.disarm();
                     },
                     title: '关闭 App 时一并停止本地服务',
-                    subtitle: '开着时，关掉 App 会停掉本机的后端，包括启动 App 之前就在跑的那个。\n'
+                    subtitle:
+                        '开着时，关掉 App 会停掉本机的后端，包括启动 App 之前就在跑的那个。\n'
                         '关掉时服务常驻，下次开 App 就是热启动。',
                   ),
                   SettingsSwitchRow(
@@ -233,17 +238,22 @@ class _LocalServicesSettingsPageState extends State<LocalServicesSettingsPage> {
                       final messenger = ScaffoldMessenger.of(context);
                       await settings.setAllowRemoteBackend(value);
                       if (!mounted) return;
-                      messenger.showSnackBar(SnackBar(
-                        content: Text(value
-                            ? '已允许局域网访问，重启后端（下面的「重启」按钮）后生效。'
-                            : '已恢复仅本机访问，重启后端后生效。'),
-                      ));
+                      messenger.showSnackBar(
+                        SnackBar(
+                          content: Text(
+                            value
+                                ? '已允许局域网访问，重启后端（下面的「重启」按钮）后生效。'
+                                : '已恢复仅本机访问，重启后端后生效。',
+                          ),
+                        ),
+                      );
                     },
                     title: '允许手机 / 局域网设备连接',
                     // ⚠ 这一项**不是**「远程访问与配对」里的配对闸门：
                     //   · 这里 = 要不要让后端监听局域网（起进程时定 → 必须重启后端）；
                     //   · 那里 = 局域网请求要不要带令牌（API 即刻生效）。
-                    subtitle: '① 让后端监听局域网（改完要点下面的「重启」才生效）。\n'
+                    subtitle:
+                        '① 让后端监听局域网（改完要点下面的「重启」才生效）。\n'
                         '手机最终能不能连，还要看「远程访问与配对」里的 ② 配对闸门。',
                   ),
                 ],
@@ -272,8 +282,10 @@ class _LocalServicesSettingsPageState extends State<LocalServicesSettingsPage> {
                       ),
                       const SizedBox(width: 8),
                       Expanded(
-                        child: Text(launcher.message,
-                            style: theme.textTheme.bodySmall),
+                        child: Text(
+                          launcher.message,
+                          style: theme.textTheme.bodySmall,
+                        ),
                       ),
                     ],
                   ),
@@ -284,16 +296,20 @@ class _LocalServicesSettingsPageState extends State<LocalServicesSettingsPage> {
                     Row(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Icon(Icons.warning_amber_rounded,
-                            size: 18, color: theme.colorScheme.error),
+                        Icon(
+                          Icons.warning_amber_rounded,
+                          size: 18,
+                          color: theme.colorScheme.error,
+                        ),
                         const SizedBox(width: 8),
                         Expanded(
                           child: Text(
                             '端口 ${launcher.portFallbackFrom} 这次没能用上（被别的程序占了），'
                             '后端改听了另一个端口，手机上保存的地址已经失效。'
                             '请让手机重新扫一次「远程访问与配对」里的二维码。',
-                            style: theme.textTheme.bodySmall
-                                ?.copyWith(color: theme.colorScheme.error),
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              color: theme.colorScheme.error,
+                            ),
                           ),
                         ),
                       ],
@@ -317,8 +333,9 @@ class _LocalServicesSettingsPageState extends State<LocalServicesSettingsPage> {
                               line,
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
-                              style: theme.textTheme.labelSmall
-                                  ?.copyWith(fontFamily: 'monospace'),
+                              style: theme.textTheme.labelSmall?.copyWith(
+                                fontFamily: 'monospace',
+                              ),
                             ),
                         ],
                       ),
@@ -331,8 +348,9 @@ class _LocalServicesSettingsPageState extends State<LocalServicesSettingsPage> {
                     runSpacing: 8,
                     children: [
                       FilledButton.icon(
-                        onPressed:
-                            busy ? null : () => _startLocalServices(launcher),
+                        onPressed: busy
+                            ? null
+                            : () => _startLocalServices(launcher),
                         icon: const Icon(Icons.play_arrow),
                         label: const Text('启动 / 修复服务'),
                       ),
@@ -344,8 +362,9 @@ class _LocalServicesSettingsPageState extends State<LocalServicesSettingsPage> {
                         label: const Text('重启'),
                       ),
                       OutlinedButton.icon(
-                        onPressed:
-                            busy ? null : () => launcher.runAction('down'),
+                        onPressed: busy
+                            ? null
+                            : () => launcher.runAction('down'),
                         icon: const Icon(Icons.stop_circle_outlined),
                         label: const Text('停止'),
                       ),
@@ -404,8 +423,9 @@ class _LocalServicesSettingsPageState extends State<LocalServicesSettingsPage> {
                       TextButton.icon(
                         onPressed: () async {
                           final messenger = ScaffoldMessenger.of(context);
-                          await settings
-                              .setProjectRoot(_projectRootController.text);
+                          await settings.setProjectRoot(
+                            _projectRootController.text,
+                          );
                           if (!mounted) return;
                           messenger.showSnackBar(
                             const SnackBar(content: Text('运行根目录已保存')),
@@ -444,8 +464,9 @@ class _LocalServicesSettingsPageState extends State<LocalServicesSettingsPage> {
                     '本机地址（127.0.0.1 / localhost）永远自动，端口由后端启动时挑选，重启会换，'
                     'App 每次都读它写在 .run\\api.json 里的真实端口，这里填什么都不会保存。\n'
                     '只有要连别的机器时手填才有意义，填了就不会被自动改。',
-                    style: theme.textTheme.bodySmall
-                        ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
                   ),
                   const SizedBox(height: 12),
                   // 窄窗口下这两枚按钮加起来比卡片宽（320px 实测溢出 7.1px），用 Wrap。
@@ -459,8 +480,9 @@ class _LocalServicesSettingsPageState extends State<LocalServicesSettingsPage> {
                             ? const SizedBox(
                                 width: 16,
                                 height: 16,
-                                child:
-                                    CircularProgressIndicator(strokeWidth: 2),
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
                               )
                             : const Icon(Icons.wifi_tethering),
                         label: const Text('保存并测试连接'),

@@ -53,8 +53,8 @@
 use serde_json::{json, Map, Value};
 
 use crate::comfy::comfy_models::{Inventory, ModelName};
-use crate::web::routes::AppState;
 use crate::tools::tools::{ToolFailure, ToolOutcome};
+use crate::web::routes::AppState;
 
 /// 纯前端节点那一项（`CHECK_FRONTEND`）。
 pub const CHECK_FRONTEND: &str = "frontendNodes";
@@ -115,7 +115,10 @@ pub struct Report {
 
 impl Report {
     pub fn blocking(&self) -> Vec<&Finding> {
-        self.findings.iter().filter(|f| f.level == Level::Block).collect()
+        self.findings
+            .iter()
+            .filter(|f| f.level == Level::Block)
+            .collect()
     }
 
     fn count(&self, level: Level) -> usize {
@@ -284,9 +287,18 @@ pub(crate) const KNOWN_FRONTEND_ONLY: [&str; 14] = [
 ///
 /// 用数组而不是 `HashMap` 是为了保住 Kotlin `mapOf` 的**插入序**（报出来的顺序要一致）。
 const KNOWN_INCOMPATIBLE: [(&str, &str); 3] = [
-    ("WidgetToString", "IS_CHANGED() missing 1 required positional argument"),
-    ("SystemNotification", "IS_CHANGED() missing 1 required keyword-only argument"),
-    ("SystemNotification|pysssss", "IS_CHANGED() missing 1 required keyword-only argument"),
+    (
+        "WidgetToString",
+        "IS_CHANGED() missing 1 required positional argument",
+    ),
+    (
+        "SystemNotification",
+        "IS_CHANGED() missing 1 required keyword-only argument",
+    ),
+    (
+        "SystemNotification|pysssss",
+        "IS_CHANGED() missing 1 required keyword-only argument",
+    ),
 ];
 
 /// 认得出档位的模型（判据是**文件名里的词**，不是猜）。
@@ -373,9 +385,7 @@ const DISPLAY_VIRTUAL: [&str; 12] = [
 ///    对它们说"让用户装/启用节点包"是错的方向（前端类装也装不上），
 ///    那句话必须由这里那条结论来说。
 pub fn is_frontend_only(class_type: &str) -> bool {
-    KNOWN_FRONTEND_ONLY.contains(&class_type)
-        || is_broadcast(class_type)
-        || is_display(class_type)
+    KNOWN_FRONTEND_ONLY.contains(&class_type) || is_broadcast(class_type) || is_display(class_type)
 }
 
 /// 这个类是不是"仅前端"的广播型虚拟节点（`FrontendNodes.isBroadcast`）。
@@ -403,7 +413,12 @@ pub fn is_display(class_type: &str) -> bool {
     let lower = class_type.to_ascii_lowercase();
     // `^Preview[A-Z]`（IGNORE_CASE → 大小写字母都算）
     if let Some(rest) = lower.strip_prefix("preview") {
-        if rest.chars().next().map(|c| c.is_ascii_alphabetic()).unwrap_or(false) {
+        if rest
+            .chars()
+            .next()
+            .map(|c| c.is_ascii_alphabetic())
+            .unwrap_or(false)
+        {
             return true;
         }
     }
@@ -508,7 +523,10 @@ pub fn audit(
     findings.extend(check_vram(graph));
     findings.extend(check_prompt_style(graph));
     findings.extend(check_loader_folder(graph, inventory));
-    Report { node_count: nodes.len(), findings }
+    Report {
+        node_count: nodes.len(),
+        findings,
+    }
 }
 
 /// 图上"认得出来的节点"：`(id, 类名, 节点体)`，**保 JSON 文档顺序**。
@@ -520,7 +538,9 @@ fn recognized_nodes<'a>(
 ) -> Vec<(String, String, &'a Map<String, Value>)> {
     let mut out: Vec<(String, String, &'a Map<String, Value>)> = Vec::new();
     for (id, raw) in graph {
-        let Some(node) = raw.as_object() else { continue };
+        let Some(node) = raw.as_object() else {
+            continue;
+        };
         let class_type = node_str(node, "class_type").unwrap_or_default();
         if class_type.trim().is_empty() {
             continue;
@@ -557,7 +577,9 @@ fn check_frontend_nodes(
             }
             if is_display(cls) {
                 // 拿不到 `/object_info` 时沿用静态判据（"不知道"不等于"没问题"）
-                return object_info.map(|info| !info.contains_key(cls.as_str())).unwrap_or(true);
+                return object_info
+                    .map(|info| !info.contains_key(cls.as_str()))
+                    .unwrap_or(true);
             }
             false
         })
@@ -577,7 +599,10 @@ fn check_frontend_nodes(
         out.push(Finding {
             level: Level::Block,
             check: CHECK_FRONTEND,
-            title: format!("图里还有 {} 个纯前端节点（服务端根本没有这些类）", ui_only.len()),
+            title: format!(
+                "图里还有 {} 个纯前端节点（服务端根本没有这些类）",
+                ui_only.len()
+            ),
             detail: "这些类只存在于 ComfyUI **前端**（rgthree 的 Label / Bookmark / \
                      Fast Groups Bypasser、Set/Get、Anything Everywhere、显示节点…）。\
                      服务端拿到它们会在**验证阶段整片丢掉节点**，表现是跑完 0.01 秒、零产物。\
@@ -601,9 +626,7 @@ fn check_frontend_nodes(
             level: Level::Block,
             check: CHECK_UNKNOWN_NODE,
             title: format!("本机 ComfyUI 里没有这 {} 个节点类", unknown.len()),
-            detail: format!(
-                "`/object_info` 里查不到它们，所以提交一定会被验证拒绝：{listed}。"
-            ),
+            detail: format!("`/object_info` 里查不到它们，所以提交一定会被验证拒绝：{listed}。"),
             fix: Some(
                 "要么装对应的自定义节点包（ComfyUI-Manager），要么把用到它们的分支摘掉\
                  （`comfy_prune_workflow(analyze=true)` 先看清楚）。"
@@ -630,12 +653,14 @@ fn sorted_ids(ids: Vec<String>) -> Vec<String> {
 //  ② 自定义节点版本不兼容
 // ---------------------------------------------------------------------------
 
-fn check_node_versions(
-    nodes: &[(String, String, &Map<String, Value>)],
-) -> Vec<Finding> {
+fn check_node_versions(nodes: &[(String, String, &Map<String, Value>)]) -> Vec<Finding> {
     let hits: Vec<&(String, String, &Map<String, Value>)> = nodes
         .iter()
-        .filter(|(_, cls, _)| KNOWN_INCOMPATIBLE.iter().any(|(name, _)| *name == cls.as_str()))
+        .filter(|(_, cls, _)| {
+            KNOWN_INCOMPATIBLE
+                .iter()
+                .any(|(name, _)| *name == cls.as_str())
+        })
         .collect();
     if hits.is_empty() {
         return Vec::new();
@@ -676,8 +701,12 @@ fn check_node_versions(
 fn check_output_name(graph: &Map<String, Value>) -> Vec<Finding> {
     let mut prefixes: Vec<String> = Vec::new();
     for (id, raw) in graph {
-        let Some(node) = raw.as_object() else { continue };
-        let Some(inputs) = node.get("inputs").and_then(Value::as_object) else { continue };
+        let Some(node) = raw.as_object() else {
+            continue;
+        };
+        let Some(inputs) = node.get("inputs").and_then(Value::as_object) else {
+            continue;
+        };
         for key in SAVE_PREFIX_KEYS {
             let value = inputs.get(key).and_then(primitive_text);
             // `if (!v.isNullOrBlank())`：全空白的也跳过
@@ -688,16 +717,25 @@ fn check_output_name(graph: &Map<String, Value>) -> Vec<Finding> {
     }
     let mut seeds: Vec<String> = Vec::new();
     for (id, raw) in graph {
-        let Some(node) = raw.as_object() else { continue };
+        let Some(node) = raw.as_object() else {
+            continue;
+        };
         let class_type = node_str(node, "class_type").unwrap_or_default();
         if !SAMPLER_CLASSES.contains(&class_type.as_str()) {
             continue;
         }
-        let Some(inputs) = node.get("inputs").and_then(Value::as_object) else { continue };
+        let Some(inputs) = node.get("inputs").and_then(Value::as_object) else {
+            continue;
+        };
         for key in ["seed", "noise_seed"] {
-            let Some(value) = inputs.get(key) else { continue };
+            let Some(value) = inputs.get(key) else {
+                continue;
+            };
             if is_number_like(value) {
-                seeds.push(format!("{id}.{key} = {}", primitive_text(value).unwrap_or_default()));
+                seeds.push(format!(
+                    "{id}.{key} = {}",
+                    primitive_text(value).unwrap_or_default()
+                ));
             }
         }
     }
@@ -741,12 +779,16 @@ fn check_output_name(graph: &Map<String, Value>) -> Vec<Finding> {
 fn check_params(graph: &Map<String, Value>) -> Vec<Finding> {
     let mut model_names: Vec<String> = Vec::new();
     for raw in graph.values() {
-        let Some(node) = raw.as_object() else { continue };
+        let Some(node) = raw.as_object() else {
+            continue;
+        };
         let class_type = node_str(node, "class_type").unwrap_or_default();
         if !class_type.to_ascii_lowercase().contains("loader") {
             continue;
         }
-        let Some(inputs) = node.get("inputs").and_then(Value::as_object) else { continue };
+        let Some(inputs) = node.get("inputs").and_then(Value::as_object) else {
+            continue;
+        };
         // `firstNotNullOfOrNull`：第一个**非 null** 的取值（空串也算取到了）
         let found = ["ckpt_name", "unet_name", "model_name", "lora_name"]
             .iter()
@@ -770,12 +812,16 @@ fn check_params(graph: &Map<String, Value>) -> Vec<Finding> {
 
     let mut out: Vec<Finding> = Vec::new();
     for (id, raw) in graph {
-        let Some(node) = raw.as_object() else { continue };
+        let Some(node) = raw.as_object() else {
+            continue;
+        };
         let class_type = node_str(node, "class_type").unwrap_or_default();
         if !SAMPLER_CLASSES.contains(&class_type.as_str()) {
             continue;
         }
-        let Some(inputs) = node.get("inputs").and_then(Value::as_object) else { continue };
+        let Some(inputs) = node.get("inputs").and_then(Value::as_object) else {
+            continue;
+        };
         let steps = inputs.get("steps").and_then(int_or_null);
         let cfg = inputs.get("cfg").and_then(double_or_null);
         let sampler = inputs.get("sampler_name").and_then(primitive_text);
@@ -844,9 +890,13 @@ fn check_vram(graph: &Map<String, Value>) -> Vec<Finding> {
     let mut has_upscale = false;
     let mut loras = 0usize;
     for raw in graph.values() {
-        let Some(node) = raw.as_object() else { continue };
+        let Some(node) = raw.as_object() else {
+            continue;
+        };
         let class_type = node_str(node, "class_type").unwrap_or_default();
-        let Some(inputs) = node.get("inputs").and_then(Value::as_object) else { continue };
+        let Some(inputs) = node.get("inputs").and_then(Value::as_object) else {
+            continue;
+        };
         if class_type.contains("EmptyLatentImage") || class_type.contains("EmptySD3LatentImage") {
             let width = inputs.get("width").and_then(int_or_null).unwrap_or(0) as i64;
             let height = inputs.get("height").and_then(int_or_null).unwrap_or(0) as i64;
@@ -870,7 +920,9 @@ fn check_vram(graph: &Map<String, Value>) -> Vec<Finding> {
         risks.push("带放大/重采样节点（放大那一步显存峰值最高）".to_string());
     }
     if loras >= 3 {
-        risks.push(format!("挂了 {loras} 个 LoRA（每个都要额外显存与显存带宽）"));
+        risks.push(format!(
+            "挂了 {loras} 个 LoRA（每个都要额外显存与显存带宽）"
+        ));
     }
     if risks.is_empty() {
         return Vec::new();
@@ -900,8 +952,12 @@ fn check_vram(graph: &Map<String, Value>) -> Vec<Finding> {
 fn check_prompt_style(graph: &Map<String, Value>) -> Vec<Finding> {
     let mut model_names: Vec<String> = Vec::new();
     for raw in graph.values() {
-        let Some(node) = raw.as_object() else { continue };
-        let Some(inputs) = node.get("inputs").and_then(Value::as_object) else { continue };
+        let Some(node) = raw.as_object() else {
+            continue;
+        };
+        let Some(inputs) = node.get("inputs").and_then(Value::as_object) else {
+            continue;
+        };
         let found = ["ckpt_name", "unet_name"]
             .iter()
             .find_map(|key| inputs.get(*key).and_then(primitive_text));
@@ -910,7 +966,9 @@ fn check_prompt_style(graph: &Map<String, Value>) -> Vec<Finding> {
         }
     }
     // ⚠ Kotlin 这里是 `firstOrNull()`（**没有** isNotBlank 过滤）——照抄
-    let Some(model_name) = model_names.into_iter().next() else { return Vec::new() };
+    let Some(model_name) = model_names.into_iter().next() else {
+        return Vec::new();
+    };
 
     let positives: Vec<String> = graph
         .values()
@@ -938,10 +996,13 @@ fn check_prompt_style(graph: &Map<String, Value>) -> Vec<Finding> {
     // `maxByOrNull`：并列时取**先出现**的那个（严格 `<` 才换人）
     let Some(text) = positives
         .iter()
-        .fold(None::<&String>, |best: Option<&String>, candidate| match best {
-            Some(current) if current.len() >= candidate.len() => Some(current),
-            _ => Some(candidate),
-        })
+        .fold(
+            None::<&String>,
+            |best: Option<&String>, candidate| match best {
+                Some(current) if current.len() >= candidate.len() => Some(current),
+                _ => Some(candidate),
+            },
+        )
         .cloned()
     else {
         return Vec::new();
@@ -996,18 +1057,19 @@ fn has_sentence(text: &str) -> bool {
         return true;
     }
     let lower = text.to_ascii_lowercase();
-    ["with", "wearing", "standing"].iter().any(|word| contains_word(&lower, word))
+    ["with", "wearing", "standing"]
+        .iter()
+        .any(|word| contains_word(&lower, word))
 }
 
 // ---------------------------------------------------------------------------
 //  ⑦ 加载器与目录不匹配
 // ---------------------------------------------------------------------------
 
-fn check_loader_folder(
-    graph: &Map<String, Value>,
-    inventory: Option<&Inventory>,
-) -> Vec<Finding> {
-    let Some(inventory) = inventory else { return Vec::new() };
+fn check_loader_folder(graph: &Map<String, Value>, inventory: Option<&Inventory>) -> Vec<Finding> {
+    let Some(inventory) = inventory else {
+        return Vec::new();
+    };
     if inventory.models.is_empty() {
         return Vec::new();
     }
@@ -1015,8 +1077,7 @@ fn check_loader_folder(
     let folders_of = |name: &str| -> Vec<String> {
         let mut out: Vec<String> = Vec::new();
         for model in &inventory.models {
-            let hit = ModelName::same(name, &model.name)
-                || model.name.eq_ignore_ascii_case(name);
+            let hit = ModelName::same(name, &model.name) || model.name.eq_ignore_ascii_case(name);
             if hit && !out.contains(&model.folder) {
                 out.push(model.folder.clone());
             }
@@ -1026,9 +1087,13 @@ fn check_loader_folder(
 
     let mut out: Vec<Finding> = Vec::new();
     for (id, raw) in graph {
-        let Some(node) = raw.as_object() else { continue };
+        let Some(node) = raw.as_object() else {
+            continue;
+        };
         let class_type = node_str(node, "class_type").unwrap_or_default();
-        let Some(inputs) = node.get("inputs").and_then(Value::as_object) else { continue };
+        let Some(inputs) = node.get("inputs").and_then(Value::as_object) else {
+            continue;
+        };
         // UNETLoader 只读 diffusion_models/（unet/），拿 checkpoints 里的文件一定报不存在
         let wanted: Option<(String, &'static str)> =
             if class_type.starts_with("UNETLoader") || class_type == "DiffusionModelLoader" {
@@ -1047,7 +1112,9 @@ fn check_loader_folder(
             } else {
                 None
             };
-        let Some((file, expected)) = wanted else { continue };
+        let Some((file, expected)) = wanted else {
+            continue;
+        };
         if file.trim().is_empty() {
             continue;
         }
@@ -1055,7 +1122,11 @@ fn check_loader_folder(
         if folders.is_empty() || folders.iter().any(|f| f.as_str() == expected) {
             continue;
         }
-        let listed = folders.iter().map(|f| format!("{f}/")).collect::<Vec<_>>().join("、");
+        let listed = folders
+            .iter()
+            .map(|f| format!("{f}/"))
+            .collect::<Vec<_>>()
+            .join("、");
         out.push(Finding {
             level: Level::Warn,
             check: CHECK_LOADER_FOLDER,
@@ -1081,7 +1152,9 @@ fn check_loader_folder(
 
 /// Kotlin `JsonObject.str(key)`：原始值 → 文本，全空白当没有。
 fn node_str(node: &Map<String, Value>, key: &str) -> Option<String> {
-    node.get(key).and_then(primitive_text).filter(|value| !value.trim().is_empty())
+    node.get(key)
+        .and_then(primitive_text)
+        .filter(|value| !value.trim().is_empty())
 }
 
 /// Kotlin 的 `contentOrNull`（数字给字面量、布尔给 `true` / `false`、null 给 `None`）。
@@ -1121,14 +1194,15 @@ pub async fn tool_audit_workflow(
     state: &AppState,
     arguments: &Value,
 ) -> Result<ToolOutcome, ToolFailure> {
-    let graph = crate::workflow::workflow_fit::api_graph_of(arguments.get("graph")).ok_or_else(|| {
-        ToolFailure::new(
-            "INVALID_ARGUMENT",
-            "graph 不是一份 API 格式节点图（应当形如 \
+    let graph =
+        crate::workflow::workflow_fit::api_graph_of(arguments.get("graph")).ok_or_else(|| {
+            ToolFailure::new(
+                "INVALID_ARGUMENT",
+                "graph 不是一份 API 格式节点图（应当形如 \
              {\"1\":{\"class_type\":\"KSampler\",\"inputs\":{…}}}）。\
              界面格式（nodes/links）请先用 comfy_load_workflow 读进库。",
-        )
-    })?;
+            )
+        })?;
 
     let config = crate::comfy::capture::capture_config(state).ok();
     let base = config
@@ -1146,10 +1220,15 @@ pub async fn tool_audit_workflow(
     };
     let project_root = state.project_root();
     let desktop = crate::tools::mcp::desktop(None);
-    let model_dirs: Vec<std::path::PathBuf> =
-        desktop.as_ref().map(|d| d.models_dirs.clone()).unwrap_or_default();
-    let inventory =
-        crate::comfy::comfy_models::inventory(object_info.as_ref(), Some(&project_root), &model_dirs);
+    let model_dirs: Vec<std::path::PathBuf> = desktop
+        .as_ref()
+        .map(|d| d.models_dirs.clone())
+        .unwrap_or_default();
+    let inventory = crate::comfy::comfy_models::inventory(
+        object_info.as_ref(),
+        Some(&project_root),
+        &model_dirs,
+    );
 
     let report = audit(&graph, object_info.as_ref(), Some(&inventory));
     Ok(ToolOutcome::new(report.render(), report.to_json()))

@@ -105,7 +105,11 @@ pub struct AiMessageDto {
 }
 
 /// `GET /api/ai/conversations?includeArchived=1|true`。
-pub fn list(state: &AppState, include_archived: bool, limit: Option<i64>) -> Result<Vec<AiConversationDto>, ApiError> {
+pub fn list(
+    state: &AppState,
+    include_archived: bool,
+    limit: Option<i64>,
+) -> Result<Vec<AiConversationDto>, ApiError> {
     let limit = limit.unwrap_or(200).clamp(1, 500);
     state.with(|conn| {
         let mut stmt = conn.prepare(
@@ -149,47 +153,54 @@ fn conversation_missing(id: &str) -> ApiError {
 ///
 /// ⚠ 先确认会话存在（Kotlin 的 `AiConversationRepo.get(id) ?: throw`）：
 /// 对着一个不存在的会话回 `[]` 会让界面显示"这条会话是空的"，而不是"它没了"。
-pub fn list_messages(state: &AppState, conversation_id: &str) -> Result<Vec<AiMessageDto>, ApiError> {
+pub fn list_messages(
+    state: &AppState,
+    conversation_id: &str,
+) -> Result<Vec<AiMessageDto>, ApiError> {
     // 存在性检查与取消息用**同一条连接**（AppState 只有一条）：分两次 `with` 也可以，
     // 但这里刻意合成一次 —— 少一次加锁，语义也更清楚（这一段是一次读快照）。
-    state.with(|conn| {
-        let exists: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM ai_conversations WHERE id = ?1",
-            rusqlite::params![conversation_id],
-            |row| row.get(0),
-        )?;
-        if exists == 0 {
-            return Ok(None);
-        }
+    state
+        .with(|conn| {
+            let exists: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM ai_conversations WHERE id = ?1",
+                rusqlite::params![conversation_id],
+                |row| row.get(0),
+            )?;
+            if exists == 0 {
+                return Ok(None);
+            }
 
-        let mut stmt = conn.prepare(
-            "SELECT * FROM ai_messages WHERE conversation_id = ?1 ORDER BY seq, created_at",
-        )?;
-        let mut messages = stmt
-            .query_map(rusqlite::params![conversation_id], message_from_row)?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
+            let mut stmt = conn.prepare(
+                "SELECT * FROM ai_messages WHERE conversation_id = ?1 ORDER BY seq, created_at",
+            )?;
+            let mut messages = stmt
+                .query_map(rusqlite::params![conversation_id], message_from_row)?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
 
-        // 有序块：按 (message_id, ordinal) 取出来，再按 message_id 归拢 ——
-        // Kotlin 就是这么做的，所以**每条消息内部的块是 ordinal 升序**
-        let mut stmt = conn.prepare(
-            "SELECT p.* FROM ai_message_parts p
+            // 有序块：按 (message_id, ordinal) 取出来，再按 message_id 归拢 ——
+            // Kotlin 就是这么做的，所以**每条消息内部的块是 ordinal 升序**
+            let mut stmt = conn.prepare(
+                "SELECT p.* FROM ai_message_parts p
                JOIN ai_messages m ON m.id = p.message_id
               WHERE m.conversation_id = ?1
               ORDER BY p.message_id, p.ordinal",
-        )?;
-        let mut rows = stmt.query(rusqlite::params![conversation_id])?;
-        let mut parts: std::collections::HashMap<String, Vec<AiMessagePartDto>> =
-            std::collections::HashMap::new();
-        while let Some(row) = rows.next()? {
-            let message_id: String = row.get("message_id")?;
-            parts.entry(message_id).or_default().push(part_from_row(row)?);
-        }
-        for message in messages.iter_mut() {
-            message.parts = parts.remove(&message.id).unwrap_or_default();
-        }
-        Ok(Some(messages))
-    })?
-    .ok_or_else(|| conversation_missing(conversation_id))
+            )?;
+            let mut rows = stmt.query(rusqlite::params![conversation_id])?;
+            let mut parts: std::collections::HashMap<String, Vec<AiMessagePartDto>> =
+                std::collections::HashMap::new();
+            while let Some(row) = rows.next()? {
+                let message_id: String = row.get("message_id")?;
+                parts
+                    .entry(message_id)
+                    .or_default()
+                    .push(part_from_row(row)?);
+            }
+            for message in messages.iter_mut() {
+                message.parts = parts.remove(&message.id).unwrap_or_default();
+            }
+            Ok(Some(messages))
+        })?
+        .ok_or_else(|| conversation_missing(conversation_id))
 }
 
 /// 一行 `ai_conversations`（可带 `message_count` 子查询列）→ DTO。
@@ -358,7 +369,11 @@ pub fn create(state: &AppState, req: &ConversationCreate) -> Result<AiConversati
 }
 
 /// `PATCH /api/ai/conversations/{id}`。
-pub fn patch(state: &AppState, id: &str, req: &ConversationPatch) -> Result<AiConversationDto, ApiError> {
+pub fn patch(
+    state: &AppState,
+    id: &str,
+    req: &ConversationPatch,
+) -> Result<AiConversationDto, ApiError> {
     let current = get(state, id)?;
     // 空标题 = 不改（不是"改成空"）：Kotlin 是 `?.takeIf { it.isNotEmpty() } ?: current.title`
     let title = req
@@ -377,7 +392,13 @@ pub fn patch(state: &AppState, id: &str, req: &ConversationPatch) -> Result<AiCo
             "UPDATE ai_conversations
                 SET title = ?1, provider_id = ?2, model_id = ?3, archived = ?4
               WHERE id = ?5",
-            rusqlite::params![title, provider_id, model_id, if archived { 1 } else { 0 }, id],
+            rusqlite::params![
+                title,
+                provider_id,
+                model_id,
+                if archived { 1 } else { 0 },
+                id
+            ],
         )?;
         Ok(())
     })?;
@@ -390,7 +411,10 @@ pub fn patch(state: &AppState, id: &str, req: &ConversationPatch) -> Result<AiCo
 /// 漏了那条 PRAGMA，这里会**静默留下孤儿消息**，而且删除本身"成功"。
 pub fn delete(state: &AppState, id: &str) -> Result<bool, ApiError> {
     let removed = state.write(|tx| {
-        let n = tx.execute("DELETE FROM ai_conversations WHERE id = ?1", rusqlite::params![id])?;
+        let n = tx.execute(
+            "DELETE FROM ai_conversations WHERE id = ?1",
+            rusqlite::params![id],
+        )?;
         Ok(n > 0)
     })?;
     if !removed {
@@ -416,10 +440,16 @@ pub fn append_message(
     req: &MessageAppend,
 ) -> Result<AiMessageDto, ApiError> {
     if !ROLES.contains(&req.role.as_str()) {
-        return Err(ApiError::ai("CONFIG_ERROR", format!("非法角色: {}", req.role)));
+        return Err(ApiError::ai(
+            "CONFIG_ERROR",
+            format!("非法角色: {}", req.role),
+        ));
     }
     if !STATUSES.contains(&req.status.as_str()) {
-        return Err(ApiError::ai("CONFIG_ERROR", format!("非法状态: {}", req.status)));
+        return Err(ApiError::ai(
+            "CONFIG_ERROR",
+            format!("非法状态: {}", req.status),
+        ));
     }
     // 存在性检查（不存在 → `CONFIG_ERROR`，与 Kotlin 同）
     get(state, conversation_id)?;
@@ -436,7 +466,13 @@ pub fn append_message(
     let provider_id = req.provider_id.clone();
     let model_id = req.model_id.clone();
     // 一块有序内容：`(type, text, attachment_id, tool_call_id, json_payload)`
-    type PartRow = (String, Option<String>, Option<String>, Option<String>, Option<String>);
+    type PartRow = (
+        String,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+    );
     let parts: Vec<PartRow> = req
         .parts
         .iter()

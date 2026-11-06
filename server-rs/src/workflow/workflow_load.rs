@@ -61,7 +61,10 @@ pub struct LoadFailure {
 
 impl LoadFailure {
     fn new(code: &str, message: impl Into<String>) -> Self {
-        Self { code: code.to_string(), message: message.into() }
+        Self {
+            code: code.to_string(),
+            message: message.into(),
+        }
     }
 }
 
@@ -75,20 +78,33 @@ pub async fn load_from_file(
     emulate_frontend: bool,
 ) -> Result<Value, LoadFailure> {
     if !file.is_file() {
-        return Err(LoadFailure::new("NOT_A_FILE", format!("不是文件：{}", file.display())));
+        return Err(LoadFailure::new(
+            "NOT_A_FILE",
+            format!("不是文件：{}", file.display()),
+        ));
     }
     let size = std::fs::metadata(file).map(|m| m.len()).unwrap_or(0);
     if size == 0 {
-        return Err(LoadFailure::new("EMPTY_FILE", format!("文件是空的：{}", file.display())));
+        return Err(LoadFailure::new(
+            "EMPTY_FILE",
+            format!("文件是空的：{}", file.display()),
+        ));
     }
     if size > MAX_WORKFLOW_FILE_BYTES {
         return Err(LoadFailure::new(
             "TOO_LARGE",
-            format!("工作流文件太大（{size} 字节 > {MAX_WORKFLOW_FILE_BYTES}）：{}", file.display()),
+            format!(
+                "工作流文件太大（{size} 字节 > {MAX_WORKFLOW_FILE_BYTES}）：{}",
+                file.display()
+            ),
         ));
     }
-    let bytes = std::fs::read(file)
-        .map_err(|e| LoadFailure::new("NOT_A_FILE", format!("读不了文件（{}）：{e}", file.display())))?;
+    let bytes = std::fs::read(file).map_err(|e| {
+        LoadFailure::new(
+            "NOT_A_FILE",
+            format!("读不了文件（{}）：{e}", file.display()),
+        )
+    })?;
     let root: Map<String, Value> = serde_json::from_slice::<Value>(&bytes)
         .ok()
         .and_then(|v| v.as_object().cloned())
@@ -147,10 +163,12 @@ pub async fn load_from_file(
                         .to_string(),
                 )
             })?;
-        let converted = workflow_convert::to_api_graph(&root, object_info.as_ref(), emulate_frontend)
-            .map_err(|message| {
-                LoadFailure::new("INVALID_ARGUMENT", format!("转换工作流失败：{message}"))
-            })?;
+        let converted =
+            workflow_convert::to_api_graph(&root, object_info.as_ref(), emulate_frontend).map_err(
+                |message| {
+                    LoadFailure::new("INVALID_ARGUMENT", format!("转换工作流失败：{message}"))
+                },
+            )?;
         if !converted.unsupported_nodes.is_empty() && !tolerate_unsupported {
             // ⚠ 这四条出口是 `AiWorkflowSearch.loadWorkflowFromFile` 里那段的**逐字**搬运：
             //   第 68 步之后 ① 是真的（广播型节点会被照前端的行为等价改写），
@@ -182,14 +200,54 @@ pub async fn load_from_file(
                 format!("转换之后一个可提交的节点都没有：{}", file.display()),
             ));
         }
-        warnings = converted.warnings.iter().take(MAX_WARNINGS).cloned().collect();
-        rewritten = converted.rewritten.iter().take(MAX_REWRITTEN).cloned().collect();
-        unsupported = converted.unsupported_nodes.iter().take(MAX_UNSUPPORTED).cloned().collect();
-        unresolved = converted.unresolved_inputs.iter().take(MAX_GAPS).cloned().collect();
-        open_inputs = converted.open_inputs.iter().take(MAX_GAPS).cloned().collect();
-        frontend_rewritten = converted.frontend_rewritten.iter().take(MAX_REWRITTEN).cloned().collect();
-        broadcast_lines = converted.broadcast_lines.iter().take(MAX_GAPS).cloned().collect();
-        injected_nodes = converted.injected_nodes.iter().take(MAX_REWRITTEN).cloned().collect();
+        warnings = converted
+            .warnings
+            .iter()
+            .take(MAX_WARNINGS)
+            .cloned()
+            .collect();
+        rewritten = converted
+            .rewritten
+            .iter()
+            .take(MAX_REWRITTEN)
+            .cloned()
+            .collect();
+        unsupported = converted
+            .unsupported_nodes
+            .iter()
+            .take(MAX_UNSUPPORTED)
+            .cloned()
+            .collect();
+        unresolved = converted
+            .unresolved_inputs
+            .iter()
+            .take(MAX_GAPS)
+            .cloned()
+            .collect();
+        open_inputs = converted
+            .open_inputs
+            .iter()
+            .take(MAX_GAPS)
+            .cloned()
+            .collect();
+        frontend_rewritten = converted
+            .frontend_rewritten
+            .iter()
+            .take(MAX_REWRITTEN)
+            .cloned()
+            .collect();
+        broadcast_lines = converted
+            .broadcast_lines
+            .iter()
+            .take(MAX_GAPS)
+            .cloned()
+            .collect();
+        injected_nodes = converted
+            .injected_nodes
+            .iter()
+            .take(MAX_REWRITTEN)
+            .cloned()
+            .collect();
         converted.graph
     };
 
@@ -231,8 +289,12 @@ pub async fn load_from_file(
                     .take(200)
                     .collect()
             });
-        let workflow_json = Value::Object(if ui_format { root.clone() } else { api_graph.clone() })
-            .to_string();
+        let workflow_json = Value::Object(if ui_format {
+            root.clone()
+        } else {
+            api_graph.clone()
+        })
+        .to_string();
         let notes = format!(
             "从本机工作流文件加载：{}{}",
             file.display(),
@@ -257,8 +319,16 @@ pub async fn load_from_file(
                 )
             })
             .map_err(|e| LoadFailure::new("CONFIG_ERROR", e.human()))?;
-        capture_ingest::finish_run(state, &run_key, Some(created), "success", 0, Some(&label), None)
-            .map_err(|e| LoadFailure::new("CONFIG_ERROR", e.human()))?;
+        capture_ingest::finish_run(
+            state,
+            &run_key,
+            Some(created),
+            "success",
+            0,
+            Some(&label),
+            None,
+        )
+        .map_err(|e| LoadFailure::new("CONFIG_ERROR", e.human()))?;
         created
     };
 
@@ -266,9 +336,11 @@ pub async fn load_from_file(
         .with(|conn| {
             use rusqlite::OptionalExtension;
             Ok(conn
-                .query_row("SELECT title FROM prompts WHERE id = ?1", params![prompt_id], |row| {
-                    row.get::<_, Option<String>>(0)
-                })
+                .query_row(
+                    "SELECT title FROM prompts WHERE id = ?1",
+                    params![prompt_id],
+                    |row| row.get::<_, Option<String>>(0),
+                )
                 .optional()?
                 .flatten())
         })
@@ -281,9 +353,11 @@ pub async fn load_from_file(
     out.insert(
         "title".into(),
         json!(stored_title.unwrap_or_else(|| {
-            title
-                .map(str::to_string)
-                .unwrap_or_else(|| file.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default())
+            title.map(str::to_string).unwrap_or_else(|| {
+                file.file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_default()
+            })
         })),
     );
     out.insert("path".into(), json!(file.display().to_string()));
@@ -359,7 +433,9 @@ pub async fn load_from_file(
     //
     // 带整图时**不再重复 `nodes`**：图是摘要的超集，两边都发只是白占字节。
     if include_graph {
-        let graph_bytes = serde_json::to_string(&api_graph).map(|text| text.len()).unwrap_or(0);
+        let graph_bytes = serde_json::to_string(&api_graph)
+            .map(|text| text.len())
+            .unwrap_or(0);
         // `clone` 只为把图交给返回值：下面还要拿它解析参考图（一张 20KB 的图，代价可忽略）
         out.insert("apiGraph".into(), Value::Object(api_graph.clone()));
         out.insert("apiGraphBytes".into(), json!(graph_bytes));
@@ -386,7 +462,10 @@ pub async fn load_from_file(
     if !reference_images.is_empty() {
         out.insert(
             "referenceImages".into(),
-            json!(reference_images.iter().map(|entry| entry.to_json()).collect::<Vec<_>>()),
+            json!(reference_images
+                .iter()
+                .map(|entry| entry.to_json())
+                .collect::<Vec<_>>()),
         );
         out.insert(
             "referenceHint".into(),
@@ -410,7 +489,11 @@ pub async fn load_from_file(
 fn api_format_hint(root: &Map<String, Value>) -> String {
     let offenders: Vec<String> = root
         .iter()
-        .filter(|(_, v)| v.as_object().map(|o| !o.contains_key("class_type")).unwrap_or(true))
+        .filter(|(_, v)| {
+            v.as_object()
+                .map(|o| !o.contains_key("class_type"))
+                .unwrap_or(true)
+        })
         .map(|(k, _)| k.clone())
         .take(5)
         .collect();
@@ -433,7 +516,9 @@ fn api_format_hint(root: &Map<String, Value>) -> String {
 fn summarize_nodes(api_graph: &Map<String, Value>) -> Value {
     let mut items: Vec<Value> = Vec::new();
     for (id, value) in api_graph.iter().take(MAX_SUMMARY_NODES) {
-        let Some(node) = value.as_object() else { continue };
+        let Some(node) = value.as_object() else {
+            continue;
+        };
         let mut widgets: Vec<String> = Vec::new();
         let mut linked: Vec<String> = Vec::new();
         if let Some(inputs) = node.get("inputs").and_then(Value::as_object) {
@@ -449,7 +534,10 @@ fn summarize_nodes(api_graph: &Map<String, Value>) -> Value {
         entry.insert("id".into(), json!(id));
         entry.insert(
             "classType".into(),
-            json!(node.get("class_type").and_then(Value::as_str).unwrap_or_default()),
+            json!(node
+                .get("class_type")
+                .and_then(Value::as_str)
+                .unwrap_or_default()),
         );
         if let Some(title) = node
             .get("_meta")
@@ -471,7 +559,11 @@ fn sha256_hex(bytes: &[u8]) -> String {
     use sha2::{Digest, Sha256};
     let mut hasher = Sha256::new();
     hasher.update(bytes);
-    hasher.finalize().iter().map(|b| format!("{b:02x}")).collect()
+    hasher
+        .finalize()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
 }
 
 #[cfg(test)]

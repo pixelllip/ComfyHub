@@ -155,7 +155,10 @@ Future<List<_Entry>> _collectEntries(String dataDir) async {
   // 产物 / AI 数据：跳过 tmp（中转）与 app-support（偏好，已经不在数据目录里了）。
   final storage = Directory(dataStorageDirOf(dataDir));
   if (storage.existsSync()) {
-    await for (final entity in storage.list(recursive: true, followLinks: false)) {
+    await for (final entity in storage.list(
+      recursive: true,
+      followLinks: false,
+    )) {
       if (entity is! File) continue;
       final relative = _relativeParts(dataDir, entity.path);
       if (relative.length >= 2 &&
@@ -200,9 +203,9 @@ bool _samePath(String a, String b) =>
 bool _isInside(String child, String parent) {
   final c = _normalize(child).toLowerCase();
   final p = _normalize(parent).toLowerCase();
-  return c.startsWith(p.endsWith(Platform.pathSeparator)
-      ? p
-      : '$p${Platform.pathSeparator}');
+  return c.startsWith(
+    p.endsWith(Platform.pathSeparator) ? p : '$p${Platform.pathSeparator}',
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -246,12 +249,14 @@ Future<DataDirCheck> checkDataDirTarget({
   // 允许它等于让用户以为在搬数据、实际切到了另一份库（产物还在旧目录）。
   final targetHasDb = File(dataDbFileOf(trimmed)).existsSync();
   final targetStorage = Directory(dataStorageDirOf(trimmed));
-  final targetHasStorage = targetStorage.existsSync() &&
+  final targetHasStorage =
+      targetStorage.existsSync() &&
       targetStorage.listSync(followLinks: false).isNotEmpty;
   if (targetHasDb || targetHasStorage) {
     return DataDirCheck(
       ok: false,
-      message: '这个目录里已经有一份 ComfyHub 的数据了。换过去等于换一份库，'
+      message:
+          '这个目录里已经有一份 ComfyHub 的数据了。换过去等于换一份库，'
           '不是搬家 —— 要恢复旧数据请用「本地服务 → 备份与恢复」。',
       source: source,
     );
@@ -261,7 +266,9 @@ Future<DataDirCheck> checkDataDirTarget({
   try {
     final dir = Directory(trimmed);
     if (!dir.existsSync()) dir.createSync(recursive: true);
-    final probe = File('${dir.path}${Platform.pathSeparator}.comfyhub-write-test');
+    final probe = File(
+      '${dir.path}${Platform.pathSeparator}.comfyhub-write-test',
+    );
     probe.writeAsStringSync('ok');
     probe.deleteSync();
   } catch (e) {
@@ -297,10 +304,7 @@ Future<MigrationResult> migrateDataDir({
   try {
     entries = await _collectEntries(source);
   } catch (e) {
-    return MigrationResult(
-      ok: false,
-      message: '读当前数据目录失败（$e）。旧数据没动。',
-    );
+    return MigrationResult(ok: false, message: '读当前数据目录失败（$e）。旧数据没动。');
   }
 
   // 有未完成的库恢复：那份标记里写的是**旧路径**，搬走之后重启会找不到 tmp。
@@ -328,13 +332,15 @@ Future<MigrationResult> migrateDataDir({
       return;
     }
     lastReport = now;
-    onProgress?.call(MigrationProgress(
-      copiedFiles: copiedFiles,
-      totalFiles: totalFiles,
-      copiedBytes: copiedBytes,
-      totalBytes: totalBytes,
-      currentPath: current,
-    ));
+    onProgress?.call(
+      MigrationProgress(
+        copiedFiles: copiedFiles,
+        totalFiles: totalFiles,
+        copiedBytes: copiedBytes,
+        totalBytes: totalBytes,
+        currentPath: current,
+      ),
+    );
   }
 
   try {
@@ -346,7 +352,10 @@ Future<MigrationResult> migrateDataDir({
           message: '已取消。旧数据没动；新目录里留着一部分拷完的文件，可以整个删掉重来。',
         );
       }
-      final destination = [target, ...entry.relative].join(Platform.pathSeparator);
+      final destination = [
+        target,
+        ...entry.relative,
+      ].join(Platform.pathSeparator);
       final parent = Directory(File(destination).parent.path);
       if (!parent.existsSync()) parent.createSync(recursive: true);
       File(entry.source).copySync(destination);
@@ -363,7 +372,10 @@ Future<MigrationResult> migrateDataDir({
 
   // 校验：逐个文件比字节数。有一个对不上就不落指针 —— 半份数据比不搬更糟。
   for (final entry in entries) {
-    final destination = [target, ...entry.relative].join(Platform.pathSeparator);
+    final destination = [
+      target,
+      ...entry.relative,
+    ].join(Platform.pathSeparator);
     final file = File(destination);
     if (!file.existsSync()) {
       return MigrationResult(
@@ -375,7 +387,8 @@ Future<MigrationResult> migrateDataDir({
     if (size != entry.length) {
       return MigrationResult(
         ok: false,
-        message: '校验没通过：${entry.relative.join('\\')} 大小对不上'
+        message:
+            '校验没通过：${entry.relative.join('\\')} 大小对不上'
             '（应该是 ${entry.length} 字节，实际 $size）。旧数据没动。',
       );
     }
@@ -384,18 +397,21 @@ Future<MigrationResult> migrateDataDir({
   if (!writeDataDirOverride(root, target)) {
     return const MigrationResult(
       ok: false,
-      message: '数据已经复制并校验好了，但"记住新位置"没写成（<根>\\data-dir.json）。'
+      message:
+          '数据已经复制并校验好了，但"记住新位置"没写成（<根>\\data-dir.json）。'
           '旧目录还在用，可以重试一次。',
     );
   }
 
-  onProgress?.call(MigrationProgress(
-    copiedFiles: copiedFiles,
-    totalFiles: totalFiles,
-    copiedBytes: copiedBytes,
-    totalBytes: totalBytes,
-    currentPath: '',
-  ));
+  onProgress?.call(
+    MigrationProgress(
+      copiedFiles: copiedFiles,
+      totalFiles: totalFiles,
+      copiedBytes: copiedBytes,
+      totalBytes: totalBytes,
+      currentPath: '',
+    ),
+  );
 
   return MigrationResult(
     ok: true,
@@ -417,7 +433,8 @@ Future<MigrationResult> migrateDataDir({
 /// 但"刚升级、还没重启"的进程可能仍把它当活文件在用（热重载不会重跑 `main()`）；
 /// 删掉它 = 下次启动读不到偏好。它只有几十 KB，留着不碍事。
 Future<({int freedBytes, int deletedFiles, List<String> failed})> deleteOldData(
-    String oldDataDir) async {
+  String oldDataDir,
+) async {
   var bytes = 0;
   var files = 0;
   final failed = <String>[];
@@ -433,7 +450,10 @@ Future<({int freedBytes, int deletedFiles, List<String> failed})> deleteOldData(
     }
   }
 
-  for (final dirPath in [dataDbParentOf(oldDataDir), dataStorageDirOf(oldDataDir)]) {
+  for (final dirPath in [
+    dataDbParentOf(oldDataDir),
+    dataStorageDirOf(oldDataDir),
+  ]) {
     final dir = Directory(dirPath);
     if (!dir.existsSync()) continue;
     await for (final entity in dir.list(recursive: true, followLinks: false)) {
@@ -449,8 +469,8 @@ Future<({int freedBytes, int deletedFiles, List<String> failed})> deleteOldData(
     // 还有 app-support 时不能用 recursive（会把保留的那份也删掉）；
     // 这时目录删不掉是预期内的，不算失败。
     final keepAppSupport = Directory(
-            '${dataStorageDirOf(oldDataDir)}${Platform.pathSeparator}app-support')
-        .existsSync();
+      '${dataStorageDirOf(oldDataDir)}${Platform.pathSeparator}app-support',
+    ).existsSync();
     try {
       await dir.delete(recursive: !keepAppSupport);
     } catch (e) {

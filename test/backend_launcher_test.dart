@@ -37,8 +37,8 @@ class _Call {
 /// 假的 Process：launcher 会订阅 stdout/stderr、挂 exitCode、在收尾时 kill
 class _FakeProcess implements Process {
   _FakeProcess({int pid = 4242, Completer<int>? exit})
-      : fakePid = pid,
-        _exit = exit ?? (Completer<int>()..complete(0));
+    : fakePid = pid,
+      _exit = exit ?? (Completer<int>()..complete(0));
 
   final int fakePid;
   final Completer<int> _exit;
@@ -75,23 +75,25 @@ void main() {
 
   /// 源码树布局里后端 exe 的位置（setUp 造出来）
   String devExe() => [
-        root.path,
-        'server-rs',
-        'target',
-        'release',
-        kServerExeName,
-      ].join(Platform.pathSeparator);
+    root.path,
+    'server-rs',
+    'target',
+    'release',
+    kServerExeName,
+  ].join(Platform.pathSeparator);
 
   setUp(() {
     root = Directory.systemTemp.createTempSync('comfyhub-launcher-');
     // 源码树布局的判据（backend_paths.dart 的 looksLikeRoot）+ 一份假 exe
     Directory('${root.path}${Platform.pathSeparator}server-rs').createSync();
-    File('${root.path}${Platform.pathSeparator}server-rs'
-            '${Platform.pathSeparator}Cargo.toml')
-        .writeAsStringSync('[package]\nname = "x"\n');
-    Directory('${root.path}${Platform.pathSeparator}server-rs'
-            '${Platform.pathSeparator}target${Platform.pathSeparator}release')
-        .createSync(recursive: true);
+    File(
+      '${root.path}${Platform.pathSeparator}server-rs'
+      '${Platform.pathSeparator}Cargo.toml',
+    ).writeAsStringSync('[package]\nname = "x"\n');
+    Directory(
+      '${root.path}${Platform.pathSeparator}server-rs'
+      '${Platform.pathSeparator}target${Platform.pathSeparator}release',
+    ).createSync(recursive: true);
     File(devExe()).writeAsStringSync('fake exe');
 
     spawns = [];
@@ -131,12 +133,15 @@ void main() {
     int pid = 555000,
     void Function()? onSpawn,
   }) {
-    BackendLauncher.processStarter = (exe, args, {workingDirectory, environment}) async {
-      spawns.add(_Call(exe, List<String>.of(args), workingDirectory, environment));
-      onSpawn?.call();
-      if (throwError) throw const ProcessException('exe', [], 'boom');
-      return _FakeProcess(pid: pid, exit: exit);
-    };
+    BackendLauncher.processStarter =
+        (exe, args, {workingDirectory, environment}) async {
+          spawns.add(
+            _Call(exe, List<String>.of(args), workingDirectory, environment),
+          );
+          onSpawn?.call();
+          if (throwError) throw const ProcessException('exe', [], 'boom');
+          return _FakeProcess(pid: pid, exit: exit);
+        };
   }
 
   Future<SettingsStore> loadSettings({
@@ -163,14 +168,19 @@ void main() {
   /// `requestedPort` / `fellBack` 是后端自己写的两个键：前者是"我们想让它听的端口"，
   /// 后者是"那个端口没绑上、它回落到随机端口了"。它们正是"端口粘住"这件事的
   /// 全部事实来源（我们**不猜**）。
-  void writeApiJson(int port,
-      {int pid = 987654, int requestedPort = 0, bool fellBack = false}) {
+  void writeApiJson(
+    int port, {
+    int pid = 987654,
+    int requestedPort = 0,
+    bool fellBack = false,
+  }) {
     final runDir = Directory('${root.path}${Platform.pathSeparator}.run');
     runDir.createSync(recursive: true);
     File('${runDir.path}${Platform.pathSeparator}api.json').writeAsStringSync(
-        '{"port":$port,"pid":$pid,"host":"127.0.0.1",'
-        '"url":"http://127.0.0.1:$port","requestedPort":$requestedPort,'
-        '"fellBack":$fellBack}');
+      '{"port":$port,"pid":$pid,"host":"127.0.0.1",'
+      '"url":"http://127.0.0.1:$port","requestedPort":$requestedPort,'
+      '"fellBack":$fellBack}',
+    );
   }
 
   /// 起一个本地 HTTP 服务当"后端"（health 可控）
@@ -198,46 +208,56 @@ void main() {
   //  启动参数
   // -------------------------------------------------------------------------
 
-  test('启动：直启 exe，参数是 --port 0 / --watch-stdin / COMFYHUB_PROJECT_ROOT，起之前先归一标签',
-      () async {
-    writeApiJson(await deadPort()); // App 启动时读到的"旧门牌"（没人听）
-    final settings = await loadSettings();
-    final launcher = BackendLauncher(settings);
-    installStarter();
+  test(
+    '启动：直启 exe，参数是 --port 0 / --watch-stdin / COMFYHUB_PROJECT_ROOT，起之前先归一标签',
+    () async {
+      writeApiJson(await deadPort()); // App 启动时读到的"旧门牌"（没人听）
+      final settings = await loadSettings();
+      final launcher = BackendLauncher(settings);
+      installStarter();
 
-    await launcher.ensureRunning();
+      await launcher.ensureRunning();
 
-    // icacls（标签归一）在起进程**之前**跑
-    expect(tools, hasLength(1));
-    expect(tools.single.exe, 'icacls');
-    expect(tools.single.args, [devExe(), '/setintegritylevel', 'Medium']);
+      // icacls（标签归一）在起进程**之前**跑
+      expect(tools, hasLength(1));
+      expect(tools.single.exe, 'icacls');
+      expect(tools.single.args, [devExe(), '/setintegritylevel', 'Medium']);
 
-    expect(spawns, hasLength(1));
-    expect(spawns.single.exe, devExe());
-    expect(spawns.single.workDir, root.path);
-    expect(spawns.single.args, [
-      '--db', '${root.path}${Platform.pathSeparator}.db'
-          '${Platform.pathSeparator}comfyhub.db',
-      '--storage', '${root.path}${Platform.pathSeparator}storage',
-      '--host', '127.0.0.1',
-      '--port', '0',
-      // 强杀 App 时不留孤儿的唯一保障（后端盯着这根管道）
-      '--watch-stdin',
-    ]);
-    // 端口文件与工具权限的基准必须显式给（发布包里 backend\ 与根差一层，纯推断不可靠）
-    expect(spawns.single.environment, containsPair('COMFYHUB_PROJECT_ROOT', root.path));
-    // 没开"允许局域网"时不带这个变量（后端只听回环）
-    expect(spawns.single.environment ?? const {}, isNot(contains('COMFYHUB_ALLOW_REMOTE')));
-    // 起了 = 认领了：关窗时才有资格停它
-    expect(launcher.servicesClaimed, isTrue);
-    launcher.dispose();
-  });
+      expect(spawns, hasLength(1));
+      expect(spawns.single.exe, devExe());
+      expect(spawns.single.workDir, root.path);
+      expect(spawns.single.args, [
+        '--db',
+        '${root.path}${Platform.pathSeparator}.db'
+            '${Platform.pathSeparator}comfyhub.db',
+        '--storage', '${root.path}${Platform.pathSeparator}storage',
+        '--host', '127.0.0.1',
+        '--port', '0',
+        // 强杀 App 时不留孤儿的唯一保障（后端盯着这根管道）
+        '--watch-stdin',
+      ]);
+      // 端口文件与工具权限的基准必须显式给（发布包里 backend\ 与根差一层，纯推断不可靠）
+      expect(
+        spawns.single.environment,
+        containsPair('COMFYHUB_PROJECT_ROOT', root.path),
+      );
+      // 没开"允许局域网"时不带这个变量（后端只听回环）
+      expect(
+        spawns.single.environment ?? const {},
+        isNot(contains('COMFYHUB_ALLOW_REMOTE')),
+      );
+      // 起了 = 认领了：关窗时才有资格停它
+      expect(launcher.servicesClaimed, isTrue);
+      launcher.dispose();
+    },
+  );
 
   test('启动：数据目录被指到别处时 --db / --storage 跟着走，根目录基准不变', () async {
     writeApiJson(await deadPort());
     final settings = await loadSettings();
-    final data = Directory('${root.path}${Platform.pathSeparator}elsewhere-data')
-      ..createSync(recursive: true);
+    final data = Directory(
+      '${root.path}${Platform.pathSeparator}elsewhere-data',
+    )..createSync(recursive: true);
     expect(writeDataDirOverride(root.path, data.path), isTrue);
     final launcher = BackendLauncher(settings);
     installStarter();
@@ -247,15 +267,22 @@ void main() {
     final sep = Platform.pathSeparator;
     expect(spawns, hasLength(1));
     expect(spawns.single.args, [
-      '--db', '${data.path}$sep.db${sep}comfyhub.db',
-      '--storage', '${data.path}${sep}storage',
-      '--host', '127.0.0.1',
-      '--port', '0',
+      '--db',
+      '${data.path}$sep.db${sep}comfyhub.db',
+      '--storage',
+      '${data.path}${sep}storage',
+      '--host',
+      '127.0.0.1',
+      '--port',
+      '0',
       '--watch-stdin',
     ]);
     // 端口文件 / 备份 / 工具白名单的基准仍是运行根目录（数据搬了，程序没搬）
     expect(spawns.single.workDir, root.path);
-    expect(spawns.single.environment, containsPair('COMFYHUB_PROJECT_ROOT', root.path));
+    expect(
+      spawns.single.environment,
+      containsPair('COMFYHUB_PROJECT_ROOT', root.path),
+    );
     expect(launcher.dataDir, data.path);
     launcher.dispose();
   });
@@ -269,7 +296,10 @@ void main() {
     await launcher.ensureRunning();
 
     expect(spawns.single.args, contains('0.0.0.0'));
-    expect(spawns.single.environment, containsPair('COMFYHUB_ALLOW_REMOTE', '1'));
+    expect(
+      spawns.single.environment,
+      containsPair('COMFYHUB_ALLOW_REMOTE', '1'),
+    );
     launcher.dispose();
   });
 
@@ -380,8 +410,7 @@ void main() {
     unawaited(launcher.settled().then((_) => settled = true));
 
     await Future<void>.delayed(const Duration(milliseconds: 50));
-    expect(settled, isFalse,
-        reason: '后端还没结论，这时候发首屏请求只能是打 8080 那个兜底地址');
+    expect(settled, isFalse, reason: '后端还没结论，这时候发首屏请求只能是打 8080 那个兜底地址');
 
     await running; // 假后端永远不健康 → 这一轮以 failed 收场
     await Future<void>.delayed(Duration.zero);
@@ -408,10 +437,13 @@ void main() {
     final settings = await loadSettings();
     final launcher = BackendLauncher(settings);
     final proc = _FakeProcess(pid: 555000, exit: Completer<int>()..complete(0));
-    BackendLauncher.processStarter = (exe, args, {workingDirectory, environment}) async {
-      spawns.add(_Call(exe, List<String>.of(args), workingDirectory, environment));
-      return proc;
-    };
+    BackendLauncher.processStarter =
+        (exe, args, {workingDirectory, environment}) async {
+          spawns.add(
+            _Call(exe, List<String>.of(args), workingDirectory, environment),
+          );
+          return proc;
+        };
     await launcher.ensureRunning(); // 起了（等待超时也无妨，认领已发生）
     expect(launcher.servicesClaimed, isTrue);
 
@@ -438,10 +470,11 @@ void main() {
     final settings = await loadSettings(stopServicesOnExit: false);
     final launcher = BackendLauncher(settings);
     final proc = _FakeProcess(pid: 555000);
-    BackendLauncher.processStarter = (exe, args, {workingDirectory, environment}) async {
-      spawns.add(_Call(exe, List.of(args), workingDirectory, environment));
-      return proc;
-    };
+    BackendLauncher.processStarter =
+        (exe, args, {workingDirectory, environment}) async {
+          spawns.add(_Call(exe, List.of(args), workingDirectory, environment));
+          return proc;
+        };
     await launcher.ensureRunning();
 
     expect(await launcher.releaseOnExit(), isFalse);
@@ -455,10 +488,11 @@ void main() {
     final settings = await loadSettings();
     final launcher = BackendLauncher(settings);
     final proc = _FakeProcess(pid: 555000, exit: Completer<int>()..complete(0));
-    BackendLauncher.processStarter = (exe, args, {workingDirectory, environment}) async {
-      spawns.add(_Call(exe, List.of(args), workingDirectory, environment));
-      return proc;
-    };
+    BackendLauncher.processStarter =
+        (exe, args, {workingDirectory, environment}) async {
+          spawns.add(_Call(exe, List.of(args), workingDirectory, environment));
+          return proc;
+        };
     await launcher.ensureRunning();
 
     expect(await launcher.releaseOnExit(), isTrue);
@@ -472,14 +506,17 @@ void main() {
     final settings = await loadSettings();
     final launcher = BackendLauncher(settings);
     // 永远不退的假进程 = 收尾一直等不到
-    BackendLauncher.processStarter = (exe, args, {workingDirectory, environment}) async {
-      spawns.add(_Call(exe, List.of(args), workingDirectory, environment));
-      return _FakeProcess(pid: 555000, exit: Completer<int>());
-    };
+    BackendLauncher.processStarter =
+        (exe, args, {workingDirectory, environment}) async {
+          spawns.add(_Call(exe, List.of(args), workingDirectory, environment));
+          return _FakeProcess(pid: 555000, exit: Completer<int>());
+        };
     await launcher.ensureRunning();
 
     final sw = Stopwatch()..start();
-    final ok = await launcher.releaseOnExit(timeout: const Duration(milliseconds: 200));
+    final ok = await launcher.releaseOnExit(
+      timeout: const Duration(milliseconds: 200),
+    );
     sw.stop();
 
     expect(ok, isTrue, reason: 'kill 已经发出去了，退出码没等到也算停过');
@@ -492,10 +529,11 @@ void main() {
     final settings = await loadSettings();
     final launcher = BackendLauncher(settings);
     final proc = _FakeProcess(pid: 555000);
-    BackendLauncher.processStarter = (exe, args, {workingDirectory, environment}) async {
-      spawns.add(_Call(exe, List.of(args), workingDirectory, environment));
-      return proc;
-    };
+    BackendLauncher.processStarter =
+        (exe, args, {workingDirectory, environment}) async {
+          spawns.add(_Call(exe, List.of(args), workingDirectory, environment));
+          return proc;
+        };
     await launcher.ensureRunning();
     expect(launcher.servicesClaimed, isTrue);
 
@@ -558,8 +596,11 @@ void main() {
     expect(spawns, hasLength(1));
     final i = spawns.single.args.indexOf('--port');
     expect(i, greaterThanOrEqualTo(0));
-    expect(spawns.single.args[i + 1], '45678',
-        reason: '要回旧端口，手机存的 http://<IP>:45678 才继续有效');
+    expect(
+      spawns.single.args[i + 1],
+      '45678',
+      reason: '要回旧端口，手机存的 http://<IP>:45678 才继续有效',
+    );
     launcher.dispose();
   });
 
@@ -592,7 +633,12 @@ void main() {
     final launcher = BackendLauncher(settings);
     // 假后端：绑定成功后写 api.json —— 想要 45678 没绑上，回落到 server.port
     installStarter(
-      onSpawn: () => writeApiJson(server.port, pid: 555000, requestedPort: 45678, fellBack: true),
+      onSpawn: () => writeApiJson(
+        server.port,
+        pid: 555000,
+        requestedPort: 45678,
+        fellBack: true,
+      ),
     );
 
     expect(await launcher.ensureRunning(), isTrue);
@@ -613,7 +659,8 @@ void main() {
     final settings = await loadSettings(lastApiPort: 45678);
     final launcher = BackendLauncher(settings);
     installStarter(
-      onSpawn: () => writeApiJson(server.port, pid: 555000, requestedPort: server.port),
+      onSpawn: () =>
+          writeApiJson(server.port, pid: 555000, requestedPort: server.port),
     );
 
     expect(await launcher.ensureRunning(), isTrue);
@@ -635,8 +682,11 @@ void main() {
     expect(await launcher.ensureRunning(), isTrue);
 
     expect(spawns, isEmpty, reason: '本来就健康，不该再起一个');
-    expect(settings.lastApiPort, server.port,
-        reason: '接管来的那个也要记住：关掉 App 再开时要能要回同一个端口');
+    expect(
+      settings.lastApiPort,
+      server.port,
+      reason: '接管来的那个也要记住：关掉 App 再开时要能要回同一个端口',
+    );
     expect(launcher.portFallbackFrom, isNull);
     launcher.dispose();
   });
@@ -648,7 +698,10 @@ void main() {
     expect(settings.lastApiPort, isNull, reason: '第一次运行还没有记录');
 
     await settings.setLastApiPort(5000);
-    expect((await SharedPreferences.getInstance()).getInt('comfyhub.lastApiPort'), 5000);
+    expect(
+      (await SharedPreferences.getInstance()).getInt('comfyhub.lastApiPort'),
+      5000,
+    );
 
     final again = SettingsStore();
     await again.load();

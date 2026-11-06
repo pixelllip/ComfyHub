@@ -36,10 +36,10 @@ String _sse(int seq, String type, String dataJson) =>
     'id: $seq\nevent: $type\ndata: $dataJson\n\n';
 
 http.StreamedResponse _jsonResponse(Object? body) => http.StreamedResponse(
-      Stream.value(utf8.encode(jsonEncode(body))),
-      200,
-      headers: {'content-type': 'application/json; charset=utf-8'},
-    );
+  Stream.value(utf8.encode(jsonEncode(body))),
+  200,
+  headers: {'content-type': 'application/json; charset=utf-8'},
+);
 
 /// 会话 c1 里的三条历史消息：
 /// ① 普通用户消息（有序块里有 text）
@@ -48,51 +48,51 @@ http.StreamedResponse _jsonResponse(Object? body) => http.StreamedResponse(
 const _conversationId = 'c1';
 
 List<Map<String, dynamic>> _history() => [
-      {
-        'id': 'u1',
-        'conversationId': _conversationId,
-        'seq': 1,
-        'role': 'user',
-        'status': 'complete',
-        'text': _plainAsk,
-        'parts': [
-          {'type': 'text', 'text': _plainAsk},
-        ],
-      },
-      {
-        'id': 'u2',
-        'conversationId': _conversationId,
-        'seq': 2,
-        'role': 'user',
-        'status': 'complete',
-        'text': _attachAsk,
-        'parts': [
-          {'type': 'text', 'text': _attachAsk},
-          {'type': 'attachment', 'text': 'cat.png', 'attachmentId': 'att-1'},
-        ],
-      },
-      {
-        'id': 'u3',
-        'conversationId': _conversationId,
-        'seq': 3,
-        'role': 'user',
-        'status': 'complete',
-        'text': _legacyAsk,
-        // 老数据（AIH-019 之前落库的消息）：一个有序块都没有
-        'parts': <Object>[],
-      },
-      {
-        'id': 'a1',
-        'conversationId': _conversationId,
-        'seq': 4,
-        'role': 'assistant',
-        'status': 'complete',
-        'text': '好的，我看到了。',
-        'parts': [
-          {'type': 'text', 'text': '好的，我看到了。'},
-        ],
-      },
-    ];
+  {
+    'id': 'u1',
+    'conversationId': _conversationId,
+    'seq': 1,
+    'role': 'user',
+    'status': 'complete',
+    'text': _plainAsk,
+    'parts': [
+      {'type': 'text', 'text': _plainAsk},
+    ],
+  },
+  {
+    'id': 'u2',
+    'conversationId': _conversationId,
+    'seq': 2,
+    'role': 'user',
+    'status': 'complete',
+    'text': _attachAsk,
+    'parts': [
+      {'type': 'text', 'text': _attachAsk},
+      {'type': 'attachment', 'text': 'cat.png', 'attachmentId': 'att-1'},
+    ],
+  },
+  {
+    'id': 'u3',
+    'conversationId': _conversationId,
+    'seq': 3,
+    'role': 'user',
+    'status': 'complete',
+    'text': _legacyAsk,
+    // 老数据（AIH-019 之前落库的消息）：一个有序块都没有
+    'parts': <Object>[],
+  },
+  {
+    'id': 'a1',
+    'conversationId': _conversationId,
+    'seq': 4,
+    'role': 'assistant',
+    'status': 'complete',
+    'text': '好的，我看到了。',
+    'parts': [
+      {'type': 'text', 'text': '好的，我看到了。'},
+    ],
+  },
+];
 
 Object? _json(String method, String path) {
   if (path == '/api/ai/providers') {
@@ -106,8 +106,12 @@ Object? _json(String method, String path) {
         'endpointTrust': 'loopback',
         'enabled': true,
         'revision': 1,
-        'credential': {'configured': true, 'source': 'managed', 'writable': true},
-      }
+        'credential': {
+          'configured': true,
+          'source': 'managed',
+          'writable': true,
+        },
+      },
     ];
   }
   if (path == '/api/ai/providers/local-gw/models') {
@@ -120,7 +124,7 @@ Object? _json(String method, String path) {
         'tools': false,
         'reasoning': false,
         'enabled': true,
-      }
+      },
     ];
   }
   if (path == '/api/ai/conversations' && method == 'POST') {
@@ -141,10 +145,11 @@ Object? _json(String method, String path) {
         'modelId': 'm-text',
         'messageCount': 4,
         'updatedAt': '2026-09-19T02:00:00.000Z',
-      }
+      },
     ];
   }
-  if (RegExp(r'^/api/ai/conversations/[^/]+$').hasMatch(path) && method == 'DELETE') {
+  if (RegExp(r'^/api/ai/conversations/[^/]+$').hasMatch(path) &&
+      method == 'DELETE') {
     return {'deleted': true, 'id': path.split('/').last};
   }
   if (RegExp(r'^/api/ai/conversations/[^/]+/runs$').hasMatch(path)) {
@@ -180,7 +185,11 @@ Object? _json(String method, String path) {
   }
   if (path == '/api/ai/skills') return <Object>[];
   if (path == '/api/ai/skills/roots') {
-    return {'userRoot': r'D:\x\skills', 'builtinRoot': r'D:\y\skills', 'userRootExists': true};
+    return {
+      'userRoot': r'D:\x\skills',
+      'builtinRoot': r'D:\y\skills',
+      'userRootExists': true,
+    };
   }
   if (path == '/api/capture/jobs') {
     return {
@@ -194,21 +203,24 @@ Object? _json(String method, String path) {
 }
 
 MockClient _backend() => MockClient((request) async {
-      final path = request.url.path;
-      return http.Response(
-        jsonEncode(_json(request.method, path)),
-        200,
-        headers: {'content-type': 'application/json; charset=utf-8'},
-      );
-    });
+  final path = request.url.path;
+  return http.Response(
+    jsonEncode(_json(request.method, path)),
+    200,
+    headers: {'content-type': 'application/json; charset=utf-8'},
+  );
+});
 
 /// 事件流由用例自己喂（用来观察"流式过程中"的渲染）。
 MockClient _streamingBackend(Stream<List<int>> events) =>
     MockClient.streaming((request, _) async {
       final path = request.url.path;
       if (path.startsWith('/api/ai/runs/') && path.endsWith('/events')) {
-        return http.StreamedResponse(events, 200,
-            headers: {'content-type': 'text/event-stream; charset=utf-8'});
+        return http.StreamedResponse(
+          events,
+          200,
+          headers: {'content-type': 'text/event-stream; charset=utf-8'},
+        );
       }
       return _jsonResponse(_json(request.method, path));
     });
@@ -247,8 +259,11 @@ void main() {
     await tester.pumpWidget(await _homePage(_backend()));
     await _openHistory(tester);
 
-    expect(find.text(_plainAsk), findsOneWidget,
-        reason: '同一句正文在一条消息里出现两次（用户 2026-09-19 报的截图就是这个）');
+    expect(
+      find.text(_plainAsk),
+      findsOneWidget,
+      reason: '同一句正文在一条消息里出现两次（用户 2026-09-19 报的截图就是这个）',
+    );
   });
 
   testWidgets('带附件的用户消息：正文一次 + 附件一次（图片不会把正文挤成上下两段）', (tester) async {
@@ -272,8 +287,11 @@ void main() {
     await tester.pumpWidget(await _homePage(_backend()));
     await _openHistory(tester);
 
-    expect(find.text(_legacyAsk), findsOneWidget,
-        reason: 'AIH-019 之前落库的消息没有 parts，兜底那条必须还在（不能把老数据变成空白）');
+    expect(
+      find.text(_legacyAsk),
+      findsOneWidget,
+      reason: 'AIH-019 之前落库的消息没有 parts，兜底那条必须还在（不能把老数据变成空白）',
+    );
   });
 
   testWidgets('流式生成中（parts 还没到）助手正文也只渲染一次', (tester) async {
@@ -290,26 +308,43 @@ void main() {
     await tester.pump();
 
     // 流式阶段：助手消息的 parts 还没到，正文只存在于实时段里
-    events.add(utf8.encode(
-      _sse(1, 'run.started', '{"runId":"r1"}') +
-          _sse(2, 'text.delta', jsonEncode({'messageId': 'a9', 'text': _streamDelta})),
-    ));
+    events.add(
+      utf8.encode(
+        _sse(1, 'run.started', '{"runId":"r1"}') +
+            _sse(
+              2,
+              'text.delta',
+              jsonEncode({'messageId': 'a9', 'text': _streamDelta}),
+            ),
+      ),
+    );
     await tester.pump(const Duration(milliseconds: 50));
 
-    expect(find.textContaining(_streamDelta, findRichText: true), findsOneWidget,
-        reason: '流式正文走"实时段"这条渲染路，兜底不能再渲染一遍');
+    expect(
+      find.textContaining(_streamDelta, findRichText: true),
+      findsOneWidget,
+      reason: '流式正文走"实时段"这条渲染路，兜底不能再渲染一遍',
+    );
 
-    events.add(utf8.encode(
-      _sse(3, 'message.completed',
-          jsonEncode({'messageId': 'a9', 'text': _streamDelta, 'steps': 0})) +
-          _sse(4, 'run.completed', '{"runId":"r1"}'),
-    ));
+    events.add(
+      utf8.encode(
+        _sse(
+              3,
+              'message.completed',
+              jsonEncode({'messageId': 'a9', 'text': _streamDelta, 'steps': 0}),
+            ) +
+            _sse(4, 'run.completed', '{"runId":"r1"}'),
+      ),
+    );
     // 不能 await：单订阅 controller 的 done future 要等消费方收尾
     unawaited(events.close());
     await tester.pumpAndSettle();
 
-    expect(find.textContaining(_streamDelta, findRichText: true), findsOneWidget,
-        reason: '落库后（有 parts 了）同样只渲染一次');
+    expect(
+      find.textContaining(_streamDelta, findRichText: true),
+      findsOneWidget,
+      reason: '落库后（有 parts 了）同样只渲染一次',
+    );
   });
 
   // 用户 bug⑥（2026-09-19）："AI 的思考、回答和工具调用错位（没有按时间顺序显示），
@@ -337,29 +372,48 @@ void main() {
     await tester.pump();
 
     // 到达顺序：思考 → 工具调用（请求 / 开始 / 完成）→ 正文
-    events.add(utf8.encode(
-      _sse(1, 'run.started', '{"runId":"r1"}') +
-          _sse(2, 'reasoning.delta', jsonEncode({'messageId': 'a9', 'text': reasoning})) +
-          _sse(
+    events.add(
+      utf8.encode(
+        _sse(1, 'run.started', '{"runId":"r1"}') +
+            _sse(
+              2,
+              'reasoning.delta',
+              jsonEncode({'messageId': 'a9', 'text': reasoning}),
+            ) +
+            _sse(
               3,
               'tool.requested',
               '{"runId":"r1","callId":"call-1","name":"read_file",'
-                  '"arguments":"{}","approval":"not_required"}') +
-          _sse(4, 'tool.started', '{"callId":"call-1","name":"read_file"}') +
-          _sse(5, 'tool.completed',
-              '{"callId":"call-1","name":"read_file","elapsedMs":8,"preview":"# 标题"}') +
-          _sse(6, 'text.delta', jsonEncode({'messageId': 'a9', 'text': body})),
-    ));
+                  '"arguments":"{}","approval":"not_required"}',
+            ) +
+            _sse(4, 'tool.started', '{"callId":"call-1","name":"read_file"}') +
+            _sse(
+              5,
+              'tool.completed',
+              '{"callId":"call-1","name":"read_file","elapsedMs":8,"preview":"# 标题"}',
+            ) +
+            _sse(
+              6,
+              'text.delta',
+              jsonEncode({'messageId': 'a9', 'text': body}),
+            ),
+      ),
+    );
     await tester.pump(const Duration(milliseconds: 50));
     await tester.pump();
 
     final reasoningY = tester.getTopLeft(find.text(reasoning)).dy;
     final toolY = tester.getTopLeft(find.text('read_file')).dy;
-    final bodyY = tester.getTopLeft(find.textContaining(body, findRichText: true)).dy;
+    final bodyY = tester
+        .getTopLeft(find.textContaining(body, findRichText: true))
+        .dy;
 
     expect(reasoningY, lessThan(toolY), reason: '思考在工具卡上面');
-    expect(toolY, lessThan(bodyY),
-        reason: '工具卡要插在它到达时的那个位置（正文之前），不能等所有正文铺完再补到末尾');
+    expect(
+      toolY,
+      lessThan(bodyY),
+      reason: '工具卡要插在它到达时的那个位置（正文之前），不能等所有正文铺完再补到末尾',
+    );
 
     // 收尾（不能 await：单订阅 controller 的 done future 要等消费方收尾）
     unawaited(events.close());

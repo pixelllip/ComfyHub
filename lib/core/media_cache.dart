@@ -317,9 +317,9 @@ class MediaCache {
       await for (final entity in dir.list()) {
         if (entity is! File) continue;
         final name = entity.uri.pathSegments.last;
-        final key = _keyOfName(name.endsWith('.part')
-            ? name.substring(0, name.length - 5)
-            : name);
+        final key = _keyOfName(
+          name.endsWith('.part') ? name.substring(0, name.length - 5) : name,
+        );
         if (key != null && _inflight.containsKey(key)) continue;
         try {
           freed += await entity.length();
@@ -471,12 +471,7 @@ class MediaCache {
 
   /// 记一次访问：更新内存里的 mtime，并把文件本身的 mtime 也推到现在
   /// （下次冷启动扫描时 LRU 顺序还在）。
-  void _touch(
-    File file,
-    String name,
-    int size, {
-    required bool thumb,
-  }) {
+  void _touch(File file, String name, int size, {required bool thumb}) {
     final now = DateTime.now();
     final entry = _index[name];
     if (entry == null) {

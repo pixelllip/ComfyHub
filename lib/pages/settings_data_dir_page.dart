@@ -87,7 +87,10 @@ class _DataDirSettingsPageState extends State<DataDirSettingsPage> {
                         onPressed: dataDir == null || _busy
                             ? null
                             : () => _changeLocation(launcher),
-                        icon: const Icon(Icons.drive_file_move_outlined, size: 18),
+                        icon: const Icon(
+                          Icons.drive_file_move_outlined,
+                          size: 18,
+                        ),
                         label: const Text('更改位置…'),
                       ),
                       if (!isDefault)
@@ -95,7 +98,10 @@ class _DataDirSettingsPageState extends State<DataDirSettingsPage> {
                           onPressed: _busy
                               ? null
                               : () => _moveBackToDefault(launcher),
-                          icon: const Icon(Icons.settings_backup_restore, size: 18),
+                          icon: const Icon(
+                            Icons.settings_backup_restore,
+                            size: 18,
+                          ),
                           label: const Text('搬回程序目录'),
                         ),
                     ],
@@ -195,12 +201,10 @@ class _DataDirSettingsPageState extends State<DataDirSettingsPage> {
               check.source.files == 0
                   ? '现在还没有数据，切换过去就是空的。'
                   : '一共 ${check.source.files} 个文件，'
-                      '约 ${_size(check.source.bytes)}。',
+                        '约 ${_size(check.source.bytes)}。',
             ),
             const SizedBox(height: 8),
-            const Text(
-              '搬的时候本地服务会先停下来，搬完自动重启。旧目录不会自动删除。',
-            ),
+            const Text('搬的时候本地服务会先停下来，搬完自动重启。旧目录不会自动删除。'),
           ],
         ),
         actions: [
@@ -237,61 +241,63 @@ class _DataDirSettingsPageState extends State<DataDirSettingsPage> {
       _status = '正在停止本地服务…';
     });
 
-    unawaited(showDialog<void>(
-      context: context,
-      barrierDismissible: false,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('正在搬数据'),
-        content: SizedBox(
-          width: 460,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              ValueListenableBuilder<MigrationProgress?>(
-                valueListenable: progress,
-                builder: (_, value, _) {
-                  if (value == null) {
-                    return const LinearProgressIndicator();
-                  }
-                  return Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      LinearProgressIndicator(value: value.fraction),
-                      const SizedBox(height: 8),
-                      Text(
-                        '${value.copiedFiles} / ${value.totalFiles} 个文件'
-                        '（${_size(value.copiedBytes)} / ${_size(value.totalBytes)}）',
-                      ),
-                      if (value.currentPath.isNotEmpty)
-                        Padding(
-                          padding: const EdgeInsets.only(top: 4),
-                          child: Text(
-                            value.currentPath,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: Theme.of(dialogContext)
-                                .textTheme
-                                .bodySmall,
-                          ),
+    unawaited(
+      showDialog<void>(
+        context: context,
+        barrierDismissible: false,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('正在搬数据'),
+          content: SizedBox(
+            width: 460,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                ValueListenableBuilder<MigrationProgress?>(
+                  valueListenable: progress,
+                  builder: (_, value, _) {
+                    if (value == null) {
+                      return const LinearProgressIndicator();
+                    }
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        LinearProgressIndicator(value: value.fraction),
+                        const SizedBox(height: 8),
+                        Text(
+                          '${value.copiedFiles} / ${value.totalFiles} 个文件'
+                          '（${_size(value.copiedBytes)} / ${_size(value.totalBytes)}）',
                         ),
-                    ],
-                  );
-                },
-              ),
-              const SizedBox(height: 12),
-              const Text('搬完之前别关窗口。旧数据不会被动。'),
-            ],
+                        if (value.currentPath.isNotEmpty)
+                          Padding(
+                            padding: const EdgeInsets.only(top: 4),
+                            child: Text(
+                              value.currentPath,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: Theme.of(dialogContext)
+                                  .textTheme
+                                  .bodySmall,
+                            ),
+                          ),
+                      ],
+                    );
+                  },
+                ),
+                const SizedBox(height: 12),
+                const Text('搬完之前别关窗口。旧数据不会被动。'),
+              ],
+            ),
           ),
+          actions: [
+            TextButton(
+              onPressed: () => cancelled[0] = true,
+              child: const Text('取消'),
+            ),
+          ],
         ),
-        actions: [
-          TextButton(
-            onPressed: () => cancelled[0] = true,
-            child: const Text('取消'),
-          ),
-        ],
       ),
-    ));
+    );
 
     MigrationResult result;
     try {
@@ -391,8 +397,10 @@ class _DataDirSettingsPageState extends State<DataDirSettingsPage> {
       final report = await deleteOldData(from);
       if (!mounted) return;
       if (report.failed.isEmpty) {
-        _toast('旧数据已删除（${report.deletedFiles} 个文件，'
-            '${_size(report.freedBytes)}）。');
+        _toast(
+          '旧数据已删除（${report.deletedFiles} 个文件，'
+          '${_size(report.freedBytes)}）。',
+        );
       } else {
         await _info(
           '有一部分没删掉',
@@ -421,7 +429,8 @@ class _DataDirSettingsPageState extends State<DataDirSettingsPage> {
   }
 
   void _toast(String message) {
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+    ScaffoldMessenger.of(context)
+        .showSnackBar(SnackBar(content: Text(message)));
   }
 
   static String _size(int bytes) {

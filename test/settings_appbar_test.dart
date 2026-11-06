@@ -40,51 +40,67 @@ void _phoneView(WidgetTester tester) {
 
 /// AI 工具权限页要的四条只读端点（其余一律 404，页面会把失败如实画出来）。
 MockClient _toolsBackend() => MockClient((request) async {
-      final path = request.url.path;
-      Object body;
-      if (path == '/api/ai/tools') {
-        body = const <Object>[];
-      } else if (path == '/api/ai/tools/policy' ||
-          path == '/api/ai/web-search/credential' ||
-          path == '/api/ai/attachments/stats') {
-        body = const <String, Object>{};
-      } else {
-        body = {'error': '接口不存在: $path'};
-        return http.Response(jsonEncode(body), 404,
-            headers: {'content-type': 'application/json'});
-      }
-      return http.Response(jsonEncode(body), 200,
-          headers: {'content-type': 'application/json; charset=utf-8'});
-    });
+  final path = request.url.path;
+  Object body;
+  if (path == '/api/ai/tools') {
+    body = const <Object>[];
+  } else if (path == '/api/ai/tools/policy' ||
+      path == '/api/ai/web-search/credential' ||
+      path == '/api/ai/attachments/stats') {
+    body = const <String, Object>{};
+  } else {
+    body = {'error': '接口不存在: $path'};
+    return http.Response(
+      jsonEncode(body),
+      404,
+      headers: {'content-type': 'application/json'},
+    );
+  }
+  return http.Response(
+    jsonEncode(body),
+    200,
+    headers: {'content-type': 'application/json; charset=utf-8'},
+  );
+});
 
 /// 一条 Provider：用来进"详情面板"（手机上是子界面，标题是这条 Provider 的名字）。
 MockClient _providerBackend() => MockClient((request) async {
-      final path = request.url.path;
-      Object body;
-      if (path == '/api/ai/providers') {
-        body = [
-          {
-            'id': 'command-code-goat',
-            'displayName': 'Command Code Goat',
-            'api': 'openai-completions',
-            'baseURL': 'https://api.commandcode.ai/provider/v1',
-            'credentialRef': 'COMMAND_CODE_GOAT',
-            'endpointTrust': 'public',
-            'enabled': true,
-            'revision': 1,
-            'credential': {'configured': true, 'source': 'keystore', 'writable': true},
-          }
-        ];
-      } else if (path == '/api/ai/providers/command-code-goat/models') {
-        body = const <Object>[];
-      } else {
-        body = {'error': '接口不存在: $path'};
-        return http.Response(jsonEncode(body), 404,
-            headers: {'content-type': 'application/json'});
-      }
-      return http.Response(jsonEncode(body), 200,
-          headers: {'content-type': 'application/json; charset=utf-8'});
-    });
+  final path = request.url.path;
+  Object body;
+  if (path == '/api/ai/providers') {
+    body = [
+      {
+        'id': 'command-code-goat',
+        'displayName': 'Command Code Goat',
+        'api': 'openai-completions',
+        'baseURL': 'https://api.commandcode.ai/provider/v1',
+        'credentialRef': 'COMMAND_CODE_GOAT',
+        'endpointTrust': 'public',
+        'enabled': true,
+        'revision': 1,
+        'credential': {
+          'configured': true,
+          'source': 'keystore',
+          'writable': true,
+        },
+      },
+    ];
+  } else if (path == '/api/ai/providers/command-code-goat/models') {
+    body = const <Object>[];
+  } else {
+    body = {'error': '接口不存在: $path'};
+    return http.Response(
+      jsonEncode(body),
+      404,
+      headers: {'content-type': 'application/json'},
+    );
+  }
+  return http.Response(
+    jsonEncode(body),
+    200,
+    headers: {'content-type': 'application/json; charset=utf-8'},
+  );
+});
 
 /// 手机形态（Android）：判据只看 `useCollapsingPageTitle`，不按窗口宽度。
 ///
@@ -114,7 +130,9 @@ void main() {
               for (var i = 0; i < 12; i++)
                 SettingsSection(
                   title: '第 $i 块',
-                  child: Card(child: SizedBox(height: 200, child: Text('内容 $i'))),
+                  child: Card(
+                    child: SizedBox(height: 200, child: Text('内容 $i')),
+                  ),
                 ),
             ],
           ),
@@ -127,24 +145,35 @@ void main() {
       expect(find.byType(AppBar), findsOneWidget);
       expect(find.text('外观与布局'), findsOneWidget);
       expect(
-        find.descendant(of: find.byType(AppBar), matching: find.byType(BackButton)),
+        find.descendant(
+          of: find.byType(AppBar),
+          matching: find.byType(BackButton),
+        ),
         findsOneWidget,
         reason: '返回键必须待在 AppBar 里',
       );
 
       // 往下滚过 fadeDistance（56）→ 大标题块的高度要收掉，AppBar 标题出现。
-      await tester.drag(find.byType(SingleChildScrollView), const Offset(0, -120));
+      await tester.drag(
+        find.byType(SingleChildScrollView),
+        const Offset(0, -120),
+      );
       await tester.pumpAndSettle();
 
       final collapsing = find.byType(CollapsingPageTitle);
       expect(collapsing, findsOneWidget);
-      expect(tester.getSize(collapsing).height, 0,
-          reason: '大标题滚走之后不许在页首留一条空白');
-      expect(find.text('外观与布局'), findsNWidgets(2),
-          reason: '正文里那份已透明，AppBar 里补上同一个名字');
+      expect(tester.getSize(collapsing).height, 0, reason: '大标题滚走之后不许在页首留一条空白');
+      expect(
+        find.text('外观与布局'),
+        findsNWidgets(2),
+        reason: '正文里那份已透明，AppBar 里补上同一个名字',
+      );
 
       // 滚回顶部：AppBar 标题收回，正文大标题回来。
-      await tester.drag(find.byType(SingleChildScrollView), const Offset(0, 200));
+      await tester.drag(
+        find.byType(SingleChildScrollView),
+        const Offset(0, 200),
+      );
       await tester.pumpAndSettle();
       expect(find.text('外观与布局'), findsOneWidget);
       expect(tester.getSize(collapsing).height, greaterThan(0));
@@ -164,10 +193,16 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      expect(find.byType(AppBar), findsOneWidget,
-          reason: '没有 AppBar 时页头会顶进状态栏');
       expect(
-        find.descendant(of: find.byType(AppBar), matching: find.byType(BackButton)),
+        find.byType(AppBar),
+        findsOneWidget,
+        reason: '没有 AppBar 时页头会顶进状态栏',
+      );
+      expect(
+        find.descendant(
+          of: find.byType(AppBar),
+          matching: find.byType(BackButton),
+        ),
         findsOneWidget,
         reason: '和其它设置子页一样，返回键在 AppBar 里',
       );
@@ -175,12 +210,18 @@ void main() {
       final appBarBottom = tester.getBottomLeft(find.byType(AppBar)).dy;
       expect(appBarBottom, greaterThanOrEqualTo(_statusBar));
       final bodyTop = tester.getTopLeft(find.byType(CollapsingPageTitle)).dy;
-      expect(bodyTop, greaterThanOrEqualTo(appBarBottom),
-          reason: '正文不许盖到状态栏 / 顶栏上');
+      expect(
+        bodyTop,
+        greaterThanOrEqualTo(appBarBottom),
+        reason: '正文不许盖到状态栏 / 顶栏上',
+      );
 
       // 手机端大标题就是页面名，滚动后同一套联动要生效。
       expect(find.text('AI 工具权限'), findsOneWidget);
-      await tester.drag(find.byType(SingleChildScrollView), const Offset(0, -120));
+      await tester.drag(
+        find.byType(SingleChildScrollView),
+        const Offset(0, -120),
+      );
       await tester.pumpAndSettle();
       expect(tester.getSize(find.byType(CollapsingPageTitle)).height, 0);
       expect(find.text('AI 工具权限'), findsNWidgets(2));
@@ -194,7 +235,10 @@ void main() {
       await tester.pumpWidget(
         MaterialApp(
           home: AiProviderSettingsPage(
-            api: AiApiClient('http://127.0.0.1:8081', client: _providerBackend()),
+            api: AiApiClient(
+              'http://127.0.0.1:8081',
+              client: _providerBackend(),
+            ),
           ),
         ),
       );
@@ -202,7 +246,10 @@ void main() {
 
       expect(find.byType(AppBar), findsOneWidget);
       expect(
-        find.descendant(of: find.byType(AppBar), matching: find.byType(BackButton)),
+        find.descendant(
+          of: find.byType(AppBar),
+          matching: find.byType(BackButton),
+        ),
         findsOneWidget,
         reason: '列表这一层是"退出整个页面"，返回键在 AppBar 里',
       );
@@ -219,11 +266,17 @@ void main() {
 
       expect(find.byType(AppBar), findsOneWidget);
       expect(
-        find.descendant(of: find.byType(AppBar), matching: find.byType(BackButton)),
+        find.descendant(
+          of: find.byType(AppBar),
+          matching: find.byType(BackButton),
+        ),
         findsOneWidget,
       );
-      expect(find.text('Command Code Goat'), findsOneWidget,
-          reason: '页面大标题是 Provider 名，正文里不许再重复一行');
+      expect(
+        find.text('Command Code Goat'),
+        findsOneWidget,
+        reason: '页面大标题是 Provider 名，正文里不许再重复一行',
+      );
       expect(find.text('新建 Provider'), findsNothing, reason: '进了详情就不该还留着列表');
 
       // 详情里的 `CustomScrollView` 也要接上同一套联动（这页的滚动在子组件里，
@@ -241,7 +294,10 @@ void main() {
 
       // 返回 → 列表（同一份 State 里换面板，不是路由弹出）。
       await tester.tap(
-        find.descendant(of: find.byType(AppBar), matching: find.byType(BackButton)),
+        find.descendant(
+          of: find.byType(AppBar),
+          matching: find.byType(BackButton),
+        ),
       );
       await tester.pumpAndSettle();
       expect(find.text('新建 Provider'), findsOneWidget);

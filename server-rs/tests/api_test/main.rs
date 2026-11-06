@@ -37,18 +37,18 @@
 //!
 //! 拆分的判据是**文件名与用例一一对应、搬完数目不变**：144 个 ASCII 名 + 6 个中文名 = 150。
 
-mod common;
-mod basics;
-mod media;
-mod capture;
-mod sync;
-mod auth;
 mod ai_conversations;
 mod ai_executor;
 mod ai_providers;
 mod ai_run_kit;
-mod cards;
-mod tools;
-mod comfy;
+mod auth;
 mod backup;
+mod basics;
+mod capture;
+mod cards;
+mod comfy;
+mod common;
+mod media;
 mod storage;
+mod sync;
+mod tools;

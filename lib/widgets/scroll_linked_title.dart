@@ -172,11 +172,7 @@ class FadingAppBarTitle extends StatelessWidget {
         if (t <= 0.01) return const SizedBox.shrink();
         return Opacity(
           opacity: t,
-          child: Text(
-            title,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-          ),
+          child: Text(title, maxLines: 1, overflow: TextOverflow.ellipsis),
         );
       },
     );

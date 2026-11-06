@@ -16,42 +16,45 @@ import 'package:viewer/core/api_client.dart';
 import 'package:viewer/models/models.dart';
 
 Map<String, dynamic> _mediaJson() => {
-      'id': 7,
-      'kind': 'IMAGE',
-      'title': 'a.png',
-      'originalName': 'a.png',
-      'storedName': 'a.png',
-      'mimeType': 'image/png',
-      'sizeBytes': 1,
-      'favorite': false,
-      'source': 'ComfyUI',
-      'createdAt': '2026-10-18T01:00:00.000Z',
-    };
+  'id': 7,
+  'kind': 'IMAGE',
+  'title': 'a.png',
+  'originalName': 'a.png',
+  'storedName': 'a.png',
+  'mimeType': 'image/png',
+  'sizeBytes': 1,
+  'favorite': false,
+  'source': 'ComfyUI',
+  'createdAt': '2026-10-18T01:00:00.000Z',
+};
 
 void main() {
   late Map<String, dynamic> lastBody;
 
   ApiClient client() => ApiClient(
-        'http://127.0.0.1:1',
-        client: MockClient((request) async {
-          if (request.method == 'PATCH') {
-            lastBody = Map<String, dynamic>.from(jsonDecode(request.body) as Map);
-          }
-          return http.Response(
-            jsonEncode(_mediaJson()),
-            200,
-            headers: {'content-type': 'application/json; charset=utf-8'},
-          );
-        }),
+    'http://127.0.0.1:1',
+    client: MockClient((request) async {
+      if (request.method == 'PATCH') {
+        lastBody = Map<String, dynamic>.from(jsonDecode(request.body) as Map);
+      }
+      return http.Response(
+        jsonEncode(_mediaJson()),
+        200,
+        headers: {'content-type': 'application/json; charset=utf-8'},
       );
+    }),
+  );
 
   setUp(() => lastBody = {});
 
   test('移出集合：发 clearCollection，**不发** collectionId', () async {
     await client().updateMedia(7, clearCollection: true);
     expect(lastBody['clearCollection'], isTrue);
-    expect(lastBody.containsKey('collectionId'), isFalse,
-        reason: '两个一起发语义就含糊了 —— 后端以 clear 优先，但请求里不该同时出现');
+    expect(
+      lastBody.containsKey('collectionId'),
+      isFalse,
+      reason: '两个一起发语义就含糊了 —— 后端以 clear 优先，但请求里不该同时出现',
+    );
   });
 
   test('移进集合：发 collectionId，**不发** clearCollection', () async {
@@ -79,7 +82,13 @@ void main() {
         expect(request.url.path, '/api/media/collections');
         return http.Response(
           jsonEncode([
-            {'id': 5, 'kind': 'IMAGE', 'origin': 'manual', 'title': '精选', 'size': 3},
+            {
+              'id': 5,
+              'kind': 'IMAGE',
+              'origin': 'manual',
+              'title': '精选',
+              'size': 3,
+            },
             // 算法分出来的**没有 title 这个键**（后端 skip_serializing_if）
             {'id': 9, 'kind': 'VIDEO', 'origin': 'auto', 'size': 2},
           ]),
@@ -105,7 +114,13 @@ void main() {
         expect(request.url.path, '/api/media/collections');
         body = Map<String, dynamic>.from(jsonDecode(request.body) as Map);
         return http.Response(
-          jsonEncode({'id': 11, 'kind': 'IMAGE', 'origin': 'manual', 'title': 'A', 'size': 2}),
+          jsonEncode({
+            'id': 11,
+            'kind': 'IMAGE',
+            'origin': 'manual',
+            'title': 'A',
+            'size': 2,
+          }),
           201,
           headers: {'content-type': 'application/json; charset=utf-8'},
         );
@@ -123,7 +138,12 @@ void main() {
   });
 
   test('一个集合只装一种：accepts 判据大小写不敏感', () {
-    const image = MediaCollection(id: 1, kind: 'IMAGE', origin: 'manual', size: 1);
+    const image = MediaCollection(
+      id: 1,
+      kind: 'IMAGE',
+      origin: 'manual',
+      size: 1,
+    );
     expect(image.accepts('IMAGE'), isTrue);
     expect(image.accepts('image'), isTrue);
     expect(image.accepts('VIDEO'), isFalse, reason: '图像集合装不下视频 —— 目标要置灰');

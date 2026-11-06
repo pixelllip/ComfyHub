@@ -82,7 +82,8 @@ class RemoteProviderStore implements ProviderStore {
   Future<List<AiProvider>> listProviders() => _api.listProviders();
 
   @override
-  Future<AiProvider> createProvider(Map<String, dynamic> draft) => _api.createProvider(draft);
+  Future<AiProvider> createProvider(Map<String, dynamic> draft) =>
+      _api.createProvider(draft);
 
   /// ⚠ 传 `toJson()`（**带 revision**）：后端靠它做乐观锁，少了它后端会拒
   /// （"缺少 revision，请刷新后重试"）。
@@ -107,7 +108,8 @@ class RemoteProviderStore implements ProviderStore {
   Future<void> deleteProvider(String id) => _api.deleteProvider(id);
 
   @override
-  Future<List<AiModel>> listModels(String providerId) => _api.listModels(providerId);
+  Future<List<AiModel>> listModels(String providerId) =>
+      _api.listModels(providerId);
 
   @override
   Future<List<AiModel>> saveModels(String providerId, List<AiModel> models) =>
@@ -120,7 +122,9 @@ class RemoteProviderStore implements ProviderStore {
 /// 与手机侧的凭据实现同一个通道（复用常量，改一处就够）。
 class DeviceProviderStore implements ProviderStore {
   DeviceProviderStore({MethodChannel? channel})
-      : _method = channel ?? const MethodChannel(LocalHarnessRunEventSource.methodChannelName);
+    : _method =
+          channel ??
+          const MethodChannel(LocalHarnessRunEventSource.methodChannelName);
 
   final MethodChannel _method;
 
@@ -145,7 +149,9 @@ class DeviceProviderStore implements ProviderStore {
   @override
   Future<AiProvider> updateProvider(AiProvider value) async {
     // toJson() 带 revision → 桥走乐观锁更新（与桌面 PUT 同）
-    final raw = await _invoke('saveProvider', {'provider': jsonEncode(value.toJson())});
+    final raw = await _invoke('saveProvider', {
+      'provider': jsonEncode(value.toJson()),
+    });
     return AiProvider.fromJson(_row(raw, 'saveProvider'));
   }
 
@@ -162,10 +168,15 @@ class DeviceProviderStore implements ProviderStore {
 
   @override
   Future<List<AiModel>> listModels(String providerId) async =>
-      _rows(await _invoke('listModels', {'providerId': providerId})).map(AiModel.fromJson).toList();
+      _rows(await _invoke('listModels', {'providerId': providerId}))
+          .map(AiModel.fromJson)
+          .toList();
 
   @override
-  Future<List<AiModel>> saveModels(String providerId, List<AiModel> models) async {
+  Future<List<AiModel>> saveModels(
+    String providerId,
+    List<AiModel> models,
+  ) async {
     final raw = await _invoke('saveModels', {
       'providerId': providerId,
       // 键名与后端 DTO 逐字一致：同一个 toJson() 走两端
@@ -195,7 +206,10 @@ class DeviceProviderStore implements ProviderStore {
     if (raw == null || raw.trim().isEmpty) return const [];
     final decoded = jsonDecode(raw);
     if (decoded is! List) return const [];
-    return decoded.whereType<Map>().map((e) => Map<String, dynamic>.from(e)).toList();
+    return decoded
+        .whereType<Map>()
+        .map((e) => Map<String, dynamic>.from(e))
+        .toList();
   }
 
   /// 桥回的是单个 JSON **对象**（保存后的那一条）。

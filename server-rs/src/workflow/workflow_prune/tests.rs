@@ -5,7 +5,11 @@
 use super::*;
 
 fn graph(text: &str) -> Map<String, Value> {
-    serde_json::from_str::<Value>(text).unwrap().as_object().unwrap().clone()
+    serde_json::from_str::<Value>(text)
+        .unwrap()
+        .as_object()
+        .unwrap()
+        .clone()
 }
 
 fn node_of<'a>(graph: &'a Map<String, Value>, id: &str) -> &'a Value {
@@ -53,7 +57,13 @@ fn empty_set() -> HashSet<String> {
 
 #[test]
 fn 摘掉参考图分支_controlnet_与_load_image_一起走_采样器的线接回文本编码器() {
-    let r = apply(&with_reference_branch(), &["89.image".to_string()], &empty_set(), &[], None);
+    let r = apply(
+        &with_reference_branch(),
+        &["89.image".to_string()],
+        &empty_set(),
+        &[],
+        None,
+    );
 
     assert!(
         r.warnings.iter().any(|w| w.contains("92.image")),
@@ -63,8 +73,15 @@ fn 摘掉参考图分支_controlnet_与_load_image_一起走_采样器的线接�
     // 采样器本来指着 92；92 还在（它还有消费者），所以采样器不动 ——
     // 想彻底不参考图，就把 92 也一起摘掉。
     let positive = ref_pair(inputs_of(&r.graph, "3").get("positive"));
-    assert_eq!(positive.0, "92", "还有消费者的节点只被摘掉那根线，节点本身保留");
-    assert!(r.unresolved.is_empty(), "不该留下悬空的线：{:?}", r.unresolved);
+    assert_eq!(
+        positive.0, "92",
+        "还有消费者的节点只被摘掉那根线，节点本身保留"
+    );
+    assert!(
+        r.unresolved.is_empty(),
+        "不该留下悬空的线：{:?}",
+        r.unresolved
+    );
     assert!(
         r.runnable(),
         "摘完应当能跑：alive={}/{} {:?}",
@@ -88,7 +105,10 @@ fn 摘掉一个共享节点不会误伤别人_文本编码器被两个分支共�
     );
     let r = apply(&g, &["89".to_string()], &empty_set(), &[], None);
     assert!(r.graph.contains_key("6"), "共享的文本编码器不能被误摘");
-    assert!(!inputs_of(&r.graph, "92").contains_key("image"), "被摘的那根线要真的没了");
+    assert!(
+        !inputs_of(&r.graph, "92").contains_key("image"),
+        "被摘的那根线要真的没了"
+    );
     assert!(!r.graph.contains_key("89"), "点名的 LoadImage 摘掉了");
     assert!(r.graph.contains_key("92"), "92 还有消费者（采样器），保留");
     assert!(r.graph.contains_key("3") && r.graph.contains_key("10"));
@@ -96,8 +116,17 @@ fn 摘掉一个共享节点不会误伤别人_文本编码器被两个分支共�
 
 #[test]
 fn 输出节点不会被摘_点名摘_save_image_要如实拒绝() {
-    let r = apply(&with_reference_branch(), &["10".to_string()], &empty_set(), &[], None);
-    assert!(r.graph.contains_key("10"), "输出节点不许被摘掉（摘了就什么都出不来）");
+    let r = apply(
+        &with_reference_branch(),
+        &["10".to_string()],
+        &empty_set(),
+        &[],
+        None,
+    );
+    assert!(
+        r.graph.contains_key("10"),
+        "输出节点不许被摘掉（摘了就什么都出不来）"
+    );
     assert!(
         r.warnings.iter().any(|w| w.contains("保留")),
         "要如实说明为什么没摘：{:?}",
@@ -108,7 +137,13 @@ fn 输出节点不会被摘_点名摘_save_image_要如实拒绝() {
 #[test]
 fn keep_里的节点不会被摘() {
     let keep: HashSet<String> = ["89".to_string()].into_iter().collect();
-    let r = apply(&with_reference_branch(), &["89".to_string()], &keep, &[], None);
+    let r = apply(
+        &with_reference_branch(),
+        &["89".to_string()],
+        &keep,
+        &[],
+        None,
+    );
     assert!(r.graph.contains_key("92"), "keep 明确要求保留的节点不能摘");
     assert!(r.graph.contains_key("89"), "keep 明确要求保留的节点不能摘");
 }
@@ -131,7 +166,13 @@ fn 插节点_sage_attention_接在模型链上_原来的上游接到它自己() 
         &injections,
         Some(&object_info),
     );
-    assert_eq!(r.injected.len(), 1, "要插进去一个节点：{:?} {:?}", r.injected, r.warnings);
+    assert_eq!(
+        r.injected.len(),
+        1,
+        "要插进去一个节点：{:?} {:?}",
+        r.injected,
+        r.warnings
+    );
     let new_id = r
         .graph
         .iter()
@@ -141,7 +182,10 @@ fn 插节点_sage_attention_接在模型链上_原来的上游接到它自己() 
     let model_ref = ref_pair(inputs_of(&r.graph, "3").get("model"));
     assert_eq!(new_id, model_ref.0, "采样器的 model 要改成补丁节点");
     let patch_model = ref_pair(inputs_of(&r.graph, &new_id).get("model"));
-    assert_eq!("4", patch_model.0, "补丁的 model 要接回原来的上游 LoraLoader");
+    assert_eq!(
+        "4", patch_model.0,
+        "补丁的 model 要接回原来的上游 LoraLoader"
+    );
     assert!(r.runnable(), "插完应当仍然能跑：{:?}", r.unresolved);
 }
 
@@ -153,10 +197,20 @@ fn 没有节点定义表时照样插_但不猜接线之外的输入() {
         inputs: Map::new(),
         node_id: None,
     }];
-    let r = apply(&with_reference_branch(), &[], &empty_set(), &injections, None);
+    let r = apply(
+        &with_reference_branch(),
+        &[],
+        &empty_set(),
+        &injections,
+        None,
+    );
     // 插入这件事本身是确定的（classType + 插在哪根线），所以定义表缺失不阻止插入；
     // 缺的是"它还有哪些输入"这类信息 —— 那种情况下宁可少插，也不乱接。
-    assert!(!r.injected.is_empty(), "有明确的插入位置就该插：{:?}", r.injected);
+    assert!(
+        !r.injected.is_empty(),
+        "有明确的插入位置就该插：{:?}",
+        r.injected
+    );
     assert!(r.graph.contains_key("3"), "采样器还在");
 }
 
@@ -176,7 +230,11 @@ fn 节点定义里没有这个类时只警告不强插() {
         &injections,
         Some(&object_info),
     );
-    assert!(r.injected.is_empty(), "这台 ComfyUI 没有的节点类不该硬插：{:?}", r.injected);
+    assert!(
+        r.injected.is_empty(),
+        "这台 ComfyUI 没有的节点类不该硬插：{:?}",
+        r.injected
+    );
     assert!(
         r.warnings.iter().any(|w| w.contains("SageAttention")),
         "要如实说明少了什么：{:?}",
@@ -195,7 +253,10 @@ fn 摘掉之后留下空输入要列出来而不是假装没事() {
     );
     let r = apply(&g, &["89".to_string()], &empty_set(), &[], None);
     assert!(r.graph.contains_key("3"), "采样器还在");
-    assert!(!inputs_of(&r.graph, "3").contains_key("positive"), "没有可用的上游 → 这个输入被摘掉");
+    assert!(
+        !inputs_of(&r.graph, "3").contains_key("positive"),
+        "没有可用的上游 → 这个输入被摘掉"
+    );
     assert!(
         r.warnings.iter().any(|w| w.contains("现在空着")),
         "必须如实说清哪根线没了：{:?}",
@@ -232,12 +293,18 @@ fn 分析_用不上的分支连成一片_孤立节点单独列出且不建议删
         report.branches.len(),
         1,
         "它们连在一起，算一条：{:?}",
-        report.branches.iter().map(|b| b.nodes.iter().map(|n| n.id.clone()).collect::<Vec<_>>()).collect::<Vec<_>>()
+        report
+            .branches
+            .iter()
+            .map(|b| b.nodes.iter().map(|n| n.id.clone()).collect::<Vec<_>>())
+            .collect::<Vec<_>>()
     );
     let branch = &report.branches[0];
     let ids: HashSet<String> = branch.nodes.iter().map(|n| n.id.clone()).collect();
-    let expected: HashSet<String> =
-        ["70", "71", "80", "81"].iter().map(|s| s.to_string()).collect();
+    let expected: HashSet<String> = ["70", "71", "80", "81"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
     assert_eq!(ids, expected);
     // 入口 = 这条分支里谁也不引用的那个（换脸节点），摘它就是整条一起走
     assert_eq!(branch.entry, "80", "入口应当是分支的梢（下游那个）");
@@ -245,10 +312,21 @@ fn 分析_用不上的分支连成一片_孤立节点单独列出且不建议删
     assert_eq!(suggest, expected);
     // 人话标签（用户要照着它做决定，不能只给节点 id）
     assert!(!branch.label.trim().is_empty());
-    assert!(branch.kinds.iter().any(|k| k.contains("放大")), "节点种类要说人话：{:?}", branch.kinds);
+    assert!(
+        branch.kinds.iter().any(|k| k.contains("放大")),
+        "节点种类要说人话：{:?}",
+        branch.kinds
+    );
 
     // 99（没接任何线、也没人用）是"还没接完"，不归"用不上"
-    assert_eq!(report.isolated.iter().map(|n| n.id.clone()).collect::<Vec<_>>(), vec!["99"]);
+    assert_eq!(
+        report
+            .isolated
+            .iter()
+            .map(|n| n.id.clone())
+            .collect::<Vec<_>>(),
+        vec!["99"]
+    );
     assert_eq!(report.total_isolated, 1);
     assert_eq!(report.total_nodes, 11);
 }
@@ -267,11 +345,22 @@ fn 分析_干净的工作流一条都不报() {
 #[test]
 fn 分析结果可以直接拿去摘_建议的入口能整条摘掉() {
     let report = unused_branches(&with_dead_branches(), &empty_set(), DEFAULT_MAX_BRANCHES);
-    let removed: Vec<String> =
-        report.branches.iter().flat_map(|b| b.suggest_remove()).collect();
+    let removed: Vec<String> = report
+        .branches
+        .iter()
+        .flat_map(|b| b.suggest_remove())
+        .collect();
     let r = apply(&with_dead_branches(), &removed, &empty_set(), &[], None);
-    assert!(r.removed.iter().any(|entry| entry.starts_with("80")), "摘除清单里要有换脸：{:?}", r.removed);
-    assert!(r.removed.iter().any(|entry| entry.starts_with("70")), "放大节点也要跟着走：{:?}", r.removed);
+    assert!(
+        r.removed.iter().any(|entry| entry.starts_with("80")),
+        "摘除清单里要有换脸：{:?}",
+        r.removed
+    );
+    assert!(
+        r.removed.iter().any(|entry| entry.starts_with("70")),
+        "放大节点也要跟着走：{:?}",
+        r.removed
+    );
     assert!(r.graph.contains_key("10"), "出图链路必须还在");
     assert!(r.graph.contains_key("9"));
     assert!(r.runnable(), "{:?} {:?}", r.unresolved, r.warnings);
@@ -280,7 +369,8 @@ fn 分析结果可以直接拿去摘_建议的入口能整条摘掉() {
 /// 工具返回的那份 JSON 形状（Kotlin `WorkflowPruneTest`「工具层」那几条的纯函数半边）。
 #[test]
 fn 分析结果的_json_形状与_kotlin_一致() {
-    let value = unused_branches(&with_dead_branches(), &empty_set(), DEFAULT_MAX_BRANCHES).to_json();
+    let value =
+        unused_branches(&with_dead_branches(), &empty_set(), DEFAULT_MAX_BRANCHES).to_json();
     assert_eq!(value["ok"], json!(true));
     assert_eq!(value["totalUnused"], json!(4));
     assert_eq!(value["branches"][0]["removeFrom"], json!("80"));
@@ -289,7 +379,10 @@ fn 分析结果的_json_形状与_kotlin_一致() {
     assert_eq!(value["truncated"], json!(false));
     let hint = value["hint"].as_str().unwrap();
     assert!(hint.contains("先问用户"), "必须要求先确认：{hint}");
-    assert!(hint.contains("isolated") || hint.contains("还没接完"), "要提醒孤立节点别删：{hint}");
+    assert!(
+        hint.contains("isolated") || hint.contains("还没接完"),
+        "要提醒孤立节点别删：{hint}"
+    );
     // `usedBy` 那条"有才写"的取舍：中间节点带 usedBy，末端（谁也不引用）**省掉键**
     assert_eq!(value["branches"][0]["nodes"][0]["id"], json!("70"));
     assert_eq!(value["branches"][0]["nodes"][0]["usedBy"][0], json!("71"));
@@ -301,15 +394,31 @@ fn 分析结果的_json_形状与_kotlin_一致() {
         .expect("末端 80 要在清单里");
     assert!(tip.get("usedBy").is_none(), "末端没人引用 → 省掉键：{tip}");
     // 干净的那份：summary 要说"没有用不上的分支"
-    let clean = unused_branches(&with_reference_branch(), &empty_set(), DEFAULT_MAX_BRANCHES).to_json();
-    assert!(clean["summary"].as_str().unwrap().contains("没有用不上的分支"), "{clean}");
-    assert!(clean.get("isolated").is_none(), "没有孤立节点时**省掉键**：{clean}");
+    let clean =
+        unused_branches(&with_reference_branch(), &empty_set(), DEFAULT_MAX_BRANCHES).to_json();
+    assert!(
+        clean["summary"]
+            .as_str()
+            .unwrap()
+            .contains("没有用不上的分支"),
+        "{clean}"
+    );
+    assert!(
+        clean.get("isolated").is_none(),
+        "没有孤立节点时**省掉键**：{clean}"
+    );
 }
 
 /// 摘除 / 拼装的 JSON 形状：可空键的取舍与 Kotlin 手拼的一致。
 #[test]
 fn 摘除结果的_json_形状与_kotlin_一致() {
-    let r = apply(&with_reference_branch(), &["89.image".to_string()], &empty_set(), &[], None);
+    let r = apply(
+        &with_reference_branch(),
+        &["89.image".to_string()],
+        &empty_set(),
+        &[],
+        None,
+    );
     assert!(r.graph.contains_key("10"));
     assert!(!r.graph.contains_key("89"));
     assert!(!r.removed.is_empty(), "摘了什么要如实列出来");
@@ -328,7 +437,11 @@ fn 拼装的四种拒法都是人话() {
         node_id: None,
     }];
     let r = apply(&with_reference_branch(), &[], &empty_set(), &bad_at, None);
-    assert!(r.warnings.iter().any(|w| w.contains("节点id.输入名")), "{:?}", r.warnings);
+    assert!(
+        r.warnings.iter().any(|w| w.contains("节点id.输入名")),
+        "{:?}",
+        r.warnings
+    );
 
     // ② 位置上的节点不在图里
     let gone = vec![Injection {
@@ -338,7 +451,11 @@ fn 拼装的四种拒法都是人话() {
         node_id: None,
     }];
     let r = apply(&with_reference_branch(), &[], &empty_set(), &gone, None);
-    assert!(r.warnings.iter().any(|w| w.contains("999")), "{:?}", r.warnings);
+    assert!(
+        r.warnings.iter().any(|w| w.contains("999")),
+        "{:?}",
+        r.warnings
+    );
 
     // ③ 那个输入不是一条线（值是字面量）
     let literal = vec![Injection {
@@ -348,7 +465,11 @@ fn 拼装的四种拒法都是人话() {
         node_id: None,
     }];
     let r = apply(&with_reference_branch(), &[], &empty_set(), &literal, None);
-    assert!(r.warnings.iter().any(|w| w.contains("不是一条线")), "{:?}", r.warnings);
+    assert!(
+        r.warnings.iter().any(|w| w.contains("不是一条线")),
+        "{:?}",
+        r.warnings
+    );
 
     // ④ 定义表里说不出该接哪个输入（required 全是控件型）
     let object_info = graph(r#"{"Patch":{"input":{"required":{"note":["STRING"]}}}}"#);
@@ -358,9 +479,19 @@ fn 拼装的四种拒法都是人话() {
         inputs: Map::new(),
         node_id: None,
     }];
-    let r = apply(&with_reference_branch(), &[], &empty_set(), &injections, Some(&object_info));
+    let r = apply(
+        &with_reference_branch(),
+        &[],
+        &empty_set(),
+        &injections,
+        Some(&object_info),
+    );
     assert!(r.injected.is_empty(), "宁可不插，也不乱接");
-    assert!(r.warnings.iter().any(|w| w.contains("自动接线")), "{:?}", r.warnings);
+    assert!(
+        r.warnings.iter().any(|w| w.contains("自动接线")),
+        "{:?}",
+        r.warnings
+    );
 }
 
 /// 空图 / 脏数据：如实报，**不许 panic**。
@@ -369,7 +500,11 @@ fn 空图与脏数据都不许_panic() {
     let empty = Map::new();
     let r = apply(&empty, &["1".to_string()], &empty_set(), &[], None);
     assert_eq!(r.outputs_total, 0);
-    assert!(r.warnings.iter().any(|w| w.contains("一个节点都没有")), "{:?}", r.warnings);
+    assert!(
+        r.warnings.iter().any(|w| w.contains("一个节点都没有")),
+        "{:?}",
+        r.warnings
+    );
     assert!(!r.runnable());
 
     let dirty = graph(r#"{"1": "nope", "2": {"class_type": "", "inputs": {}}}"#);
@@ -399,7 +534,10 @@ fn 静音的输出节点不算输出来源() {
 
 #[test]
 fn describe_认不出来就照抄类名() {
-    assert_eq!(describe("ControlNetApplyAdvanced"), "ControlNet（结构控制）");
+    assert_eq!(
+        describe("ControlNetApplyAdvanced"),
+        "ControlNet（结构控制）"
+    );
     assert_eq!(describe("ImageUpscaleWithModel"), "放大 / 缩放");
     assert_eq!(describe("UnknownThing"), "UnknownThing");
     assert_eq!(describe("VAELoader"), "VAE 加载/解码");
@@ -410,7 +548,11 @@ fn describe_认不出来就照抄类名() {
 fn bool_arg_只认严格的_true_false() {
     assert_eq!(bool_arg(Some(&json!(true))), Some(true));
     assert_eq!(bool_arg(Some(&json!("true"))), Some(true));
-    assert_eq!(bool_arg(Some(&json!("True"))), None, "Kotlin 的 toBooleanStrictOrNull 不认大小写变体");
+    assert_eq!(
+        bool_arg(Some(&json!("True"))),
+        None,
+        "Kotlin 的 toBooleanStrictOrNull 不认大小写变体"
+    );
     assert_eq!(bool_arg(Some(&json!(1))), None);
     assert_eq!(bool_arg(None), None);
 }

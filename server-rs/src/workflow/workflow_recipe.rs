@@ -67,10 +67,10 @@ use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 
 use crate::infra::iso_time::iso_time;
-use crate::tools::policy::ToolPolicy;
 use crate::library::repo::WriteError;
-use crate::web::routes::{ApiError, AppState};
+use crate::tools::policy::ToolPolicy;
 use crate::tools::tools::{ToolFailure, ToolOutcome};
+use crate::web::routes::{ApiError, AppState};
 
 // ===========================================================================
 //  一、解析核心（`WorkflowRecipe.kt`）
@@ -442,7 +442,10 @@ impl Recipe {
         o.insert("imageInputs".into(), json!(self.image_inputs));
         o.insert("hasMask".into(), json!(self.has_mask));
         o.insert("knobsTruncated".into(), json!(self.knobs_truncated));
-        o.insert("nodeClasses".into(), strings_json(&distinct(&self.node_classes)));
+        o.insert(
+            "nodeClasses".into(),
+            strings_json(&distinct(&self.node_classes)),
+        );
         o.insert("edges".into(), strings_json(&self.edges));
         let slots: Vec<Value> = self
             .slots
@@ -632,8 +635,13 @@ const VIDEO_HINTS: [&str; 19] = [
 ];
 
 /// 音频链的类名子串。
-const AUDIO_HINTS: [&str; 5] =
-    ["SaveAudio", "PreviewAudio", "MiniMaxMusic", "MusicGen", "AudioEncoder"];
+const AUDIO_HINTS: [&str; 5] = [
+    "SaveAudio",
+    "PreviewAudio",
+    "MiniMaxMusic",
+    "MusicGen",
+    "AudioEncoder",
+];
 
 /// 放大链（"没有采样器 + 有放大模型" = upscale）。
 const UPSCALE_NODES: [&str; 7] = [
@@ -703,8 +711,9 @@ const SIZE_INPUTS: [&str; 9] = [
     "scale_by",
 ];
 
-const IMAGE_INPUTS: [&str; 8] =
-    ["image", "images", "mask", "masks", "image1", "image2", "image_b", "video"];
+const IMAGE_INPUTS: [&str; 8] = [
+    "image", "images", "mask", "masks", "image1", "image2", "image_b", "video",
+];
 
 /// 采样器（判 upscale 用 + 报告里给模型看的"有没有采样"）。
 ///
@@ -776,7 +785,9 @@ pub fn analyze(
 ) -> Recipe {
     let mut nodes: Vec<Node> = Vec::new();
     for (id, raw) in graph {
-        let Some(node) = raw.as_object() else { continue };
+        let Some(node) = raw.as_object() else {
+            continue;
+        };
         let Some(class_type) = node
             .get("class_type")
             .and_then(Value::as_str)
@@ -795,15 +806,19 @@ pub fn analyze(
             .and_then(Value::as_object)
             .and_then(|m| m.get("title"))
             .and_then(prim_content);
-        nodes.push(Node { id: id.clone(), class_type, inputs, title });
+        nodes.push(Node {
+            id: id.clone(),
+            class_type,
+            inputs,
+            title,
+        });
     }
 
     let exec: Vec<&Node> = nodes
         .iter()
         .filter(|n| !NON_EXECUTING.contains(&n.class_type.as_str()))
         .collect();
-    let by_id: HashMap<&str, &Node> =
-        exec.iter().map(|n| (n.id.as_str(), *n)).collect();
+    let by_id: HashMap<&str, &Node> = exec.iter().map(|n| (n.id.as_str(), *n)).collect();
 
     // --- 骨架：执行相关类（带重数）+ 类级连线（带重数）---------------
     let fingerprint_classes: Vec<String> = exec
@@ -819,10 +834,19 @@ pub fn analyze(
             continue;
         }
         for (name, value) in &node.inputs {
-            let Some(link) = value.as_array() else { continue };
-            let Some(upstream_id) = link.first().and_then(prim_content) else { continue };
-            let slot = link.get(1).and_then(prim_content).unwrap_or_else(|| "0".to_string());
-            let Some(upstream) = by_id.get(upstream_id.as_str()) else { continue };
+            let Some(link) = value.as_array() else {
+                continue;
+            };
+            let Some(upstream_id) = link.first().and_then(prim_content) else {
+                continue;
+            };
+            let slot = link
+                .get(1)
+                .and_then(prim_content)
+                .unwrap_or_else(|| "0".to_string());
+            let Some(upstream) = by_id.get(upstream_id.as_str()) else {
+                continue;
+            };
             if DISPLAY_ONLY.contains(&upstream.class_type.as_str()) {
                 continue;
             }
@@ -839,12 +863,11 @@ pub fn analyze(
     let outputs: Vec<Output> = exec
         .iter()
         .filter_map(|node| {
-            output_kind(&node.class_type)
-                .map(|kind| Output {
-                    node_id: node.id.clone(),
-                    class_type: node.class_type.clone(),
-                    kind: kind.to_string(),
-                })
+            output_kind(&node.class_type).map(|kind| Output {
+                node_id: node.id.clone(),
+                class_type: node.class_type.clone(),
+                kind: kind.to_string(),
+            })
         })
         .collect();
     // 槽位两遍算：`model_inputs` 那一遍是**全量**（含 /object_info 现算的自定义加载器），
@@ -887,7 +910,9 @@ pub fn analyze(
             if slot_keys.contains(&format!("{}.{}", node.id, name)) {
                 continue;
             }
-            let Some(text) = prim_content(value) else { continue };
+            let Some(text) = prim_content(value) else {
+                continue;
+            };
             all_knobs.push(Knob {
                 node_id: node.id.clone(),
                 class_type: node.class_type.clone(),
@@ -911,7 +936,9 @@ pub fn analyze(
     let task = classify(&classes, &outputs, image_inputs, has_mask);
     let mut warnings: Vec<String> = Vec::new();
     if nodes.is_empty() {
-        warnings.push("这张图里一个节点都没有（空图）：要么文件选错了，要么转换时被摘空了。".to_string());
+        warnings.push(
+            "这张图里一个节点都没有（空图）：要么文件选错了，要么转换时被摘空了。".to_string(),
+        );
     }
     if task == Task::Unknown && !nodes.is_empty() {
         warnings.push(
@@ -1165,13 +1192,14 @@ impl WorkflowRecipeDto {
     /// "界面上看到的配方与 AI 拿到的不一样"（不报错）。已知字段解析不出来时**如实回空**
     /// （一行坏数据不该让整个详情 500），缺口列表里已经带着"转换有缺口"这个事实。
     pub fn to_recipe(&self) -> Recipe {
-        let array = |v: &Value| -> Vec<Value> {
-            v.as_array().cloned().unwrap_or_default()
-        };
+        let array = |v: &Value| -> Vec<Value> { v.as_array().cloned().unwrap_or_default() };
         Recipe {
             task: Task::parse(&self.task).unwrap_or(Task::Unknown),
             skeleton_hash: self.skeleton_hash.clone(),
-            node_classes: array(&self.classes).iter().filter_map(prim_content).collect(),
+            node_classes: array(&self.classes)
+                .iter()
+                .filter_map(prim_content)
+                .collect(),
             edges: array(&self.edges).iter().filter_map(prim_content).collect(),
             slots: array(&self.slots)
                 .iter()
@@ -1247,7 +1275,9 @@ const COLS: &str = "id, name, task, skeleton_hash, recipe_version, source_kind, 
 
 /// 坏 JSON 按空数组处理：一条配方的一格坏掉不该让整个列表 500。
 fn json_array(raw: Option<String>) -> Value {
-    let Some(raw) = raw else { return Value::Array(Vec::new()) };
+    let Some(raw) = raw else {
+        return Value::Array(Vec::new());
+    };
     if raw.trim().is_empty() {
         return Value::Array(Vec::new());
     }
@@ -1274,8 +1304,12 @@ fn row_to_dto(row: &Row<'_>) -> rusqlite::Result<WorkflowRecipeDto> {
             .get::<_, Option<String>>("task")?
             .filter(|t| !t.trim().is_empty())
             .unwrap_or_else(|| "unknown".to_string()),
-        skeleton_hash: row.get::<_, Option<String>>("skeleton_hash")?.unwrap_or_default(),
-        recipe_version: row.get::<_, Option<i64>>("recipe_version")?.unwrap_or(VERSION),
+        skeleton_hash: row
+            .get::<_, Option<String>>("skeleton_hash")?
+            .unwrap_or_default(),
+        recipe_version: row
+            .get::<_, Option<i64>>("recipe_version")?
+            .unwrap_or(VERSION),
         source_kind: row
             .get::<_, Option<String>>("source_kind")?
             .filter(|k| !k.trim().is_empty())
@@ -1443,7 +1477,11 @@ pub struct Write {
 /// （界面上的链接不会失效）。
 pub fn save_row(conn: &Connection, w: &Write) -> Result<(i64, bool), WriteError> {
     let trimmed = w.name.trim();
-    let name = if trimmed.is_empty() { "未命名工作流".to_string() } else { trimmed.to_string() };
+    let name = if trimmed.is_empty() {
+        "未命名工作流".to_string()
+    } else {
+        trimmed.to_string()
+    };
     let name_len = name.chars().count();
     if name_len > MAX_NAME_CHARS {
         return Err(WriteError::Validation(format!(
@@ -1483,14 +1521,20 @@ pub fn save_row(conn: &Connection, w: &Write) -> Result<(i64, bool), WriteError>
     if let Some(notes) = &notes {
         let len = notes.chars().count();
         if len > MAX_NOTES_CHARS {
-            return Err(WriteError::Validation(format!("备注太长（> {MAX_NOTES_CHARS} 字符）")));
+            return Err(WriteError::Validation(format!(
+                "备注太长（> {MAX_NOTES_CHARS} 字符）"
+            )));
         }
     }
 
     // 有 prompt_id 时先确认它真的在（外键会拦，但那样报出来的是 500 + SQL 原文）
     if let Some(prompt_id) = w.prompt_id {
         let exists: Option<i64> = conn
-            .query_row("SELECT 1 FROM prompts WHERE id = ?1", params![prompt_id], |row| row.get(0))
+            .query_row(
+                "SELECT 1 FROM prompts WHERE id = ?1",
+                params![prompt_id],
+                |row| row.get(0),
+            )
             .optional()?;
         if exists.is_none() {
             return Err(WriteError::Validation(format!(
@@ -1589,7 +1633,9 @@ pub struct WriteOf<'a> {
 pub fn write_of(recipe: &Recipe, args: WriteOf<'_>) -> Write {
     let json = recipe.to_json();
     let encode = |key: &str| -> String {
-        json.get(key).map(|v| v.to_string()).unwrap_or_else(|| "[]".to_string())
+        json.get(key)
+            .map(|v| v.to_string())
+            .unwrap_or_else(|| "[]".to_string())
     };
     let warnings: Vec<String> = recipe
         .warnings
@@ -1652,7 +1698,10 @@ pub enum RecipeFailure {
 
 impl RecipeFailure {
     fn ai(code: &str, message: impl Into<String>) -> Self {
-        RecipeFailure::Ai { code: code.to_string(), message: message.into() }
+        RecipeFailure::Ai {
+            code: code.to_string(),
+            message: message.into(),
+        }
     }
 
     fn plain(message: impl Into<String>) -> Self {
@@ -1676,9 +1725,7 @@ impl RecipeFailure {
     pub fn to_tool_failure(&self) -> ToolFailure {
         match self {
             RecipeFailure::Ai { code, message } => ToolFailure::new(code, message.clone()),
-            RecipeFailure::Plain(message) => {
-                ToolFailure::new("INVALID_ARGUMENT", message.clone())
-            }
+            RecipeFailure::Plain(message) => ToolFailure::new("INVALID_ARGUMENT", message.clone()),
         }
     }
 }
@@ -1750,7 +1797,9 @@ pub async fn object_info_of(state: &AppState) -> Option<Arc<Map<String, Value>>>
     .ok()?;
     // 用 `if let` 把 map **移动**出来。写成 `as_object().cloned()` 会白拷整棵树
     // （兆字节级、逐节点重新分配），正好把缓存省下来的时间还回去。
-    let Value::Object(map) = value else { return None };
+    let Value::Object(map) = value else {
+        return None;
+    };
     let map = Arc::new(map);
     // **只缓存成功**：拿不到就让下次重试（ComfyUI 可能刚起来，负缓存会让人以为它没开）
     state.object_info.put(&base, Arc::clone(&map));
@@ -1853,20 +1902,32 @@ pub fn learn_file(
     deps: &Deps,
 ) -> Result<Learned, RecipeFailure> {
     if !path.is_file() {
-        return Err(RecipeFailure::ai("NOT_FOUND", format!("不是文件：{}", path.display())));
+        return Err(RecipeFailure::ai(
+            "NOT_FOUND",
+            format!("不是文件：{}", path.display()),
+        ));
     }
     let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
     if size == 0 {
-        return Err(RecipeFailure::ai("EMPTY_FILE", format!("文件是空的：{}", path.display())));
+        return Err(RecipeFailure::ai(
+            "EMPTY_FILE",
+            format!("文件是空的：{}", path.display()),
+        ));
     }
     if size > MAX_FILE_BYTES {
         return Err(RecipeFailure::ai(
             "TOO_LARGE",
-            format!("工作流文件太大（{size} 字节 > {MAX_FILE_BYTES}）：{}", path.display()),
+            format!(
+                "工作流文件太大（{size} 字节 > {MAX_FILE_BYTES}）：{}",
+                path.display()
+            ),
         ));
     }
     let bytes = std::fs::read(path).map_err(|e| {
-        RecipeFailure::ai("NOT_FOUND", format!("读不了文件（{e}）：{}", path.display()))
+        RecipeFailure::ai(
+            "NOT_FOUND",
+            format!("读不了文件（{e}）：{}", path.display()),
+        )
     })?;
     let root: Map<String, Value> = serde_json::from_slice::<Value>(&bytes)
         .ok()
@@ -1911,16 +1972,25 @@ pub fn learn_file(
                  存一份 API 格式的文件，再把那份路径给我。",
             ));
         };
-        let converted = crate::workflow::workflow_convert::to_api_graph(&root, info2, emulate_frontend)
-            .map_err(|e| {
-                RecipeFailure::ai("INVALID_ARGUMENT", format!("转换工作流失败：{}", take_chars(&e, 400)))
-            })?;
+        let converted =
+            crate::workflow::workflow_convert::to_api_graph(&root, info2, emulate_frontend)
+                .map_err(|e| {
+                    RecipeFailure::ai(
+                        "INVALID_ARGUMENT",
+                        format!("转换工作流失败：{}", take_chars(&e, 400)),
+                    )
+                })?;
         gaps = distinct(
             &converted
                 .unsupported_nodes
                 .iter()
                 .map(|class| format!("摘掉节点类：{class}"))
-                .chain(converted.unresolved_inputs.iter().map(|input| format!("悬空输入：{input}")))
+                .chain(
+                    converted
+                        .unresolved_inputs
+                        .iter()
+                        .map(|input| format!("悬空输入：{input}")),
+                )
                 .chain(
                     converted
                         .required_open_inputs
@@ -1939,7 +2009,10 @@ pub fn learn_file(
             .cloned()
             .collect();
         if !gaps.is_empty() && !tolerate_unsupported {
-            return Err(RecipeFailure::ai("UNSUPPORTED_NODES", unsupported_nodes_message(&gaps)));
+            return Err(RecipeFailure::ai(
+                "UNSUPPORTED_NODES",
+                unsupported_nodes_message(&gaps),
+            ));
         }
         if converted.graph.is_empty() {
             return Err(RecipeFailure::ai(
@@ -1980,7 +2053,11 @@ pub fn learn_file(
         prompt_id: (deps.find_prompt_id_by_run_key)(&run_key),
         complete: gaps.is_empty(),
         gaps,
-        format: if ui_format { "ui".to_string() } else { "api".to_string() },
+        format: if ui_format {
+            "ui".to_string()
+        } else {
+            "api".to_string()
+        },
         warnings,
         ..learned
     })
@@ -2115,7 +2192,11 @@ fn analyze_learned(
     info: Option<&Map<String, Value>>,
 ) -> Learned {
     let model_inputs = crate::comfy::comfy_models::enumerate_model_inputs(info);
-    let model_inputs = if model_inputs.is_empty() { None } else { Some(&model_inputs) };
+    let model_inputs = if model_inputs.is_empty() {
+        None
+    } else {
+        Some(&model_inputs)
+    };
     let recipe = analyze(graph, model_inputs);
     Learned {
         warnings: recipe.warnings.clone(),
@@ -2183,7 +2264,11 @@ pub async fn learn_and_save(
 fn sha256_hex(bytes: &[u8]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(bytes);
-    hasher.finalize().iter().map(|b| format!("{b:02x}")).collect()
+    hasher
+        .finalize()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
 }
 
 // ===========================================================================
@@ -2341,7 +2426,11 @@ impl Report {
         out.push_str(&self.task);
         out.push_str("　骨架：");
         out.push_str(&self.skeleton_hash);
-        out.push_str(if self.ready { "　→ 可以直接跑\n" } else { "　→ **还不能直接跑**\n" });
+        out.push_str(if self.ready {
+            "　→ 可以直接跑\n"
+        } else {
+            "　→ **还不能直接跑**\n"
+        });
         for binding in &self.bindings {
             out.push_str("  · ");
             out.push_str(&binding.to);
@@ -2460,7 +2549,11 @@ pub fn bind(
                 // 或者调用方显式 `force`（"我知道我在做什么"，最后仍由提交前预检守门）
                 let can_apply = verdict.status == Status::Exact || force;
                 let binding = Binding {
-                    override_key: if can_apply { Some(slot.override_key()) } else { None },
+                    override_key: if can_apply {
+                        Some(slot.override_key())
+                    } else {
+                        None
+                    },
                     role: Some(slot.role.clone()),
                     from: Some(slot.file_name.clone()),
                     to: request.file_name.clone(),
@@ -2500,13 +2593,24 @@ pub fn bind(
         .slots
         .iter()
         .filter(|slot| !used_keys.contains(&slot.override_key()))
-        .map(|slot| format!("{}（{}）= {}", slot.override_key(), slot.role, slot.file_name))
+        .map(|slot| {
+            format!(
+                "{}（{}）= {}",
+                slot.override_key(),
+                slot.role,
+                slot.file_name
+            )
+        })
         .collect();
     let mut knob_hints: Vec<String> = Vec::new();
     for knob in recipe.knobs.iter().filter(|knob| {
         matches!(
             knob.kind,
-            KnobKind::Prompt | KnobKind::Sampling | KnobKind::Seed | KnobKind::Size | KnobKind::Image
+            KnobKind::Prompt
+                | KnobKind::Sampling
+                | KnobKind::Seed
+                | KnobKind::Size
+                | KnobKind::Image
         )
     }) {
         let key = knob.override_key();
@@ -2593,7 +2697,14 @@ fn slot_list(recipe: &Recipe) -> String {
         recipe
             .slots
             .iter()
-            .map(|slot| format!("{}（{}）= {}", slot.override_key(), slot.role, slot.file_name))
+            .map(|slot| {
+                format!(
+                    "{}（{}）= {}",
+                    slot.override_key(),
+                    slot.role,
+                    slot.file_name
+                )
+            })
             .collect::<Vec<String>>()
             .join("、")
     }
@@ -2606,7 +2717,10 @@ fn resolve_slot(
 ) -> SlotLookup {
     if let Some(key) = &request.override_key {
         return match recipe.slots.iter().find(|slot| slot.override_key() == *key) {
-            Some(slot) => SlotLookup::One { slot: slot.clone(), assumed: false },
+            Some(slot) => SlotLookup::One {
+                slot: slot.clone(),
+                assumed: false,
+            },
             None => SlotLookup::NotFound(format!(
                 "这条配方里没有 `{key}` 这个槽位。它的槽位是：{}。\
                  （覆盖键写成 `节点id.输入名`；不确定就先用 comfy_list_recipes 看配方正文。）",
@@ -2625,7 +2739,10 @@ fn resolve_slot(
                 "这条配方里没有 role={role} 的槽位。它的槽位是：{}。",
                 slot_list(recipe)
             )),
-            1 => SlotLookup::One { slot: slots[0].clone(), assumed: false },
+            1 => SlotLookup::One {
+                slot: slots[0].clone(),
+                assumed: false,
+            },
             _ => SlotLookup::Ambiguous(
                 role.clone(),
                 slots.iter().map(|slot| slot.override_key()).collect(),
@@ -2634,9 +2751,9 @@ fn resolve_slot(
     }
     // 两者都没给：按清单里的**目录**推角色（推不出来再退回"底模那一格"）
     let found = inventory.and_then(|inv| {
-        inv.models
-            .iter()
-            .find(|model| crate::comfy::comfy_models::ModelName::same(&model.name, &request.file_name))
+        inv.models.iter().find(|model| {
+            crate::comfy::comfy_models::ModelName::same(&model.name, &request.file_name)
+        })
     });
     if let Some(found) = found {
         let slots: Vec<&Slot> = recipe
@@ -2646,7 +2763,10 @@ fn resolve_slot(
             .collect();
         return match slots.len() {
             0 => SlotLookup::NotFound(mismatch_note(recipe, &found.folder, &request.file_name)),
-            1 => SlotLookup::One { slot: slots[0].clone(), assumed: false },
+            1 => SlotLookup::One {
+                slot: slots[0].clone(),
+                assumed: false,
+            },
             _ => SlotLookup::Ambiguous(
                 found.folder.clone(),
                 slots.iter().map(|slot| slot.override_key()).collect(),
@@ -2661,9 +2781,18 @@ fn resolve_slot(
         .filter(|slot| BASE_ROLES.contains(&slot.role.as_str()))
         .collect();
     if base.len() == 1 {
-        return SlotLookup::One { slot: base[0].clone(), assumed: true };
+        return SlotLookup::One {
+            slot: base[0].clone(),
+            assumed: true,
+        };
     }
-    let roles: Vec<String> = distinct(&recipe.slots.iter().map(|s| s.role.clone()).collect::<Vec<_>>());
+    let roles: Vec<String> = distinct(
+        &recipe
+            .slots
+            .iter()
+            .map(|s| s.role.clone())
+            .collect::<Vec<_>>(),
+    );
     SlotLookup::NotFound(format!(
         "没说绑哪个槽位（既没有 role 也没有 overrideKey），而这个文件名在本机清单里也找不到，\
          所以我不知道它属于哪一类。这条配方的槽位是：{}。\
@@ -2678,7 +2807,13 @@ fn resolve_slot(
 /// 最常见的两种：整包 checkpoint ↔ 分离式 unet+clip+vae；LoRA 被放进 checkpoints。
 /// 这两种都不是"改个文件名"能解决的，必须让模型知道**该换个方向**。
 fn mismatch_note(recipe: &Recipe, requested_folder: &str, _file_name: &str) -> String {
-    let roles: Vec<String> = distinct(&recipe.slots.iter().map(|s| s.role.clone()).collect::<Vec<_>>());
+    let roles: Vec<String> = distinct(
+        &recipe
+            .slots
+            .iter()
+            .map(|s| s.role.clone())
+            .collect::<Vec<_>>(),
+    );
     let base = format!(
         "这条配方里没有 `{requested_folder}` 这一类槽位（它有：{}）。",
         roles.join("、")
@@ -2701,7 +2836,9 @@ fn mismatch_note(recipe: &Recipe, requested_folder: &str, _file_name: &str) -> S
         );
     }
     if requested_folder == "loras" && !has("loras") {
-        return format!("{base} LoRA 只能挂在 LoRA 槽位上：这条骨架没有 LoRA 位置（想加得改骨架）。");
+        return format!(
+            "{base} LoRA 只能挂在 LoRA 槽位上：这条骨架没有 LoRA 位置（想加得改骨架）。"
+        );
     }
     format!(
         "{base} 换一条有这一类槽位的骨架，或者用 overrideKey 直接指一个已存在的槽位\
@@ -2748,10 +2885,11 @@ fn verify(
     let Some(inventory) = inventory else {
         return Verdict {
             status: Status::Unchecked,
-            note: "拿不到本机模型清单（ComfyUI 没在跑 / 没找到 models 目录），**这个名字没验证过**：\
+            note:
+                "拿不到本机模型清单（ComfyUI 没在跑 / 没找到 models 目录），**这个名字没验证过**：\
                    要照写就带 force=true，我会把它当'你指名要的文件'写进覆盖键\
                    （提交前预检还会再查一次）。"
-                .to_string(),
+                    .to_string(),
             candidates: Vec::new(),
         };
     };
@@ -2772,9 +2910,9 @@ fn verify(
             candidates: Vec::new(),
         };
     }
-    let exact_any = candidates
-        .iter()
-        .find(|candidate| crate::comfy::comfy_models::ModelName::same(file_name, &candidate.model.name));
+    let exact_any = candidates.iter().find(|candidate| {
+        crate::comfy::comfy_models::ModelName::same(file_name, &candidate.model.name)
+    });
     if let Some(hit) = exact_any {
         let where_ = hit
             .model
@@ -2871,10 +3009,15 @@ pub async fn bind_and_report(
     let object_info = object_info_of(state).await;
     let project_root = state.project_root();
     let desktop = crate::tools::mcp::desktop(None);
-    let model_dirs: Vec<std::path::PathBuf> =
-        desktop.as_ref().map(|d| d.models_dirs.clone()).unwrap_or_default();
-    let inventory =
-        crate::comfy::comfy_models::inventory(object_info.as_deref(), Some(&project_root), &model_dirs);
+    let model_dirs: Vec<std::path::PathBuf> = desktop
+        .as_ref()
+        .map(|d| d.models_dirs.clone())
+        .unwrap_or_default();
+    let inventory = crate::comfy::comfy_models::inventory(
+        object_info.as_deref(),
+        Some(&project_root),
+        &model_dirs,
+    );
     Ok(Some(bind(
         &row.to_recipe(),
         requests,
@@ -2931,7 +3074,10 @@ pub async fn tool_learn_workflow(
 ) -> Result<ToolOutcome, ToolFailure> {
     let args = LearnArgs {
         // 路径准入在 `learn_and_save` 里做（Run 开始时快照的策略，见 AGENTS §10）
-        path: arguments.get("path").and_then(Value::as_str).map(str::to_string),
+        path: arguments
+            .get("path")
+            .and_then(Value::as_str)
+            .map(str::to_string),
         prompt_id: arg_i64(arguments, "promptId"),
         graph: arguments.get("graph").and_then(Value::as_object).cloned(),
         name: arg_str(arguments, "name"),
@@ -2949,10 +3095,7 @@ pub async fn tool_learn_workflow(
 }
 
 /// `comfy_list_recipes`：列已经学过的配方（**只读**）。
-pub fn tool_list_recipes(
-    state: &AppState,
-    arguments: &Value,
-) -> Result<ToolOutcome, ToolFailure> {
+pub fn tool_list_recipes(state: &AppState, arguments: &Value) -> Result<ToolOutcome, ToolFailure> {
     let q = arg_str(arguments, "q");
     let task = arg_str(arguments, "task");
     let skeleton = arg_str(arguments, "skeleton");
@@ -2969,14 +3112,20 @@ pub fn tool_list_recipes(
                 limit,
             )
         })
-        .map_err(|error| ToolFailure::new("TOOL_ERROR", format!("数据库错误：{}", error.human())))?;
+        .map_err(|error| {
+            ToolFailure::new("TOOL_ERROR", format!("数据库错误：{}", error.human()))
+        })?;
     if rows.is_empty() {
         return Err(ToolFailure::new(
             "NOT_FOUND",
             format!(
                 "还没有学过任何配方{}。先 `comfy_list_workflows` 看本机有哪些工作流文件，再用 \
                  comfy_learn_workflow(path=…) 学一份 —— 学过的会留在这里，下次换模型直接绑。",
-                if q.is_some() || task.is_some() { "匹配这些条件的" } else { "" }
+                if q.is_some() || task.is_some() {
+                    "匹配这些条件的"
+                } else {
+                    ""
+                }
             ),
         ));
     }
@@ -2987,7 +3136,11 @@ pub fn tool_list_recipes(
             "── [{}] {}{}\n",
             row.id,
             row.name,
-            if row.complete { "" } else { "　⚠ **缺件（complete=false）**" }
+            if row.complete {
+                ""
+            } else {
+                "　⚠ **缺件（complete=false）**"
+            }
         ));
         let slots: Vec<Value> = row.slots.as_array().cloned().unwrap_or_default();
         text.push_str(&format!(
@@ -2996,7 +3149,9 @@ pub fn tool_list_recipes(
             row.skeleton_hash,
             row.node_count,
             slots.len(),
-            row.source_ref.clone().unwrap_or_else(|| row.source_kind.clone()),
+            row.source_ref
+                .clone()
+                .unwrap_or_else(|| row.source_kind.clone()),
             row.prompt_id
                 .map(|id| format!(" · promptId={id}"))
                 .unwrap_or_default()
@@ -3006,7 +3161,9 @@ pub fn tool_list_recipes(
                 .iter()
                 .map(|slot| {
                     let o = slot.as_object();
-                    let role = o.and_then(|o| o.json_str("role")).unwrap_or_else(|| "?".to_string());
+                    let role = o
+                        .and_then(|o| o.json_str("role"))
+                        .unwrap_or_else(|| "?".to_string());
                     let key = o
                         .and_then(|o| o.json_str("overrideKey"))
                         .unwrap_or_else(|| "?".to_string());
@@ -3021,7 +3178,12 @@ pub fn tool_list_recipes(
         if !row.complete && !row.gaps.is_empty() {
             text.push_str(&format!(
                 "   缺口：{}\n",
-                row.gaps.iter().take(3).cloned().collect::<Vec<String>>().join("；")
+                row.gaps
+                    .iter()
+                    .take(3)
+                    .cloned()
+                    .collect::<Vec<String>>()
+                    .join("；")
             ));
         }
         if let Some(path) = &row.source_path {
@@ -3070,7 +3232,10 @@ pub async fn tool_bind_recipe(
     arguments: &Value,
 ) -> Result<ToolOutcome, ToolFailure> {
     let recipe_id = arg_i64(arguments, "recipeId").ok_or_else(|| {
-        ToolFailure::new("INVALID_ARGUMENT", "缺少参数 recipeId（先用 comfy_list_recipes 拿）")
+        ToolFailure::new(
+            "INVALID_ARGUMENT",
+            "缺少参数 recipeId（先用 comfy_list_recipes 拿）",
+        )
     })?;
     let model = arg_str(arguments, "model").ok_or_else(|| {
         ToolFailure::new("INVALID_ARGUMENT", "缺少参数 model（要绑上去的模型文件名）")
@@ -3098,18 +3263,23 @@ pub async fn tool_bind_recipe(
             });
         }
     }
-    let report = bind_and_report(state, recipe_id, &requests, arg_bool(arguments, "force").unwrap_or(false))
-        .await
-        .map_err(|failure| failure.to_tool_failure())?
-        .ok_or_else(|| {
-            ToolFailure::new(
-                "NOT_FOUND",
-                format!(
-                    "配方库里没有 id={recipe_id}。先用 comfy_list_recipes 看有哪些\
+    let report = bind_and_report(
+        state,
+        recipe_id,
+        &requests,
+        arg_bool(arguments, "force").unwrap_or(false),
+    )
+    .await
+    .map_err(|failure| failure.to_tool_failure())?
+    .ok_or_else(|| {
+        ToolFailure::new(
+            "NOT_FOUND",
+            format!(
+                "配方库里没有 id={recipe_id}。先用 comfy_list_recipes 看有哪些\
                      （也可以用 comfy_learn_workflow 现学一份）。"
-                ),
-            )
-        })?;
+            ),
+        )
+    })?;
     Ok(ToolOutcome::new(report.render(), report.to_json()))
 }
 
@@ -3274,7 +3444,10 @@ async fn create_recipe(
     let (id, learned) = learn_and_save(&state, &policy, args)
         .await
         .map_err(|failure| failure.to_api_error())?;
-    Ok((axum::http::StatusCode::CREATED, axum::Json(learned.to_json(Some(id)))))
+    Ok((
+        axum::http::StatusCode::CREATED,
+        axum::Json(learned.to_json(Some(id))),
+    ))
 }
 
 async fn get_recipe(
@@ -3286,7 +3459,10 @@ async fn get_recipe(
         .ok_or_else(|| ApiError::not_found(format!("配方 {id} 不存在")))?;
     // 详情里带上 render 正文：与 comfy_learn_workflow 当场回的那份**跑的是同一个函数**
     let render = row.render_text();
-    Ok(axum::Json(WorkflowRecipeDetailDto { recipe: row, render }))
+    Ok(axum::Json(WorkflowRecipeDetailDto {
+        recipe: row,
+        render,
+    }))
 }
 
 async fn delete_recipe(
@@ -3318,7 +3494,10 @@ async fn bind_recipe(
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty())
             .ok_or_else(|| {
-                ApiError::ai("INVALID_ARGUMENT", format!("extra 里的 {role} 不是字符串文件名"))
+                ApiError::ai(
+                    "INVALID_ARGUMENT",
+                    format!("extra 里的 {role} 不是字符串文件名"),
+                )
             })?;
         requests.push(Request {
             file_name: name,

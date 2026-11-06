@@ -71,16 +71,13 @@ void main() {
     });
 
     test('Paged.fromJson 解析分页信息', () {
-      final page = Paged<Prompt>.fromJson(
-        {
-          'items': <Map<String, dynamic>>[],
-          'total': 42,
-          'page': 2,
-          'size': 20,
-          'pages': 3,
-        },
-        Prompt.fromJson,
-      );
+      final page = Paged<Prompt>.fromJson({
+        'items': <Map<String, dynamic>>[],
+        'total': 42,
+        'page': 2,
+        'size': 20,
+        'pages': 3,
+      }, Prompt.fromJson);
       expect(page.total, 42);
       expect(page.pages, 3);
       expect(page.items, isEmpty);

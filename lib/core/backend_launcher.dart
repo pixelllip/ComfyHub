@@ -9,15 +9,7 @@ import 'backend_paths.dart';
 import 'settings_store.dart';
 
 /// 启动阶段
-enum StartupPhase {
-  idle,
-  probing,
-  starting,
-  waiting,
-  ready,
-  failed,
-  skipped,
-}
+enum StartupPhase { idle, probing, starting, waiting, ready, failed, skipped }
 
 /// 起子进程的可注入缝隙：测试里换掉它，就能断言"到底起的是哪个 exe、传了哪些参数"，
 /// 而不用真去拉一个后端进程（在没有 Windows / 没有后端二进制的机器上也能跑）。
@@ -30,7 +22,9 @@ typedef BackendProcessStarter = Future<Process> Function(
 
 /// 跑"小工具"进程（`icacls` / `taskkill`）的缝隙，测试里替换掉。
 typedef ToolRunner = Future<ProcessResult?> Function(
-    String executable, List<String> arguments);
+  String executable,
+  List<String> arguments,
+);
 
 Future<Process> _startProcess(
   String executable,
@@ -38,15 +32,14 @@ Future<Process> _startProcess(
   String? workingDirectory,
   Map<String, String>? environment,
   ProcessStartMode mode = ProcessStartMode.normal,
-}) =>
-    Process.start(
-      executable,
-      arguments,
-      workingDirectory: workingDirectory,
-      environment: environment,
-      runInShell: false,
-      mode: mode,
-    );
+}) => Process.start(
+  executable,
+  arguments,
+  workingDirectory: workingDirectory,
+  environment: environment,
+  runInShell: false,
+  mode: mode,
+);
 
 /// **App 自己把 Rust 后端拉起来 / 关掉**（2026-09-30 起不再经过 pwsh）。
 ///
@@ -161,7 +154,8 @@ class BackendLauncher extends ChangeNotifier {
       phase == StartupPhase.starting ||
       phase == StartupPhase.waiting;
 
-  bool get isReady => phase == StartupPhase.ready || phase == StartupPhase.skipped;
+  bool get isReady =>
+      phase == StartupPhase.ready || phase == StartupPhase.skipped;
 
   /// 给后端的额外环境变量。端口文件与工具权限的基准是 `COMFYHUB_PROJECT_ROOT`；
   /// 开了「允许手机 / 局域网设备连接」时再带上 `COMFYHUB_ALLOW_REMOTE`
@@ -177,12 +171,16 @@ class BackendLauncher extends ChangeNotifier {
   // -------------------------------------------------------------------------
 
   /// 探一次后端健康检查；连不上返回 null
-  Future<Map<String, dynamic>?> probe({Duration timeout = const Duration(seconds: 3)}) async {
+  Future<Map<String, dynamic>?> probe({
+    Duration timeout = const Duration(seconds: 3),
+  }) async {
     final uri = Uri.parse('${_settings.baseUrl}/api/health');
     // 本机连"没人监听"的端口要等 SYN 重传（这台机器上实测 ~2 秒），冷启动时服务
     // 还没起来恰是常态；先花 ≤250ms 判一下端口，省掉这段白等。
     // 只对回环地址这么做，远端地址不预检（免得把慢网络误判成"没起来"）。
-    if (_isLoopback(uri.host) && !await _portOpen(uri.host, uri.port)) return null;
+    if (_isLoopback(uri.host) && !await _portOpen(uri.host, uri.port)) {
+      return null;
+    }
     try {
       final res = await http.get(uri).timeout(timeout);
       if (res.statusCode == 200) {
@@ -196,14 +194,23 @@ class BackendLauncher extends ChangeNotifier {
   }
 
   static bool _isLoopback(String host) =>
-      host == '127.0.0.1' || host == 'localhost' || host == '::1' || host == '[::1]';
+      host == '127.0.0.1' ||
+      host == 'localhost' ||
+      host == '::1' ||
+      host == '[::1]';
 
   /// 端口上有没有人在听（带短超时）
-  static Future<bool> _portOpen(String host, int port,
-      {int timeoutMs = 250}) async {
+  static Future<bool> _portOpen(
+    String host,
+    int port, {
+    int timeoutMs = 250,
+  }) async {
     try {
-      final s = await Socket.connect(host, port,
-          timeout: Duration(milliseconds: timeoutMs));
+      final s = await Socket.connect(
+        host,
+        port,
+        timeout: Duration(milliseconds: timeoutMs),
+      );
       s.destroy();
       return true;
     } catch (_) {
@@ -242,7 +249,9 @@ class BackendLauncher extends ChangeNotifier {
     addListener(check);
     check(); // 加监听与首次判断之间可能刚好翻了档，补一次
     try {
-      await completer.future.timeout(timeout ?? readyTimeout + const Duration(seconds: 5));
+      await completer.future.timeout(
+        timeout ?? readyTimeout + const Duration(seconds: 5),
+      );
     } on TimeoutException {
       _log('等后端启动结论超时，先按现状继续（该报的错照样会报）。');
     } finally {
@@ -278,7 +287,8 @@ class BackendLauncher extends ChangeNotifier {
     return true;
   }
 
-  String _missingExeMessage() => '没找到后端程序 $kServerExeName。'
+  String _missingExeMessage() =>
+      '没找到后端程序 $kServerExeName。'
       '发布包或 Release 产物里，它应该跟 viewer.exe 同级放在 backend\\ 里，'
       'release 构建时会由 windows\\CMakeLists.txt 自动装配（见 README「构建」一节）。'
       '源码树里可以先运行 cargo build --release --manifest-path server-rs\\Cargo.toml。'
@@ -351,7 +361,9 @@ class BackendLauncher extends ChangeNotifier {
       _log('已停掉状态异常的后端（pid $pid）');
       // 让它把端口放掉再起新的（最多等 3 秒）
       for (var i = 0; i < 15; i++) {
-        if (await probe(timeout: const Duration(milliseconds: 300)) == null) break;
+        if (await probe(timeout: const Duration(milliseconds: 300)) == null) {
+          break;
+        }
         await Future.delayed(const Duration(milliseconds: 200));
       }
     }
@@ -427,18 +439,24 @@ class BackendLauncher extends ChangeNotifier {
     proc.stderr
         .transform(const Utf8Decoder(allowMalformed: true))
         .transform(const LineSplitter())
-        .listen((l) => _log(l.isEmpty ? '' : l),
-            onError: (Object e) => _log('[stderr 错误] $e'));
+        .listen(
+          (l) => _log(l.isEmpty ? '' : l),
+          onError: (Object e) => _log('[stderr 错误] $e'),
+        );
 
     // 进程提前退出要能当场看见（不再像脚本时代那样白等满 90 秒）
     var exited = false;
     int? exitCode;
-    unawaited(proc.exitCode.then((code) {
-      exited = true;
-      exitCode = code;
-      _log('[后端已退出] 退出码 $code');
-      _notify();
-    }).catchError((Object _) {}));
+    unawaited(
+      proc.exitCode
+          .then((code) {
+            exited = true;
+            exitCode = code;
+            _log('[后端已退出] 退出码 $code');
+            _notify();
+          })
+          .catchError((Object _) {}),
+    );
 
     _set(StartupPhase.waiting, '等待后端就绪…');
     final deadline = DateTime.now().add(waitDeadlineOverride ?? readyTimeout);
@@ -461,18 +479,24 @@ class BackendLauncher extends ChangeNotifier {
       }
       if (_cancelled) return _fail('已取消启动');
       if (exited) {
-        return _fail('后端启动失败，进程已退出（退出码 $exitCode）。日志见上。'
-            '常见原因可能是数据库文件被别的进程占着、端口绑不上，或 exe 与源码不匹配。');
+        return _fail(
+          '后端启动失败，进程已退出（退出码 $exitCode）。日志见上。'
+          '常见原因可能是数据库文件被别的进程占着、端口绑不上，或 exe 与源码不匹配。',
+        );
       }
       if (attempt % 10 == 0) {
-        _log('仍在等待…（${attempt}s）'
-            '${h == null ? "后端未响应" : "数据库 ${h['database']}"}');
+        _log(
+          '仍在等待…（${attempt}s）'
+          '${h == null ? "后端未响应" : "数据库 ${h['database']}"}',
+        );
       }
       await Future.delayed(const Duration(milliseconds: 1000));
     }
 
-    return _fail('等待后端超时（${(waitDeadlineOverride ?? readyTimeout).inSeconds} 秒）。'
-        '后端日志见上方输出，也可以在「设置 → 本地服务」里点「停止」再点「启动 / 修复服务」。');
+    return _fail(
+      '等待后端超时（${(waitDeadlineOverride ?? readyTimeout).inSeconds} 秒）。'
+      '后端日志见上方输出，也可以在「设置 → 本地服务」里点「停止」再点「启动 / 修复服务」。',
+    );
   }
 
   /// 停下"我们认领过的"后端（自己起的 + 接管来的），不动别人的。
@@ -517,7 +541,9 @@ class BackendLauncher extends ChangeNotifier {
     if (killed) {
       // 让收尾跑完：后端要删端口记录、写完 WAL 再退出（最多等 5 秒）
       for (var i = 0; i < 25; i++) {
-        if (await probe(timeout: const Duration(milliseconds: 300)) == null) break;
+        if (await probe(timeout: const Duration(milliseconds: 300)) == null) {
+          break;
+        }
         await Future.delayed(const Duration(milliseconds: 200));
       }
       _set(StartupPhase.idle, '本地服务已停止');
@@ -578,8 +604,10 @@ class BackendLauncher extends ChangeNotifier {
         final code = await proc.exitCode.timeout(timeout);
         _log('本地服务已停止（后端退出码 $code）');
       } on TimeoutException {
-        _log('后端 ${timeout.inSeconds}s 内还没退干净，放它在后台收尾'
-            '（stdin 一关它也会自己退，不影响关闭）。');
+        _log(
+          '后端 ${timeout.inSeconds}s 内还没退干净，放它在后台收尾'
+          '（stdin 一关它也会自己退，不影响关闭）。',
+        );
       } catch (e) {
         _log('后端退出结果未知（$e），已放它在后台跑完。');
       }
@@ -654,9 +682,11 @@ class BackendLauncher extends ChangeNotifier {
     await _settings.setLastApiPort(port);
 
     if (portFallbackFrom != null) {
-      _log('⚠ 端口 $portFallbackFrom 这次没能用上（被别的程序占了，或落在系统保留段），'
-          '后端改听 $port。手机上保存的地址会失效，'
-          '请在「设置 → 远程访问与配对」里重新扫一次二维码。');
+      _log(
+        '⚠ 端口 $portFallbackFrom 这次没能用上（被别的程序占了，或落在系统保留段），'
+        '后端改听 $port。手机上保存的地址会失效，'
+        '请在「设置 → 远程访问与配对」里重新扫一次二维码。',
+      );
     } else if (spawned && wanted != null) {
       _log('端口沿用上次的 $port（手机存的地址不用改）。');
     }
@@ -683,7 +713,9 @@ class BackendLauncher extends ChangeNotifier {
   }
 
   static Future<ProcessResult?> _runTool(
-      String executable, List<String> arguments) async {
+    String executable,
+    List<String> arguments,
+  ) async {
     try {
       // Process.run 同样走 CREATE_NO_WINDOW（见类注释），不会闪黑框
       return await Process.run(executable, arguments);
@@ -721,12 +753,16 @@ class BackendLauncher extends ChangeNotifier {
     final lines = result.stdout.toString().trim().split('\n');
     final first = lines.isEmpty ? '' : lines.first.trim();
     if (result.exitCode == 0) {
-      _log('[权限] 已把后端 exe 的完整性标签设回 Medium（Low 标签是"写不进工作区外"的根因，'
-          '判据见 GET /api/system/confinement）。');
+      _log(
+        '[权限] 已把后端 exe 的完整性标签设回 Medium（Low 标签是"写不进工作区外"的根因，'
+        '判据见 GET /api/system/confinement）。',
+      );
     } else {
-      _log('[权限] 设完整性标签失败（icacls 退出码 ${result.exitCode}）$first —— '
-          'App 自己多半也跑在 Low 上（链路上任何一环是 Low，子进程就掉回 Low）。'
-          '那种情况只能把整个产物拷到工作区外，或在不受限的终端里重新构建一次。');
+      _log(
+        '[权限] 设完整性标签失败（icacls 退出码 ${result.exitCode}）$first —— '
+        'App 自己多半也跑在 Low 上（链路上任何一环是 Low，子进程就掉回 Low）。'
+        '那种情况只能把整个产物拷到工作区外，或在不受限的终端里重新构建一次。',
+      );
     }
   }
 

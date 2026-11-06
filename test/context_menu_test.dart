@@ -65,8 +65,13 @@ MockClient _mockClient() {
 
     Object? body;
     var status = 200;
-    Map<String, dynamic> page(List<Map<String, dynamic>> items) =>
-        {'items': items, 'total': items.length, 'page': 1, 'size': 24, 'pages': 1};
+    Map<String, dynamic> page(List<Map<String, dynamic>> items) => {
+      'items': items,
+      'total': items.length,
+      'page': 1,
+      'size': 24,
+      'pages': 1,
+    };
 
     if (path == '/api/media') {
       body = page([_mediaJson]);
@@ -107,20 +112,23 @@ Future<LibraryStore> _makeStore() async {
   SharedPreferences.setMockInitialValues({});
   final settings = SettingsStore();
   await settings.load();
-  final store = LibraryStore(settings, api: ApiClient(settings.baseUrl, client: _mockClient()));
+  final store = LibraryStore(
+    settings,
+    api: ApiClient(settings.baseUrl, client: _mockClient()),
+  );
   await store.refreshAll();
   return store;
 }
 
 Widget _wrap(LibraryStore store) => MultiProvider(
-      providers: [
-        ChangeNotifierProvider<LibraryStore>.value(value: store),
-        // 画廊的筛选栏要读 `SettingsStore`（折叠状态记在它里面）。
-        // 用 store 自己那一份设置实例，避免"测试改了一份、界面读另一份"。
-        ChangeNotifierProvider<SettingsStore>.value(value: store.settings),
-      ],
-      child: const MaterialApp(home: GalleryPage()),
-    );
+  providers: [
+    ChangeNotifierProvider<LibraryStore>.value(value: store),
+    // 画廊的筛选栏要读 `SettingsStore`（折叠状态记在它里面）。
+    // 用 store 自己那一份设置实例，避免"测试改了一份、界面读另一份"。
+    ChangeNotifierProvider<SettingsStore>.value(value: store.settings),
+  ],
+  child: const MaterialApp(home: GalleryPage()),
+);
 
 void _useDesktopSurface(WidgetTester tester) {
   tester.view.physicalSize = const Size(1600, 1100);
@@ -148,8 +156,10 @@ List<String> _captureClipboard(WidgetTester tester) {
     },
   );
   addTearDown(
-    () => tester.binding.defaultBinaryMessenger
-        .setMockMethodCallHandler(SystemChannels.platform, null),
+    () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+      SystemChannels.platform,
+      null,
+    ),
   );
   return copied;
 }

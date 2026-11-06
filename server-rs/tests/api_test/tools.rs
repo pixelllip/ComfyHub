@@ -4,7 +4,6 @@
 
 use super::common::*;
 
-
 #[tokio::test]
 async fn desktop_file_tools_stay_inside_the_whitelist() {
     let state = state();
@@ -20,8 +19,14 @@ async fn desktop_file_tools_stay_inside_the_whitelist() {
     .unwrap();
     let written = root.join("comfyui").join("sub").join("工作流.json");
     assert!(written.is_file(), "文件没落盘：{}", written.display());
-    assert_eq!(std::fs::read_to_string(&written).unwrap(), "{\"hello\":\"世界\"}");
-    assert_eq!(out.payload["bytes"], std::fs::metadata(&written).unwrap().len() as i64);
+    assert_eq!(
+        std::fs::read_to_string(&written).unwrap(),
+        "{\"hello\":\"世界\"}"
+    );
+    assert_eq!(
+        out.payload["bytes"],
+        std::fs::metadata(&written).unwrap().len() as i64
+    );
     assert_eq!(out.payload["path"], written.display().to_string());
 
     // ② 越界写：`storage` 是读白名单，不是写白名单
@@ -33,7 +38,10 @@ async fn desktop_file_tools_stay_inside_the_whitelist() {
     .await
     .unwrap_err();
     assert_eq!(denied.code, "PATH_DENIED");
-    assert!(!root.join("storage").join("x.txt").exists(), "越界写被拒了却落了盘");
+    assert!(
+        !root.join("storage").join("x.txt").exists(),
+        "越界写被拒了却落了盘"
+    );
 
     // ③ 禁写段：即使用户把白名单放宽到项目根也不行
     let mut config: comfyhub_server_rs::tools::policy::ToolPolicyConfig =
@@ -53,12 +61,20 @@ async fn desktop_file_tools_stay_inside_the_whitelist() {
     .await
     .unwrap_err();
     assert_eq!(forbidden.code, "PATH_DENIED");
-    assert!(forbidden.message.contains("运行期数据 / 依赖目录"), "{}", forbidden.message);
+    assert!(
+        forbidden.message.contains("运行期数据 / 依赖目录"),
+        "{}",
+        forbidden.message
+    );
 
     // ④ append 模式：第一次覆盖、第二次追加
-    let first = call_tool(&state, "write_file", serde_json::json!({ "path": "comfyui/a.txt", "content": "甲" }))
-        .await
-        .unwrap();
+    let first = call_tool(
+        &state,
+        "write_file",
+        serde_json::json!({ "path": "comfyui/a.txt", "content": "甲" }),
+    )
+    .await
+    .unwrap();
     assert!(first.content.contains("覆盖"), "{}", first.content);
     let second = call_tool(
         &state,
@@ -68,15 +84,26 @@ async fn desktop_file_tools_stay_inside_the_whitelist() {
     .await
     .unwrap();
     assert!(second.content.contains("追加"), "{}", second.content);
-    assert_eq!(std::fs::read_to_string(root.join("comfyui").join("a.txt")).unwrap(), "甲乙");
+    assert_eq!(
+        std::fs::read_to_string(root.join("comfyui").join("a.txt")).unwrap(),
+        "甲乙"
+    );
 
     // ⑤ 超过单次上限：**告诉模型怎么分段写**，不是干巴巴一句失败
     let huge = "x".repeat(comfyhub_server_rs::tools::policy::DEFAULT_MAX_WRITE_BYTES as usize + 1);
-    let too_large = call_tool(&state, "write_file", serde_json::json!({ "path": "comfyui/big.txt", "content": huge }))
-        .await
-        .unwrap_err();
+    let too_large = call_tool(
+        &state,
+        "write_file",
+        serde_json::json!({ "path": "comfyui/big.txt", "content": huge }),
+    )
+    .await
+    .unwrap_err();
     assert_eq!(too_large.code, "TOO_LARGE");
-    assert!(too_large.message.contains("mode=\"append\""), "{}", too_large.message);
+    assert!(
+        too_large.message.contains("mode=\"append\""),
+        "{}",
+        too_large.message
+    );
 
     std::fs::remove_dir_all(&root).ok();
 }
@@ -94,10 +121,18 @@ async fn read_file_splits_chinese_on_character_boundaries() {
     std::fs::write(&file, original.as_bytes()).unwrap();
 
     // 用小窗口（10 字节）逼出"落在汉字中间"的切点
-    let first = call_tool(&state, "read_file", serde_json::json!({ "path": "comfyui/flow.json", "maxBytes": 10 }))
-        .await
-        .unwrap();
-    assert!(!first.content.contains('\u{FFFD}'), "页尾出现乱码：{}", first.content);
+    let first = call_tool(
+        &state,
+        "read_file",
+        serde_json::json!({ "path": "comfyui/flow.json", "maxBytes": 10 }),
+    )
+    .await
+    .unwrap();
+    assert!(
+        !first.content.contains('\u{FFFD}'),
+        "页尾出现乱码：{}",
+        first.content
+    );
     let restart = first
         .content
         .rsplit("offset=")
@@ -122,7 +157,10 @@ async fn read_file_splits_chinese_on_character_boundaries() {
         let body = chunk.content.lines().nth(1).unwrap().to_string();
         assembled.push_str(&body);
         if let Some(pos) = chunk.content.rfind("offset=") {
-            cursor = chunk.content[pos + 7..].trim_end_matches('）').parse().unwrap();
+            cursor = chunk.content[pos + 7..]
+                .trim_end_matches('）')
+                .parse()
+                .unwrap();
         } else {
             break;
         }
@@ -140,10 +178,16 @@ async fn list_dir_defaults_to_the_write_root_and_reports_truncation() {
     let root = state.project_root();
     std::fs::create_dir_all(root.join("comfyui").join("models")).unwrap();
     std::fs::write(root.join("comfyui").join("a.json"), b"{}").unwrap();
-    std::fs::write(root.join("comfyui").join("models").join("b.safetensors"), b"xx").unwrap();
+    std::fs::write(
+        root.join("comfyui").join("models").join("b.safetensors"),
+        b"xx",
+    )
+    .unwrap();
 
     // 不带 path：默认就是写白名单的第一个（出厂 = comfyui）
-    let out = call_tool(&state, "list_dir", serde_json::json!({})).await.unwrap();
+    let out = call_tool(&state, "list_dir", serde_json::json!({}))
+        .await
+        .unwrap();
     let expected_dir = root.join("comfyui").display().to_string();
     assert!(out.content.starts_with(&expected_dir), "{}", out.content);
     assert!(out.content.contains("file a.json 2B"), "{}", out.content);
@@ -151,20 +195,32 @@ async fn list_dir_defaults_to_the_write_root_and_reports_truncation() {
     // depth=1 不递归：子目录里的文件不出现
     assert!(!out.content.contains("b.safetensors"), "{}", out.content);
     // depth=2 才列到
-    let deep = call_tool(&state, "list_dir", serde_json::json!({ "depth": 2 })).await.unwrap();
+    let deep = call_tool(&state, "list_dir", serde_json::json!({ "depth": 2 }))
+        .await
+        .unwrap();
     assert!(deep.content.contains("b.safetensors"), "{}", deep.content);
 
     // 超过 200 条：明说截断（静默截断会让模型以为目录里就这么多东西）
     for i in 0..205 {
         std::fs::write(root.join("comfyui").join(format!("many-{i:03}.txt")), b"x").unwrap();
     }
-    let many = call_tool(&state, "list_dir", serde_json::json!({})).await.unwrap();
-    assert!(many.content.contains("超过 200 条已截断"), "{}", many.content);
+    let many = call_tool(&state, "list_dir", serde_json::json!({}))
+        .await
+        .unwrap();
+    assert!(
+        many.content.contains("超过 200 条已截断"),
+        "{}",
+        many.content
+    );
 
     // 不是目录 → NOT_A_DIRECTORY（码与 Kotlin 一致）
-    let not_dir = call_tool(&state, "list_dir", serde_json::json!({ "path": "comfyui/a.json" }))
-        .await
-        .unwrap_err();
+    let not_dir = call_tool(
+        &state,
+        "list_dir",
+        serde_json::json!({ "path": "comfyui/a.json" }),
+    )
+    .await
+    .unwrap_err();
     assert_eq!(not_dir.code, "NOT_A_DIRECTORY");
 
     std::fs::remove_dir_all(&root).ok();
@@ -183,12 +239,28 @@ async fn search_prompts_搜得到库里的那一条并带够照抄需要的东�
     let state = state();
 
     // 关键字命中（与 `/api/prompts?q=` 同一条路：标题 / 正负提示词都能命中）
-    let out = call_tool(&state, "search_prompts", serde_json::json!({ "query": "cyberpunk" }))
-        .await
-        .unwrap();
-    assert!(out.content.contains("提示词库：命中 1 条"), "{}", out.content);
-    assert!(out.content.contains("── [10] 赛博朋克少女"), "{}", out.content);
-    assert!(out.content.contains("1girl, cyberpunk"), "要带上正向正文，模型才照抄得了：{}", out.content);
+    let out = call_tool(
+        &state,
+        "search_prompts",
+        serde_json::json!({ "query": "cyberpunk" }),
+    )
+    .await
+    .unwrap();
+    assert!(
+        out.content.contains("提示词库：命中 1 条"),
+        "{}",
+        out.content
+    );
+    assert!(
+        out.content.contains("── [10] 赛博朋克少女"),
+        "{}",
+        out.content
+    );
+    assert!(
+        out.content.contains("1girl, cyberpunk"),
+        "要带上正向正文，模型才照抄得了：{}",
+        out.content
+    );
     assert!(out.content.contains("lowres"), "{}", out.content);
     assert!(out.content.contains("tag: 赛博朋克"), "{}", out.content);
     assert!(out.content.contains("anima@0.8"), "{}", out.content);
@@ -197,14 +269,25 @@ async fn search_prompts_搜得到库里的那一条并带够照抄需要的东�
     assert_eq!(out.payload["count"], 1);
     assert_eq!(out.payload["items"][0]["id"], 10);
     assert_eq!(out.payload["items"][0]["mediaCount"], 1);
-    assert_eq!(out.payload["items"][0]["tags"], serde_json::json!(["赛博朋克"]));
-    assert_eq!(out.payload["items"][0]["positivePrompt"], "1girl, cyberpunk");
+    assert_eq!(
+        out.payload["items"][0]["tags"],
+        serde_json::json!(["赛博朋克"])
+    );
+    assert_eq!(
+        out.payload["items"][0]["positivePrompt"],
+        "1girl, cyberpunk"
+    );
 
     // 按 id 取（与 query 二选一）：拿到的是**同一条**
-    let by_id = call_tool(&state, "search_prompts", serde_json::json!({ "id": 11 })).await.unwrap();
+    let by_id = call_tool(&state, "search_prompts", serde_json::json!({ "id": 11 }))
+        .await
+        .unwrap();
     assert!(by_id.content.contains("（id=11）"), "{}", by_id.content);
     assert!(by_id.content.contains("国风山水"), "{}", by_id.content);
-    assert_eq!(by_id.payload["items"][0]["positivePrompt"], "chinese ink painting");
+    assert_eq!(
+        by_id.payload["items"][0]["positivePrompt"],
+        "chinese ink painting"
+    );
 
     // includePrompt=false：正文与结构化负载里都**不许**再出现提示词正文
     let lean = call_tool(
@@ -214,9 +297,16 @@ async fn search_prompts_搜得到库里的那一条并带够照抄需要的东�
     )
     .await
     .unwrap();
-    assert!(!lean.content.contains("chinese ink painting"), "{}", lean.content);
     assert!(
-        !lean.payload["items"][0].as_object().unwrap().contains_key("positivePrompt"),
+        !lean.content.contains("chinese ink painting"),
+        "{}",
+        lean.content
+    );
+    assert!(
+        !lean.payload["items"][0]
+            .as_object()
+            .unwrap()
+            .contains_key("positivePrompt"),
         "只想看列表时不该把正文也塞回来：{}",
         lean.payload
     );
@@ -228,18 +318,38 @@ async fn search_prompts_搜得到库里的那一条并带够照抄需要的东�
 async fn search_prompts_搜不到时要说下一步而不是编() {
     let state = state();
 
-    let missing = call_tool(&state, "search_prompts", serde_json::json!({ "query": "不存在的关键字" }))
-        .await
-        .unwrap_err();
+    let missing = call_tool(
+        &state,
+        "search_prompts",
+        serde_json::json!({ "query": "不存在的关键字" }),
+    )
+    .await
+    .unwrap_err();
     assert_eq!(missing.code, "NOT_FOUND");
-    assert!(missing.message.contains("不存在的关键字"), "{}", missing.message);
-    assert!(missing.message.contains("不要"), "要明确禁止库里没有就自己编 tag：{}", missing.message);
-    assert!(missing.message.contains("comfy_list_workflows"), "要给另一条出路：{}", missing.message);
+    assert!(
+        missing.message.contains("不存在的关键字"),
+        "{}",
+        missing.message
+    );
+    assert!(
+        missing.message.contains("不要"),
+        "要明确禁止库里没有就自己编 tag：{}",
+        missing.message
+    );
+    assert!(
+        missing.message.contains("comfy_list_workflows"),
+        "要给另一条出路：{}",
+        missing.message
+    );
 
     // 按 id 取不到 → 同一个码（`NOT_FOUND`），而不是 500
-    let bad_id = call_tool(&state, "search_prompts", serde_json::json!({ "id": 999999 }))
-        .await
-        .unwrap_err();
+    let bad_id = call_tool(
+        &state,
+        "search_prompts",
+        serde_json::json!({ "id": 999999 }),
+    )
+    .await
+    .unwrap_err();
     assert_eq!(bad_id.code, "NOT_FOUND");
     assert!(bad_id.message.contains("999999"), "{}", bad_id.message);
 
@@ -294,7 +404,10 @@ async fn desktop_tools_are_declared_for_desktop_but_never_sent_to_the_phone() {
         "comfy_list_recipes",
         "comfy_bind_recipe",
     ] {
-        assert!(names.contains(&expected), "{expected} 没下发给桌面：{names:?}");
+        assert!(
+            names.contains(&expected),
+            "{expected} 没下发给桌面：{names:?}"
+        );
     }
     // 手机那四个也还在
     for expected in ["ask_user_question", "list_skills", "load_skill", "remember"] {
@@ -302,8 +415,15 @@ async fn desktop_tools_are_declared_for_desktop_but_never_sent_to_the_phone() {
     }
     // 配方三件（P4 第 67 步）已经实现 → 它们**必须**出现在下发清单里
     // （第 65/66 步那三条 `absent` 断言到这里就该反过来）
-    for present in ["comfy_learn_workflow", "comfy_list_recipes", "comfy_bind_recipe"] {
-        assert!(names.contains(&present), "{present} 已经搬过来了，不许漏：{names:?}");
+    for present in [
+        "comfy_learn_workflow",
+        "comfy_list_recipes",
+        "comfy_bind_recipe",
+    ] {
+        assert!(
+            names.contains(&present),
+            "{present} 已经搬过来了，不许漏：{names:?}"
+        );
     }
     // 系统提示里那段"可调用的工具"必须与下发的清单**同一份**
     let catalog = comfyhub_server_rs::tools::tools::catalog(&policy);
@@ -336,16 +456,25 @@ async fn desktop_tools_are_declared_for_desktop_but_never_sent_to_the_phone() {
         "comfy_get_run",
         "comfy_list_workflows",
     ] {
-        assert!(!kit_tools.contains(&absent), "桌面工具漏进了手机 run-kit：{kit_tools:?}");
+        assert!(
+            !kit_tools.contains(&absent),
+            "桌面工具漏进了手机 run-kit：{kit_tools:?}"
+        );
     }
 
     // deny 的工具连描述都不下发（与 Kotlin `kitParts` 同一条规则）
-    let mut config: comfyhub_server_rs::tools::policy::ToolPolicyConfig = serde_json::from_str("{}").unwrap();
+    let mut config: comfyhub_server_rs::tools::policy::ToolPolicyConfig =
+        serde_json::from_str("{}").unwrap();
     config.overrides.insert("write_file".into(), "deny".into());
     let denied = comfyhub_server_rs::tools::policy::ToolPolicy::new(state.project_root(), config);
-    let denied_names: Vec<String> =
-        comfyhub_server_rs::tools::tools::specs(&denied).into_iter().map(|s| s.name).collect();
-    assert!(!denied_names.contains(&"write_file".to_string()), "{denied_names:?}");
+    let denied_names: Vec<String> = comfyhub_server_rs::tools::tools::specs(&denied)
+        .into_iter()
+        .map(|s| s.name)
+        .collect();
+    assert!(
+        !denied_names.contains(&"write_file".to_string()),
+        "{denied_names:?}"
+    );
     assert!(denied_names.contains(&"read_file".to_string()));
 
     std::fs::remove_dir_all(state.project_root()).ok();
@@ -375,10 +504,22 @@ async fn diagnose_workflow_points_at_the_dangling_wire_without_comfyui() {
     .unwrap();
 
     assert_eq!(out.payload["format"], "api", "{}", out.content);
-    assert!(out.payload["counts"]["errors"].as_i64().unwrap() >= 1, "{}", out.content);
+    assert!(
+        out.payload["counts"]["errors"].as_i64().unwrap() >= 1,
+        "{}",
+        out.content
+    );
     // 报告要点到**哪个节点、哪个输入**（只报"有问题"等于没说）
-    assert!(out.content.contains("2.vae"), "报告没点到出问题的插口：{}", out.content);
-    assert!(out.content.contains('9'), "报告没点到那个不存在的节点：{}", out.content);
+    assert!(
+        out.content.contains("2.vae"),
+        "报告没点到出问题的插口：{}",
+        out.content
+    );
+    assert!(
+        out.content.contains('9'),
+        "报告没点到那个不存在的节点：{}",
+        out.content
+    );
     // ⚠ 不断言"没连上 ComfyUI"那句话：**本机真的跑着 ComfyUI** 时它会连上、覆盖面就变大了
     //   （那是环境差异，不是行为差异）。"拿不到 /object_info 就只做结构检查"由
     //   `workflow_blueprint::tests` 那两条钉着（一条离线、一条在线）。
@@ -429,9 +570,13 @@ async fn view_outputs_returns_recent_media_as_reference_images() {
         })
         .unwrap();
 
-    let out = call_tool(&state, "comfy_view_outputs", serde_json::json!({ "limit": 5 }))
-        .await
-        .unwrap();
+    let out = call_tool(
+        &state,
+        "comfy_view_outputs",
+        serde_json::json!({ "limit": 5 }),
+    )
+    .await
+    .unwrap();
     // 夹具里还有一条 a.png（id=100）——两条都要列出来
     assert_eq!(out.payload["count"], 2, "{}", out.content);
     let refs = out.payload["referenceImages"].as_array().unwrap();
@@ -446,16 +591,24 @@ async fn view_outputs_returns_recent_media_as_reference_images() {
     assert!(out.content.contains("1girl, cyberpunk"), "{}", out.content);
 
     // 指定 mediaId：只看这一条
-    let one = call_tool(&state, "comfy_view_outputs", serde_json::json!({ "mediaId": 101 }))
-        .await
-        .unwrap();
+    let one = call_tool(
+        &state,
+        "comfy_view_outputs",
+        serde_json::json!({ "mediaId": 101 }),
+    )
+    .await
+    .unwrap();
     assert_eq!(one.payload["count"], 1);
     assert_eq!(one.payload["items"][0]["id"], 101);
 
     // 不存在：**空结果 + 一句下一步**，不要报成工具错误让模型反复重试
-    let none = call_tool(&state, "comfy_view_outputs", serde_json::json!({ "mediaId": 999 }))
-        .await
-        .unwrap();
+    let none = call_tool(
+        &state,
+        "comfy_view_outputs",
+        serde_json::json!({ "mediaId": 999 }),
+    )
+    .await
+    .unwrap();
     assert_eq!(none.payload["count"], 0);
     assert!(none.content.contains("没有"), "{}", none.content);
 }
@@ -511,7 +664,11 @@ async fn layout_propose_returns_editable_templates_and_fixes_boxes() {
     );
     // 正文给模型看的是摘要，不重复贴整份坐标（坐标是它自己写的）
     assert!(out.content.contains("三分法：旅人压左"), "{}", out.content);
-    assert!(!out.content.contains("\"regions\""), "正文不该复述 JSON：{}", out.content);
+    assert!(
+        !out.content.contains("\"regions\""),
+        "正文不该复述 JSON：{}",
+        out.content
+    );
 
     std::fs::remove_dir_all(state.project_root()).ok();
 }

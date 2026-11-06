@@ -43,14 +43,17 @@ class _FakeBridge {
   MethodChannel channel() => MethodChannel('test/provider-store');
 
   Future<Object?> handle(MethodCall call) async {
-    calls.add(MapEntry(call.method, (call.arguments as Map?)?.cast<String, dynamic>()));
+    calls.add(
+      MapEntry(call.method, (call.arguments as Map?)?.cast<String, dynamic>()),
+    );
     final failure = failures[call.method];
     if (failure != null) throw failure;
     return replies[call.method];
   }
 
-  Map<String, dynamic>? argsOf(String method) =>
-      calls.lastWhere((c) => c.key == method, orElse: () => const MapEntry('', null)).value;
+  Map<String, dynamic>? argsOf(String method) => calls
+      .lastWhere((c) => c.key == method, orElse: () => const MapEntry('', null))
+      .value;
 }
 
 Map<String, dynamic> _providerJson({
@@ -58,37 +61,39 @@ Map<String, dynamic> _providerJson({
   String name = '手机网关',
   String baseURL = 'http://192.168.1.9:11434/v1',
   int revision = 1,
-}) =>
-    {
-      'id': id,
-      'displayName': name,
-      'api': 'openai-completions',
-      'baseURL': baseURL,
-      'credentialRef': 'PHONE_KEY',
-      'endpointTrust': 'private-network',
-      'enabled': true,
-      'revision': revision,
-      'createdAt': '2026-09-27T00:00:00.000Z',
-      'updatedAt': '2026-09-27T00:00:00.000Z',
-    };
+}) => {
+  'id': id,
+  'displayName': name,
+  'api': 'openai-completions',
+  'baseURL': baseURL,
+  'credentialRef': 'PHONE_KEY',
+  'endpointTrust': 'private-network',
+  'enabled': true,
+  'revision': revision,
+  'createdAt': '2026-09-27T00:00:00.000Z',
+  'updatedAt': '2026-09-27T00:00:00.000Z',
+};
 
-Map<String, dynamic> _modelJson({String id = 'm-text', String name = '纯文本模型'}) => {
-      'providerId': 'phone-gw',
-      'id': id,
-      'displayName': name,
-      'inputModalities': ['text', 'image'],
-      'attachmentTransports': {
-        'image': ['inline_base64']
-      },
-      'mimeAllowlist': ['image/png'],
-      'tools': true,
-      'parallelTools': false,
-      'reasoning': false,
-      'thinkingEfforts': <String, String>{},
-      'contextWindow': 128000,
-      'capabilitySource': 'manual',
-      'enabled': true,
-    };
+Map<String, dynamic> _modelJson({
+  String id = 'm-text',
+  String name = '纯文本模型',
+}) => {
+  'providerId': 'phone-gw',
+  'id': id,
+  'displayName': name,
+  'inputModalities': ['text', 'image'],
+  'attachmentTransports': {
+    'image': ['inline_base64'],
+  },
+  'mimeAllowlist': ['image/png'],
+  'tools': true,
+  'parallelTools': false,
+  'reasoning': false,
+  'thinkingEfforts': <String, String>{},
+  'contextWindow': 128000,
+  'capabilitySource': 'manual',
+  'enabled': true,
+};
 
 /// 页面用的假 store：记录每一次调用，回执可定制。
 class _FakeProviderStore implements ProviderStore {
@@ -123,7 +128,10 @@ class _FakeProviderStore implements ProviderStore {
     calls.add('createProvider');
     lastCreateDraft = draft;
     final created = AiProvider.fromJson({
-      ..._providerJson(id: draft['id'] as String, name: draft['displayName'] as String),
+      ..._providerJson(
+        id: draft['id'] as String,
+        name: draft['displayName'] as String,
+      ),
       'baseURL': draft['baseURL'],
     });
     // 真 store 的行为：建完就能在清单里查到（页面会 `_reload()` 再选中它）
@@ -151,7 +159,10 @@ class _FakeProviderStore implements ProviderStore {
   }
 
   @override
-  Future<List<AiModel>> saveModels(String providerId, List<AiModel> models) async {
+  Future<List<AiModel>> saveModels(
+    String providerId,
+    List<AiModel> models,
+  ) async {
     calls.add('saveModels');
     lastModelsFor = providerId;
     lastSavedModels = models;
@@ -164,16 +175,16 @@ class _Backend {
   final List<String> hits = [];
 
   AiApiClient client() => AiApiClient(
-        'http://127.0.0.1:8080',
-        client: MockClient((request) async {
-          hits.add('${request.method} ${request.url.path}');
-          return http.Response(
-            jsonEncode(<String, dynamic>{}),
-            200,
-            headers: {'content-type': 'application/json; charset=utf-8'},
-          );
-        }),
+    'http://127.0.0.1:8080',
+    client: MockClient((request) async {
+      hits.add('${request.method} ${request.url.path}');
+      return http.Response(
+        jsonEncode(<String, dynamic>{}),
+        200,
+        headers: {'content-type': 'application/json; charset=utf-8'},
       );
+    }),
+  );
 }
 
 void main() {
@@ -210,21 +221,34 @@ void main() {
     final backend = _Backend();
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(bridge.channel(), bridge.handle);
-    addTearDown(() => TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-        .setMockMethodCallHandler(bridge.channel(), null));
+    addTearDown(
+      () => TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(bridge.channel(), null),
+    );
 
     bridge.replies['listProviders'] = jsonEncode([_providerJson()]);
-    bridge.replies['saveProvider'] = jsonEncode(_providerJson(id: 'new-gw', name: '新建的'));
+    bridge.replies['saveProvider'] = jsonEncode(
+      _providerJson(id: 'new-gw', name: '新建的'),
+    );
     bridge.replies['listModels'] = jsonEncode([_modelJson()]);
-    bridge.replies['saveModels'] = jsonEncode([_modelJson(id: 'm2', name: '改过的')]);
+    bridge.replies['saveModels'] = jsonEncode([
+      _modelJson(id: 'm2', name: '改过的'),
+    ]);
 
     // ⚠ 这个 api 是**故意给错的**：本地实现根本不该碰它（碰了就说明回落了 HTTP）
-    final store = openProviderStore(api: backend.client(), forceLocal: true, methodChannel: bridge.channel())
-        as DeviceProviderStore;
+    final store = openProviderStore(
+      api: backend.client(),
+      forceLocal: true,
+      methodChannel: bridge.channel(),
+    ) as DeviceProviderStore;
 
     final listed = await store.listProviders();
     expect(listed.single.id, 'phone-gw');
-    expect(listed.single.displayName, '手机网关', reason: 'DTO 键名逐字对齐才能直接 fromJson');
+    expect(
+      listed.single.displayName,
+      '手机网关',
+      reason: 'DTO 键名逐字对齐才能直接 fromJson',
+    );
     expect(bridge.argsOf('listProviders'), isNull, reason: '读清单不带参数');
 
     final created = await store.createProvider({
@@ -237,7 +261,8 @@ void main() {
     });
     expect(created.id, 'new-gw');
     final createArgs = bridge.argsOf('saveProvider')!;
-    final sentDraft = jsonDecode(createArgs['provider'] as String) as Map<String, dynamic>;
+    final sentDraft =
+        jsonDecode(createArgs['provider'] as String) as Map<String, dynamic>;
     expect(sentDraft['id'], 'new-gw');
     expect(sentDraft['baseURL'], 'https://api.example.com/v1');
     expect(
@@ -248,8 +273,14 @@ void main() {
 
     final stored = AiProvider.fromJson(_providerJson(revision: 3));
     await store.updateProvider(stored);
-    final updateArgs = jsonDecode(bridge.argsOf('saveProvider')!['provider'] as String) as Map<String, dynamic>;
-    expect(updateArgs['revision'], 3, reason: '更新必须带 revision（桌面靠它做乐观锁 AIH-007）');
+    final updateArgs = jsonDecode(
+      bridge.argsOf('saveProvider')!['provider'] as String,
+    ) as Map<String, dynamic>;
+    expect(
+      updateArgs['revision'],
+      3,
+      reason: '更新必须带 revision（桌面靠它做乐观锁 AIH-007）',
+    );
 
     await store.deleteProvider('phone-gw');
     expect(bridge.argsOf('deleteProvider')!['id'], 'phone-gw');
@@ -260,7 +291,12 @@ void main() {
     expect(bridge.argsOf('listModels')!['providerId'], 'phone-gw');
 
     final saved = await store.saveModels('phone-gw', [
-      const AiModel(providerId: 'phone-gw', id: 'm2', displayName: '改过的', tools: true),
+      const AiModel(
+        providerId: 'phone-gw',
+        id: 'm2',
+        displayName: '改过的',
+        tools: true,
+      ),
     ]);
     expect(saved.single.id, 'm2');
     final saveArgs = bridge.argsOf('saveModels')!;
@@ -269,11 +305,7 @@ void main() {
     expect((sentModels.single as Map)['id'], 'm2');
     expect((sentModels.single as Map)['providerId'], 'phone-gw');
 
-    expect(
-      backend.hits,
-      isEmpty,
-      reason: '手机实现只碰本机库：一个远端请求都不许打（桌面不在线也要能用）',
-    );
+    expect(backend.hits, isEmpty, reason: '手机实现只碰本机库：一个远端请求都不许打（桌面不在线也要能用）');
   });
 
   test('手机实现：桥报错要翻成同一种人话异常（页面不用分叉）', () async {
@@ -284,13 +316,24 @@ void main() {
       );
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(bridge.channel(), bridge.handle);
-    addTearDown(() => TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-        .setMockMethodCallHandler(bridge.channel(), null));
+    addTearDown(
+      () => TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(bridge.channel(), null),
+    );
 
-    final store = openProviderStore(api: _Backend().client(), forceLocal: true, methodChannel: bridge.channel());
+    final store = openProviderStore(
+      api: _Backend().client(),
+      forceLocal: true,
+      methodChannel: bridge.channel(),
+    );
 
     await expectLater(
-      store.createProvider({'id': 'x', 'displayName': 'x', 'api': 'openai-completions', 'baseURL': 'http://a/v1'}),
+      store.createProvider({
+        'id': 'x',
+        'displayName': 'x',
+        'api': 'openai-completions',
+        'baseURL': 'http://a/v1',
+      }),
       throwsA(
         isA<AiApiException>().having(
           (e) => '$e',
@@ -308,6 +351,7 @@ void main() {
   test('桌面实现：六个动作都转发给后端，更新带 revision', () async {
     final seen = <String>[];
     late Map<String, dynamic> lastBody;
+
     /// 单独留一份 **provider 的 PUT body**：`lastBody` 最后会被模型目录那条 PUT 覆盖，
     /// 而这里要看的是 provider 那一份（`endpointTrust` 刻意不带）。
     Map<String, dynamic>? providerPut;
@@ -318,27 +362,39 @@ void main() {
         if (request.body.isNotEmpty) {
           final decoded = jsonDecode(request.body) as Map<String, dynamic>;
           lastBody = decoded;
-          if (request.method == 'PUT' && request.url.path == '/api/ai/providers/phone-gw') {
+          if (request.method == 'PUT' &&
+              request.url.path == '/api/ai/providers/phone-gw') {
             providerPut = decoded;
           }
         }
         final body = request.url.path.endsWith('/models')
             ? [_modelJson()]
-            : (request.method == 'GET' && request.url.path == '/api/ai/providers'
-                ? [_providerJson()]
-                : _providerJson());
-        return http.Response(jsonEncode(body), 200,
-            headers: {'content-type': 'application/json; charset=utf-8'});
+            : (request.method == 'GET' &&
+                      request.url.path == '/api/ai/providers'
+                  ? [_providerJson()]
+                  : _providerJson());
+        return http.Response(
+          jsonEncode(body),
+          200,
+          headers: {'content-type': 'application/json; charset=utf-8'},
+        );
       }),
     );
     final store = openProviderStore(api: api, forceLocal: false);
 
     await store.listProviders();
-    await store.createProvider({'id': 'p', 'displayName': 'P', 'api': 'openai-completions', 'baseURL': 'http://a/v1'});
+    await store.createProvider({
+      'id': 'p',
+      'displayName': 'P',
+      'api': 'openai-completions',
+      'baseURL': 'http://a/v1',
+    });
     await store.updateProvider(AiProvider.fromJson(_providerJson(revision: 4)));
     await store.deleteProvider('p');
     await store.listModels('p');
-    await store.saveModels('p', [const AiModel(providerId: 'p', id: 'm', displayName: 'M')]);
+    await store.saveModels('p', [
+      const AiModel(providerId: 'p', id: 'm', displayName: 'M'),
+    ]);
 
     expect(seen, [
       'GET /api/ai/providers',
@@ -348,14 +404,21 @@ void main() {
       'GET /api/ai/providers/p/models',
       'PUT /api/ai/providers/p/models',
     ]);
-    expect(lastBody['models'], isA<List>(), reason: '模型目录是整份替换（PUT body 里是 models 数组）');
+    expect(
+      lastBody['models'],
+      isA<List>(),
+      reason: '模型目录是整份替换（PUT body 里是 models 数组）',
+    );
 
     // provider 那一份 PUT：**一个字节的 endpointTrust 都不带**
     // （2026-10 用户要求：信任档由软件按地址决定）。带了旧档的话，"把公网 Provider 的地址
     // 改成本机"会拿着 public 去校验，当场被后端拒 —— 而表单里已经没有这一栏可改了。
     expect(providerPut, isNotNull, reason: '更新必须真的 PUT 出去');
-    expect(providerPut!.containsKey('endpointTrust'), isFalse,
-        reason: '不带信任档 → 后端按这次的新 baseURL 重新推断（`routes::update_provider`）');
+    expect(
+      providerPut!.containsKey('endpointTrust'),
+      isFalse,
+      reason: '不带信任档 → 后端按这次的新 baseURL 重新推断（`routes::update_provider`）',
+    );
     expect(providerPut!['revision'], 4, reason: '乐观锁那一份照旧要带');
   });
 
@@ -409,7 +472,8 @@ void main() {
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
 
-    final store = _FakeProviderStore()..providers = [AiProvider.fromJson(_providerJson())];
+    final store = _FakeProviderStore()
+      ..providers = [AiProvider.fromJson(_providerJson())];
     await tester.pumpWidget(await page(store, _Backend()));
     await tester.pumpAndSettle();
 
@@ -421,7 +485,10 @@ void main() {
     await tester.pumpAndSettle();
 
     final test = tester.widget<OutlinedButton>(
-      find.ancestor(of: find.text('测试连接'), matching: find.byType(OutlinedButton)),
+      find.ancestor(
+        of: find.text('测试连接'),
+        matching: find.byType(OutlinedButton),
+      ),
     );
     expect(test.onPressed, isNull, reason: '手机上还做不到：要由本机自己探上游');
 
@@ -437,7 +504,8 @@ void main() {
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
 
-    final store = _FakeProviderStore(local: false)..providers = [AiProvider.fromJson(_providerJson())];
+    final store = _FakeProviderStore(local: false)
+      ..providers = [AiProvider.fromJson(_providerJson())];
     await tester.pumpWidget(await page(store, _Backend()));
     await tester.pumpAndSettle();
 
@@ -445,7 +513,10 @@ void main() {
     await tester.tap(find.text('手机网关'));
     await tester.pumpAndSettle();
     final test = tester.widget<OutlinedButton>(
-      find.ancestor(of: find.text('测试连接'), matching: find.byType(OutlinedButton)),
+      find.ancestor(
+        of: find.text('测试连接'),
+        matching: find.byType(OutlinedButton),
+      ),
     );
     expect(test.onPressed, isNotNull);
   });
@@ -464,7 +535,10 @@ void main() {
     await tester.tap(find.text('新建 Provider'));
     await tester.pumpAndSettle();
     await tester.enterText(
-      find.ancestor(of: find.text('Provider ID（创建后不可改）'), matching: find.byType(TextField)),
+      find.ancestor(
+        of: find.text('Provider ID（创建后不可改）'),
+        matching: find.byType(TextField),
+      ),
       'phone-new',
     );
     await tester.enterText(
@@ -472,7 +546,10 @@ void main() {
       '手机新建的',
     );
     await tester.enterText(
-      find.ancestor(of: find.text('Base URL'), matching: find.byType(TextField)),
+      find.ancestor(
+        of: find.text('Base URL'),
+        matching: find.byType(TextField),
+      ),
       'https://api.example.com/v1',
     );
     await tester.pumpAndSettle();
@@ -501,7 +578,8 @@ void main() {
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
 
-    final store = _FakeProviderStore()..providers = [AiProvider.fromJson(_providerJson(revision: 2))];
+    final store = _FakeProviderStore()
+      ..providers = [AiProvider.fromJson(_providerJson(revision: 2))];
     final backend = _Backend();
     await tester.pumpWidget(await page(store, backend));
     await tester.pumpAndSettle();
@@ -512,11 +590,19 @@ void main() {
     await tester.pumpAndSettle();
 
     // 对话框要**预填**现有那一行（用户一眼看得出在改什么）
-    final urlField = find.ancestor(of: find.text('Base URL'), matching: find.byType(TextField));
-    expect(tester.widget<TextField>(urlField).controller!.text, 'http://192.168.1.9:11434/v1');
+    final urlField = find.ancestor(
+      of: find.text('Base URL'),
+      matching: find.byType(TextField),
+    );
+    expect(
+      tester.widget<TextField>(urlField).controller!.text,
+      'http://192.168.1.9:11434/v1',
+    );
     // ID 锁住：两端都是"创建后不可修改"
-    final idField =
-        find.ancestor(of: find.text('Provider ID（创建后不可改）'), matching: find.byType(TextField));
+    final idField = find.ancestor(
+      of: find.text('Provider ID（创建后不可改）'),
+      matching: find.byType(TextField),
+    );
     expect(tester.widget<TextField>(idField).readOnly, isTrue);
 
     // 改 baseURL（用户原话里那一件事）→ 保存
@@ -528,7 +614,11 @@ void main() {
     expect(store.calls, contains('updateProvider'));
     expect(store.lastUpdate!.id, 'phone-gw');
     expect(store.lastUpdate!.baseURL, 'http://192.168.1.20:11434/v1');
-    expect(store.lastUpdate!.revision, 2, reason: '更新必须带库里那一版 revision（AIH-007）');
+    expect(
+      store.lastUpdate!.revision,
+      2,
+      reason: '更新必须带库里那一版 revision（AIH-007）',
+    );
     expect(
       backend.hits.where((h) => h.contains('/api/ai/providers')),
       isEmpty,
@@ -544,13 +634,16 @@ class _NoCredentialStore implements CredentialStore {
   bool get isLocal => false;
 
   @override
-  Future<AiCredentialStatus> statusOf(AiProvider provider) async => AiCredentialStatus.none;
+  Future<AiCredentialStatus> statusOf(AiProvider provider) async =>
+      AiCredentialStatus.none;
 
   @override
-  Future<AiCredentialStatus> save(AiProvider provider, String value) async => AiCredentialStatus.none;
+  Future<AiCredentialStatus> save(AiProvider provider, String value) async =>
+      AiCredentialStatus.none;
 
   @override
-  Future<AiCredentialStatus> clear(AiProvider provider) async => AiCredentialStatus.none;
+  Future<AiCredentialStatus> clear(AiProvider provider) async =>
+      AiCredentialStatus.none;
 
   @override
   Future<String?> reveal(AiProvider provider) async => null;

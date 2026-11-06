@@ -19,7 +19,10 @@ import 'package:viewer/core/portable_paths.dart';
 void main() {
   test('WorkspacePathProvider 返回指定目录', () async {
     final provider = WorkspacePathProvider(r'D:\somewhere\app-support');
-    expect(await provider.getApplicationSupportPath(), r'D:\somewhere\app-support');
+    expect(
+      await provider.getApplicationSupportPath(),
+      r'D:\somewhere\app-support',
+    );
   });
 
   test('installPortablePaths 不抛（main() 最前面跑，抛了就白屏）', () async {

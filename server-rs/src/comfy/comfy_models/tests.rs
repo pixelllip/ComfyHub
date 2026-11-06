@@ -30,7 +30,10 @@ fn 分词把驼峰与数字边界都切开() {
         vec!["krea", "2", "turbo", "official", "comfy", "int", "8"]
     );
     // 去扩展名：`flux1dev.safetensors` → flux / 1 / dev
-    assert_eq!(ModelName::tokens("flux1dev.safetensors"), vec!["flux", "1", "dev"]);
+    assert_eq!(
+        ModelName::tokens("flux1dev.safetensors"),
+        vec!["flux", "1", "dev"]
+    );
     // 没有扩展名时整串都算
     assert_eq!(ModelName::tokens("anima-base"), vec!["anima", "base"]);
 }
@@ -42,10 +45,19 @@ fn 相似度用的是词根而不是字面() {
     assert!(ModelName::similarity(want, "krea2_turbo_int8.safetensors") >= MIN_SCORE);
     assert!(ModelName::similarity(want, want) == 1.0);
     // 字面很像但确实是两份模型 —— 高过阈值是**有意**的（工具不替模型做决定）
-    let s = ModelName::similarity("sd_xl_base_1.0.safetensors", "sd_xl_refiner_1.0.safetensors");
+    let s = ModelName::similarity(
+        "sd_xl_base_1.0.safetensors",
+        "sd_xl_refiner_1.0.safetensors",
+    );
     assert!((MIN_SCORE..1.0).contains(&s), "{s}");
-    assert!(ModelName::same("Krea2_Turbo.safetensors", "krea2 turbo.safetensors"));
-    assert!(!ModelName::same("sd_xl_base_1.0.safetensors", "sd_xl_refiner_1.0.safetensors"));
+    assert!(ModelName::same(
+        "Krea2_Turbo.safetensors",
+        "krea2 turbo.safetensors"
+    ));
+    assert!(!ModelName::same(
+        "sd_xl_base_1.0.safetensors",
+        "sd_xl_refiner_1.0.safetensors"
+    ));
 }
 
 #[test]
@@ -69,7 +81,11 @@ fn 查询词先归一化去重再截断并粘回数字() {
 fn 从_object_info_抠出清单并去重() {
     let mut m = Map::new();
     for (k, v) in [
-        loader("CheckpointLoaderSimple", "ckpt_name", &["a.safetensors", "sub\\b.safetensors"]),
+        loader(
+            "CheckpointLoaderSimple",
+            "ckpt_name",
+            &["a.safetensors", "sub\\b.safetensors"],
+        ),
         loader("LoraLoader", "lora_name", &["c.safetensors"]),
     ] {
         m.insert(k, v);
@@ -103,8 +119,17 @@ fn 扫盘认后缀且深度与体积如实() {
     // 非模型后缀一律不收
     assert!(!names.iter().any(|n| n.ends_with(".txt")));
     // ⚠ sidecar 一律不收（大小写都算）——真实机上这 3 个曾把报告变成假警报
-    assert!(!names.iter().any(|n| n.to_lowercase().ends_with(".metadata.json")), "{names:?}");
-    let a = inv.models.iter().find(|m| m.name == "a.safetensors").unwrap();
+    assert!(
+        !names
+            .iter()
+            .any(|n| n.to_lowercase().ends_with(".metadata.json")),
+        "{names:?}"
+    );
+    let a = inv
+        .models
+        .iter()
+        .find(|m| m.name == "a.safetensors")
+        .unwrap();
     assert_eq!(a.bytes, Some(4));
     assert!(a.path.is_some());
     // 扫盘来源**不能**声称"实例看得到"
@@ -132,7 +157,11 @@ fn 并集把实例看不到的那些单列出来() {
     assert_eq!(inv.disk_only.len(), 1);
     assert_eq!(inv.disk_only[0].name, "on_disk_only.safetensors");
     // 两边都有的那一条：能加载 + 带上盘上的体积
-    let seen = inv.models.iter().find(|m| m.name == "seen.safetensors").unwrap();
+    let seen = inv
+        .models
+        .iter()
+        .find(|m| m.name == "seen.safetensors")
+        .unwrap();
     assert!(seen.visible_to_instance);
     assert_eq!(seen.bytes, Some(4));
     std::fs::remove_dir_all(&dir).ok();
@@ -163,13 +192,18 @@ fn 候选先本类再跨目录且按分数排() {
         disk_only: Vec::new(),
         merged: false,
     };
-    let hits = inv.candidates_for("checkpoints", "krea2TurboOfficialComfy_krea2TurboInt8.safetensors");
+    let hits = inv.candidates_for(
+        "checkpoints",
+        "krea2TurboOfficialComfy_krea2TurboInt8.safetensors",
+    );
     assert_eq!(hits.len(), 1);
     assert!(hits[0].same_folder);
     // 分数不达标的（sd15）一条都不给 —— **不编**
     assert!(hits.iter().all(|h| h.model.name != "sd15.safetensors"));
     // 沾边的那些只在 near_misses 里出现，且要有长度 ≥3 的公共词
-    assert!(inv.near_misses_for("krea2TurboInt8.safetensors", 3).is_empty());
+    assert!(inv
+        .near_misses_for("krea2TurboInt8.safetensors", 3)
+        .is_empty());
 }
 
 #[test]
@@ -182,11 +216,20 @@ fn 图里点名的模型只认字符串值不认连线() {
                    "_meta": {"title": "底模"}}),
         ),
         // 值是数组（连线）→ 跳过（那是"从别的节点来的"）
-        ("2", json!({"class_type": "VAELoader", "inputs": {"vae_name": ["3", 0]}})),
+        (
+            "2",
+            json!({"class_type": "VAELoader", "inputs": {"vae_name": ["3", 0]}}),
+        ),
         // 认不出来的类 → 不猜
-        ("3", json!({"class_type": "MyThirdPartyThing", "inputs": {"model": "x.safetensors"}})),
+        (
+            "3",
+            json!({"class_type": "MyThirdPartyThing", "inputs": {"model": "x.safetensors"}}),
+        ),
         // 空串不算"要装一个模型"
-        ("4", json!({"class_type": "LoraLoader", "inputs": {"lora_name": "  "}})),
+        (
+            "4",
+            json!({"class_type": "LoraLoader", "inputs": {"lora_name": "  "}}),
+        ),
     ]);
     let reqs = requirements(&graph, None);
     assert_eq!(reqs.len(), 1);
@@ -206,6 +249,9 @@ fn 从_object_info_认出第三方加载器的模型输入() {
         json!({"input": {"required": {"text": ["STRING", {"multiline": true}]}}}),
     );
     let found = enumerate_model_inputs(Some(&m));
-    assert!(found.get("MyThirdPartyLoader").unwrap().contains("model_name"));
+    assert!(found
+        .get("MyThirdPartyLoader")
+        .unwrap()
+        .contains("model_name"));
     assert!(!found.contains_key("FreeText"));
 }

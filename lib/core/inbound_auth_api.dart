@@ -22,7 +22,8 @@ import 'pairing_token.dart';
 /// （`PairingTokenStore.write`），要再读出来只能走 `KeystoreCredentials.get`
 /// —— 与 API Key 同一条纪律（值不回显给界面）。
 class InboundAuthApi {
-  InboundAuthApi(this.baseUrl, {http.Client? client}) : _client = client ?? http.Client();
+  InboundAuthApi(this.baseUrl, {http.Client? client})
+    : _client = client ?? http.Client();
 
   /// 桌面地址（形如 `http://10.44.130.232:8081`，末尾斜杠无所谓）。
   final String baseUrl;
@@ -39,12 +40,12 @@ class InboundAuthApi {
   }
 
   Map<String, String> _headers(String? token) => {
-        'Content-Type': 'application/json; charset=utf-8',
-        'Accept': 'application/json',
-        // 空令牌**不发这个头**：发一个空串会被当成"带了个错的令牌"，
-        // 而闸门对这两件事的回答是不同的（403 vs 401），诊断会因此指错方向。
-        if (token != null && token.isNotEmpty) 'X-ComfyHub-Token': token,
-      };
+    'Content-Type': 'application/json; charset=utf-8',
+    'Accept': 'application/json',
+    // 空令牌**不发这个头**：发一个空串会被当成"带了个错的令牌"，
+    // 而闸门对这两件事的回答是不同的（403 vs 401），诊断会因此指错方向。
+    if (token != null && token.isNotEmpty) 'X-ComfyHub-Token': token,
+  };
 
   dynamic _decode(http.Response res) {
     final body = utf8.decode(res.bodyBytes);
@@ -63,19 +64,23 @@ class InboundAuthApi {
     // 界面上的表现为**开关弹回去、一个字都不解释**。
     if (json is Map && json['error'] != null) {
       final detail = json['detail']?.toString();
-      throw ApiException(
-        res.statusCode,
-        json['error'].toString(),
-        detail,
-      );
+      throw ApiException(res.statusCode, json['error'].toString(), detail);
     }
     if (res.statusCode >= 200 && res.statusCode < 300) return json;
-    final msg = (json is Map && json['error'] != null) ? json['error'].toString() : 'HTTP ${res.statusCode}';
-    final detail = (json is Map && json['detail'] != null) ? json['detail'].toString() : null;
+    final msg = (json is Map && json['error'] != null)
+        ? json['error'].toString()
+        : 'HTTP ${res.statusCode}';
+    final detail = (json is Map && json['detail'] != null)
+        ? json['detail'].toString()
+        : null;
     throw ApiException(res.statusCode, msg, detail);
   }
 
-  Future<dynamic> _get(String path, {Map<String, String>? query, String? token}) async {
+  Future<dynamic> _get(
+    String path, {
+    Map<String, String>? query,
+    String? token,
+  }) async {
     final uri = Uri.parse('$_root$path').replace(queryParameters: query);
     try {
       return _decode(await _client.get(uri, headers: _headers(token)));
@@ -84,7 +89,12 @@ class InboundAuthApi {
     }
   }
 
-  Future<dynamic> _send(String method, String path, Object? body, {String? token}) async {
+  Future<dynamic> _send(
+    String method,
+    String path,
+    Object? body, {
+    String? token,
+  }) async {
     final req = http.Request(method, Uri.parse('$_root$path'))
       ..headers.addAll(_headers(token));
     if (body != null) req.body = jsonEncode(body);
@@ -107,7 +117,9 @@ class InboundAuthApi {
   /// 打开时后端会**顺手生成一个长期令牌**（若还没有），这是它现在唯一的用途。
   Future<InboundAuthStatus> setEnabled(bool enabled, {String? token}) async =>
       InboundAuthStatus.fromJson(
-        _asMap(await _send('PUT', '/api/auth', {'enabled': enabled}, token: token)),
+        _asMap(
+          await _send('PUT', '/api/auth', {'enabled': enabled}, token: token),
+        ),
       );
 
   /// `POST /api/auth/rotate` —— 轮换全局令牌（所有设备立刻失效，无宽限期）。
@@ -115,20 +127,22 @@ class InboundAuthApi {
       _asMap(await _send('POST', '/api/auth/rotate', const {}, token: token));
 
   /// `GET /api/auth/pair/pending` —— 桌面上那张"待配对"列表（6 位码就在里面）。
-  Future<List<PendingPairing>> pending({String? token}) async =>
-      (_asList(_asMap(await _get('/api/auth/pair/pending', token: token))['pending']))
-          .map(PendingPairing.fromJson)
-          .toList();
+  Future<List<PendingPairing>> pending({String? token}) async => (_asList(
+    _asMap(await _get('/api/auth/pair/pending', token: token))['pending'],
+  )).map(PendingPairing.fromJson).toList();
 
   /// `GET /api/auth/devices` —— 已配对设备（**不含令牌**）。
-  Future<List<PairedDevice>> devices({String? token}) async =>
-      (_asList(_asMap(await _get('/api/auth/devices', token: token))['devices']))
-          .map(PairedDevice.fromJson)
-          .toList();
+  Future<List<PairedDevice>> devices({String? token}) async => (_asList(
+    _asMap(await _get('/api/auth/devices', token: token))['devices'],
+  )).map(PairedDevice.fromJson).toList();
 
   /// `POST /api/auth/devices/{id}/revoke` —— 吊销一台设备的令牌（**立刻**生效）。
-  Future<void> revoke(String deviceId, {String? token}) =>
-      _send('POST', '/api/auth/devices/${Uri.encodeComponent(deviceId)}/revoke', const {}, token: token);
+  Future<void> revoke(String deviceId, {String? token}) => _send(
+    'POST',
+    '/api/auth/devices/${Uri.encodeComponent(deviceId)}/revoke',
+    const {},
+    token: token,
+  );
 
   /// `POST /api/auth/devices/{id}/credentials` `{allow, allowUpload?}` ——
   /// 这台设备能不能**下行**密钥 / 能不能**上行**（改桌面上的）密钥。
@@ -145,18 +159,16 @@ class InboundAuthApi {
     bool allow, {
     bool? allowUpload,
     String? token,
-  }) async =>
-      PairedDevice.fromJson(
-        _asMap(await _send(
-          'POST',
-          '/api/auth/devices/${Uri.encodeComponent(deviceId)}/credentials',
-          {
-            'allow': allow,
-            'allowUpload': ?allowUpload,
-          },
-          token: token,
-        )),
-      );
+  }) async => PairedDevice.fromJson(
+    _asMap(
+      await _send(
+        'POST',
+        '/api/auth/devices/${Uri.encodeComponent(deviceId)}/credentials',
+        {'allow': allow, 'allowUpload': ?allowUpload},
+        token: token,
+      ),
+    ),
+  );
 
   /// `PUT /api/ai/credentials` —— **密钥上行**：把手机上配的 key 推给桌面（§14.2）。
   ///
@@ -169,16 +181,14 @@ class InboundAuthApi {
     Map<String, String> values, {
     int? rev,
     String? token,
-  }) async =>
-      CredentialUploadResult.fromJson(_asMap(await _send(
-        'PUT',
-        '/api/ai/credentials',
-        {
-          'credentials': values,
-          'rev': ?rev,
-        },
-        token: token,
-      )));
+  }) async => CredentialUploadResult.fromJson(
+    _asMap(
+      await _send('PUT', '/api/ai/credentials', {
+        'credentials': values,
+        'rev': ?rev,
+      }, token: token),
+    ),
+  );
 
   // --- 手机侧（匿名 + 限速）--------------------------------------------------
 
@@ -187,8 +197,9 @@ class InboundAuthApi {
   /// 回的是**事实**（ticket / 可达地址 / 滚动码 / 过期时间）：二维码那串文本由前端
   /// 用 [`PairingPayload.encode`] 编 —— 格式只留一份实现（桌面编、手机解同一份），
   /// 后端再编一遍就会出现"两端各写一份 URL 拼装"式的漂移。
-  Future<PairStart> startPairing({String? token}) async =>
-      PairStart.fromJson(_asMap(await _send('POST', '/api/auth/pair/start', const {}, token: token)));
+  Future<PairStart> startPairing({String? token}) async => PairStart.fromJson(
+    _asMap(await _send('POST', '/api/auth/pair/start', const {}, token: token)),
+  );
 
   /// `POST /api/auth/pair/request` —— 手机举手，桌面屏幕上会出现 6 位码。
   ///
@@ -197,11 +208,14 @@ class InboundAuthApi {
   Future<PairingRequest> requestPairing({
     required String deviceId,
     required String deviceName,
-  }) async =>
-      PairingRequest.fromJson(_asMap(await _send('POST', '/api/auth/pair/request', {
+  }) async => PairingRequest.fromJson(
+    _asMap(
+      await _send('POST', '/api/auth/pair/request', {
         'deviceId': deviceId,
         'deviceName': deviceName,
-      })));
+      }),
+    ),
+  );
 
   /// `POST /api/auth/pair/claim` —— 交人敲进来的 6 位码，换**这台设备专属**的长期令牌。
   ///
@@ -213,8 +227,9 @@ class InboundAuthApi {
     required String deviceName,
     String? requestId,
     String? ticket,
-  }) async =>
-      PairingClaim.fromJson(_asMap(await _send('POST', '/api/auth/pair/claim', {
+  }) async => PairingClaim.fromJson(
+    _asMap(
+      await _send('POST', '/api/auth/pair/claim', {
         'code': code,
         'deviceId': deviceId,
         'deviceName': deviceName,
@@ -222,15 +237,28 @@ class InboundAuthApi {
         // 带一个 null 上去会被后端当成"给了个空 ticket"，两种失败就分不清了
         'requestId': ?requestId,
         'ticket': ?ticket,
-      })));
+      }),
+    ),
+  );
 
   /// `GET /api/ai/credentials?refs=a,b` —— **密钥下行**（仅"已授权设备"或本机回环）。
   ///
   /// 未授权的 ref **不会出现在结果里**（不报错）：调用方据此如实说"哪几把没拿到"。
-  Future<Map<String, String>> fetchCredentials(List<String> refs, {String? token}) async {
-    final wanted = refs.map((e) => e.trim()).where((e) => e.isNotEmpty).toSet().toList();
+  Future<Map<String, String>> fetchCredentials(
+    List<String> refs, {
+    String? token,
+  }) async {
+    final wanted = refs
+        .map((e) => e.trim())
+        .where((e) => e.isNotEmpty)
+        .toSet()
+        .toList();
     if (wanted.isEmpty) return const {};
-    final raw = await _get('/api/ai/credentials', query: {'refs': wanted.join(',')}, token: token);
+    final raw = await _get(
+      '/api/ai/credentials',
+      query: {'refs': wanted.join(',')},
+      token: token,
+    );
     final map = _asMap(_asMap(raw)['credentials']);
     return map.map((k, v) => MapEntry(k, v?.toString() ?? ''));
   }
@@ -267,13 +295,17 @@ class PairStart {
   final List<String> urls;
 
   factory PairStart.fromJson(Map<String, dynamic> json) => PairStart(
-        ticket: (json['ticket'] ?? '').toString(),
-        code: (json['code'] ?? '').toString(),
-        expiresAt: json['expiresAt']?.toString(),
-        codeExpiresAt: json['codeExpiresAt']?.toString(),
-        urls: (json['urls'] as List?)?.map((e) => e.toString()).where((e) => e.isNotEmpty).toList() ??
-            const [],
-      );
+    ticket: (json['ticket'] ?? '').toString(),
+    code: (json['code'] ?? '').toString(),
+    expiresAt: json['expiresAt']?.toString(),
+    codeExpiresAt: json['codeExpiresAt']?.toString(),
+    urls:
+        (json['urls'] as List?)
+            ?.map((e) => e.toString())
+            .where((e) => e.isNotEmpty)
+            .toList() ??
+        const [],
+  );
 
   bool get usable => ticket.isNotEmpty && code.isNotEmpty;
 }
@@ -296,11 +328,11 @@ class PairingRequest {
   final String? serverTime;
 
   factory PairingRequest.fromJson(Map<String, dynamic> json) => PairingRequest(
-        requestId: (json['requestId'] ?? '').toString(),
-        expiresAt: json['expiresAt']?.toString(),
-        codeExpiresAt: json['codeExpiresAt']?.toString(),
-        serverTime: json['serverTime']?.toString(),
-      );
+    requestId: (json['requestId'] ?? '').toString(),
+    expiresAt: json['expiresAt']?.toString(),
+    codeExpiresAt: json['codeExpiresAt']?.toString(),
+    serverTime: json['serverTime']?.toString(),
+  );
 }
 
 /// `POST /api/auth/pair/claim` 的响应（**长期令牌唯一一次出现的地方**）。
@@ -318,11 +350,11 @@ class PairingClaim {
   final String? serverTime;
 
   factory PairingClaim.fromJson(Map<String, dynamic> json) => PairingClaim(
-        deviceId: (json['deviceId'] ?? '').toString(),
-        token: (json['token'] ?? '').toString(),
-        schemaVersion: (json['schemaVersion'] as num?)?.toInt(),
-        serverTime: json['serverTime']?.toString(),
-      );
+    deviceId: (json['deviceId'] ?? '').toString(),
+    token: (json['token'] ?? '').toString(),
+    schemaVersion: (json['schemaVersion'] as num?)?.toInt(),
+    serverTime: json['serverTime']?.toString(),
+  );
 }
 
 /// 已配对的一台设备（`GET /api/auth/devices`）。**只有事实，没有令牌。**
@@ -353,14 +385,14 @@ class PairedDevice {
   final bool allowCredentialsUpload;
 
   factory PairedDevice.fromJson(Map<String, dynamic> json) => PairedDevice(
-        id: (json['id'] ?? '').toString(),
-        name: (json['name'] ?? '').toString(),
-        pairedAt: json['pairedAt']?.toString(),
-        lastSeenAt: json['lastSeenAt']?.toString(),
-        lastIp: json['lastIp']?.toString(),
-        allowCredentials: json['allowCredentials'] == true,
-        allowCredentialsUpload: json['allowCredentialsUpload'] == true,
-      );
+    id: (json['id'] ?? '').toString(),
+    name: (json['name'] ?? '').toString(),
+    pairedAt: json['pairedAt']?.toString(),
+    lastSeenAt: json['lastSeenAt']?.toString(),
+    lastIp: json['lastIp']?.toString(),
+    allowCredentials: json['allowCredentials'] == true,
+    allowCredentialsUpload: json['allowCredentialsUpload'] == true,
+  );
 }
 
 /// `PUT /api/ai/credentials` 的回执（§14.2）。
@@ -380,11 +412,19 @@ class CredentialUploadResult {
   /// 桌面写完之后的 `ai.credentials.rev`（下次上行要带它）。
   final int? rev;
 
-  factory CredentialUploadResult.fromJson(Map<String, dynamic> json) => CredentialUploadResult(
-        applied: (json['applied'] as List?)?.map((e) => e.toString()).toList() ?? const [],
-        rejected: (json['rejected'] as List?)
+  factory CredentialUploadResult.fromJson(Map<String, dynamic> json) =>
+      CredentialUploadResult(
+        applied:
+            (json['applied'] as List?)?.map((e) => e.toString()).toList() ??
+            const [],
+        rejected:
+            (json['rejected'] as List?)
                 ?.whereType<Map>()
-                .map((e) => CredentialRejection.fromJson(Map<String, dynamic>.from(e)))
+                .map(
+                  (e) => CredentialRejection.fromJson(
+                    Map<String, dynamic>.from(e),
+                  ),
+                )
                 .toList() ??
             const [],
         rev: (json['rev'] as num?)?.toInt(),
@@ -393,7 +433,11 @@ class CredentialUploadResult {
 
 /// 一条被拒的凭据上行。
 class CredentialRejection {
-  const CredentialRejection({required this.ref, required this.code, this.message});
+  const CredentialRejection({
+    required this.ref,
+    required this.code,
+    this.message,
+  });
 
   final String ref;
 
@@ -402,7 +446,8 @@ class CredentialRejection {
   final String code;
   final String? message;
 
-  factory CredentialRejection.fromJson(Map<String, dynamic> json) => CredentialRejection(
+  factory CredentialRejection.fromJson(Map<String, dynamic> json) =>
+      CredentialRejection(
         ref: (json['ref'] ?? '').toString(),
         code: (json['code'] ?? '').toString(),
         message: json['message']?.toString(),
@@ -410,11 +455,11 @@ class CredentialRejection {
 
   /// 给人看的一句话（界面直接显示它，别只显示码）。
   String get hint => switch (code) {
-        'FORBIDDEN' => '桌面没有允许这台设备改密钥（要在桌面上的设备卡片里勾选）',
-        'STALE_IGNORED' => '桌面上这把更新过 —— 先从桌面同步一次，再推你改的这版',
-        'BAD_PAYLOAD' => message ?? '这把的名字（ref）不合法，桌面拒收了',
-        _ => message ?? '桌面拒收（$code）',
-      };
+    'FORBIDDEN' => '桌面没有允许这台设备改密钥（要在桌面上的设备卡片里勾选）',
+    'STALE_IGNORED' => '桌面上这把更新过 —— 先从桌面同步一次，再推你改的这版',
+    'BAD_PAYLOAD' => message ?? '这把的名字（ref）不合法，桌面拒收了',
+    _ => message ?? '桌面拒收（$code）',
+  };
 }
 
 /// 桌面屏幕上正在等的那次配对（`GET /api/auth/pair/pending`）。
@@ -438,13 +483,13 @@ class PendingPairing {
   final String? expiresAt;
 
   factory PendingPairing.fromJson(Map<String, dynamic> json) => PendingPairing(
-        requestId: (json['requestId'] ?? '').toString(),
-        code: (json['code'] ?? '').toString(),
-        ip: json['ip']?.toString(),
-        deviceName: json['deviceName']?.toString(),
-        codeExpiresAt: json['codeExpiresAt']?.toString(),
-        expiresAt: json['expiresAt']?.toString(),
-      );
+    requestId: (json['requestId'] ?? '').toString(),
+    code: (json['code'] ?? '').toString(),
+    ip: json['ip']?.toString(),
+    deviceName: json['deviceName']?.toString(),
+    codeExpiresAt: json['codeExpiresAt']?.toString(),
+    expiresAt: json['expiresAt']?.toString(),
+  );
 }
 
 /// `GET/PUT /api/auth` 的响应。
@@ -466,12 +511,17 @@ class InboundAuthStatus {
   final List<PairedDevice> devices;
   final List<PendingPairing> pending;
 
-  factory InboundAuthStatus.fromJson(Map<String, dynamic> json) => InboundAuthStatus(
+  factory InboundAuthStatus.fromJson(Map<String, dynamic> json) =>
+      InboundAuthStatus(
         enabled: json['enabled'] == true,
         hasToken: json['hasToken'] == true,
         schema: json['schema']?.toString(),
-        devices: InboundAuthApi._asList(json['devices']).map(PairedDevice.fromJson).toList(),
-        pending: InboundAuthApi._asList(json['pending']).map(PendingPairing.fromJson).toList(),
+        devices: InboundAuthApi._asList(json['devices'])
+            .map(PairedDevice.fromJson)
+            .toList(),
+        pending: InboundAuthApi._asList(json['pending'])
+            .map(PendingPairing.fromJson)
+            .toList(),
       );
 }
 
@@ -484,7 +534,7 @@ class InboundAuthStatus {
 /// 存进去之后**只能由桥读出来**（`getCredential`），界面拿不到它。
 class PairingTokenStore {
   PairingTokenStore({MethodChannel? channel})
-      : _method = channel ?? const MethodChannel(methodChannelName);
+    : _method = channel ?? const MethodChannel(methodChannelName);
 
   /// 与 `LocalHarnessRunEventSource.methodChannelName` 同一个通道（复用常量，改一处就够）。
   static const String methodChannelName = 'comfyhub/harness';
@@ -511,7 +561,10 @@ class PairingTokenStore {
     if (token.trim().isEmpty) {
       throw StateError('令牌为空，拒绝写入密钥库');
     }
-    await _method.invokeMethod<bool>('putCredential', {'ref': ref, 'value': token});
+    await _method.invokeMethod<bool>('putCredential', {
+      'ref': ref,
+      'value': token,
+    });
     PairingTokenCache.set(token);
   }
 
@@ -532,6 +585,9 @@ class PairingTokenStore {
     final id = (map['deviceId'] ?? '').toString();
     final name = (map['deviceName'] ?? '').toString();
     // 设备名兜底成平台名而不是空串：桌面上那一行总得有东西可显示
-    return (deviceId: id, deviceName: name.isEmpty ? Platform.operatingSystem : name);
+    return (
+      deviceId: id,
+      deviceName: name.isEmpty ? Platform.operatingSystem : name,
+    );
   }
 }

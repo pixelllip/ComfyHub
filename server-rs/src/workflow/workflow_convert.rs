@@ -107,8 +107,14 @@ const MODE_BYPASS: i64 = 4;
 ///
 /// ⚠ 判定顺序：**先看 `/object_info` 里有没有**。有的版本把 `SetNode` 之类做成了真节点
 /// （那时它就该原样保留），所以只有"查不到 + 名字在这张表里"才改写。
-const FRONTEND_VIRTUAL: [&str; 6] =
-    ["Note", "MarkdownNote", "PrimitiveNode", "Reroute", "SetNode", "GetNode"];
+const FRONTEND_VIRTUAL: [&str; 6] = [
+    "Note",
+    "MarkdownNote",
+    "PrimitiveNode",
+    "Reroute",
+    "SetNode",
+    "GetNode",
+];
 
 /// 只在前端存在的**直通**节点（1 进 1 出地把上游那一路递下去）。
 ///
@@ -266,7 +272,8 @@ pub fn to_api_graph(
         if handled.contains(&id) || redirected_ids.contains(&id) {
             continue;
         }
-        if (FRONTEND_VIRTUAL.contains(&class.as_str()) || FRONTEND_PASSTHROUGH.contains(&class.as_str()))
+        if (FRONTEND_VIRTUAL.contains(&class.as_str())
+            || FRONTEND_PASSTHROUGH.contains(&class.as_str()))
             && object_info.get(&class).is_none()
         {
             continue;
@@ -299,16 +306,25 @@ pub fn to_api_graph(
         // 1) 连线优先：界面格式里 `inputs[].link` 指向 links 表
         if let Some(list) = node.get("inputs").and_then(Value::as_array) {
             for entry in list {
-                let Some(entry) = entry.as_object() else { continue };
-                let Some(name) = entry.get("name").and_then(Value::as_str).filter(|n| !n.trim().is_empty())
+                let Some(entry) = entry.as_object() else {
+                    continue;
+                };
+                let Some(name) = entry
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .filter(|n| !n.trim().is_empty())
                 else {
                     continue;
                 };
                 if inputs.contains_key(name) {
                     continue;
                 }
-                let Some(link_id) = as_int(entry.get("link")) else { continue };
-                let Some(reference) = links.get(&link_id) else { continue };
+                let Some(link_id) = as_int(entry.get("link")) else {
+                    continue;
+                };
+                let Some(reference) = links.get(&link_id) else {
+                    continue;
+                };
                 // 穿透 Reroute / Set-Get / 旁路的节点，拿到真正的产出节点
                 let source = resolve(reference.clone(), &redirects);
                 inputs.insert(name.to_string(), json!([ref_of(&source.0), source.1]));
@@ -322,12 +338,23 @@ pub fn to_api_graph(
             }
         }
         // 3) 控件值：按 /object_info 的声明顺序贴回名字上
-        fill_widgets(node, &widget_specs(info), &mut inputs, &mut warnings, &id, &class);
+        fill_widgets(
+            node,
+            &widget_specs(info),
+            &mut inputs,
+            &mut warnings,
+            &id,
+            &class,
+        );
 
         let mut node_out = Map::new();
         node_out.insert("class_type".into(), json!(class));
         node_out.insert("inputs".into(), Value::Object(inputs.clone()));
-        if let Some(title) = node.get("title").and_then(Value::as_str).filter(|t| !t.trim().is_empty()) {
+        if let Some(title) = node
+            .get("title")
+            .and_then(Value::as_str)
+            .filter(|t| !t.trim().is_empty())
+        {
             node_out.insert("_meta".into(), json!({ "title": title }));
         }
         out.insert(id.clone(), Value::Object(node_out));
@@ -347,8 +374,12 @@ pub fn to_api_graph(
     let mut broadcast_lines: Vec<String> = Vec::new();
     let mut injected_nodes: Vec<String> = Vec::new();
     if emulate_frontend {
-        let (emulated, report) =
-            crate::workflow::workflow_frontend::emulate(&raw_nodes, object_info, &final_graph, &links);
+        let (emulated, report) = crate::workflow::workflow_frontend::emulate(
+            &raw_nodes,
+            object_info,
+            &final_graph,
+            &links,
+        );
         final_graph = emulated;
         // 广播灌完之后"还空着"的清单要重算：不然模型会去补一根已经接好的线
         final_open = crate::workflow::workflow_frontend::open_inputs_of(object_info, &final_graph);
@@ -359,7 +390,10 @@ pub fn to_api_graph(
         injected_nodes = report.injected;
         // 已经等价改写掉的节点不该再挂在 unsupported 里
         unsupported.retain(|line| {
-            !report.handled_ids.iter().any(|handled_id| line.starts_with(&format!("{handled_id} ")))
+            !report
+                .handled_ids
+                .iter()
+                .any(|handled_id| line.starts_with(&format!("{handled_id} ")))
         });
         unsupported.extend(report.unsupported);
     } else {
@@ -462,16 +496,23 @@ fn flatten(ui: &Map<String, Value>, object_info: &Map<String, Value>) -> Flat {
         }
 
         let short: String = class.chars().take(8).collect();
-        let input_proxy = def.get("inputNode").and_then(Value::as_object).and_then(node_id);
-        let output_proxy = def.get("outputNode").and_then(Value::as_object).and_then(node_id);
+        let input_proxy = def
+            .get("inputNode")
+            .and_then(Value::as_object)
+            .and_then(node_id);
+        let output_proxy = def
+            .get("outputNode")
+            .and_then(Value::as_object)
+            .and_then(node_id);
         let iface: Vec<&Map<String, Value>> = object_list(def.get("inputs"));
         let inst_inputs: Vec<&Map<String, Value>> = object_list(node.get("inputs"));
         let inner_nodes: Vec<&Map<String, Value>> = object_list(def.get("nodes"));
 
         // 失败的三档：**带具体原因**报 unsupported，并登记 handled（第二遍跳过它）
         if input_proxy.is_none() || output_proxy.is_none() || inner_nodes.is_empty() {
-            unsupported
-                .push(format!("{id} {short}…（组节点：定义里缺少输入 / 输出代理，不敢猜着展开）"));
+            unsupported.push(format!(
+                "{id} {short}…（组节点：定义里缺少输入 / 输出代理，不敢猜着展开）"
+            ));
             handled.push(id.clone());
             nodes.push(node.clone());
             continue;
@@ -486,8 +527,13 @@ fn flatten(ui: &Map<String, Value>, object_info: &Map<String, Value>) -> Flat {
             nodes.push(node.clone());
             continue;
         }
-        if inner_nodes.iter().any(|inner| defs.contains_key(&ui_class(inner))) {
-            unsupported.push(format!("{id} {short}…（组节点里还套着一层组节点，这一版不展开）"));
+        if inner_nodes
+            .iter()
+            .any(|inner| defs.contains_key(&ui_class(inner)))
+        {
+            unsupported.push(format!(
+                "{id} {short}…（组节点里还套着一层组节点，这一版不展开）"
+            ));
             handled.push(id.clone());
             nodes.push(node.clone());
             continue;
@@ -522,7 +568,10 @@ fn flatten(ui: &Map<String, Value>, object_info: &Map<String, Value>) -> Flat {
             }
             // Kotlin `name?.let { named?.get(it) } ?: positional`：
             // 有名字那份里**没有这个键**时也要退回位置式那一份
-            let name = iface.get(slot).and_then(|decl| decl.get("name")).and_then(primitive_text);
+            let name = iface
+                .get(slot)
+                .and_then(|decl| decl.get("name"))
+                .and_then(primitive_text);
             let named = node.get("widgets_values_named").and_then(Value::as_object);
             let positional = node
                 .get("widgets_values")
@@ -542,10 +591,16 @@ fn flatten(ui: &Map<String, Value>, object_info: &Map<String, Value>) -> Flat {
         // 内部连线：输入代理换成真实来源；输出代理登记成实例输出的改写
         let mut widget_fix: HashMap<i64, (String, Value)> = HashMap::new();
         for (old_link, link) in &inner_links {
-            let Some(new_link) = renumber.get(old_link).copied() else { continue };
+            let Some(new_link) = renumber.get(old_link).copied() else {
+                continue;
+            };
             if Some(link.origin.as_str()) == input_proxy.as_deref() {
-                let source = source_of_slot.get(link.origin_slot as usize).and_then(Clone::clone);
-                let widget = widget_of_slot.get(link.origin_slot as usize).and_then(Clone::clone);
+                let source = source_of_slot
+                    .get(link.origin_slot as usize)
+                    .and_then(Clone::clone);
+                let widget = widget_of_slot
+                    .get(link.origin_slot as usize)
+                    .and_then(Clone::clone);
                 match (source, widget) {
                     (Some(source), _) => {
                         links.insert(new_link, source);
@@ -560,13 +615,17 @@ fn flatten(ui: &Map<String, Value>, object_info: &Map<String, Value>) -> Flat {
                     (None, None) => {}
                 }
             } else {
-                let origin =
-                    id_map.get(&link.origin).cloned().unwrap_or_else(|| link.origin.clone());
+                let origin = id_map
+                    .get(&link.origin)
+                    .cloned()
+                    .unwrap_or_else(|| link.origin.clone());
                 links.insert(new_link, (origin, link.origin_slot));
             }
             if Some(link.target.as_str()) == output_proxy.as_deref() {
-                let origin =
-                    id_map.get(&link.origin).cloned().unwrap_or_else(|| link.origin.clone());
+                let origin = id_map
+                    .get(&link.origin)
+                    .cloned()
+                    .unwrap_or_else(|| link.origin.clone());
                 redirects.insert((id.clone(), link.target_slot), (origin, link.origin_slot));
             }
         }
@@ -574,7 +633,9 @@ fn flatten(ui: &Map<String, Value>, object_info: &Map<String, Value>) -> Flat {
         // 内部节点本体：换号、重指连线、把外层控件的值填进对应输入
         for inner in &inner_nodes {
             let Some(raw) = node_id(inner) else { continue };
-            let Some(new_id) = id_map.get(&raw).cloned() else { continue };
+            let Some(new_id) = id_map.get(&raw).cloned() else {
+                continue;
+            };
             let mut fixed: Map<String, Value> = Map::new();
             let mut new_inputs: Vec<Value> = Vec::new();
             for entry in object_list(inner.get("inputs")) {
@@ -613,10 +674,22 @@ fn flatten(ui: &Map<String, Value>, object_info: &Map<String, Value>) -> Flat {
             nodes.push(merged);
         }
         handled.push(id.clone());
-        rewritten.push(format!("{id} {short}…（组节点，展开成 {} 个节点）", inner_nodes.len()));
+        rewritten.push(format!(
+            "{id} {short}…（组节点，展开成 {} 个节点）",
+            inner_nodes.len()
+        ));
     }
 
-    Flat { nodes, links, redirects, handled, forced_inputs, rewritten, unsupported, warnings }
+    Flat {
+        nodes,
+        links,
+        redirects,
+        handled,
+        forced_inputs,
+        rewritten,
+        unsupported,
+        warnings,
+    }
 }
 
 /// `definitions.subgraphs[]` → `id` → 定义（Kotlin `subgraphDefs`，重复 id 时后者胜）。
@@ -631,8 +704,12 @@ fn subgraph_defs(ui: &Map<String, Value>) -> HashMap<String, Map<String, Value>>
         return out;
     };
     for item in list {
-        let Some(def) = item.as_object() else { continue };
-        let Some(id) = def.get("id").and_then(primitive_text) else { continue };
+        let Some(def) = item.as_object() else {
+            continue;
+        };
+        let Some(id) = def.get("id").and_then(primitive_text) else {
+            continue;
+        };
         out.insert(id, def.clone());
     }
     out
@@ -665,13 +742,19 @@ pub(crate) struct RawLink {
 /// 判据只有这一份（`flatten` 与蓝图共用）。
 pub(crate) fn raw_links(raw: Option<&Value>) -> HashMap<i64, RawLink> {
     let mut out: HashMap<i64, RawLink> = HashMap::new();
-    let Some(list) = raw.and_then(Value::as_array) else { return out };
+    let Some(list) = raw.and_then(Value::as_array) else {
+        return out;
+    };
     for entry in list {
         match entry {
             // [link_id, origin_id, origin_slot, target_id, target_slot, type]
             Value::Array(items) => {
-                let Some(link_id) = as_int(items.first()) else { continue };
-                let Some(origin) = items.get(1).and_then(primitive_text) else { continue };
+                let Some(link_id) = as_int(items.first()) else {
+                    continue;
+                };
+                let Some(origin) = items.get(1).and_then(primitive_text) else {
+                    continue;
+                };
                 out.insert(
                     link_id,
                     RawLink {
@@ -685,14 +768,21 @@ pub(crate) fn raw_links(raw: Option<&Value>) -> HashMap<i64, RawLink> {
             }
             // {id, origin_id, origin_slot, target_id, target_slot, …}
             Value::Object(obj) => {
-                let Some(link_id) = as_int(obj.get("id")) else { continue };
-                let Some(origin) = obj.get("origin_id").and_then(primitive_text) else { continue };
+                let Some(link_id) = as_int(obj.get("id")) else {
+                    continue;
+                };
+                let Some(origin) = obj.get("origin_id").and_then(primitive_text) else {
+                    continue;
+                };
                 out.insert(
                     link_id,
                     RawLink {
                         origin,
                         origin_slot: as_int(obj.get("origin_slot")).unwrap_or(0),
-                        target: obj.get("target_id").and_then(primitive_text).unwrap_or_default(),
+                        target: obj
+                            .get("target_id")
+                            .and_then(primitive_text)
+                            .unwrap_or_default(),
                         target_slot: as_int(obj.get("target_slot")).unwrap_or(0),
                         type_name: obj.get("type").and_then(primitive_text),
                     },
@@ -731,7 +821,11 @@ fn bypass_redirects(
                     let entry = entry.as_object()?;
                     let link_id = as_int(entry.get("link"))?;
                     let source = links.get(&link_id)?;
-                    Some((index, entry.get("type").and_then(primitive_text), source.clone()))
+                    Some((
+                        index,
+                        entry.get("type").and_then(primitive_text),
+                        source.clone(),
+                    ))
                 })
                 .collect()
         })
@@ -742,8 +836,11 @@ fn bypass_redirects(
         let same_slot = linked_inputs
             .iter()
             .find(|(index, input_type, _)| *index == slot && *input_type == output_type);
-        let candidate = same_slot
-            .or_else(|| linked_inputs.iter().find(|(_, input_type, _)| *input_type == output_type));
+        let candidate = same_slot.or_else(|| {
+            linked_inputs
+                .iter()
+                .find(|(_, input_type, _)| *input_type == output_type)
+        });
         match candidate {
             Some((_, _, source)) => {
                 let resolved = resolve(source.clone(), redirects);
@@ -763,17 +860,19 @@ fn bypass_redirects(
 }
 
 /// 谁引用了这个节点的输出（给"静音节点"的警告用）。
-fn consumers_of(
-    id: &str,
-    nodes: &[Map<String, Value>],
-    links: &LinkTable,
-) -> Vec<String> {
+fn consumers_of(id: &str, nodes: &[Map<String, Value>], links: &LinkTable) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     for node in nodes {
-        let Some(inputs) = node.get("inputs").and_then(Value::as_array) else { continue };
+        let Some(inputs) = node.get("inputs").and_then(Value::as_array) else {
+            continue;
+        };
         for entry in inputs {
-            let Some(entry) = entry.as_object() else { continue };
-            let Some(link_id) = as_int(entry.get("link")) else { continue };
+            let Some(entry) = entry.as_object() else {
+                continue;
+            };
+            let Some(link_id) = as_int(entry.get("link")) else {
+                continue;
+            };
             if links.get(&link_id).map(|(origin, _)| origin.as_str()) == Some(id) {
                 let label = format!(
                     "{}（{}）",
@@ -848,8 +947,10 @@ fn fill_widgets(
         }
         Some(Value::Array(values)) => {
             // 已经被连线占掉的输入不重复写（ComfyUI 会当未知参数拒掉）
-            let pending: Vec<&WidgetSpec> =
-                specs.iter().filter(|spec| !inputs.contains_key(&spec.name)).collect();
+            let pending: Vec<&WidgetSpec> = specs
+                .iter()
+                .filter(|spec| !inputs.contains_key(&spec.name))
+                .collect();
             let expected = pending.len() + pending.iter().filter(|spec| spec.extra_slot).count();
             if values.len() != expected {
                 warnings.push(format!(
@@ -860,7 +961,9 @@ fn fill_widgets(
             }
             let mut index = 0usize;
             for spec in pending {
-                let Some(value) = values.get(index) else { break };
+                let Some(value) = values.get(index) else {
+                    break;
+                };
                 index += 1;
                 if !value.is_null() {
                     inputs.insert(spec.name.clone(), value.clone());
@@ -884,7 +987,9 @@ struct WidgetSpec {
 
 /// `parent` 这个动态下拉框的子项名（`sampling_mode.temperature`）。
 fn is_dynamic_child(parent: &str, name: &str) -> bool {
-    name.strip_prefix(parent).map(|rest| rest.starts_with('.') && rest.len() > 1).unwrap_or(false)
+    name.strip_prefix(parent)
+        .map(|rest| rest.starts_with('.') && rest.len() > 1)
+        .unwrap_or(false)
 }
 
 /// 一个输入声明算不算"控件"（= 有 `widgets_values` 槽位）。
@@ -896,7 +1001,9 @@ fn is_dynamic_child(parent: &str, name: &str) -> bool {
 /// （Kotlin 那边是 `WorkflowConvert.isWidgetInput` 与 `FrontendNodes.isWidgetSpec` 两份，
 /// 那两份在"声明是数组"这个前提下**判得一样**，搬过来就不必再抄一遍）。
 pub(crate) fn is_widget_input(decl: &Value) -> bool {
-    let Some(items) = decl.as_array() else { return false };
+    let Some(items) = decl.as_array() else {
+        return false;
+    };
     if let Some(options) = items.get(1).and_then(Value::as_object) {
         if options.get("forceInput").and_then(Value::as_bool) == Some(true) {
             return false;
@@ -935,10 +1042,14 @@ pub(crate) fn widget_names(info: &Map<String, Value>) -> Vec<Option<String>> {
 
 /// 一个节点的控件（= 有 `widgets_values` 槽位的输入）名字与顺序，来自 `/object_info`。
 fn widget_specs(info: &Map<String, Value>) -> Vec<WidgetSpec> {
-    let Some(input) = info.get("input").and_then(Value::as_object) else { return Vec::new() };
+    let Some(input) = info.get("input").and_then(Value::as_object) else {
+        return Vec::new();
+    };
     let mut out: Vec<WidgetSpec> = Vec::new();
     for group in ["required", "optional"] {
-        let Some(map) = input.get(group).and_then(Value::as_object) else { continue };
+        let Some(map) = input.get(group).and_then(Value::as_object) else {
+            continue;
+        };
         for (name, raw) in map {
             if !is_widget_input(raw) {
                 continue;
@@ -956,7 +1067,11 @@ fn widget_specs(info: &Map<String, Value>) -> Vec<WidgetSpec> {
                 .and_then(primitive_text)
                 .map(|text| text.to_uppercase().starts_with("COMFY_DYNAMIC"))
                 .unwrap_or(false);
-            out.push(WidgetSpec { name: name.clone(), extra_slot, dynamic });
+            out.push(WidgetSpec {
+                name: name.clone(),
+                extra_slot,
+                dynamic,
+            });
         }
     }
     out
@@ -969,9 +1084,13 @@ fn collect_open_inputs(
     id: &str,
     into: &mut Vec<String>,
 ) {
-    let Some(input) = info.get("input").and_then(Value::as_object) else { return };
+    let Some(input) = info.get("input").and_then(Value::as_object) else {
+        return;
+    };
     for group in ["required", "optional"] {
-        let Some(map) = input.get(group).and_then(Value::as_object) else { continue };
+        let Some(map) = input.get(group).and_then(Value::as_object) else {
+            continue;
+        };
         for (name, raw) in map {
             if inputs.contains_key(name) {
                 continue;
@@ -981,7 +1100,10 @@ fn collect_open_inputs(
             if is_widget_input(raw) {
                 continue;
             }
-            let Some(type_name) = raw.as_array().and_then(|items| items.first()).and_then(primitive_text)
+            let Some(type_name) = raw
+                .as_array()
+                .and_then(|items| items.first())
+                .and_then(primitive_text)
             else {
                 continue;
             };
@@ -997,10 +1119,17 @@ fn collect_open_inputs(
 fn dangling_inputs(out: &Map<String, Value>) -> Vec<String> {
     let mut dangling: Vec<String> = Vec::new();
     for (id, value) in out {
-        let Some(node) = value.as_object() else { continue };
-        let Some(inputs) = node.get("inputs").and_then(Value::as_object) else { continue };
+        let Some(node) = value.as_object() else {
+            continue;
+        };
+        let Some(inputs) = node.get("inputs").and_then(Value::as_object) else {
+            continue;
+        };
         for (name, reference) in inputs {
-            let Some(source) = reference.as_array().and_then(|items| items.first()).and_then(primitive_text)
+            let Some(source) = reference
+                .as_array()
+                .and_then(|items| items.first())
+                .and_then(primitive_text)
             else {
                 continue;
             };
@@ -1027,14 +1156,15 @@ fn resolve(reference: (String, i64), redirects: &Redirects) -> (String, i64) {
 }
 
 /// 节点第一个有连线的输入 → (上游节点, 槽位)。
-fn first_linked_input(
-    node: &Map<String, Value>,
-    links: &LinkTable,
-) -> Option<(String, i64)> {
+fn first_linked_input(node: &Map<String, Value>, links: &LinkTable) -> Option<(String, i64)> {
     let inputs = node.get("inputs").and_then(Value::as_array)?;
     for entry in inputs {
-        let Some(entry) = entry.as_object() else { continue };
-        let Some(link_id) = as_int(entry.get("link")) else { continue };
+        let Some(entry) = entry.as_object() else {
+            continue;
+        };
+        let Some(link_id) = as_int(entry.get("link")) else {
+            continue;
+        };
         if let Some(source) = links.get(&link_id) {
             return Some(source.clone());
         }
@@ -1045,10 +1175,16 @@ fn first_linked_input(
 /// 有几个输入真的接了线（直通类节点要靠它判形状，见 [`FRONTEND_PASSTHROUGH`]）。
 fn linked_input_count(node: &Map<String, Value>, links: &LinkTable) -> usize {
     let mut count = 0;
-    let Some(inputs) = node.get("inputs").and_then(Value::as_array) else { return 0 };
+    let Some(inputs) = node.get("inputs").and_then(Value::as_array) else {
+        return 0;
+    };
     for entry in inputs {
-        let Some(entry) = entry.as_object() else { continue };
-        let Some(link_id) = as_int(entry.get("link")) else { continue };
+        let Some(entry) = entry.as_object() else {
+            continue;
+        };
+        let Some(link_id) = as_int(entry.get("link")) else {
+            continue;
+        };
         if links.contains_key(&link_id) {
             count += 1;
         }
@@ -1076,7 +1212,9 @@ fn widget_string(node: &Map<String, Value>) -> Option<String> {
 /// ⚠ 这两个键名混过一次、代价是**一张空图**（每个节点都被当成"没有类名"跳过，
 /// 而空图提交上去只得到 ComfyUI 一句 `Prompt has no outputs`）。
 pub(crate) fn ui_class(node: &Map<String, Value>) -> String {
-    node.get("type").and_then(primitive_text).unwrap_or_default()
+    node.get("type")
+        .and_then(primitive_text)
+        .unwrap_or_default()
 }
 
 /// 节点 id：界面格式里是**数字**，统一转成文本（API 格式的键是字符串）。
@@ -1084,7 +1222,9 @@ pub(crate) fn ui_class(node: &Map<String, Value>) -> String {
 /// ⚠ 空白 id 当**没有 id**（Kotlin `JsonObject.idOf` 的 `takeIf { it.isNotBlank() }`）：
 /// 这样它既不会被当成图的键，也不会被当成某个改写表的键。
 pub(crate) fn node_id(node: &Map<String, Value>) -> Option<String> {
-    node.get("id").and_then(primitive_text).filter(|id| !id.trim().is_empty())
+    node.get("id")
+        .and_then(primitive_text)
+        .filter(|id| !id.trim().is_empty())
 }
 
 fn node_int(node: &Map<String, Value>, field: &str) -> Option<i64> {
@@ -1111,7 +1251,10 @@ pub(crate) fn as_int(value: Option<&Value>) -> Option<i64> {
     if let Ok(parsed) = trimmed.parse::<i64>() {
         return Some(parsed);
     }
-    trimmed.parse::<f64>().ok().map(|v| v.trunc().clamp(i64::MIN as f64, i64::MAX as f64) as i64)
+    trimmed
+        .parse::<f64>()
+        .ok()
+        .map(|v| v.trunc().clamp(i64::MIN as f64, i64::MAX as f64) as i64)
 }
 
 /// 节点引用里的 id 值：**永远是字符串**（`["128", 0]`，不是 `[128, 0]`）。

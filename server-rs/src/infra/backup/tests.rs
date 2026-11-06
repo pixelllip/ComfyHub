@@ -154,7 +154,10 @@ fn names_never_escape_the_backup_directory() {
     for bad in ["../evil.db", "a/b.db", "..", "", "x.txt", "a..b.db"] {
         assert!(!is_safe_name(bad), "`{bad}` 不该被当成备份名");
     }
-    for good in ["comfyhub-20261106-131211.db", "before-restore-20261106-131211-2.db"] {
+    for good in [
+        "comfyhub-20261106-131211.db",
+        "before-restore-20261106-131211-2.db",
+    ] {
         assert!(is_safe_name(good), "`{good}` 是合法备份名");
     }
     let (root, db) = scene("backup-names");
@@ -170,7 +173,10 @@ fn deleting_a_backup_reports_missing_ones() {
     let item = create(&conn, &root).expect("备份");
     assert!(delete(&root, &item.name).expect("删掉"));
     assert!(list(&root).unwrap().is_empty());
-    assert!(!delete(&root, &item.name).expect("再删一次"), "本来就没有 = false");
+    assert!(
+        !delete(&root, &item.name).expect("再删一次"),
+        "本来就没有 = false"
+    );
 }
 
 #[test]

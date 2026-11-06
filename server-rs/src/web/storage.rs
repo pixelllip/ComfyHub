@@ -41,10 +41,10 @@ async fn storage_usage(State(state): State<AppState>) -> Result<Json<Value>, Api
         .map_err(|e| ApiError::internal(format!("统计任务失败：{e}")))?;
     let events = runs::event_stats(&state)?;
 
-    let mut body = serde_json::to_value(usage)
-        .map_err(|e| ApiError::internal(format!("序列化失败：{e}")))?;
-    body["events"] = serde_json::to_value(events)
-        .map_err(|e| ApiError::internal(format!("序列化失败：{e}")))?;
+    let mut body =
+        serde_json::to_value(usage).map_err(|e| ApiError::internal(format!("序列化失败：{e}")))?;
+    body["events"] =
+        serde_json::to_value(events).map_err(|e| ApiError::internal(format!("序列化失败：{e}")))?;
     Ok(Json(body))
 }
 

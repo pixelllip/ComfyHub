@@ -108,7 +108,8 @@ pub fn dir(project_root: &Path) -> PathBuf {
 
 fn ensure_dir(project_root: &Path) -> Result<PathBuf, String> {
     let dir = dir(project_root);
-    std::fs::create_dir_all(&dir).map_err(|e| format!("建备份目录失败（{}）：{e}", dir.display()))?;
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| format!("建备份目录失败（{}）：{e}", dir.display()))?;
     Ok(dir)
 }
 
@@ -130,7 +131,10 @@ fn old_path(db_path: &Path) -> PathBuf {
 
 /// `<db>` 同目录下的一个兄弟文件（`comfyhub.db` → `comfyhub.db.restore-tmp`）。
 fn sibling(db_path: &Path, suffix: &str) -> PathBuf {
-    let mut name = db_path.file_name().map(|n| n.to_os_string()).unwrap_or_default();
+    let mut name = db_path
+        .file_name()
+        .map(|n| n.to_os_string())
+        .unwrap_or_default();
     name.push(".");
     name.push(suffix);
     db_path.with_file_name(name)
@@ -168,7 +172,8 @@ pub fn list(project_root: &Path) -> Result<Vec<Item>, String> {
         return Ok(Vec::new());
     }
     let mut items: Vec<(SystemTime, Item)> = Vec::new();
-    let entries = std::fs::read_dir(&dir).map_err(|e| format!("读备份目录失败（{}）：{e}", dir.display()))?;
+    let entries =
+        std::fs::read_dir(&dir).map_err(|e| format!("读备份目录失败（{}）：{e}", dir.display()))?;
     for entry in entries.flatten() {
         let path = entry.path();
         if !path.is_file() {
@@ -215,7 +220,11 @@ pub fn create(conn: &Connection, project_root: &Path) -> Result<Item, String> {
     create_with_prefix(conn, project_root, AUTO_PREFIX)
 }
 
-fn create_with_prefix(conn: &Connection, project_root: &Path, prefix: &str) -> Result<Item, String> {
+fn create_with_prefix(
+    conn: &Connection,
+    project_root: &Path,
+    prefix: &str,
+) -> Result<Item, String> {
     let dir = ensure_dir(project_root)?;
     let stamp = stamp_now();
     let mut seq = 0;
@@ -239,13 +248,16 @@ fn create_with_prefix(conn: &Connection, project_root: &Path, prefix: &str) -> R
         .map_err(|e| format!("写备份失败（{}）：{e}", path.display()))?;
     let meta = std::fs::metadata(&path).map_err(|e| format!("备份写完却读不到它：{e}"))?;
     let item = Item {
-        name: path.file_name().unwrap_or_default().to_string_lossy().to_string(),
+        name: path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string(),
         bytes: meta.len(),
         created_at: crate::infra::iso_time::from_system_time(
             meta.modified().unwrap_or(SystemTime::UNIX_EPOCH),
         ),
-        kind: kind_of(&path.file_name().unwrap_or_default().to_string_lossy())
-            .unwrap_or("auto"),
+        kind: kind_of(&path.file_name().unwrap_or_default().to_string_lossy()).unwrap_or("auto"),
     };
     prune(project_root, prefix)?;
     Ok(item)
@@ -254,7 +266,11 @@ fn create_with_prefix(conn: &Connection, project_root: &Path, prefix: &str) -> R
 /// 只留最新的 N 份（同前缀）。按 **mtime** 排，不按文件名 —— 同一秒里带 `-2` 后缀的
 /// 那份名字反而更小，按名字排会把最新的删掉。
 fn prune(project_root: &Path, prefix: &str) -> Result<(), String> {
-    let keep = if prefix == BEFORE_PREFIX { KEEP_BEFORE } else { KEEP_AUTO };
+    let keep = if prefix == BEFORE_PREFIX {
+        KEEP_BEFORE
+    } else {
+        KEEP_AUTO
+    };
     let dir = dir(project_root);
     let mut entries: Vec<(SystemTime, PathBuf)> = Vec::new();
     let Ok(read) = std::fs::read_dir(&dir) else {
@@ -427,14 +443,16 @@ pub fn apply_pending(db_path: &Path) -> Option<LastRestore> {
     }
     let outcome = match std::fs::read_to_string(&marker)
         .map_err(|e| format!("读恢复标记失败：{e}"))
-        .and_then(|raw| serde_json::from_str::<Pending>(&raw).map_err(|e| format!("恢复标记坏了：{e}")))
-    {
+        .and_then(|raw| {
+            serde_json::from_str::<Pending>(&raw).map_err(|e| format!("恢复标记坏了：{e}"))
+        }) {
         Ok(pending) => match swap(db_path, &pending) {
             Ok(()) => LastRestore {
                 ok: true,
                 name: pending.name,
-                message: "已恢复这份备份。恢复前的库另存了一份 before-restore 备份，需要时可以再换回来。"
-                    .into(),
+                message:
+                    "已恢复这份备份。恢复前的库另存了一份 before-restore 备份，需要时可以再换回来。"
+                        .into(),
                 at: iso_now(),
             },
             Err(e) => LastRestore {

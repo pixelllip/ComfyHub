@@ -221,7 +221,11 @@ fn take_chars(text: &str, limit: usize) -> String {
 }
 
 /// 字段超长**报错**而不是截断。
-fn require_fits(value: Option<&String>, limit: usize, what: &str) -> Result<Option<String>, WriteError> {
+fn require_fits(
+    value: Option<&String>,
+    limit: usize,
+    what: &str,
+) -> Result<Option<String>, WriteError> {
     let Some(raw) = value else { return Ok(None) };
     let trimmed = raw.trim();
     if trimmed.is_empty() {
@@ -260,8 +264,12 @@ fn example_from_row(row: &Row<'_>) -> rusqlite::Result<CardExampleDto> {
         id,
         kind: row.get("kind").unwrap_or_else(|_| "IMAGE".to_string()),
         title: row.get::<_, Option<String>>("title")?.unwrap_or_default(),
-        original_name: row.get::<_, Option<String>>("original_name")?.unwrap_or_default(),
-        stored_name: row.get::<_, Option<String>>("stored_name")?.unwrap_or_default(),
+        original_name: row
+            .get::<_, Option<String>>("original_name")?
+            .unwrap_or_default(),
+        stored_name: row
+            .get::<_, Option<String>>("stored_name")?
+            .unwrap_or_default(),
         mime_type: row.get("mime_type")?,
         size_bytes: row.get::<_, Option<i64>>("size_bytes")?.unwrap_or(0),
         width: row.get("width")?,
@@ -291,7 +299,11 @@ pub fn list_examples(
     rows.collect()
 }
 
-fn with_examples(mut card: CardDto, conn: &Connection, kind: CardKind) -> rusqlite::Result<CardDto> {
+fn with_examples(
+    mut card: CardDto,
+    conn: &Connection,
+    kind: CardKind,
+) -> rusqlite::Result<CardDto> {
     card.examples = list_examples(conn, kind, card.id)?;
     Ok(card)
 }
@@ -354,7 +366,10 @@ pub fn replace_examples(
     let ids = clean_example_ids(media_ids)?;
     ensure_media_exist(conn, &ids)?;
     conn.execute(
-        &format!("DELETE FROM {examples} WHERE card_id = ?1", examples = kind.example_table()),
+        &format!(
+            "DELETE FROM {examples} WHERE card_id = ?1",
+            examples = kind.example_table()
+        ),
         params![card_id],
     )?;
     for id in &ids {
@@ -440,7 +455,10 @@ pub fn remove_example(
 
 fn card_exists(conn: &Connection, kind: CardKind, id: i64) -> rusqlite::Result<bool> {
     let found: i64 = conn.query_row(
-        &format!("SELECT COUNT(*) FROM {table} WHERE id = ?1", table = kind.table()),
+        &format!(
+            "SELECT COUNT(*) FROM {table} WHERE id = ?1",
+            table = kind.table()
+        ),
         params![id],
         |row| row.get(0),
     )?;
@@ -493,7 +511,10 @@ pub fn list(
 
 pub fn get(conn: &Connection, kind: CardKind, id: i64) -> rusqlite::Result<Option<CardDto>> {
     conn.query_row(
-        &format!("SELECT {BASE_COLUMNS} FROM {table} WHERE id = ?1", table = kind.table()),
+        &format!(
+            "SELECT {BASE_COLUMNS} FROM {table} WHERE id = ?1",
+            table = kind.table()
+        ),
         params![id],
         row_to_card,
     )
@@ -527,7 +548,10 @@ pub fn get_by_normalized(
 fn validate(kind: CardKind, input: &CardInput) -> Result<String, WriteError> {
     let name = input.name.trim();
     if name.is_empty() {
-        return Err(WriteError::Validation(format!("{}不能为空", kind.name_label())));
+        return Err(WriteError::Validation(format!(
+            "{}不能为空",
+            kind.name_label()
+        )));
     }
     let len = name.chars().count();
     if len > MAX_NAME_CHARS {
@@ -613,7 +637,9 @@ pub fn delete(conn: &Connection, kind: CardKind, id: i64) -> Result<bool, WriteE
 /// ⚠ 正面字段是**整段替换**（给了就整段覆盖），**不是追加** —— 追加会把
 /// 两段风格不同的提示词粘在一起，读起来像一条、其实是两条。
 pub fn merge(existing: Option<&CardDto>, incoming: CardInput) -> CardInput {
-    let Some(existing) = existing else { return incoming };
+    let Some(existing) = existing else {
+        return incoming;
+    };
     let pick = |new: Option<String>, old: Option<String>| match new {
         Some(v) if !v.trim().is_empty() => Some(v),
         _ => old,
@@ -693,7 +719,10 @@ pub fn render_card(kind: CardKind, card: &CardDto) -> String {
         out.push_str(&format!("  负面提示词: {}\n", clip(negative, 600)));
     }
     out.push_str(&examples_line(card));
-    out.push_str(&format!("  更新于 {}\n", card.updated_at.as_deref().unwrap_or("?")));
+    out.push_str(&format!(
+        "  更新于 {}\n",
+        card.updated_at.as_deref().unwrap_or("?")
+    ));
     out
 }
 
@@ -874,7 +903,10 @@ pub fn tool_save(
         .ok_or_else(|| {
             crate::tools::tools::ToolFailure::new(
                 "TOOL_ERROR",
-                format!("{}已保存但读不回来（id={id}）；这是本机的 bug，请如实告诉用户", kind.label()),
+                format!(
+                    "{}已保存但读不回来（id={id}）；这是本机的 bug，请如实告诉用户",
+                    kind.label()
+                ),
             )
         })?;
     let mut text = format!(
@@ -886,11 +918,11 @@ pub fn tool_save(
     text.push_str(&render_card(kind, &card));
     if missing_prompt(&card) {
         let length_rule = match kind {
-            CardKind::Character => {
-                "角色卡的正面提示词要写到 600+ token、覆盖全身上下每一个细节"
+            CardKind::Character => "角色卡的正面提示词要写到 600+ token、覆盖全身上下每一个细节",
+            CardKind::Style => {
+                "画风卡的正面提示词至少 100~200 token、一段话写完画风；\
+                复杂画风（材质按面部 / 头发 / 衣物 / 其他物体分开、多套打光）该写多长写多长"
             }
-            CardKind::Style => "画风卡的正面提示词至少 100~200 token、一段话写完画风；\
-                复杂画风（材质按面部 / 头发 / 衣物 / 其他物体分开、多套打光）该写多长写多长",
         };
         text.push_str(&format!(
             "\n⚠ 这张卡还空着**正面提示词**。写一版**自然语言**正文再带完整字段保存一次；\
@@ -898,7 +930,10 @@ pub fn tool_save(
              {length_rule}。规则见 skill `card-writer`。"
         ));
     }
-    Ok(crate::tools::tools::ToolOutcome::new(text, card_json(&card)))
+    Ok(crate::tools::tools::ToolOutcome::new(
+        text,
+        card_json(&card),
+    ))
 }
 
 /// 把 `state.with` / `state.write` 折出来的 `ApiError` 翻成 `ToolFailure`。
@@ -944,7 +979,9 @@ pub fn router() -> Router<AppState> {
         )
         .route(
             "/api/ai/style-cards/{id}",
-            axum::routing::get(get_style).put(update_style).delete(delete_style),
+            axum::routing::get(get_style)
+                .put(update_style)
+                .delete(delete_style),
         )
         .route(
             "/api/ai/style-cards/{id}/examples",
@@ -1023,7 +1060,11 @@ async fn update_card_impl(
         .ok_or_else(|| ApiError::internal("读取失败"))
 }
 
-async fn delete_card_impl(state: AppState, id: i64, kind: CardKind) -> Result<Json<Value>, ApiError> {
+async fn delete_card_impl(
+    state: AppState,
+    id: i64,
+    kind: CardKind,
+) -> Result<Json<Value>, ApiError> {
     let deleted = state.write(|conn| delete(conn, kind, id))?;
     if !deleted {
         return Err(ApiError::not_found(format!("{} {id} 不存在", kind.label())));
@@ -1116,7 +1157,10 @@ async fn create_character(
     create_card_impl(state, input, CardKind::Character).await
 }
 
-async fn get_character(State(state): State<AppState>, Id(id): Id) -> Result<Json<CardDto>, ApiError> {
+async fn get_character(
+    State(state): State<AppState>,
+    Id(id): Id,
+) -> Result<Json<CardDto>, ApiError> {
     get_card_impl(state, id, CardKind::Character).await
 }
 

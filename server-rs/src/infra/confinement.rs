@@ -59,7 +59,9 @@ pub const FILE_NAME: &str = "confinement.json";
 
 /// 标记在项目根下的位置。
 pub fn path(project_root: &Path) -> PathBuf {
-    project_root.join(crate::web::api_port_file::RUN_DIR).join(FILE_NAME)
+    project_root
+        .join(crate::web::api_port_file::RUN_DIR)
+        .join(FILE_NAME)
 }
 
 /// 一次自查的结论（纯计算结果，方便用例直接断言）。
@@ -128,7 +130,10 @@ pub fn dir_writable(dir: &Path) -> bool {
 ///
 /// 判据可注入，用例因此**不依赖这台机器的目录可不可写**。注入的判据返回 `Err(原因)`，
 /// 原因会原样进留证与文案（排查时"哪个目录、报什么错"是最有价值的两半）。
-pub fn probe(targets: &[(&str, Option<&Path>)], judge: &dyn Fn(&Path) -> Result<(), String>) -> Report {
+pub fn probe(
+    targets: &[(&str, Option<&Path>)],
+    judge: &dyn Fn(&Path) -> Result<(), String>,
+) -> Report {
     let mut report = Report::default();
     for (label, dir) in targets {
         let Some(dir) = dir else { continue };
@@ -169,7 +174,11 @@ pub fn refresh(state: &crate::web::routes::AppState) -> Report {
         ],
         &|dir| {
             probe_dir(dir).map_err(|e| {
-                format!("{}（os error {}）", e.kind().to_string().replace(" ", ""), e.raw_os_error().unwrap_or(0))
+                format!(
+                    "{}（os error {}）",
+                    e.kind().to_string().replace(" ", ""),
+                    e.raw_os_error().unwrap_or(0)
+                )
             })
         },
     );
@@ -275,7 +284,12 @@ pub fn read(project_root: &Path) -> Option<Report> {
         value
             .get(key)
             .and_then(|v| v.as_array())
-            .map(|a| a.iter().filter_map(|x| x.as_str()).map(String::from).collect())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|x| x.as_str())
+                    .map(String::from)
+                    .collect()
+            })
             .unwrap_or_default()
     };
     Some(Report {

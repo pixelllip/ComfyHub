@@ -25,7 +25,9 @@ use std::path::{Path, PathBuf};
 
 /// 暂存根：`<crate>\target\.scratch`。已随 `target/` 一起被 git 忽略。
 pub fn root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("target").join(".scratch")
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("target")
+        .join(".scratch")
 }
 
 /// 一个新的、带标签的暂存目录（**已创建**，可以直接往里写）。
@@ -39,7 +41,13 @@ pub fn scratch(label: &str) -> PathBuf {
     // 标签来自用例代码，不是用户输入；仍然清一遍路径分隔符，省得拼出子目录
     let safe: String = label
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '-' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '-'
+            }
+        })
         .collect();
     let dir = root().join(format!("{safe}-{nanos}"));
     std::fs::create_dir_all(&dir).expect("建测试暂存目录");

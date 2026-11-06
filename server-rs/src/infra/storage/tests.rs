@@ -86,7 +86,11 @@ fn usage_counts_every_known_directory() {
 #[test]
 fn usage_of_missing_directories_is_zero_not_an_error() {
     let root = testpaths::scratch("storage-empty");
-    let usage = usage(&root, &root.join("storage"), &root.join(".db").join("comfyhub.db"));
+    let usage = usage(
+        &root,
+        &root.join("storage"),
+        &root.join(".db").join("comfyhub.db"),
+    );
     assert_eq!(usage.total_bytes, 0);
     assert!(usage.dirs.iter().all(|d| d.bytes == 0));
 }
@@ -110,7 +114,12 @@ fn scan_finds_unreferenced_files_and_keeps_referenced_ones() {
     ] {
         age(&s.storage.join(name), old());
     }
-    for name in ["media/a.png", "thumbs/100.jpg", "ai-attachments/b.png", "ai-thumbs/att-1.jpg"] {
+    for name in [
+        "media/a.png",
+        "thumbs/100.jpg",
+        "ai-attachments/b.png",
+        "ai-thumbs/att-1.jpg",
+    ] {
         age(&s.storage.join(name), old());
     }
 

@@ -95,9 +95,16 @@ fn history_keeps_reasoning_apart_from_the_text() {
     assert_eq!(turns.len(), 1);
     assert_eq!(turns[0].content, "答案");
     assert!(!turns[0].content.contains("我一直在想"), "思考不许混进正文");
-    assert_eq!(turns[0].reasoning.as_deref(), Some("我一直在想"), "思考要挂在同一轮上回传");
+    assert_eq!(
+        turns[0].reasoning.as_deref(),
+        Some("我一直在想"),
+        "思考要挂在同一轮上回传"
+    );
     // 没有思考块的那一轮：`None`（而不是空串 —— 适配器据此判断"发不发"）
-    let plain = turns_of(&message("assistant", vec![text_part("只有正文")]), &AttachmentPlan::empty());
+    let plain = turns_of(
+        &message("assistant", vec![text_part("只有正文")]),
+        &AttachmentPlan::empty(),
+    );
     assert_eq!(plain[0].reasoning, None);
 }
 
@@ -110,12 +117,18 @@ fn sink_seals_reasoning_per_round() {
     let mut sink = Sink::default();
     sink.push_reasoning("第一轮想");
     assert_eq!(sink.seal_reasoning(), "第一轮想");
-    assert_eq!(sink.seal_reasoning(), "", "取走之后本轮必须是空的（不许重复归属）");
+    assert_eq!(
+        sink.seal_reasoning(),
+        "",
+        "取走之后本轮必须是空的（不许重复归属）"
+    );
     sink.push_reasoning("第二轮想");
     assert_eq!(sink.seal_reasoning(), "第二轮想");
     assert_eq!(sink.reasoning, "第一轮想第二轮想", "整条回复的思考照样完整");
     assert!(
-        parts_of(&sink).iter().any(|(kind, text, _, _)| kind == "reasoning" && text.contains("第二轮想")),
+        parts_of(&sink)
+            .iter()
+            .any(|(kind, text, _, _)| kind == "reasoning" && text.contains("第二轮想")),
         "落库的 reasoning 块要在（界面靠它显示思考）"
     );
 }
@@ -180,12 +193,18 @@ fn messages_without_parts_fall_back_to_text() {
 #[test]
 fn cancel_flag_lifecycle() {
     let executor = Executor::new();
-    assert!(!executor.request_cancel("r1"), "不在跑的 Run 没什么可取消的");
+    assert!(
+        !executor.request_cancel("r1"),
+        "不在跑的 Run 没什么可取消的"
+    );
     executor.mark_running("r1");
     assert!(executor.request_cancel("r1"));
     assert!(executor.is_cancelled("r1"));
     executor.mark_done("r1");
-    assert!(!executor.is_cancelled("r1"), "收尾之后旗标必须清掉（否则下一次 Run 一开就取消）");
+    assert!(
+        !executor.is_cancelled("r1"),
+        "收尾之后旗标必须清掉（否则下一次 Run 一开就取消）"
+    );
     assert!(!executor.request_cancel("r1"));
 }
 
@@ -227,6 +246,9 @@ fn 首条用户消息兜底成标题且去掉卡片标记() {
         Some("一二三四五六七八九十一二三四五六七八九十")
     );
     // 只有标记 / 空消息：不编标题
-    assert_eq!(title_from_user_message("[STYLE SPEC]\n\n[CHARACTER CARD]\n  "), None);
+    assert_eq!(
+        title_from_user_message("[STYLE SPEC]\n\n[CHARACTER CARD]\n  "),
+        None
+    );
     assert_eq!(title_from_user_message(""), None);
 }

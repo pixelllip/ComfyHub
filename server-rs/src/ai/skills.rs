@@ -132,10 +132,18 @@ pub fn parse_front_matter(raw: &str) -> (BTreeMap<String, String>, String) {
                 collected.push(next);
                 j += 1;
             }
-            while collected.first().map(|l| l.trim().is_empty()).unwrap_or(false) {
+            while collected
+                .first()
+                .map(|l| l.trim().is_empty())
+                .unwrap_or(false)
+            {
                 collected.remove(0);
             }
-            while collected.last().map(|l| l.trim().is_empty()).unwrap_or(false) {
+            while collected
+                .last()
+                .map(|l| l.trim().is_empty())
+                .unwrap_or(false)
+            {
                 collected.pop();
             }
             let indent = collected
@@ -146,9 +154,19 @@ pub fn parse_front_matter(raw: &str) -> (BTreeMap<String, String>, String) {
                 .unwrap_or(0);
             let body: Vec<String> = collected
                 .iter()
-                .map(|l| if l.len() >= indent { l[indent..].to_string() } else { String::new() })
+                .map(|l| {
+                    if l.len() >= indent {
+                        l[indent..].to_string()
+                    } else {
+                        String::new()
+                    }
+                })
                 .collect();
-            let joined = if fold { body.join(" ") } else { body.join("\n") };
+            let joined = if fold {
+                body.join(" ")
+            } else {
+                body.join("\n")
+            };
             meta.insert(key, joined.trim().to_string());
             i = j;
             continue;
@@ -159,7 +177,11 @@ pub fn parse_front_matter(raw: &str) -> (BTreeMap<String, String>, String) {
                 value = value[..pos].trim().to_string();
             }
         }
-        let trimmed = value.trim().trim_matches('"').trim_matches('\'').to_string();
+        let trimmed = value
+            .trim()
+            .trim_matches('"')
+            .trim_matches('\'')
+            .to_string();
         meta.insert(key, trimmed);
         i += 1;
     }
@@ -174,7 +196,9 @@ pub fn parse_front_matter(raw: &str) -> (BTreeMap<String, String>, String) {
 /// `|` / `|-` / `>` / `>-`（可带一位缩进位数）。
 fn is_block_scalar(value: &str) -> bool {
     let mut chars = value.chars();
-    let Some(first) = chars.next() else { return false };
+    let Some(first) = chars.next() else {
+        return false;
+    };
     if first != '|' && first != '>' {
         return false;
     }
@@ -256,7 +280,12 @@ fn short_digest(text: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(text.as_bytes());
     let out = hasher.finalize();
-    out.iter().map(|b| format!("{b:02x}")).collect::<String>().chars().take(16).collect()
+    out.iter()
+        .map(|b| format!("{b:02x}"))
+        .collect::<String>()
+        .chars()
+        .take(16)
+        .collect()
 }
 
 /// description 的**安全上限**（只约束 `save()` 这条写入路径，扫描已有 skill 时不判它）。
@@ -282,7 +311,9 @@ fn count_files_under(parent: &Path, name: &str) -> i64 {
         if depth > FILE_COUNT_MAX_DEPTH {
             return;
         }
-        let Ok(entries) = std::fs::read_dir(dir) else { return };
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
         for entry in entries.flatten() {
             let path = entry.path();
             match std::fs::symlink_metadata(&path) {
@@ -325,7 +356,9 @@ pub fn parse_one(file: &Path, fallback_name: &str, source: &'static str) -> Opti
             .map(|n| n.to_string_lossy() == fallback_name)
             .unwrap_or(false)
     {
-        fail(format!("frontmatter 的 name「{name}」与目录名「{fallback_name}」不一致"));
+        fail(format!(
+            "frontmatter 的 name「{name}」与目录名「{fallback_name}」不一致"
+        ));
     }
     let description = meta.get("description").cloned().unwrap_or_default();
     if description.trim().is_empty() {
@@ -348,8 +381,14 @@ pub fn parse_one(file: &Path, fallback_name: &str, source: &'static str) -> Opti
         entry: SkillEntry {
             name,
             description,
-            when_to_use: meta.get("whentouse").map(|s| s.trim().to_string()).filter(|s| !s.is_empty()),
-            version: meta.get("version").map(|s| s.trim().to_string()).filter(|s| !s.is_empty()),
+            when_to_use: meta
+                .get("whentouse")
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty()),
+            version: meta
+                .get("version")
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty()),
         },
         valid: error.is_none(),
         source,
@@ -368,7 +407,9 @@ fn scan_root(root: &Path, source: &'static str) -> Vec<(String, ParsedSkill)> {
     if !is_dir_no_follow(root) {
         return Vec::new();
     }
-    let Ok(entries) = std::fs::read_dir(root) else { return Vec::new() };
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return Vec::new();
+    };
     // 目录枚举顺序是文件系统给的：这里**按文件名排一次**，否则同名冲突时哪份生效
     // 取决于磁盘顺序（Kotlin 侧是 `Files.list`，同样没有保证 —— 排序至少让两端可复现）
     let mut paths: Vec<PathBuf> = entries.flatten().map(|e| e.path()).collect();
@@ -376,7 +417,10 @@ fn scan_root(root: &Path, source: &'static str) -> Vec<(String, ParsedSkill)> {
 
     let mut by_name: Vec<(String, ParsedSkill, bool)> = Vec::new();
     for entry in paths {
-        let file_name = entry.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+        let file_name = entry
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default();
         let is_dir = is_dir_no_follow(&entry);
         let file = if is_dir {
             let bundle = entry.join("SKILL.md");
@@ -399,7 +443,9 @@ fn scan_root(root: &Path, source: &'static str) -> Vec<(String, ParsedSkill)> {
             .or_else(|| file_name.strip_suffix(".MD"))
             .unwrap_or(&file_name)
             .to_string();
-        let Some(parsed) = parse_one(&file, &fallback, source) else { continue };
+        let Some(parsed) = parse_one(&file, &fallback, source) else {
+            continue;
+        };
         let name = parsed.entry.name.clone();
         match by_name.iter_mut().find(|(n, _, _)| *n == name) {
             Some(slot) => {
@@ -411,7 +457,10 @@ fn scan_root(root: &Path, source: &'static str) -> Vec<(String, ParsedSkill)> {
             None => by_name.push((name, parsed, is_dir)),
         }
     }
-    by_name.into_iter().map(|(name, parsed, _)| (name, parsed)).collect()
+    by_name
+        .into_iter()
+        .map(|(name, parsed, _)| (name, parsed))
+        .collect()
 }
 
 /// 全量扫描（内置 + 用户），同名冲突 **用户胜出**（AIH-037）。
@@ -426,7 +475,10 @@ fn scan_with_conflict(builtin_root: &Path, user_root: &Path) -> Vec<(ParsedSkill
     for (name, dto) in &builtin {
         match user.iter().find(|(n, _)| n == name) {
             // 用户那份胜出；`conflict` 只是提示，不影响可用性
-            Some((_, override_dto)) => out.push((override_dto.clone(), Some("覆盖了同名内置 skill".to_string()))),
+            Some((_, override_dto)) => out.push((
+                override_dto.clone(),
+                Some("覆盖了同名内置 skill".to_string()),
+            )),
             None => out.push((dto.clone(), None)),
         }
     }
@@ -441,7 +493,10 @@ fn scan_with_conflict(builtin_root: &Path, user_root: &Path) -> Vec<(ParsedSkill
 
 /// 全量扫描（丢掉 `conflict`）—— `catalog` / `snapshot` / `scan_all` 用。
 fn scan(builtin_root: &Path, user_root: &Path) -> Vec<ParsedSkill> {
-    scan_with_conflict(builtin_root, user_root).into_iter().map(|(s, _)| s).collect()
+    scan_with_conflict(builtin_root, user_root)
+        .into_iter()
+        .map(|(s, _)| s)
+        .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -511,7 +566,11 @@ impl SkillDto {
 /// **只有这一处拼路径**：端点的 `roots` / `scan` / `save` 全从它来 ——
 /// 分开拼的话，发布包（便携式）与源码树两种布局就会有一处拼错。
 pub fn roots_of(state: &crate::web::routes::AppState) -> (PathBuf, PathBuf) {
-    let storage = state.media_dir().parent().unwrap_or(state.media_dir()).to_path_buf();
+    let storage = state
+        .media_dir()
+        .parent()
+        .unwrap_or(state.media_dir())
+        .to_path_buf();
     (
         state.project_root().join("skills").join("builtin"),
         storage.join("ai").join("skills"),
@@ -558,7 +617,10 @@ pub struct SkillFailure {
 
 impl SkillFailure {
     fn new(code: &'static str, message: impl Into<String>) -> Self {
-        Self { code, message: message.into() }
+        Self {
+            code,
+            message: message.into(),
+        }
     }
 
     pub fn into_api_error(self) -> crate::web::routes::ApiError {
@@ -581,11 +643,17 @@ pub fn validate_name(name: &str) -> Result<(), SkillFailure> {
 fn safe_child(root: &Path, name: &str) -> Result<PathBuf, SkillFailure> {
     // `Path::join` 遇到绝对路径会**整段替换**（`join("D:\\x")` = `D:\x`）—— 先挡掉
     if Path::new(name).is_absolute() || name.contains(['/', '\\']) {
-        return Err(SkillFailure::new("PATH_DENIED", format!("非法 skill 路径：{name}")));
+        return Err(SkillFailure::new(
+            "PATH_DENIED",
+            format!("非法 skill 路径：{name}"),
+        ));
     }
     let child = root.join(name);
     if !child.starts_with(root) {
-        return Err(SkillFailure::new("PATH_DENIED", format!("非法 skill 路径：{name}")));
+        return Err(SkillFailure::new(
+            "PATH_DENIED",
+            format!("非法 skill 路径：{name}"),
+        ));
     }
     Ok(child)
 }
@@ -609,7 +677,12 @@ pub fn read_detail(
     let (builtin, user) = roots_of(state);
     let file = file_of(&builtin, &user, name)
         .map(|(path, _)| path)
-        .ok_or_else(|| SkillFailure::new("SKILL_NOT_FOUND", format!("找不到 skill「{name}」的正文文件")))?;
+        .ok_or_else(|| {
+            SkillFailure::new(
+                "SKILL_NOT_FOUND",
+                format!("找不到 skill「{name}」的正文文件"),
+            )
+        })?;
     let raw = std::fs::read_to_string(&file)
         .map_err(|e| SkillFailure::new("IO_ERROR", format!("读不了 skill「{name}」的正文：{e}")))?;
     let (_, body) = parse_front_matter(&raw);
@@ -621,7 +694,10 @@ fn render(name: &str, description: &str, when_to_use: Option<&str>, body: &str) 
     let mut out = String::new();
     out.push_str("---\n");
     out.push_str(&format!("name: {name}\n"));
-    out.push_str(&format!("description: {}\n", description.replace('\n', " ")));
+    out.push_str(&format!(
+        "description: {}\n",
+        description.replace('\n', " ")
+    ));
     if let Some(when) = when_to_use.map(str::trim).filter(|w| !w.is_empty()) {
         out.push_str(&format!("whenToUse: {}\n", when.replace('\n', " ")));
     }
@@ -643,7 +719,10 @@ pub fn save(
     validate_name(name)?;
     let desc = description.trim();
     if desc.is_empty() {
-        return Err(SkillFailure::new("INVALID_ARGUMENT", "description 必填：说明这个 skill 什么时候用"));
+        return Err(SkillFailure::new(
+            "INVALID_ARGUMENT",
+            "description 必填：说明这个 skill 什么时候用",
+        ));
     }
     // Kotlin 的 `String.length` 是 **UTF-16 码元**数
     let desc_len = desc.encode_utf16().count();
@@ -665,14 +744,26 @@ pub fn save(
     }
 
     let (_, user_root) = roots_of(state);
-    std::fs::create_dir_all(&user_root)
-        .map_err(|e| SkillFailure::new("IO_ERROR", format!("建不了 skill 目录（{}）：{e}", user_root.display())))?;
+    std::fs::create_dir_all(&user_root).map_err(|e| {
+        SkillFailure::new(
+            "IO_ERROR",
+            format!("建不了 skill 目录（{}）：{e}", user_root.display()),
+        )
+    })?;
     let dir = safe_child(&user_root, name)?;
-    std::fs::create_dir_all(&dir)
-        .map_err(|e| SkillFailure::new("IO_ERROR", format!("建不了 skill 目录（{}）：{e}", dir.display())))?;
+    std::fs::create_dir_all(&dir).map_err(|e| {
+        SkillFailure::new(
+            "IO_ERROR",
+            format!("建不了 skill 目录（{}）：{e}", dir.display()),
+        )
+    })?;
     let file = dir.join("SKILL.md");
-    std::fs::write(&file, render(name, desc, when_to_use, body))
-        .map_err(|e| SkillFailure::new("IO_ERROR", format!("写不了 skill 文件（{}）：{e}", file.display())))?;
+    std::fs::write(&file, render(name, desc, when_to_use, body)).map_err(|e| {
+        SkillFailure::new(
+            "IO_ERROR",
+            format!("写不了 skill 文件（{}）：{e}", file.display()),
+        )
+    })?;
 
     list(state)
         .into_iter()
@@ -695,7 +786,9 @@ pub fn delete(state: &crate::web::routes::AppState, name: &str) -> Result<bool, 
         ));
     }
     let (builtin, user_root) = roots_of(state);
-    let Some((file, _)) = file_of(&builtin, &user_root, name) else { return Ok(false) };
+    let Some((file, _)) = file_of(&builtin, &user_root, name) else {
+        return Ok(false);
+    };
     let _ = std::fs::remove_file(&file);
     // bundle 目录：整个删掉（含 references/）；平铺 `<name>.md` 只删文件
     if let Some(parent) = file.parent() {
@@ -741,10 +834,18 @@ pub fn slug_of(raw: &str) -> Option<String> {
 fn describe(body: &str, label: &str) -> String {
     let first = body
         .lines()
-        .map(|line| line.trim().trim_start_matches(['#', '>', '-', '*', ' ', '\t']).trim())
+        .map(|line| {
+            line.trim()
+                .trim_start_matches(['#', '>', '-', '*', ' ', '\t'])
+                .trim()
+        })
         .find(|line| !line.is_empty())
         .unwrap_or("");
-    let text = if first.is_empty() { format!("从 {label} 自动登记") } else { first.to_string() };
+    let text = if first.is_empty() {
+        format!("从 {label} 自动登记")
+    } else {
+        first.to_string()
+    };
     // Kotlin `take(160)` 是 UTF-16 码元
     crate::ai::memory::take_utf16(&text, AUTO_DESCRIPTION_CHARS)
 }
@@ -808,7 +909,9 @@ pub fn auto_register(state: &crate::web::routes::AppState) -> SkillAutoRegisterR
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_default();
-        let Some((file, fallback)) = entry_of(&entry) else { continue };
+        let Some((file, fallback)) = entry_of(&entry) else {
+            continue;
+        };
         let Ok(raw) = std::fs::read_to_string(&file) else {
             errors.push(format!("{label}：读不了"));
             continue;
@@ -869,8 +972,14 @@ pub fn catalog(builtin_root: &Path, user_root: &Path) -> Vec<SkillEntry> {
 ///
 /// ⚠ `digest` 是**文件原文** sha256 的前 16 位（不是解析后的 body）——
 /// 与 Kotlin `SkillStore.sha256(raw)` 同一个口径，改一个字就不同。
-pub fn snapshot(state: &crate::web::routes::AppState) -> Result<serde_json::Value, crate::web::routes::ApiError> {
-    let storage = state.media_dir().parent().unwrap_or(state.media_dir()).to_path_buf();
+pub fn snapshot(
+    state: &crate::web::routes::AppState,
+) -> Result<serde_json::Value, crate::web::routes::ApiError> {
+    let storage = state
+        .media_dir()
+        .parent()
+        .unwrap_or(state.media_dir())
+        .to_path_buf();
     let entries = scan(
         &state.project_root().join("skills").join("builtin"),
         &storage.join("ai").join("skills"),
@@ -893,7 +1002,11 @@ pub fn snapshot(state: &crate::web::routes::AppState) -> Result<serde_json::Valu
 ///
 /// 返回 `(路径, source)`。与 [`catalog`] 走**同一次扫描**：分开扫两次会出现
 /// "目录里有它、load 说找不到"这种自相矛盾。
-pub fn file_of(builtin_root: &Path, user_root: &Path, name: &str) -> Option<(PathBuf, &'static str)> {
+pub fn file_of(
+    builtin_root: &Path,
+    user_root: &Path,
+    name: &str,
+) -> Option<(PathBuf, &'static str)> {
     let trimmed = name.trim();
     // 走 `scan_root` 而不是 `scan`：要连**不合法**的那条也找得到，
     // 这样 `load_skill` 才能区分"没有这个 skill"与"有这个 skill 但它不合法"
@@ -983,7 +1096,9 @@ pub struct ScannedSkill {
 
 /// `Files.isDirectory(path, NOFOLLOW_LINKS)`：**不看符号链接指向什么**。
 fn is_dir_no_follow(path: &Path) -> bool {
-    std::fs::symlink_metadata(path).map(|m| m.is_dir()).unwrap_or(false)
+    std::fs::symlink_metadata(path)
+        .map(|m| m.is_dir())
+        .unwrap_or(false)
 }
 
 #[cfg(test)]

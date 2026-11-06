@@ -4,10 +4,13 @@ import 'package:viewer/pages/ai_home_page.dart';
 
 /// 把三个有代表性的内置项做成夹具：剪切 / 粘贴 / 全选。
 List<ContextMenuButtonItem> _builtin({required VoidCallback onPaste}) => [
-      ContextMenuButtonItem(type: ContextMenuButtonType.cut, onPressed: () {}),
-      ContextMenuButtonItem(type: ContextMenuButtonType.paste, onPressed: onPaste),
-      ContextMenuButtonItem(type: ContextMenuButtonType.selectAll, onPressed: () {}),
-    ];
+  ContextMenuButtonItem(type: ContextMenuButtonType.cut, onPressed: () {}),
+  ContextMenuButtonItem(type: ContextMenuButtonType.paste, onPressed: onPaste),
+  ContextMenuButtonItem(
+    type: ContextMenuButtonType.selectAll,
+    onPressed: () {},
+  ),
+];
 
 void main() {
   // 用户 2026-10-18："右键粘贴贴的是文件地址。"
@@ -29,15 +32,11 @@ void main() {
       );
 
       expect(items, hasLength(3), reason: '不许悄悄多出一项或少一项');
-      expect(
-        items.map((item) => item.type).toList(),
-        [
-          ContextMenuButtonType.cut,
-          ContextMenuButtonType.paste,
-          ContextMenuButtonType.selectAll,
-        ],
-        reason: '三个内置项的**顺序**要原样保留（用户看惯的位置不该跳）',
-      );
+      expect(items.map((item) => item.type).toList(), [
+        ContextMenuButtonType.cut,
+        ContextMenuButtonType.paste,
+        ContextMenuButtonType.selectAll,
+      ], reason: '三个内置项的**顺序**要原样保留（用户看惯的位置不该跳）');
 
       items[1].onPressed!();
       expect(ours, 1, reason: '★ 点「粘贴」必须走我们那条（读文件 → 挂附件）');
@@ -46,10 +45,12 @@ void main() {
 
     test('内置项里本来没有「粘贴」时，补一个在末尾（别让用户没有粘贴入口）', () {
       var ours = 0;
-      final items = withReplacedPaste(
-        [ContextMenuButtonItem(type: ContextMenuButtonType.copy, onPressed: () {})],
-        () => ours++,
-      );
+      final items = withReplacedPaste([
+        ContextMenuButtonItem(
+          type: ContextMenuButtonType.copy,
+          onPressed: () {},
+        ),
+      ], () => ours++);
 
       expect(items, hasLength(2));
       expect(items.last.label, '粘贴');

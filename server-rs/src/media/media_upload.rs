@@ -24,9 +24,9 @@ use rusqlite::params;
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 
+use crate::library::repo::{self, WriteError};
 use crate::media::media;
 use crate::web::models::MediaDto;
-use crate::library::repo::{self, WriteError};
 use crate::web::routes::{ApiError, AppState};
 
 pub const KINDS: [&str; 3] = ["IMAGE", "VIDEO", "AUDIO"];
@@ -34,14 +34,29 @@ pub const KINDS: [&str; 3] = ["IMAGE", "VIDEO", "AUDIO"];
 /// 扩展名 → MIME（与 Kotlin `MediaFiles.MIME` 同一张表）。
 fn mime_table() -> &'static [(&'static str, &'static str)] {
     &[
-        ("png", "image/png"), ("jpg", "image/jpeg"), ("jpeg", "image/jpeg"),
-        ("webp", "image/webp"), ("gif", "image/gif"), ("bmp", "image/bmp"),
-        ("avif", "image/avif"), ("tif", "image/tiff"), ("tiff", "image/tiff"),
-        ("mp4", "video/mp4"), ("webm", "video/webm"), ("mov", "video/quicktime"),
-        ("mkv", "video/x-matroska"), ("avi", "video/x-msvideo"), ("m4v", "video/x-m4v"),
-        ("mp3", "audio/mpeg"), ("wav", "audio/wav"), ("flac", "audio/flac"),
-        ("ogg", "audio/ogg"), ("m4a", "audio/mp4"), ("aac", "audio/aac"),
-        ("opus", "audio/opus"), ("wma", "audio/x-ms-wma"),
+        ("png", "image/png"),
+        ("jpg", "image/jpeg"),
+        ("jpeg", "image/jpeg"),
+        ("webp", "image/webp"),
+        ("gif", "image/gif"),
+        ("bmp", "image/bmp"),
+        ("avif", "image/avif"),
+        ("tif", "image/tiff"),
+        ("tiff", "image/tiff"),
+        ("mp4", "video/mp4"),
+        ("webm", "video/webm"),
+        ("mov", "video/quicktime"),
+        ("mkv", "video/x-matroska"),
+        ("avi", "video/x-msvideo"),
+        ("m4v", "video/x-m4v"),
+        ("mp3", "audio/mpeg"),
+        ("wav", "audio/wav"),
+        ("flac", "audio/flac"),
+        ("ogg", "audio/ogg"),
+        ("m4a", "audio/mp4"),
+        ("aac", "audio/aac"),
+        ("opus", "audio/opus"),
+        ("wma", "audio/x-ms-wma"),
     ]
 }
 
@@ -57,7 +72,10 @@ pub fn extension_of(filename: &str) -> String {
 
 /// 客户端给的 MIME 优先（不等于 `application/octet-stream` 时），否则按扩展名查表。
 pub fn detect_mime(filename: &str, provided: Option<&str>) -> String {
-    if let Some(m) = provided.map(|m| m.trim()).filter(|m| !m.is_empty() && *m != "application/octet-stream") {
+    if let Some(m) = provided
+        .map(|m| m.trim())
+        .filter(|m| !m.is_empty() && *m != "application/octet-stream")
+    {
         return m.to_string();
     }
     let ext = extension_of(filename);
@@ -113,7 +131,11 @@ pub fn sha256_of(path: &Path) -> std::io::Result<String> {
     let mut file = std::fs::File::open(path)?;
     let mut hasher = Sha256::new();
     std::io::copy(&mut file, &mut hasher)?;
-    Ok(hasher.finalize().iter().map(|b| format!("{b:02x}")).collect())
+    Ok(hasher
+        .finalize()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect())
 }
 
 /// 上传结果（与 Kotlin `UploadResultDto` 同形）。
@@ -150,7 +172,10 @@ struct Incoming {
 }
 
 /// `POST /api/media/upload`。
-pub async fn upload(state: AppState, mut multipart: Multipart) -> Result<(axum::http::StatusCode, axum::Json<UploadResult>), ApiError> {
+pub async fn upload(
+    state: AppState,
+    mut multipart: Multipart,
+) -> Result<(axum::http::StatusCode, axum::Json<UploadResult>), ApiError> {
     let mut prompt_id: Option<i64> = None;
     let mut title: Option<String> = None;
     let mut kind_override: Option<String> = None;
@@ -160,7 +185,11 @@ pub async fn upload(state: AppState, mut multipart: Multipart) -> Result<(axum::
     let mut incoming: Vec<Incoming> = Vec::new();
     let mut failed: Vec<FailedInfo> = Vec::new();
 
-    let tmp_dir = state.media_dir().parent().unwrap_or(Path::new(".")).join("tmp");
+    let tmp_dir = state
+        .media_dir()
+        .parent()
+        .unwrap_or(Path::new("."))
+        .join("tmp");
     std::fs::create_dir_all(&tmp_dir)
         .map_err(|e| ApiError::internal(format!("临时目录不可用：{e}")))?;
 
@@ -214,10 +243,18 @@ pub async fn upload(state: AppState, mut multipart: Multipart) -> Result<(axum::
                 };
                 let size = bytes.len() as i64;
                 if let Err(e) = std::fs::write(&tmp, &bytes) {
-                    failed.push(FailedInfo { file_name: original_name, reason: format!("写入临时文件失败：{e}") });
+                    failed.push(FailedInfo {
+                        file_name: original_name,
+                        reason: format!("写入临时文件失败：{e}"),
+                    });
                     continue;
                 }
-                incoming.push(Incoming { original_name, tmp, mime, size });
+                incoming.push(Incoming {
+                    original_name,
+                    tmp,
+                    mime,
+                    size,
+                });
             }
         }
     }
@@ -229,15 +266,20 @@ pub async fn upload(state: AppState, mut multipart: Multipart) -> Result<(axum::
     // promptId 校验放在**动库之前**；不通过就把临时文件清掉（别留一地垃圾）
     if let Some(pid) = prompt_id {
         let exists = state.with(|conn| {
-            conn
-                .query_row("SELECT id FROM prompts WHERE id = ?1", params![pid], |row| row.get::<_, i64>(0))
-                .optional_present()
+            conn.query_row(
+                "SELECT id FROM prompts WHERE id = ?1",
+                params![pid],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional_present()
         })?;
         if exists.is_none() {
             incoming.iter().for_each(|i| {
                 let _ = std::fs::remove_file(&i.tmp);
             });
-            return Err(ApiError::bad_request(format!("promptId={pid} 对应的提示词不存在")));
+            return Err(ApiError::bad_request(format!(
+                "promptId={pid} 对应的提示词不存在"
+            )));
         }
     }
 
@@ -249,35 +291,46 @@ pub async fn upload(state: AppState, mut multipart: Multipart) -> Result<(axum::
         let stored_name = new_stored_name(&item.original_name);
         let moved = media_dir.join(&stored_name);
         if let Err(e) = std::fs::rename(&item.tmp, &moved) {
-            failed.push(FailedInfo { file_name: item.original_name, reason: format!("移动文件失败：{e}") });
+            failed.push(FailedInfo {
+                file_name: item.original_name,
+                reason: format!("移动文件失败：{e}"),
+            });
             continue;
         }
 
         let result = (|| -> Result<Option<i64>, String> {
-            let kind = kind_override.clone().unwrap_or_else(|| kind_of(&item.original_name, item.mime.as_deref()));
+            let kind = kind_override
+                .clone()
+                .unwrap_or_else(|| kind_of(&item.original_name, item.mime.as_deref()));
             let mime = detect_mime(&item.original_name, item.mime.as_deref());
             let sha = sha256_of(&moved).map_err(|e| format!("算 sha256 失败：{e}"))?;
 
             // 判重：内容相同就**不入库**（与 Kotlin 一致）
             let existing: Option<i64> = state
                 .with(|conn| {
-                    conn
-                        .query_row("SELECT id FROM media_assets WHERE sha256 = ?1 LIMIT 1", params![sha], |row| {
-                            row.get::<_, i64>(0)
-                        })
-                        .optional_present()
+                    conn.query_row(
+                        "SELECT id FROM media_assets WHERE sha256 = ?1 LIMIT 1",
+                        params![sha],
+                        |row| row.get::<_, i64>(0),
+                    )
+                    .optional_present()
                 })
                 .map_err(|e| e.human().to_string())?;
             if let Some(existing_id) = existing {
                 let _ = std::fs::remove_file(&moved);
-                duplicates.push(DuplicateInfo { file_name: item.original_name.clone(), existing_media_id: existing_id });
+                duplicates.push(DuplicateInfo {
+                    file_name: item.original_name.clone(),
+                    existing_media_id: existing_id,
+                });
                 return Ok(None);
             }
 
-            let dims = if kind == "IMAGE" { crate::media::thumbs::probe_image_size(&moved) } else { None };
-            let new_title = title
-                .clone()
-                .unwrap_or_else(|| item.original_name.clone());
+            let dims = if kind == "IMAGE" {
+                crate::media::thumbs::probe_image_size(&moved)
+            } else {
+                None
+            };
+            let new_title = title.clone().unwrap_or_else(|| item.original_name.clone());
 
             let new_id = state
                 .write(|tx| -> Result<i64, WriteError> {
@@ -323,20 +376,31 @@ pub async fn upload(state: AppState, mut multipart: Multipart) -> Result<(axum::
         match result {
             Ok(Some(new_id)) => match media::get(&state, new_id) {
                 Ok(dto) => created.push(dto),
-                Err(e) => failed.push(FailedInfo { file_name: item.original_name, reason: e.human().to_string() }),
+                Err(e) => failed.push(FailedInfo {
+                    file_name: item.original_name,
+                    reason: e.human().to_string(),
+                }),
             },
             Ok(None) => {}
             Err(reason) => {
                 // 单个文件失败不整批失败：清掉刚落的那份，记进 failed
                 let _ = std::fs::remove_file(&moved);
-                failed.push(FailedInfo { file_name: item.original_name, reason });
+                failed.push(FailedInfo {
+                    file_name: item.original_name,
+                    reason,
+                });
             }
         }
     }
 
     Ok((
         axum::http::StatusCode::CREATED,
-        axum::Json(UploadResult { items: created, duplicates, failed, prompt_id }),
+        axum::Json(UploadResult {
+            items: created,
+            duplicates,
+            failed,
+            prompt_id,
+        }),
     ))
 }
 

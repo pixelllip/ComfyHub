@@ -81,7 +81,10 @@ pub fn no_download() -> bool {
 /// 返回 `Some(人话)` = 跳过（并把这句如实回给界面）。
 pub fn skip_reason(force: bool, no_download: bool, stale: bool) -> Option<String> {
     if no_download {
-        return Some("COMFYHUB_NO_DOWNLOAD=1 已关闭在线更新（目录仍用内置表 + 已有 remote.json）".to_string());
+        return Some(
+            "COMFYHUB_NO_DOWNLOAD=1 已关闭在线更新（目录仍用内置表 + 已有 remote.json）"
+                .to_string(),
+        );
     }
     if !force && !stale {
         return Some(format!(
@@ -93,10 +96,7 @@ pub fn skip_reason(force: bool, no_download: bool, stale: bool) -> Option<String
 }
 
 /// 一次走完：判过期 → 出网 → 解析落盘。**任何失败都不动旧文件。**
-pub async fn refresh(
-    state: &crate::web::routes::AppState,
-    force: bool,
-) -> RefreshResult {
+pub async fn refresh(state: &crate::web::routes::AppState, force: bool) -> RefreshResult {
     let dir = crate::provider::capability_catalog::dir_of(
         state.media_dir().parent().unwrap_or(state.media_dir()),
     );
@@ -136,7 +136,9 @@ pub async fn refresh(
     }
     let body = match response.text().await {
         Ok(body) => body,
-        Err(error) => return RefreshResult::failed(format!("读取返回体失败：{error}（旧目录原样保留）")),
+        Err(error) => {
+            return RefreshResult::failed(format!("读取返回体失败：{error}（旧目录原样保留）"))
+        }
     };
 
     let fetched_at = crate::infra::iso_time::from_system_time(std::time::SystemTime::now());
@@ -218,15 +220,16 @@ fn effort_of(raw: &str) -> Option<(String, String)> {
     let v = raw.trim().to_lowercase();
     match v.as_str() {
         "none" => Some(("off".to_string(), "none".to_string())),
-        "minimal" | "low" | "medium" | "high" | "xhigh" | "max" => {
-            Some((v.clone(), v))
-        }
+        "minimal" | "low" | "medium" | "high" | "xhigh" | "max" => Some((v.clone(), v)),
         _ => None,
     }
 }
 
 fn normalize(key: &str, model: &Map<String, Value>) -> Option<Entry> {
-    let id = str_of(model, "id").unwrap_or_else(|| key.to_string()).trim().to_lowercase();
+    let id = str_of(model, "id")
+        .unwrap_or_else(|| key.to_string())
+        .trim()
+        .to_lowercase();
     if id.is_empty() || id.chars().any(char::is_control) {
         return None;
     }
@@ -240,7 +243,9 @@ fn normalize(key: &str, model: &Map<String, Value>) -> Option<Entry> {
             let mut out: Vec<String> = Vec::new();
             for item in input {
                 let Some(token) = item.as_str() else { continue };
-                let Some(mapped) = modality_of(token) else { continue };
+                let Some(mapped) = modality_of(token) else {
+                    continue;
+                };
                 if !out.iter().any(|v| v == mapped) {
                     out.push(mapped.to_string());
                 }
@@ -256,11 +261,15 @@ fn normalize(key: &str, model: &Map<String, Value>) -> Option<Entry> {
     if let Some(options) = model.get("reasoning_options").and_then(Value::as_array) {
         let mut map: BTreeMap<String, String> = BTreeMap::new();
         for option in options {
-            let Some(option) = option.as_object() else { continue };
+            let Some(option) = option.as_object() else {
+                continue;
+            };
             if option.get("type").and_then(Value::as_str) != Some("effort") {
                 continue;
             }
-            let Some(values) = option.get("values").and_then(Value::as_array) else { continue };
+            let Some(values) = option.get("values").and_then(Value::as_array) else {
+                continue;
+            };
             for raw in values {
                 let Some(raw) = raw.as_str() else { continue };
                 if let Some((k, v)) = effort_of(raw) {
@@ -332,8 +341,7 @@ fn merge_entries(a: Entry, b: Entry) -> Entry {
 
 /// 解析数据集并写 `remote.json`，返回条目数。**解析不出任何模型就报错，不动旧文件。**
 pub fn parse_and_write(body: &str, dir: &Path, fetched_at: &str) -> Result<usize, String> {
-    let root: Value =
-        serde_json::from_str(body).map_err(|e| format!("返回体不是 JSON：{e}"))?;
+    let root: Value = serde_json::from_str(body).map_err(|e| format!("返回体不是 JSON：{e}"))?;
     let root = root
         .as_object()
         .ok_or_else(|| "返回体不是 JSON 对象".to_string())?;
@@ -345,11 +353,19 @@ pub fn parse_and_write(body: &str, dir: &Path, fetched_at: &str) -> Result<usize
 
     let mut merged: BTreeMap<String, Entry> = BTreeMap::new();
     for provider in providers.values() {
-        let Some(provider) = provider.as_object() else { continue };
-        let Some(models) = provider.get("models").and_then(Value::as_object) else { continue };
+        let Some(provider) = provider.as_object() else {
+            continue;
+        };
+        let Some(models) = provider.get("models").and_then(Value::as_object) else {
+            continue;
+        };
         for (key, model) in models {
-            let Some(model) = model.as_object() else { continue };
-            let Some(entry) = normalize(key, model) else { continue };
+            let Some(model) = model.as_object() else {
+                continue;
+            };
+            let Some(entry) = normalize(key, model) else {
+                continue;
+            };
             merged
                 .entry(entry.id.clone())
                 .and_modify(|existing| {
@@ -371,16 +387,15 @@ pub fn parse_and_write(body: &str, dir: &Path, fetched_at: &str) -> Result<usize
             .map(|(id, entry)| (id.clone(), entry.to_overlay()))
             .collect(),
     };
-    let json = serde_json::to_string_pretty(&overlay)
-        .map_err(|e| format!("覆盖层序列化失败：{e}"))?;
+    let json =
+        serde_json::to_string_pretty(&overlay).map_err(|e| format!("覆盖层序列化失败：{e}"))?;
 
     std::fs::create_dir_all(dir).map_err(|e| format!("建目录失败（{}）：{e}", dir.display()))?;
     let target = dir.join(REMOTE_FILE);
     let tmp = dir.join(format!("{REMOTE_FILE}.tmp"));
     std::fs::write(&tmp, json).map_err(|e| format!("写临时文件失败（{}）：{e}", tmp.display()))?;
     // Windows 上 `fs::rename` 走 `MoveFileEx(MOVEFILE_REPLACE_EXISTING)`，可以直接覆盖
-    std::fs::rename(&tmp, &target)
-        .map_err(|e| format!("替换 {} 失败：{e}", target.display()))?;
+    std::fs::rename(&tmp, &target).map_err(|e| format!("替换 {} 失败：{e}", target.display()))?;
     Ok(merged.len())
 }
 

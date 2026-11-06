@@ -70,7 +70,9 @@ class _PromptEditPageState extends State<PromptEditPage> {
     _favorite = p?.favorite ?? false;
     _tags = [
       ...(p?.tags.map((e) => e.name) ?? const <String>[]),
-      ...widget.initialTags.where((t) => !(p?.tags.any((e) => e.name == t) ?? false)),
+      ...widget.initialTags.where(
+        (t) => !(p?.tags.any((e) => e.name == t) ?? false),
+      ),
     ];
     _loras = List.of(p?.loras ?? const <LoraRef>[]);
   }
@@ -78,8 +80,19 @@ class _PromptEditPageState extends State<PromptEditPage> {
   @override
   void dispose() {
     for (final c in [
-      _title, _positive, _negative, _checkpoint, _sampler, _scheduler,
-      _steps, _cfg, _seed, _width, _height, _batch, _notes,
+      _title,
+      _positive,
+      _negative,
+      _checkpoint,
+      _sampler,
+      _scheduler,
+      _steps,
+      _cfg,
+      _seed,
+      _width,
+      _height,
+      _batch,
+      _notes,
     ]) {
       c.dispose();
     }
@@ -92,9 +105,8 @@ class _PromptEditPageState extends State<PromptEditPage> {
   Future<void> _save() async {
     if (!_formKey.currentState!.validate()) return;
     if (_positive.text.trim().isEmpty && _title.text.trim().isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('正向提示词和标题至少填一个')),
-      );
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text('正向提示词和标题至少填一个')));
       return;
     }
 
@@ -105,8 +117,12 @@ class _PromptEditPageState extends State<PromptEditPage> {
       title: _title.text.trim(),
       kind: _kind,
       positivePrompt: _positive.text.trim(),
-      negativePrompt: _negative.text.trim().isEmpty ? null : _negative.text.trim(),
-      checkpoint: _checkpoint.text.trim().isEmpty ? null : _checkpoint.text.trim(),
+      negativePrompt: _negative.text.trim().isEmpty
+          ? null
+          : _negative.text.trim(),
+      checkpoint: _checkpoint.text.trim().isEmpty
+          ? null
+          : _checkpoint.text.trim(),
       loras: _loras,
       sampler: _sampler.text.trim().isEmpty ? null : _sampler.text.trim(),
       scheduler: _scheduler.text.trim().isEmpty ? null : _scheduler.text.trim(),
@@ -124,7 +140,9 @@ class _PromptEditPageState extends State<PromptEditPage> {
     );
 
     try {
-      final saved = isNew ? await store.api.createPrompt(draft) : await store.api.updatePrompt(draft);
+      final saved = isNew
+          ? await store.api.createPrompt(draft)
+          : await store.api.updatePrompt(draft);
       if (!mounted) return;
       await store.refreshAll();
       if (!mounted) return;
@@ -132,9 +150,8 @@ class _PromptEditPageState extends State<PromptEditPage> {
     } catch (e) {
       if (!mounted) return;
       setState(() => _saving = false);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('保存失败: $e')),
-      );
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('保存失败: $e')));
     }
   }
 
@@ -148,7 +165,11 @@ class _PromptEditPageState extends State<PromptEditPage> {
           TextButton.icon(
             onPressed: _saving ? null : _save,
             icon: _saving
-                ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+                ? const SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
                 : const Icon(Icons.check),
             label: const Text('保存'),
           ),
@@ -173,10 +194,26 @@ class _PromptEditPageState extends State<PromptEditPage> {
             const SizedBox(height: 6),
             SegmentedButton<PromptKind>(
               segments: const [
-                ButtonSegment(value: PromptKind.image, label: Text('生图'), icon: Icon(Icons.image_outlined)),
-                ButtonSegment(value: PromptKind.video, label: Text('生视频'), icon: Icon(Icons.movie_outlined)),
-                ButtonSegment(value: PromptKind.audio, label: Text('生音频'), icon: Icon(Icons.music_note_outlined)),
-                ButtonSegment(value: PromptKind.mixed, label: Text('混合'), icon: Icon(Icons.auto_awesome_mosaic_outlined)),
+                ButtonSegment(
+                  value: PromptKind.image,
+                  label: Text('生图'),
+                  icon: Icon(Icons.image_outlined),
+                ),
+                ButtonSegment(
+                  value: PromptKind.video,
+                  label: Text('生视频'),
+                  icon: Icon(Icons.movie_outlined),
+                ),
+                ButtonSegment(
+                  value: PromptKind.audio,
+                  label: Text('生音频'),
+                  icon: Icon(Icons.music_note_outlined),
+                ),
+                ButtonSegment(
+                  value: PromptKind.mixed,
+                  label: Text('混合'),
+                  icon: Icon(Icons.auto_awesome_mosaic_outlined),
+                ),
               ],
               selected: {_kind},
               onSelectionChanged: (s) => setState(() => _kind = s.first),
@@ -214,12 +251,15 @@ class _PromptEditPageState extends State<PromptEditPage> {
               contentPadding: EdgeInsets.zero,
               dense: true,
               value: _negativeMode == 'positive_only',
-              onChanged: (v) => setState(() => _negativeMode = v ? 'positive_only' : 'keep'),
+              onChanged: (v) =>
+                  setState(() => _negativeMode = v ? 'positive_only' : 'keep'),
               title: const Text('只发正面提示词'),
               subtitle: Text(
                 '目标模型不认负面提示词时打开。发给 Comfy 执行时会去掉下面的负向提示词，'
                 '内容本身不受影响。',
-                style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.outline),
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.outline,
+                ),
               ),
             ),
             const SizedBox(height: 12),
@@ -233,9 +273,21 @@ class _PromptEditPageState extends State<PromptEditPage> {
             const SizedBox(height: 12),
             Row(
               children: [
-                Expanded(child: TextFormField(controller: _sampler, decoration: const InputDecoration(labelText: '采样器 Sampler'))),
+                Expanded(
+                  child: TextFormField(
+                    controller: _sampler,
+                    decoration: const InputDecoration(labelText: '采样器 Sampler'),
+                  ),
+                ),
                 const SizedBox(width: 12),
-                Expanded(child: TextFormField(controller: _scheduler, decoration: const InputDecoration(labelText: '调度器 Scheduler'))),
+                Expanded(
+                  child: TextFormField(
+                    controller: _scheduler,
+                    decoration: const InputDecoration(
+                      labelText: '调度器 Scheduler',
+                    ),
+                  ),
+                ),
               ],
             ),
             const SizedBox(height: 12),
@@ -303,19 +355,30 @@ class _PromptEditPageState extends State<PromptEditPage> {
   }
 
   Widget _section(ThemeData theme, String title) => Row(
-        children: [
-          Text(title, style: theme.textTheme.titleSmall?.copyWith(color: theme.colorScheme.primary)),
-          const SizedBox(width: 8),
-          Expanded(child: Divider(color: theme.dividerColor)),
-        ],
-      );
+    children: [
+      Text(
+        title,
+        style: theme.textTheme.titleSmall?.copyWith(
+          color: theme.colorScheme.primary,
+        ),
+      ),
+      const SizedBox(width: 8),
+      Expanded(child: Divider(color: theme.dividerColor)),
+    ],
+  );
 
-  Widget _numField(TextEditingController controller, String label, {bool integer = false}) {
+  Widget _numField(
+    TextEditingController controller,
+    String label, {
+    bool integer = false,
+  }) {
     return TextFormField(
       controller: controller,
       keyboardType: TextInputType.number,
       inputFormatters: [
-        FilteringTextInputFormatter.allow(integer ? RegExp(r'[0-9\-]') : RegExp(r'[0-9\.\-]')),
+        FilteringTextInputFormatter.allow(
+          integer ? RegExp(r'[0-9\-]') : RegExp(r'[0-9\.\-]'),
+        ),
       ],
       decoration: InputDecoration(labelText: label),
     );
@@ -335,7 +398,8 @@ class _PromptEditPageState extends State<PromptEditPage> {
                 child: TextFormField(
                   initialValue: lora.name,
                   decoration: const InputDecoration(labelText: 'LoRA 名称'),
-                  onChanged: (v) => _loras[i] = LoraRef(name: v, weight: lora.weight),
+                  onChanged: (v) =>
+                      _loras[i] = LoraRef(name: v, weight: lora.weight),
                 ),
               ),
               const SizedBox(width: 10),
@@ -363,7 +427,8 @@ class _PromptEditPageState extends State<PromptEditPage> {
       Align(
         alignment: Alignment.centerLeft,
         child: TextButton.icon(
-          onPressed: () => setState(() => _loras.add(const LoraRef(name: '', weight: 1.0))),
+          onPressed: () =>
+              setState(() => _loras.add(const LoraRef(name: '', weight: 1.0))),
           icon: const Icon(Icons.add, size: 18),
           label: const Text('添加 LoRA'),
         ),

@@ -46,13 +46,13 @@ use std::time::Duration;
 
 use serde_json::{json, Map, Value};
 
-use crate::tools::civitai::CivitaiClient;
 use crate::comfy::comfy_models::{Inventory, LocalModel, ModelName, Source};
-use crate::web::routes::AppState;
+use crate::tools::civitai::CivitaiClient;
 use crate::tools::tools::{
-    java_error_name, outbound_error_kind, str_arg, take_utf16, url_encode, OutboundError, ToolFailure,
-    ToolOutcome,
+    java_error_name, outbound_error_kind, str_arg, take_utf16, url_encode, OutboundError,
+    ToolFailure, ToolOutcome,
 };
+use crate::web::routes::AppState;
 
 /// 一次最多给几条候选（跨源合并之后的数字）。
 pub const DEFAULT_LIMIT: i64 = 8;
@@ -70,7 +70,16 @@ pub const MAX_TIMEOUT_SECONDS: u64 = 60;
 /// 与 [`crate::comfy::comfy_models`] 那张表**故意不一样**：那边是"ComfyUI 能加载什么"
 /// （含 `.yaml` / `.json`，因为 CLIP 那类要配置文件），这边是"用户要手下一个多大的文件"——
 /// 把 `.json` 当成"模型文件"报到候选里只会让人莫名其妙。
-pub const MODEL_EXTS: [&str; 8] = ["safetensors", "ckpt", "pt", "pth", "bin", "gguf", "sft", "onnx"];
+pub const MODEL_EXTS: [&str; 8] = [
+    "safetensors",
+    "ckpt",
+    "pt",
+    "pth",
+    "bin",
+    "gguf",
+    "sft",
+    "onnx",
+];
 
 /// HF 令牌在凭据库里的引用名（受管凭据库 → `HF_TOKEN` 环境变量兜底）。
 pub const HF_CREDENTIAL_REF: &str = "huggingface";
@@ -103,8 +112,11 @@ pub enum ModelSource {
 }
 
 impl ModelSource {
-    pub const ALL: [ModelSource; 3] =
-        [ModelSource::Civitai, ModelSource::HuggingFace, ModelSource::ModelScope];
+    pub const ALL: [ModelSource; 3] = [
+        ModelSource::Civitai,
+        ModelSource::HuggingFace,
+        ModelSource::ModelScope,
+    ];
 
     pub fn wire(self) -> &'static str {
         match self {
@@ -276,10 +288,10 @@ impl ModelKind {
             .map(|s| s.to_lowercase())
             .collect();
         let any = |wanted: &[&str]| segments.iter().any(|s| wanted.contains(&s.as_str()));
-        if segments
-            .iter()
-            .any(|s| s.split(['-', '_', '.']).any(|part| part == "loras" || part == "lora"))
-        {
+        if segments.iter().any(|s| {
+            s.split(['-', '_', '.'])
+                .any(|part| part == "loras" || part == "lora")
+        }) {
             return Some(ModelKind::Lora);
         }
         if any(&["diffusion_models", "unet", "dit"]) {
@@ -359,7 +371,9 @@ impl ModelKind {
     /// diffusers 格式**没有**"一个能放进 `diffusion_models\` 的 safetensors" ——
     /// 里面的 `transformer/`、`vae/` 是分片的，而且都是**文件夹**。
     pub fn is_diffusers_format(library_name: Option<&str>, tags: &[String]) -> bool {
-        library_name.map(|l| l.eq_ignore_ascii_case("diffusers")).unwrap_or(false)
+        library_name
+            .map(|l| l.eq_ignore_ascii_case("diffusers"))
+            .unwrap_or(false)
             || tags.iter().any(|t| t.eq_ignore_ascii_case("diffusers"))
     }
 }
@@ -421,8 +435,16 @@ impl ModelCandidate {
 /// 一个源的产出。**失败也要有位置** —— 这正是"逐个报可达性"那条纪律的实现方式。
 #[derive(Debug, Clone)]
 pub enum SourceOutcome {
-    Ok { source: ModelSource, candidates: Vec<ModelCandidate>, detail: String },
-    Failed { source: ModelSource, state: Reachability, detail: String },
+    Ok {
+        source: ModelSource,
+        candidates: Vec<ModelCandidate>,
+        detail: String,
+    },
+    Failed {
+        source: ModelSource,
+        state: Reachability,
+        detail: String,
+    },
 }
 
 impl SourceOutcome {
@@ -504,7 +526,10 @@ struct SourceOutcomeError {
 
 impl SourceOutcomeError {
     fn new(state: Reachability, detail: impl Into<String>) -> Self {
-        Self { state, detail: detail.into() }
+        Self {
+            state,
+            detail: detail.into(),
+        }
     }
 }
 
@@ -561,7 +586,11 @@ impl HttpModelFinder {
                 candidates: Vec::new(),
                 local_matches: local,
                 local_near_misses: near_misses,
-                local_source: query.inventory.as_ref().map(|inv| inv.source).unwrap_or(Source::None),
+                local_source: query
+                    .inventory
+                    .as_ref()
+                    .map(|inv| inv.source)
+                    .unwrap_or(Source::None),
                 online: false,
                 notes,
             });
@@ -604,7 +633,11 @@ impl HttpModelFinder {
             candidates: merged,
             local_matches: Vec::new(),
             local_near_misses: near_misses,
-            local_source: query.inventory.as_ref().map(|inv| inv.source).unwrap_or(Source::None),
+            local_source: query
+                .inventory
+                .as_ref()
+                .map(|inv| inv.source)
+                .unwrap_or(Source::None),
             online: true,
             notes,
         })
@@ -616,13 +649,17 @@ impl HttpModelFinder {
     /// 字都没读它**；Rust 侧的 [`Inventory::near_misses_for`] 干脆不收这个参数。
     /// 行为完全一致，所以这里那一步"取 folder"只是"清单里没有就早退"的守卫。
     fn near_misses(&self, text: &str, query: &ModelQuery, hit: Option<&LocalModel>) -> Vec<String> {
-        let Some(inv) = query.inventory.as_ref() else { return Vec::new() };
-        let known_folder = hit.is_some()
-            || query.kind.and_then(|k| k.folder()).is_some();
+        let Some(inv) = query.inventory.as_ref() else {
+            return Vec::new();
+        };
+        let known_folder = hit.is_some() || query.kind.and_then(|k| k.folder()).is_some();
         if !known_folder {
             return Vec::new();
         }
-        inv.near_misses_for(text, 3).into_iter().map(|m| m.name).collect()
+        inv.near_misses_for(text, 3)
+            .into_iter()
+            .map(|m| m.name)
+            .collect()
     }
 
     /// 本机有没有同名的。
@@ -666,7 +703,10 @@ impl HttpModelFinder {
         // `allow_nsfw` **不在这里打开**：`find_model` 的语义是"帮我找某个具体的模型 / 文件"，
         // 成人内容有 `civitai_search` 那条专线（它才带 allowNsfw）。这里打开它，
         // 等于替用户做了一个他没做的决定。
-        match search.search(text, false, None, limit.clamp(1, PER_SOURCE_LIMIT)).await {
+        match search
+            .search(text, false, None, limit.clamp(1, PER_SOURCE_LIMIT))
+            .await
+        {
             Ok(outcome) => {
                 let candidates: Vec<ModelCandidate> = outcome
                     .models
@@ -689,7 +729,11 @@ impl HttpModelFinder {
                     })
                     .collect();
                 let detail = describe_count(candidates.len());
-                SourceOutcome::Ok { source: ModelSource::Civitai, candidates, detail }
+                SourceOutcome::Ok {
+                    source: ModelSource::Civitai,
+                    candidates,
+                    detail,
+                }
             }
             Err(error) => failed_from_failure(ModelSource::Civitai, &error),
         }
@@ -709,7 +753,10 @@ impl HttpModelFinder {
         );
         // ⚠ `GET /api/models` 返回的是一个 **JSON 数组**（不是对象）——
         // 拿"顶层是对象"那条路去取会得到"无法解析的内容"，而那看起来像"HF 挂了"。
-        match self.get_json_array(&search_url, ModelSource::HuggingFace, token).await {
+        match self
+            .get_json_array(&search_url, ModelSource::HuggingFace, token)
+            .await
+        {
             Ok(repos) => {
                 let mut candidates: Vec<ModelCandidate> = Vec::new();
                 for repo in repos.iter().filter_map(Value::as_object) {
@@ -718,7 +765,11 @@ impl HttpModelFinder {
                     }
                 }
                 let detail = describe_count(candidates.len());
-                SourceOutcome::Ok { source: ModelSource::HuggingFace, candidates, detail }
+                SourceOutcome::Ok {
+                    source: ModelSource::HuggingFace,
+                    candidates,
+                    detail,
+                }
             }
             Err(error) => SourceOutcome::Failed {
                 source: ModelSource::HuggingFace,
@@ -742,14 +793,20 @@ impl HttpModelFinder {
         let tags: Vec<String> = repo
             .get("tags")
             .and_then(Value::as_array)
-            .map(|tags| tags.iter().filter_map(|t| t.as_str().map(str::to_string)).collect())
+            .map(|tags| {
+                tags.iter()
+                    .filter_map(|t| t.as_str().map(str::to_string))
+                    .collect()
+            })
             .unwrap_or_default();
         // `startsWith(ignoreCase = true)` + `substringAfter("base_model:")`（**后者区分大小写**，
         // 找不到就返回原串 —— Kotlin 那两行的组合行为，照抄）
         let base_model = tags
             .iter()
             .find(|t| {
-                t.get(..11).map(|head| head.eq_ignore_ascii_case("base_model:")).unwrap_or(false)
+                t.get(..11)
+                    .map(|head| head.eq_ignore_ascii_case("base_model:"))
+                    .unwrap_or(false)
             })
             .map(|t| match t.split_once("base_model:") {
                 Some((_, rest)) => rest.to_string(),
@@ -758,14 +815,21 @@ impl HttpModelFinder {
 
         let files = self.hf_tree(&repo_id, token).await.unwrap_or_default();
         // ⚠ `maxByOrNull` 是**并列取第一个**（Rust 的 `max_by_key` 取最后一个）
-        let best = files.iter().fold(None::<&WeightFile>, |best, file| match best {
-            Some(current) if current.size.unwrap_or(0) >= file.size.unwrap_or(0) => Some(current),
-            _ => Some(file),
-        });
+        let best = files
+            .iter()
+            .fold(None::<&WeightFile>, |best, file| match best {
+                Some(current) if current.size.unwrap_or(0) >= file.size.unwrap_or(0) => {
+                    Some(current)
+                }
+                _ => Some(file),
+            });
 
         // 类型：**文件名 → 仓库名/路径 → pipeline_tag**（后者的信息量最小）。
         // 仓库名也传进去：`Omnico/Krea2_turbo_diff_loras` 这种线索只在仓库名里。
-        let full_path = format!("{repo_id}/{}", best.map(|f| f.path.as_str()).unwrap_or_default());
+        let full_path = format!(
+            "{repo_id}/{}",
+            best.map(|f| f.path.as_str()).unwrap_or_default()
+        );
         let kind = ModelKind::infer(
             best.map(|f| f.path.as_str()),
             Some(&full_path),
@@ -838,7 +902,10 @@ impl HttpModelFinder {
     async fn hf_tree(&self, repo_id: &str, token: Option<&str>) -> Option<Vec<WeightFile>> {
         let url = format!("{}/api/models/{repo_id}/tree/main", self.hf_base);
         // 同样是 **JSON 数组**
-        let arr = self.get_json_array(&url, ModelSource::HuggingFace, token).await.ok()?;
+        let arr = self
+            .get_json_array(&url, ModelSource::HuggingFace, token)
+            .await
+            .ok()?;
         Some(
             arr.iter()
                 .filter_map(Value::as_object)
@@ -881,7 +948,10 @@ impl HttpModelFinder {
             "SortBy": "Default",
         });
         let url = format!("{}/api/v1/dolphin/models", self.ms_base);
-        match self.request(&url, ModelSource::ModelScope, None, Some(&body), "PUT").await {
+        match self
+            .request(&url, ModelSource::ModelScope, None, Some(&body), "PUT")
+            .await
+        {
             Ok(json) => {
                 let mut candidates: Vec<ModelCandidate> = Vec::new();
                 for model in ms_models(&json) {
@@ -890,7 +960,11 @@ impl HttpModelFinder {
                     }
                 }
                 let detail = describe_count(candidates.len());
-                SourceOutcome::Ok { source: ModelSource::ModelScope, candidates, detail }
+                SourceOutcome::Ok {
+                    source: ModelSource::ModelScope,
+                    candidates,
+                    detail,
+                }
             }
             Err(error) => SourceOutcome::Failed {
                 source: ModelSource::ModelScope,
@@ -907,11 +981,20 @@ impl HttpModelFinder {
         // `Path="krea"` + `Name="Krea-2-Turbo"` → `krea/Krea-2-Turbo` 的 `repo/files` 返回 200，
         // 而只拿 `Path` 是 **404** —— 那个 404 会让每个候选都丢掉"文件名 / 直链 / sha256"。
         // `Path` 里已经带斜杠时就是全名，不要再拼一次。
-        let repo = if path.contains('/') { path.clone() } else { format!("{path}/{name}") };
+        let repo = if path.contains('/') {
+            path.clone()
+        } else {
+            format!("{path}/{name}")
+        };
         let tasks: Vec<String> = model
             .get("Tasks")
             .and_then(Value::as_array)
-            .map(|tasks| tasks.iter().filter_map(|t| t.as_str().map(str::to_string)).collect())
+            .map(|tasks| {
+                tasks
+                    .iter()
+                    .filter_map(|t| t.as_str().map(str::to_string))
+                    .collect()
+            })
             .unwrap_or_default();
         let base_model = model
             .get("BaseModel")
@@ -962,8 +1045,14 @@ impl HttpModelFinder {
     }
 
     async fn ms_largest_file(&self, path: &str) -> Option<WeightFile> {
-        let url = format!("{}/api/v1/models/{path}/repo/files?Revision=master", self.ms_base);
-        let json = self.request(&url, ModelSource::ModelScope, None, None, "GET").await.ok()?;
+        let url = format!(
+            "{}/api/v1/models/{path}/repo/files?Revision=master",
+            self.ms_base
+        );
+        let json = self
+            .request(&url, ModelSource::ModelScope, None, None, "GET")
+            .await
+            .ok()?;
         let files = json
             .get("Data")
             .and_then(Value::as_object)
@@ -988,7 +1077,9 @@ impl HttpModelFinder {
                 })
             })
             .fold(None::<WeightFile>, |best, file| match best {
-                Some(current) if current.size.unwrap_or(0) >= file.size.unwrap_or(0) => Some(current),
+                Some(current) if current.size.unwrap_or(0) >= file.size.unwrap_or(0) => {
+                    Some(current)
+                }
                 _ => Some(file),
             })
     }
@@ -1078,7 +1169,9 @@ impl HttpModelFinder {
             request = request.header("Authorization", format!("Bearer {token}"));
         }
         if let Some(body) = body {
-            request = request.header("Content-Type", "application/json").body(body.to_string());
+            request = request
+                .header("Content-Type", "application/json")
+                .body(body.to_string());
         }
 
         let response = request.send().await.map_err(|e| {
@@ -1124,7 +1217,10 @@ impl HttpModelFinder {
                         .to_string(),
                 ),
                 404 => (Reachability::Error, "这一问的目标不存在（404）".to_string()),
-                429 => (Reachability::Error, "被限流了（429）：等一下再试，别连着搜".to_string()),
+                429 => (
+                    Reachability::Error,
+                    "被限流了（429）：等一下再试，别连着搜".to_string(),
+                ),
                 500..=599 => (Reachability::Error, format!("对方暂时不可用（{status}）")),
                 _ => (Reachability::Error, format!("返回 {status}")),
             };
@@ -1189,7 +1285,11 @@ fn failed_from_failure(source: ModelSource, error: &ToolFailure) -> SourceOutcom
         "CIVITAI_AUTH" => Reachability::NeedsLogin,
         _ => Reachability::Error,
     };
-    SourceOutcome::Failed { source, state, detail: error.message.clone() }
+    SourceOutcome::Failed {
+        source,
+        state,
+        detail: error.message.clone(),
+    }
 }
 
 /// 去掉目录前缀与扩展名的文件名（`SDXL\a.safetensors` → `a`）。
@@ -1204,7 +1304,10 @@ fn base_without_ext(name: &str) -> String {
 
 /// 是不是一个"用户要手下的"权重文件（按后缀认，与 [`MODEL_EXTS`] 同源）。
 fn looks_like_weight(path: &str) -> bool {
-    let ext = path.rsplit_once('.').map(|(_, ext)| ext.to_lowercase()).unwrap_or_default();
+    let ext = path
+        .rsplit_once('.')
+        .map(|(_, ext)| ext.to_lowercase())
+        .unwrap_or_default();
     MODEL_EXTS.contains(&ext.as_str())
 }
 
@@ -1236,9 +1339,10 @@ fn int_field(obj: &Map<String, Value>, key: &str) -> Option<i64> {
 fn long_field(obj: &Map<String, Value>, key: &str) -> Option<i64> {
     match obj.get(key)? {
         Value::Number(n) => n.as_i64().or_else(|| n.as_f64().map(|f| f as i64)),
-        Value::String(s) => {
-            s.parse::<i64>().ok().or_else(|| s.parse::<f64>().ok().map(|f| f as i64))
-        }
+        Value::String(s) => s
+            .parse::<i64>()
+            .ok()
+            .or_else(|| s.parse::<f64>().ok().map(|f| f as i64)),
         _ => None,
     }
 }
@@ -1268,7 +1372,8 @@ fn ms_models(json: &Map<String, Value>) -> Vec<&Map<String, Value>> {
         .or_else(|| data.and_then(|d| d.get("Models")))
         .or_else(|| json.get("Models"))
         .and_then(Value::as_array);
-    arr.map(|items| items.iter().filter_map(Value::as_object).collect()).unwrap_or_default()
+    arr.map(|items| items.iter().filter_map(Value::as_object).collect())
+        .unwrap_or_default()
 }
 
 // ---------------------------------------------------------------------------
@@ -1313,11 +1418,18 @@ fn merge(all: Vec<ModelCandidate>) -> Vec<ModelCandidate> {
             }
         }
     }
-    order.into_iter().filter_map(|key| by_key.remove(&key)).collect()
+    order
+        .into_iter()
+        .filter_map(|key| by_key.remove(&key))
+        .collect()
 }
 
 fn richer(a: ModelCandidate, b: ModelCandidate) -> ModelCandidate {
-    let (primary, other) = if score(&b) > score(&a) { (b, a) } else { (a, b) };
+    let (primary, other) = if score(&b) > score(&a) {
+        (b, a)
+    } else {
+        (a, b)
+    };
     let mut trained_words = primary.trained_words.clone();
     for word in &other.trained_words {
         if !trained_words.contains(word) {
@@ -1330,16 +1442,33 @@ fn richer(a: ModelCandidate, b: ModelCandidate) -> ModelCandidate {
             sources.push(*source);
         }
     }
-    sources.sort_by_key(|s| ModelSource::ALL.iter().position(|x| x == s).unwrap_or(usize::MAX));
+    sources.sort_by_key(|s| {
+        ModelSource::ALL
+            .iter()
+            .position(|x| x == s)
+            .unwrap_or(usize::MAX)
+    });
     ModelCandidate {
         trained_words,
-        base_model: primary.base_model.clone().or_else(|| other.base_model.clone()),
+        base_model: primary
+            .base_model
+            .clone()
+            .or_else(|| other.base_model.clone()),
         size_bytes: primary.size_bytes.or(other.size_bytes),
-        download_url: primary.download_url.clone().or_else(|| other.download_url.clone()),
+        download_url: primary
+            .download_url
+            .clone()
+            .or_else(|| other.download_url.clone()),
         page_url: primary.page_url.clone().or_else(|| other.page_url.clone()),
         sha256: primary.sha256.clone().or_else(|| other.sha256.clone()),
-        file_name: primary.file_name.clone().or_else(|| other.file_name.clone()),
-        description: primary.description.clone().or_else(|| other.description.clone()),
+        file_name: primary
+            .file_name
+            .clone()
+            .or_else(|| other.file_name.clone()),
+        description: primary
+            .description
+            .clone()
+            .or_else(|| other.description.clone()),
         downloads: primary.downloads.or(other.downloads),
         note: primary.note.clone().or_else(|| other.note.clone()),
         sources,
@@ -1368,8 +1497,9 @@ pub async fn tool_find_model(
     };
     let query = raw.trim().to_string();
     let kind = parse_model_kind(str_arg(arguments, "type").as_deref())?;
-    let limit =
-        crate::tools::tools::int_arg(arguments, "limit").unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
+    let limit = crate::tools::tools::int_arg(arguments, "limit")
+        .unwrap_or(DEFAULT_LIMIT)
+        .clamp(1, MAX_LIMIT);
 
     // 本机清单：**与 comfy_env_report / comfy_fit_workflow 用的是同一份**
     // （`/object_info` ∪ 盘扫）。另算一份就会出现"对账说本机有、find_model 说没有"
@@ -1378,7 +1508,13 @@ pub async fn tool_find_model(
 
     let finder = HttpModelFinder::from_state(state)?;
     let result = finder
-        .search(ModelQuery { text: query, kind, limit, online: true, inventory: Some(inventory) })
+        .search(ModelQuery {
+            text: query,
+            kind,
+            limit,
+            online: true,
+            inventory: Some(inventory),
+        })
         .await?;
     let content = render_find_model(&result, kind);
     Ok(ToolOutcome::new(content, to_find_model_json(&result)))
@@ -1401,8 +1537,10 @@ async fn current_inventory(state: &AppState) -> Inventory {
     };
     let project_root = state.project_root();
     let desktop = crate::tools::mcp::desktop(None);
-    let model_dirs: Vec<PathBuf> =
-        desktop.as_ref().map(|d| d.models_dirs.clone()).unwrap_or_default();
+    let model_dirs: Vec<PathBuf> = desktop
+        .as_ref()
+        .map(|d| d.models_dirs.clone())
+        .unwrap_or_default();
     crate::comfy::comfy_models::inventory(object_info.as_ref(), Some(&project_root), &model_dirs)
 }
 
@@ -1411,7 +1549,11 @@ fn resolve_hf_token(state: &AppState) -> Option<String> {
     crate::mobile::auth::resolve_credential(state, HF_CREDENTIAL_REF)
         .ok()
         .filter(|v| !v.trim().is_empty())
-        .or_else(|| std::env::var("HF_TOKEN").ok().filter(|v| !v.trim().is_empty()))
+        .or_else(|| {
+            std::env::var("HF_TOKEN")
+                .ok()
+                .filter(|v| !v.trim().is_empty())
+        })
 }
 
 /// 把模型给的 `type` 归一成 [`ModelKind`]；不认识就说清可选值（别让它反复试）。
@@ -1504,7 +1646,11 @@ fn render_find_model(result: &ModelFinderResult, kind: Option<ModelKind>) -> Str
     // ② 每个源都占一行（不可达的也在）
     out.push_str("\n【各源可达性】\n");
     for source in &result.sources {
-        out.push_str(&format!("· {}：{}", source.source().label(), source.state().label()));
+        out.push_str(&format!(
+            "· {}：{}",
+            source.source().label(),
+            source.state().label()
+        ));
         if source.state() == Reachability::Ok {
             out.push_str(&format!("（{} 条）", source.candidates().len()));
         }
@@ -1557,11 +1703,20 @@ fn render_find_model(result: &ModelFinderResult, kind: Option<ModelKind>) -> Str
 
 /// 一条候选：名字 / 类型 / 该放哪 / 底模 / 触发词 / 体积 / sha256 / 直链 / 来源。
 fn render_candidate(index: usize, candidate: &ModelCandidate, asked: Option<ModelKind>) -> String {
-    let mut out = format!("\n[{index}] {}（{}）", candidate.name, candidate.kind.label());
+    let mut out = format!(
+        "\n[{index}] {}（{}）",
+        candidate.name,
+        candidate.kind.label()
+    );
     if candidate.sources.len() > 1 {
         out.push_str(&format!(
             "  ← 在 {} 上都有",
-            candidate.sources.iter().map(|s| s.label()).collect::<Vec<_>>().join("、")
+            candidate
+                .sources
+                .iter()
+                .map(|s| s.label())
+                .collect::<Vec<_>>()
+                .join("、")
         ));
     }
     out.push('\n');
@@ -1572,7 +1727,10 @@ fn render_candidate(index: usize, candidate: &ModelCandidate, asked: Option<Mode
         out.push_str(&format!("  体积：{size}\n"));
     }
     if !candidate.trained_words.is_empty() {
-        out.push_str(&format!("  触发词：{}\n", candidate.trained_words.join(", ")));
+        out.push_str(&format!(
+            "  触发词：{}\n",
+            candidate.trained_words.join(", ")
+        ));
     }
     if let Some(sha) = candidate.sha256.as_deref() {
         out.push_str(&format!("  sha256：{sha}\n"));
@@ -1584,7 +1742,9 @@ fn render_candidate(index: usize, candidate: &ModelCandidate, asked: Option<Mode
     // 「该放哪个目录」永远要有一行 —— 拿不到就明说"说不准"，别让模型自己编一个
     match candidate.install_into() {
         Some(folder) => {
-            out.push_str(&format!("  该放进：{folder}\\\u{ff08}相对 {INSTALL_ROOT_HINT}）\n"));
+            out.push_str(&format!(
+                "  该放进：{folder}\\\u{ff08}相对 {INSTALL_ROOT_HINT}）\n"
+            ));
         }
         None => {
             if candidate.note.is_some() {
@@ -1728,7 +1888,10 @@ fn to_find_model_json(result: &ModelFinderResult) -> Value {
     let mut out = Map::new();
     out.insert("query".into(), json!(result.query));
     out.insert("online".into(), json!(result.online));
-    out.insert("localInventorySource".into(), json!(result.local_source.wire()));
+    out.insert(
+        "localInventorySource".into(),
+        json!(result.local_source.wire()),
+    );
     out.insert("localHit".into(), json!(result.local_hit()));
     out.insert("localMatches".into(), Value::Array(local_matches));
     if !result.local_near_misses.is_empty() {

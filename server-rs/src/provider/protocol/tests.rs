@@ -5,7 +5,11 @@
 use super::*;
 
 fn turn(role: &str, content: &str) -> ChatTurn {
-    ChatTurn { role: role.into(), content: content.into(), ..Default::default() }
+    ChatTurn {
+        role: role.into(),
+        content: content.into(),
+        ..Default::default()
+    }
 }
 
 /// **附件协议的形状**（Kotlin `AttachmentProtocolTest` 的同一条纪律）：
@@ -20,30 +24,50 @@ fn image_blocks_shape_per_adapter() {
     };
     let turns = vec![
         turn("system", "规则"),
-        ChatTurn { role: "user".into(), content: "看看".into(), images: vec![image.clone()], ..Default::default() },
+        ChatTurn {
+            role: "user".into(),
+            content: "看看".into(),
+            images: vec![image.clone()],
+            ..Default::default()
+        },
     ];
     let reasoning = ReasoningRequest::default();
 
     // ① OpenAI 兼容：`content` 变成有序块数组，图片是 `image_url.url` 的 data URL
     let openai = OpenAiCompletionsAdapter.build_body("m", &turns, &[], &reasoning, None);
-    let blocks = openai["messages"][1]["content"].as_array().expect("要变成数组");
+    let blocks = openai["messages"][1]["content"]
+        .as_array()
+        .expect("要变成数组");
     assert_eq!(blocks[0], json!({ "type": "text", "text": "看看" }));
     assert_eq!(blocks[1]["type"], json!("image_url"));
-    assert_eq!(blocks[1]["image_url"]["url"], json!("data:image/png;base64,AAA="));
+    assert_eq!(
+        blocks[1]["image_url"]["url"],
+        json!("data:image/png;base64,AAA=")
+    );
     // 纯文本轮仍然是字符串（兼容性最好）
-    let plain = OpenAiCompletionsAdapter.build_body("m", &[turn("user", "只有文字")], &[], &reasoning, None);
+    let plain = OpenAiCompletionsAdapter.build_body(
+        "m",
+        &[turn("user", "只有文字")],
+        &[],
+        &reasoning,
+        None,
+    );
     assert!(plain["messages"][0]["content"].is_string());
 
     // ② Responses：`input[].content[]` 里是 `input_text` + `input_image`
     let responses = OpenAiResponsesAdapter.build_body("m", &turns, &[], &reasoning, None);
-    let content = responses["input"][0]["content"].as_array().expect("content 数组");
+    let content = responses["input"][0]["content"]
+        .as_array()
+        .expect("content 数组");
     assert_eq!(content[0]["type"], json!("input_text"));
     assert_eq!(content[1]["type"], json!("input_image"));
     assert_eq!(content[1]["image_url"], json!("data:image/png;base64,AAA="));
 
     // ③ Anthropic：`content[]` 里的 `image` 块用 `source.media_type` + base64（**不是** data URL）
     let anthropic = AnthropicMessagesAdapter.build_body("m", &turns, &[], &reasoning, None);
-    let blocks = anthropic["messages"][0]["content"].as_array().expect("content 数组");
+    let blocks = anthropic["messages"][0]["content"]
+        .as_array()
+        .expect("content 数组");
     assert_eq!(blocks[0]["type"], json!("text"));
     assert_eq!(blocks[1]["type"], json!("image"));
     assert_eq!(blocks[1]["source"]["type"], json!("base64"));
@@ -61,17 +85,26 @@ fn image_only_turn_is_still_sent() {
     let turns = vec![ChatTurn {
         role: "user".into(),
         content: String::new(),
-        images: vec![ChatImage { mime_type: "image/webp".into(), base64: "BBB=".into(), file_name: "a.webp".into() }],
+        images: vec![ChatImage {
+            mime_type: "image/webp".into(),
+            base64: "BBB=".into(),
+            file_name: "a.webp".into(),
+        }],
         ..Default::default()
     }];
-    let body = OpenAiCompletionsAdapter.build_body("m", &turns, &[], &ReasoningRequest::default(), None);
+    let body =
+        OpenAiCompletionsAdapter.build_body("m", &turns, &[], &ReasoningRequest::default(), None);
     let blocks = body["messages"][0]["content"].as_array().unwrap();
     assert_eq!(blocks.len(), 1, "没有正文时就只有图片块：{body}");
     assert_eq!(blocks[0]["type"], json!("image_url"));
 
-    let anthropic = AnthropicMessagesAdapter.build_body("m", &turns, &[], &ReasoningRequest::default(), None);
+    let anthropic =
+        AnthropicMessagesAdapter.build_body("m", &turns, &[], &ReasoningRequest::default(), None);
     // Anthropic 那边照样是**一条消息**（blocks 非空就发）
-    assert_eq!(anthropic["messages"][0]["content"][0]["type"], json!("image"));
+    assert_eq!(
+        anthropic["messages"][0]["content"][0]["type"],
+        json!("image")
+    );
 }
 
 /// SSE 分帧：多行 data 拼接、注释丢掉、`\r\n` 认、结尾无空行也能靠 flush 收尾。
@@ -81,7 +114,10 @@ fn sse_framing_rules() {
     assert!(acc.line(": keep-alive").is_none(), "注释不算帧");
     assert!(acc.line("event: message").is_none());
     assert!(acc.line("data: {\"a\":").is_none());
-    assert!(acc.line("data: 1}").is_none(), "**空行才是帧结束**：data 行本身不产生帧");
+    assert!(
+        acc.line("data: 1}").is_none(),
+        "**空行才是帧结束**：data 行本身不产生帧"
+    );
     let frame = acc.line("").unwrap();
     assert_eq!(frame.event.as_deref(), Some("message"));
     assert_eq!(frame.data, "{\"a\":\n1}", "多行 data 用换行拼接");
@@ -115,9 +151,15 @@ fn completions_body_is_minimal_for_text() {
     assert_eq!(body["model"], "deepseek-v4");
     assert_eq!(body["stream"], true);
     assert_eq!(body["stream_options"]["include_usage"], true);
-    assert_eq!(body["messages"][1]["content"], "你好", "纯文本轮用字符串，不是数组");
+    assert_eq!(
+        body["messages"][1]["content"], "你好",
+        "纯文本轮用字符串，不是数组"
+    );
     assert!(body.get("tools").is_none(), "没工具就不下发 tools");
-    assert!(body.get("reasoning_effort").is_none(), "不指定强度 → 一个思考参数都不发");
+    assert!(
+        body.get("reasoning_effort").is_none(),
+        "不指定强度 → 一个思考参数都不发"
+    );
 }
 
 /// 工具轮：`role=tool` 带 `tool_call_id`；助手带 `tool_calls`。
@@ -156,8 +198,14 @@ fn completions_tool_turns() {
         &ReasoningRequest::default(),
         None,
     );
-    assert_eq!(body["messages"][1]["tool_calls"][0]["function"]["name"], "web_search");
-    assert_eq!(body["messages"][1]["content"], "", "助手工具轮的 content 是空串（兼容性）");
+    assert_eq!(
+        body["messages"][1]["tool_calls"][0]["function"]["name"],
+        "web_search"
+    );
+    assert_eq!(
+        body["messages"][1]["content"], "",
+        "助手工具轮的 content 是空串（兼容性）"
+    );
     assert!(
         !body.to_string().contains("先想一下"),
         "completions **不回传思考**（要回传的是 responses，见 responses_reasoning_round_trip）"
@@ -186,7 +234,10 @@ fn completions_reasoning_dialects() {
             None,
         )
     };
-    assert_eq!(build(ThinkingFormat::OpenAi, Some("high"))["reasoning_effort"], "high");
+    assert_eq!(
+        build(ThinkingFormat::OpenAi, Some("high"))["reasoning_effort"],
+        "high"
+    );
     let deepseek = build(ThinkingFormat::DeepSeek, Some("high"));
     assert_eq!(deepseek["thinking"]["type"], "enabled");
     assert_eq!(deepseek["reasoning_effort"], "high");
@@ -198,18 +249,34 @@ fn completions_reasoning_dialects() {
     assert_eq!(or["reasoning"]["effort"], "low");
 
     // **默认档（不指定）**：只有"默认会思考"的方言才值得试着显式关闭
-    assert!(build(ThinkingFormat::OpenAi, None).get("reasoning_effort").is_none());
-    assert_eq!(build(ThinkingFormat::DeepSeek, None)["thinking"]["type"], "disabled");
-    assert_eq!(build(ThinkingFormat::Zai, None)["thinking"]["type"], "disabled");
-    assert_eq!(build(ThinkingFormat::OpenRouter, None)["reasoning"]["effort"], "none");
-    assert!(build(ThinkingFormat::Qwen, None).get("enable_thinking").is_none());
+    assert!(build(ThinkingFormat::OpenAi, None)
+        .get("reasoning_effort")
+        .is_none());
+    assert_eq!(
+        build(ThinkingFormat::DeepSeek, None)["thinking"]["type"],
+        "disabled"
+    );
+    assert_eq!(
+        build(ThinkingFormat::Zai, None)["thinking"]["type"],
+        "disabled"
+    );
+    assert_eq!(
+        build(ThinkingFormat::OpenRouter, None)["reasoning"]["effort"],
+        "none"
+    );
+    assert!(build(ThinkingFormat::Qwen, None)
+        .get("enable_thinking")
+        .is_none());
 }
 
 /// completions 的流事件：正文 / 思考 / usage / 工具分片 / finish_reason。
 #[test]
 fn completions_interpret() {
     let adapter = OpenAiCompletionsAdapter;
-    let frame = |data: &str| Frame { event: None, data: data.to_string() };
+    let frame = |data: &str| Frame {
+        event: None,
+        data: data.to_string(),
+    };
 
     let events = adapter.interpret(&frame(
         r#"{"id":"r1","choices":[{"delta":{"content":"你"}}]}"#,
@@ -250,7 +317,10 @@ fn completions_interpret() {
         vec![StreamEvent::Finished("stop".into())]
     );
     assert!(adapter.interpret(&frame("[DONE]")).is_empty());
-    assert!(adapter.interpret(&frame("not json")).is_empty(), "一条读不懂的帧不该让整轮失败");
+    assert!(
+        adapter.interpret(&frame("not json")).is_empty(),
+        "一条读不懂的帧不该让整轮失败"
+    );
     assert!(adapter.interpret(&frame("")).is_empty());
 
     // 有的网关在流里回完整 message（不是 delta）
@@ -272,7 +342,10 @@ fn tool_call_accumulator_joins_by_index() {
     assert_eq!(calls.len(), 2);
     assert_eq!(calls[0].0, "call_a");
     assert_eq!(calls[0].1.name, "web_search");
-    assert_eq!(calls[0].1.arguments, "{\"q\":\"x\"}", "参数按 index 归位，不许串线");
+    assert_eq!(
+        calls[0].1.arguments, "{\"q\":\"x\"}",
+        "参数按 index 归位，不许串线"
+    );
     assert_eq!(calls[1].1.name, "web_fetch");
     assert_eq!(calls[1].1.arguments, "{\"url\":\"y\"}");
 
@@ -325,7 +398,10 @@ fn responses_body_shape() {
         &ReasoningRequest::default(),
         None,
     );
-    assert_eq!(body["instructions"], "规则", "system 轮走 instructions（没有 system 角色）");
+    assert_eq!(
+        body["instructions"], "规则",
+        "system 轮走 instructions（没有 system 角色）"
+    );
     assert_eq!(body["input"][0]["type"], "message");
     assert_eq!(body["input"][0]["role"], "user");
     assert_eq!(body["input"][1]["type"], "function_call");
@@ -333,8 +409,15 @@ fn responses_body_shape() {
     assert_eq!(body["input"][2]["type"], "function_call_output");
     assert_eq!(body["input"][2]["output"], "结果");
     assert_eq!(body["tools"][0]["type"], "function");
-    assert_eq!(body["tools"][0]["name"], "web_search", "responses 的工具是扁平的");
-    assert!(body["input"].as_array().unwrap().iter().all(|i| i["role"] != "system"));
+    assert_eq!(
+        body["tools"][0]["name"], "web_search",
+        "responses 的工具是扁平的"
+    );
+    assert!(body["input"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|i| i["role"] != "system"));
 }
 
 /// **思考必须回传**（真实的 400 现场，DeepSeek Responses API）：
@@ -374,10 +457,16 @@ fn responses_reasoning_round_trip() {
         None,
     );
     let input = body["input"].as_array().expect("input 数组");
-    assert_eq!(input[1]["type"], "reasoning", "思考项要排在 assistant 轮的最前面");
+    assert_eq!(
+        input[1]["type"], "reasoning",
+        "思考项要排在 assistant 轮的最前面"
+    );
     assert_eq!(input[1]["content"][0]["type"], "reasoning_text");
     assert_eq!(input[1]["content"][0]["text"], "先查一下天气工具");
-    assert_eq!(input[2]["type"], "function_call", "思考项后面紧跟同一轮的 function_call");
+    assert_eq!(
+        input[2]["type"], "function_call",
+        "思考项后面紧跟同一轮的 function_call"
+    );
     assert_eq!(input[3]["type"], "function_call_output");
 
     // 有正文的那一轮：`reasoning` → `message`（DeepSeek 的输出顺序就是这样回传的）
@@ -423,7 +512,11 @@ fn responses_fills_empty_reasoning_for_tool_turns_that_did_not_think() {
     let silent_tool_turn = ChatTurn {
         role: "assistant".into(),
         content: String::new(),
-        tool_calls: vec![ToolCallRef { id: "call_1".into(), name: "t".into(), arguments: "{}".into() }],
+        tool_calls: vec![ToolCallRef {
+            id: "call_1".into(),
+            name: "t".into(),
+            arguments: "{}".into(),
+        }],
         ..Default::default()
     };
     let deepseek = ReasoningRequest {
@@ -432,9 +525,19 @@ fn responses_fills_empty_reasoning_for_tool_turns_that_did_not_think() {
         format: Some(ThinkingFormat::DeepSeek),
         echo_all: false,
     };
-    let body = adapter.build_body("m", std::slice::from_ref(&silent_tool_turn), &[], &deepseek, None);
+    let body = adapter.build_body(
+        "m",
+        std::slice::from_ref(&silent_tool_turn),
+        &[],
+        &deepseek,
+        None,
+    );
     assert_eq!(body["input"][0]["type"], "reasoning");
-    assert_eq!(body["input"][0]["content"], json!([]), "空 content，而不是空白 reasoning_text");
+    assert_eq!(
+        body["input"][0]["content"],
+        json!([]),
+        "空 content，而不是空白 reasoning_text"
+    );
     assert_eq!(body["input"][1]["type"], "function_call");
 
     let off = ReasoningRequest {
@@ -443,9 +546,19 @@ fn responses_fills_empty_reasoning_for_tool_turns_that_did_not_think() {
         format: Some(ThinkingFormat::DeepSeek),
         echo_all: false,
     };
-    let body = adapter.build_body("m", std::slice::from_ref(&silent_tool_turn), &[], &off, None);
+    let body = adapter.build_body(
+        "m",
+        std::slice::from_ref(&silent_tool_turn),
+        &[],
+        &off,
+        None,
+    );
     assert!(
-        body["input"].as_array().unwrap().iter().all(|i| i["type"] != "reasoning"),
+        body["input"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|i| i["type"] != "reasoning"),
         "思考关掉时不校验回传，不补"
     );
 
@@ -457,7 +570,11 @@ fn responses_fills_empty_reasoning_for_tool_turns_that_did_not_think() {
     };
     let body = adapter.build_body("m", &[silent_tool_turn], &[], &openai, None);
     assert!(
-        body["input"].as_array().unwrap().iter().all(|i| i["type"] != "reasoning"),
+        body["input"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|i| i["type"] != "reasoning"),
         "别的方言不许凭空多一个 reasoning 项"
     );
 }
@@ -473,7 +590,11 @@ fn responses_补回传与方言解耦() {
     let silent = ChatTurn {
         role: "assistant".into(),
         content: String::new(),
-        tool_calls: vec![ToolCallRef { id: "call_1".into(), name: "t".into(), arguments: "{}".into() }],
+        tool_calls: vec![ToolCallRef {
+            id: "call_1".into(),
+            name: "t".into(),
+            arguments: "{}".into(),
+        }],
         ..Default::default()
     };
     // 声明了 OpenAI 方言（不是 DeepSeek）：默认不补
@@ -485,13 +606,20 @@ fn responses_补回传与方言解耦() {
     };
     let body = adapter.build_body("m", std::slice::from_ref(&silent), &[], &plain, None);
     assert!(
-        body["input"].as_array().unwrap().iter().all(|i| i["type"] != "reasoning"),
+        body["input"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|i| i["type"] != "reasoning"),
         "没被拒过就不补，免得给不需要它的上游塞怪东西"
     );
 
     // 被拒过一次：同一个请求，只把 echo_all 打开 → 补出空 content 的 reasoning 项，
     // 而**思考强度仍然在**（`reasoning.effort` 还在，没有被降成 none）
-    let echoed = ReasoningRequest { echo_all: true, ..plain };
+    let echoed = ReasoningRequest {
+        echo_all: true,
+        ..plain
+    };
     let body = adapter.build_body("m", &[silent], &[], &echoed, None);
     assert_eq!(body["input"][0]["type"], "reasoning");
     assert_eq!(body["input"][0]["content"], json!([]));
@@ -503,9 +631,14 @@ fn responses_补回传与方言解耦() {
 #[test]
 fn responses_interpret() {
     let adapter = OpenAiResponsesAdapter;
-    let frame = |data: &str| Frame { event: None, data: data.to_string() };
+    let frame = |data: &str| Frame {
+        event: None,
+        data: data.to_string(),
+    };
     assert_eq!(
-        adapter.interpret(&frame(r#"{"type":"response.output_text.delta","delta":"甲"}"#)),
+        adapter.interpret(&frame(
+            r#"{"type":"response.output_text.delta","delta":"甲"}"#
+        )),
         vec![StreamEvent::TextDelta("甲".into())]
     );
     assert_eq!(
@@ -575,11 +708,17 @@ fn anthropic_body_shape() {
         None,
     );
     assert_eq!(body["system"], "规则");
-    assert_eq!(body["max_tokens"], 4096, "Anthropic 的 max_tokens 必填，缺了直接 400");
+    assert_eq!(
+        body["max_tokens"], 4096,
+        "Anthropic 的 max_tokens 必填，缺了直接 400"
+    );
     assert_eq!(body["messages"][0]["role"], "user");
     assert_eq!(body["messages"][1]["content"][0]["type"], "tool_result");
     assert_eq!(body["messages"][1]["content"][0]["tool_use_id"], "toolu_1");
-    assert_eq!(body["tools"][0]["input_schema"]["type"], "object", "Anthropic 叫 input_schema");
+    assert_eq!(
+        body["tools"][0]["input_schema"]["type"], "object",
+        "Anthropic 叫 input_schema"
+    );
 
     // 工具调用的参数在 Anthropic 是**对象**（completions 那边是字符串）
     let with_call = adapter.build_body(
@@ -637,7 +776,10 @@ fn anthropic_body_shape() {
 #[test]
 fn anthropic_interpret() {
     let adapter = AnthropicMessagesAdapter;
-    let frame = |data: &str| Frame { event: None, data: data.to_string() };
+    let frame = |data: &str| Frame {
+        event: None,
+        data: data.to_string(),
+    };
     let events = adapter.interpret(&frame(
         r#"{"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":5}}}"#,
     ));
@@ -712,7 +854,10 @@ fn chat_urls_match_kotlin() {
         Api::AnthropicMessages.chat_url("https://api.anthropic.com"),
         "https://api.anthropic.com/v1/messages"
     );
-    assert_eq!(Api::parse("openai-completions"), Some(Api::OpenAiCompletions));
+    assert_eq!(
+        Api::parse("openai-completions"),
+        Some(Api::OpenAiCompletions)
+    );
     assert_eq!(Api::parse("  grok  "), None);
     assert_eq!(Api::AnthropicMessages.wire(), "anthropic-messages");
 }
@@ -727,8 +872,16 @@ fn chat_urls_match_kotlin() {
 fn anthropic_prompt_cache_breakpoints() {
     let adapter = AnthropicMessagesAdapter;
     let tools = vec![
-        ToolSpec { name: "a".into(), description: "甲".into(), parameters: json!({"type":"object"}) },
-        ToolSpec { name: "b".into(), description: "乙".into(), parameters: json!({"type":"object"}) },
+        ToolSpec {
+            name: "a".into(),
+            description: "甲".into(),
+            parameters: json!({"type":"object"}),
+        },
+        ToolSpec {
+            name: "b".into(),
+            description: "乙".into(),
+            parameters: json!({"type":"object"}),
+        },
     ];
     let turns = vec![
         turn("system", "规则"),
@@ -743,20 +896,40 @@ fn anthropic_prompt_cache_breakpoints() {
     let body = adapter.build_body("claude", &turns, &tools, &ReasoningRequest::default(), None);
 
     // ① 断点打在**最后一个**工具上（打中间那个就只缓存到一半）
-    assert!(body["tools"][0].get("cache_control").is_none(), "断点只打最后一个工具");
-    assert_eq!(body["tools"][1]["cache_control"], json!({ "type": "ephemeral" }));
+    assert!(
+        body["tools"][0].get("cache_control").is_none(),
+        "断点只打最后一个工具"
+    );
+    assert_eq!(
+        body["tools"][1]["cache_control"],
+        json!({ "type": "ephemeral" })
+    );
     // ② 滚动断点：最后一条消息（这里是工具结果那条用户轮）的最后一个内容块
     let last = body["messages"].as_array().unwrap().last().unwrap();
     assert_eq!(last["content"].as_array().unwrap().len(), 1);
-    assert_eq!(last["content"][0]["cache_control"], json!({ "type": "ephemeral" }));
-    assert_eq!(last["content"][0]["type"], "tool_result", "断点不许把块的类型挤掉");
+    assert_eq!(
+        last["content"][0]["cache_control"],
+        json!({ "type": "ephemeral" })
+    );
+    assert_eq!(
+        last["content"][0]["type"], "tool_result",
+        "断点不许把块的类型挤掉"
+    );
     // ③ 系统提示**仍是字符串**（不动线上的形状，理由见类型文档）
     assert_eq!(body["system"], "规则");
 
     // 空工具 / 空消息时一个断点都不发（别在多造出来的块上打）
-    let bare = adapter.build_body("claude", &[turn("user", "hi")], &[], &ReasoningRequest::default(), None);
+    let bare = adapter.build_body(
+        "claude",
+        &[turn("user", "hi")],
+        &[],
+        &ReasoningRequest::default(),
+        None,
+    );
     assert!(bare.get("tools").is_none());
-    assert!(bare["messages"][0]["content"][0].get("cache_control").is_some());
+    assert!(bare["messages"][0]["content"][0]
+        .get("cache_control")
+        .is_some());
 }
 
 /// 递归抹掉 `cache_control`（**只用于前缀比较**：它是元数据，见下面那条用例的注释）。
@@ -790,7 +963,8 @@ fn 下一轮的请求前缀逐字节包含上一轮() {
         parameters: json!({"type": "object"}),
     }];
     let base = vec![turn("system", "规则"), turn("user", "读一下那个文件")];
-    let appended = [ChatTurn {
+    let appended = [
+        ChatTurn {
             role: "assistant".into(),
             content: String::new(),
             tool_calls: vec![ToolCallRef {
@@ -805,7 +979,8 @@ fn 下一轮的请求前缀逐字节包含上一轮() {
             content: "内容".into(),
             tool_call_id: Some("call_1".into()),
             ..Default::default()
-        }];
+        },
+    ];
     let mut second_turns = base.clone();
     second_turns.extend(appended.iter().cloned());
 
@@ -826,7 +1001,11 @@ fn 下一轮的请求前缀逐字节包含上一轮() {
 
         // ② 上一轮的每一条消息都原样出现在下一轮的**同一位置**上
         let pick = |body: &Value| -> Vec<Value> {
-            let key = if body.get("messages").is_some() { "messages" } else { "input" };
+            let key = if body.get("messages").is_some() {
+                "messages"
+            } else {
+                "input"
+            };
             body[key]
                 .as_array()
                 .cloned()

@@ -36,42 +36,40 @@ Map<String, dynamic> _providerJson({
   String endpointTrust = 'public',
   bool enabled = true,
   int revision = 7,
-}) =>
-    {
-      'id': id,
-      'displayName': name,
-      'api': api,
-      'baseURL': baseURL,
-      'credentialRef': ?credentialRef,
-      'endpointTrust': endpointTrust,
-      'enabled': enabled,
-      'revision': revision,
-      'createdAt': '2026-09-27T00:00:00.000Z',
-      'updatedAt': '2026-09-27T00:00:00.000Z',
-    };
+}) => {
+  'id': id,
+  'displayName': name,
+  'api': api,
+  'baseURL': baseURL,
+  'credentialRef': ?credentialRef,
+  'endpointTrust': endpointTrust,
+  'enabled': enabled,
+  'revision': revision,
+  'createdAt': '2026-09-27T00:00:00.000Z',
+  'updatedAt': '2026-09-27T00:00:00.000Z',
+};
 
 Map<String, dynamic> _modelJson({
   String providerId = 'desk-gw',
   String id = 'm-text',
   String name = '纯文本模型',
-}) =>
-    {
-      'providerId': providerId,
-      'id': id,
-      'displayName': name,
-      'inputModalities': ['text', 'image'],
-      'attachmentTransports': {
-        'image': ['inline_base64'],
-      },
-      'mimeAllowlist': ['image/png'],
-      'tools': true,
-      'parallelTools': false,
-      'reasoning': false,
-      'thinkingEfforts': <String, String>{},
-      'contextWindow': 128000,
-      'capabilitySource': 'manual',
-      'enabled': true,
-    };
+}) => {
+  'providerId': providerId,
+  'id': id,
+  'displayName': name,
+  'inputModalities': ['text', 'image'],
+  'attachmentTransports': {
+    'image': ['inline_base64'],
+  },
+  'mimeAllowlist': ['image/png'],
+  'tools': true,
+  'parallelTools': false,
+  'reasoning': false,
+  'thinkingEfforts': <String, String>{},
+  'contextWindow': 128000,
+  'capabilitySource': 'manual',
+  'enabled': true,
+};
 
 /// 本机那份清单元件（= 手机的 `DeviceProviderStore`，走桥进本机库）。
 class _FakeLocalStore implements ProviderStore {
@@ -79,8 +77,8 @@ class _FakeLocalStore implements ProviderStore {
     this.local = true,
     List<AiProvider>? providers,
     Map<String, List<AiModel>>? models,
-  })  : providers = providers ?? [],
-        models = models ?? {};
+  }) : providers = providers ?? [],
+       models = models ?? {};
 
   final bool local;
   List<AiProvider> providers;
@@ -145,7 +143,10 @@ class _FakeLocalStore implements ProviderStore {
   Future<void> deleteProvider(String id) async {
     calls.add('deleteProvider');
     deleted.add(id);
-    providers = [for (final p in providers) if (p.id != id) p];
+    providers = [
+      for (final p in providers)
+        if (p.id != id) p,
+    ];
   }
 
   @override
@@ -156,7 +157,10 @@ class _FakeLocalStore implements ProviderStore {
   }
 
   @override
-  Future<List<AiModel>> saveModels(String providerId, List<AiModel> value) async {
+  Future<List<AiModel>> saveModels(
+    String providerId,
+    List<AiModel> value,
+  ) async {
     calls.add('saveModels');
     models = {...models, providerId: value};
     return value;
@@ -190,32 +194,39 @@ class _FakeDesktop {
   final List<String> hits = [];
 
   AiApiClient client() => AiApiClient(
-        'http://desktop.test',
-        client: MockClient((request) async {
-          final path = request.url.path;
-          hits.add('${request.method} $path');
-          const json = {'content-type': 'application/json; charset=utf-8'};
-          if (request.method != 'GET') {
-            return http.Response('{"error":"同步只读，不许往桌面写"}', 500, headers: json);
-          }
-          if (path == '/api/ai/providers') {
-            if (providersStatus != 200) {
-              return http.Response('{"error":"需要配对令牌（X-ComfyHub-Token）"}', providersStatus,
-                  headers: json);
-            }
-            return http.Response(jsonEncode(providers), 200, headers: json);
-          }
-          final match = RegExp(r'^/api/ai/providers/(.+)/models$').firstMatch(path);
-          if (match != null) {
-            final id = Uri.decodeComponent(match.group(1)!);
-            if (failModels.contains(id)) {
-              return http.Response('{"error":"上游超时"}', 500, headers: json);
-            }
-            return http.Response(jsonEncode(models[id] ?? const []), 200, headers: json);
-          }
-          return http.Response('{"error":"没有这条端点"}', 404, headers: json);
-        }),
-      );
+    'http://desktop.test',
+    client: MockClient((request) async {
+      final path = request.url.path;
+      hits.add('${request.method} $path');
+      const json = {'content-type': 'application/json; charset=utf-8'};
+      if (request.method != 'GET') {
+        return http.Response('{"error":"同步只读，不许往桌面写"}', 500, headers: json);
+      }
+      if (path == '/api/ai/providers') {
+        if (providersStatus != 200) {
+          return http.Response(
+            '{"error":"需要配对令牌（X-ComfyHub-Token）"}',
+            providersStatus,
+            headers: json,
+          );
+        }
+        return http.Response(jsonEncode(providers), 200, headers: json);
+      }
+      final match = RegExp(r'^/api/ai/providers/(.+)/models$').firstMatch(path);
+      if (match != null) {
+        final id = Uri.decodeComponent(match.group(1)!);
+        if (failModels.contains(id)) {
+          return http.Response('{"error":"上游超时"}', 500, headers: json);
+        }
+        return http.Response(
+          jsonEncode(models[id] ?? const []),
+          200,
+          headers: json,
+        );
+      }
+      return http.Response('{"error":"没有这条端点"}', 404, headers: json);
+    }),
+  );
 }
 
 void main() {
@@ -247,28 +258,33 @@ void main() {
     );
     final local = _FakeLocalStore(
       providers: [
-        AiProvider.fromJson(_providerJson(
-          id: 'both-gw',
-          name: '手机上的名字',
-          baseURL: 'http://192.168.1.9:11434/v1',
-          credentialRef: null,
-          revision: 3,
-        )),
-        AiProvider.fromJson(_providerJson(id: 'phone-only', name: '只在手机上', revision: 2)),
+        AiProvider.fromJson(
+          _providerJson(
+            id: 'both-gw',
+            name: '手机上的名字',
+            baseURL: 'http://192.168.1.9:11434/v1',
+            credentialRef: null,
+            revision: 3,
+          ),
+        ),
+        AiProvider.fromJson(
+          _providerJson(id: 'phone-only', name: '只在手机上', revision: 2),
+        ),
       ],
     );
 
-    final report = await ProviderSync(desktop: desktop.client(), local: local).run();
+    final report = await ProviderSync(
+      desktop: desktop.client(),
+      local: local,
+    ).run();
 
     expect(report.ok, isTrue, reason: report.error);
     expect(report.created, ['new-gw']);
     expect(report.updated, ['both-gw']);
     expect(report.unchanged, isEmpty);
-    expect(
-      report.localOnly,
-      ['phone-only'],
-      reason: '桌面没有它 ≠ 本机该删它 —— 本机清单可能是用户自己配的',
-    );
+    expect(report.localOnly, [
+      'phone-only',
+    ], reason: '桌面没有它 ≠ 本机该删它 —— 本机清单可能是用户自己配的');
     expect(report.modelsWritten, 3, reason: '两份目录各写一次（1 + 2 条）');
     expect(report.problems, isEmpty);
 
@@ -312,20 +328,28 @@ void main() {
     );
     final local = _FakeLocalStore(
       // 本机那一行的 revision 与桌面不同（两份库各算各的），但**配置内容**一致
-      providers: [AiProvider.fromJson(_providerJson(id: 'same-gw', revision: 2))],
+      providers: [
+        AiProvider.fromJson(_providerJson(id: 'same-gw', revision: 2)),
+      ],
       models: {
         'same-gw': [AiModel.fromJson(_modelJson(providerId: 'same-gw'))],
       },
     );
 
-    final report = await ProviderSync(desktop: desktop.client(), local: local).run();
+    final report = await ProviderSync(
+      desktop: desktop.client(),
+      local: local,
+    ).run();
 
     expect(report.ok, isTrue, reason: report.error);
     expect(report.unchanged, ['same-gw']);
     expect(report.touched, isFalse);
     expect(report.modelsWritten, 0);
-    expect(local.calls.where((c) => c != 'listProviders' && c != 'listModels'), isEmpty,
-        reason: '没有变化就不许写库：${local.calls}');
+    expect(
+      local.calls.where((c) => c != 'listProviders' && c != 'listModels'),
+      isEmpty,
+      reason: '没有变化就不许写库：${local.calls}',
+    );
   });
 
   // ---------------------------------------------------------------------------
@@ -338,19 +362,29 @@ void main() {
       failModels: {'flaky-gw'},
     );
     final local = _FakeLocalStore(
-      providers: [AiProvider.fromJson(_providerJson(id: 'flaky-gw', revision: 1))],
+      providers: [
+        AiProvider.fromJson(_providerJson(id: 'flaky-gw', revision: 1)),
+      ],
       models: {
-        'flaky-gw': [AiModel.fromJson(_modelJson(providerId: 'flaky-gw', id: 'keep-me'))],
+        'flaky-gw': [
+          AiModel.fromJson(_modelJson(providerId: 'flaky-gw', id: 'keep-me')),
+        ],
       },
     );
 
-    final report = await ProviderSync(desktop: desktop.client(), local: local).run();
+    final report = await ProviderSync(
+      desktop: desktop.client(),
+      local: local,
+    ).run();
 
     expect(report.ok, isTrue, reason: '单条失败不该把整趟判死');
     expect(report.problems, hasLength(1));
     expect('${report.problems.single}', contains('模型目录'));
-    expect(local.calls, isNot(contains('saveModels')),
-        reason: '拿空目录覆盖会把"上游抖了一下"变成"模型全没了"');
+    expect(
+      local.calls,
+      isNot(contains('saveModels')),
+      reason: '拿空目录覆盖会把"上游抖了一下"变成"模型全没了"',
+    );
     expect(local.models['flaky-gw']!.single.id, 'keep-me');
   });
 
@@ -371,12 +405,18 @@ void main() {
     );
     final local = _FakeLocalStore();
 
-    final report = await ProviderSync(desktop: desktop.client(), local: local).run();
+    final report = await ProviderSync(
+      desktop: desktop.client(),
+      local: local,
+    ).run();
 
     expect(report.ok, isTrue, reason: report.error);
     expect(report.created, ['good-gw']);
     expect(report.problems, hasLength(2));
-    expect(report.problems.map((p) => p.providerId), containsAll(['acme-gw', 'no-url']));
+    expect(
+      report.problems.map((p) => p.providerId),
+      containsAll(['acme-gw', 'no-url']),
+    );
     expect(local.providers.map((p) => p.id), ['good-gw']);
   });
 
@@ -387,24 +427,34 @@ void main() {
   test('拿不到桌面清单（403）：整趟失败、一个字都没动', () async {
     final desktop = _FakeDesktop(providers: const [], providersStatus: 403);
     final local = _FakeLocalStore(
-      providers: [AiProvider.fromJson(_providerJson(id: 'phone-only', revision: 1))],
+      providers: [
+        AiProvider.fromJson(_providerJson(id: 'phone-only', revision: 1)),
+      ],
       models: {
         'phone-only': [AiModel.fromJson(_modelJson(providerId: 'phone-only'))],
       },
     );
 
-    final report = await ProviderSync(desktop: desktop.client(), local: local).run();
+    final report = await ProviderSync(
+      desktop: desktop.client(),
+      local: local,
+    ).run();
 
     expect(report.ok, isFalse);
     expect(report.error, contains('403'));
     expect(report.touched, isFalse);
-    expect(local.providers.map((p) => p.id), ['phone-only'], reason: '失败不许顺手清理本机');
+    expect(local.providers.map((p) => p.id), [
+      'phone-only',
+    ], reason: '失败不许顺手清理本机');
     expect(local.models['phone-only'], hasLength(1));
   });
 
   test('桌面那一端（不是本机库）直接拒绝：没有"自己同步给自己"这回事', () async {
     final local = _FakeLocalStore(local: false);
-    final report = await ProviderSync(desktop: _FakeDesktop(providers: const []).client(), local: local).run();
+    final report = await ProviderSync(
+      desktop: _FakeDesktop(providers: const []).client(),
+      local: local,
+    ).run();
 
     expect(report.ok, isFalse);
     expect(report.error, contains('不需要从桌面同步'));
@@ -443,7 +493,9 @@ void main() {
     final desktop = _FakeDesktop(
       providers: [_providerJson(id: 'desk-gw', name: '桌面网关')],
       models: {
-        'desk-gw': [_modelJson(providerId: 'desk-gw', id: 'm1', name: '桌面上的模型')],
+        'desk-gw': [
+          _modelJson(providerId: 'desk-gw', id: 'm1', name: '桌面上的模型'),
+        ],
       },
     );
 
@@ -488,7 +540,12 @@ void main() {
       local: false,
       providers: [AiProvider.fromJson(_providerJson(id: 'desk-gw'))],
     );
-    await tester.pumpWidget(await page(store: store, desktop: _FakeDesktop(providers: const [])));
+    await tester.pumpWidget(
+      await page(
+        store: store,
+        desktop: _FakeDesktop(providers: const []),
+      ),
+    );
     await tester.pumpAndSettle();
 
     expect(find.text('从电脑同步 Provider'), findsNothing);
@@ -509,7 +566,12 @@ void main() {
     final store = _FakeLocalStore(
       providers: [AiProvider.fromJson(_providerJson(id: 'desk-gw'))],
     );
-    await tester.pumpWidget(await page(store: store, desktop: _FakeDesktop(providers: const [])));
+    await tester.pumpWidget(
+      await page(
+        store: store,
+        desktop: _FakeDesktop(providers: const []),
+      ),
+    );
     await tester.pumpAndSettle();
 
     expect(find.text('从电脑同步 Provider'), findsOneWidget);
@@ -524,13 +586,16 @@ class _NoCredentialStore implements CredentialStore {
   bool get isLocal => false;
 
   @override
-  Future<AiCredentialStatus> statusOf(AiProvider provider) async => AiCredentialStatus.none;
+  Future<AiCredentialStatus> statusOf(AiProvider provider) async =>
+      AiCredentialStatus.none;
 
   @override
-  Future<AiCredentialStatus> save(AiProvider provider, String value) async => AiCredentialStatus.none;
+  Future<AiCredentialStatus> save(AiProvider provider, String value) async =>
+      AiCredentialStatus.none;
 
   @override
-  Future<AiCredentialStatus> clear(AiProvider provider) async => AiCredentialStatus.none;
+  Future<AiCredentialStatus> clear(AiProvider provider) async =>
+      AiCredentialStatus.none;
 
   @override
   Future<String?> reveal(AiProvider provider) async => null;

@@ -41,8 +41,8 @@
 
 use crate::ai::memory;
 use crate::ai::nsfw_prompt;
-use crate::tools::policy::{ToolAccess, ToolPolicy};
 use crate::ai::skills::SkillEntry;
+use crate::tools::policy::{ToolAccess, ToolPolicy};
 use crate::tools::tools::ToolView;
 
 /// 权限标记（与 Kotlin `render` 里那三个字符串逐字一致）。
@@ -117,7 +117,10 @@ pub fn render(
             out.push_str(&memory::take_utf16(&skill.one_line_for_prompt(), 240));
             if let Some(when) = skill.when_to_use.as_deref() {
                 out.push_str("（适用：");
-                out.push_str(&memory::take_utf16(&crate::ai::skills::collapse_whitespace(when), 120));
+                out.push_str(&memory::take_utf16(
+                    &crate::ai::skills::collapse_whitespace(when),
+                    120,
+                ));
                 out.push('）');
             }
             out.push('\n');

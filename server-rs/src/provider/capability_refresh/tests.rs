@@ -5,15 +5,23 @@
 use super::*;
 
 fn obj(json: &str) -> Map<String, Value> {
-    serde_json::from_str::<Value>(json).unwrap().as_object().unwrap().clone()
+    serde_json::from_str::<Value>(json)
+        .unwrap()
+        .as_object()
+        .unwrap()
+        .clone()
 }
 
 #[test]
 fn 跳过判据三档() {
     // NO_DOWNLOAD 一刀关（优先级最高）
-    assert!(skip_reason(true, true, true).unwrap().contains("COMFYHUB_NO_DOWNLOAD=1"));
+    assert!(skip_reason(true, true, true)
+        .unwrap()
+        .contains("COMFYHUB_NO_DOWNLOAD=1"));
     // 没强制 + 没过期 → 跳过（后台巡检那条路）
-    assert!(skip_reason(false, false, false).unwrap().contains("还没过期"));
+    assert!(skip_reason(false, false, false)
+        .unwrap()
+        .contains("还没过期"));
     // 强制 → 不跳
     assert!(skip_reason(true, false, false).is_none());
     // 过期 → 不跳（即使没强制）
@@ -44,7 +52,10 @@ fn normalize_档位_none_归到_off_且_reasoning_缺省时按有档位推为_tr
     assert_eq!(efforts.get("off").map(String::as_str), Some("none"));
     assert_eq!(efforts.get("low").map(String::as_str), Some("low"));
     assert_eq!(efforts.get("xhigh").map(String::as_str), Some("xhigh"));
-    assert!(!efforts.contains_key("bogus"), "不认识的值必须跳过：{efforts:?}");
+    assert!(
+        !efforts.contains_key("bogus"),
+        "不认识的值必须跳过：{efforts:?}"
+    );
     assert_eq!(e.reasoning, Some(true), "给了档位 = 支持推理（诚实推断）");
 }
 
@@ -96,24 +107,36 @@ fn 解析落盘_两种顶层形状都认_并且不填方言() {
     let dir = crate::infra::testpaths::scratch("capability");
     // 形状一：顶层就是 provider map
     let flat = r#"{"openai":{"models":{"gpt-5":{"id":"gpt-5","modalities":{"input":["text","image"]},"tool_call":true,"reasoning":true,"last_updated":"2026-09-01"}}}}"#;
-    assert_eq!(parse_and_write(flat, &dir, "2026-09-27T00:00:00Z").unwrap(), 1);
+    assert_eq!(
+        parse_and_write(flat, &dir, "2026-09-27T00:00:00Z").unwrap(),
+        1
+    );
     let written = std::fs::read_to_string(dir.join(REMOTE_FILE)).unwrap();
     let parsed: OverlayFile = serde_json::from_str(&written).unwrap();
     assert_eq!(parsed.source, SOURCE);
     assert_eq!(parsed.fetched_at.as_deref(), Some("2026-09-27T00:00:00Z"));
     let entry = parsed.entries.get("gpt-5").unwrap();
-    assert_eq!(entry.thinking_format, None, "方言永远不填（猜错比不填更糟）");
+    assert_eq!(
+        entry.thinking_format, None,
+        "方言永远不填（猜错比不填更糟）"
+    );
     assert_eq!(entry.tools, Some(true));
 
     // 形状二：包一层 `models`
     let nested = r#"{"models":{"anthropic":{"models":{"claude":{"modalities":{"input":["text"]},"tool_call":false}}}}}"#;
-    assert_eq!(parse_and_write(nested, &dir, "2026-09-27T01:00:00Z").unwrap(), 1);
+    assert_eq!(
+        parse_and_write(nested, &dir, "2026-09-27T01:00:00Z").unwrap(),
+        1
+    );
 
     // 解析不出任何模型 → 报错，而且**旧文件还在**（上面那份没被弄坏）
     let before = std::fs::read_to_string(dir.join(REMOTE_FILE)).unwrap();
     let err = parse_and_write(r#"{"hello":"world"}"#, &dir, "x").unwrap_err();
     assert!(err.contains("没有解析出任何模型"), "{err}");
-    assert_eq!(std::fs::read_to_string(dir.join(REMOTE_FILE)).unwrap(), before);
+    assert_eq!(
+        std::fs::read_to_string(dir.join(REMOTE_FILE)).unwrap(),
+        before
+    );
 
     let _ = std::fs::remove_dir_all(&dir);
 }

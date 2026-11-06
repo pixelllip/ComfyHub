@@ -36,7 +36,12 @@ pub const MAX_FILES: i64 = 200;
 /// `{runKey, source?, status?, error?, comfyUrl?, outputDir?, prompt?, workflow?, outputs[],
 ///   extra:{nsfw?}, title?, notes?, tags[]?, raw?}`。
 pub async fn ingest_json(state: &AppState, body: &Value) -> Result<Value, ApiError> {
-    let run_key = body.get("runKey").and_then(Value::as_str).unwrap_or("").trim().to_string();
+    let run_key = body
+        .get("runKey")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_string();
     if run_key.is_empty() {
         return Err(ApiError::bad_request("runKey 不能为空"));
     }
@@ -51,7 +56,8 @@ pub async fn ingest_json(state: &AppState, body: &Value) -> Result<Value, ApiErr
         .unwrap_or("ComfyUI")
         .to_string();
     let raw = body.get("raw").cloned().unwrap_or_else(|| body.clone());
-    let claim = crate::comfy::capture_ingest::begin_run(state, &run_key, &source, Some(&raw), false)?;
+    let claim =
+        crate::comfy::capture_ingest::begin_run(state, &run_key, &source, Some(&raw), false)?;
     if !claim.claimed {
         return Ok(json!({
             "runKey": run_key,
@@ -89,15 +95,31 @@ fn request_from_body(
             items
                 .iter()
                 .map(|item| crate::comfy::capture_ingest::IngestOutput {
-                    filename: item.get("filename").and_then(Value::as_str).unwrap_or("").to_string(),
-                    subfolder: item.get("subfolder").and_then(Value::as_str).map(|s| s.to_string()),
-                    type_field: item.get("type").and_then(Value::as_str).map(|s| s.to_string()),
-                    kind: item.get("kind").and_then(Value::as_str).map(|s| s.to_string()),
+                    filename: item
+                        .get("filename")
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .to_string(),
+                    subfolder: item
+                        .get("subfolder")
+                        .and_then(Value::as_str)
+                        .map(|s| s.to_string()),
+                    type_field: item
+                        .get("type")
+                        .and_then(Value::as_str)
+                        .map(|s| s.to_string()),
+                    kind: item
+                        .get("kind")
+                        .and_then(Value::as_str)
+                        .map(|s| s.to_string()),
                     node_id: item
                         .get("nodeId")
                         .map(primitive_text)
                         .filter(|s| !s.is_empty()),
-                    node_type: item.get("nodeType").and_then(Value::as_str).map(|s| s.to_string()),
+                    node_type: item
+                        .get("nodeType")
+                        .and_then(Value::as_str)
+                        .map(|s| s.to_string()),
                 })
                 .collect()
         })
@@ -106,7 +128,13 @@ fn request_from_body(
     let tags = body
         .get("tags")
         .and_then(Value::as_array)
-        .map(|items| items.iter().filter_map(Value::as_str).map(|s| s.to_string()).collect())
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(|s| s.to_string())
+                .collect()
+        })
         .unwrap_or_default();
 
     // `extra.nsfw`（Kotlin 把它放在 `extra` 里；也有老客户端直接给顶层 `nsfw`）
@@ -120,8 +148,15 @@ fn request_from_body(
     Ok(crate::comfy::capture_ingest::IngestRequest {
         run_key: run_key.to_string(),
         source: source.to_string(),
-        status: body.get("status").and_then(Value::as_str).unwrap_or("").to_string(),
-        error: body.get("error").and_then(Value::as_str).map(|s| s.to_string()),
+        status: body
+            .get("status")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string(),
+        error: body
+            .get("error")
+            .and_then(Value::as_str)
+            .map(|s| s.to_string()),
         comfy_url: body
             .get("comfyUrl")
             .and_then(Value::as_str)
@@ -136,8 +171,14 @@ fn request_from_body(
         workflow: body.get("workflow").cloned(),
         outputs,
         nsfw,
-        title: body.get("title").and_then(Value::as_str).map(|s| s.to_string()),
-        notes: body.get("notes").and_then(Value::as_str).map(|s| s.to_string()),
+        title: body
+            .get("title")
+            .and_then(Value::as_str)
+            .map(|s| s.to_string()),
+        notes: body
+            .get("notes")
+            .and_then(Value::as_str)
+            .map(|s| s.to_string()),
         tags,
         raw: body.get("raw").cloned(),
     })
@@ -166,7 +207,12 @@ fn primitive_text(value: &Value) -> String {
 ///
 /// 单个文件失败**不整批失败**：记进 `errors`（`名字: 原因`），其余继续 —— 不许静默跳过。
 pub async fn import_folder_json(state: &AppState, body: &Value) -> Result<Value, ApiError> {
-    let raw_dir = body.get("dir").and_then(Value::as_str).unwrap_or("").trim().to_string();
+    let raw_dir = body
+        .get("dir")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_string();
     if raw_dir.is_empty() {
         return Err(ApiError::bad_request("dir 不能为空"));
     }
@@ -174,8 +220,14 @@ pub async fn import_folder_json(state: &AppState, body: &Value) -> Result<Value,
     if !dir.is_dir() {
         return Err(ApiError::bad_request(format!("目录不存在: {raw_dir}")));
     }
-    let recursive = body.get("recursive").and_then(Value::as_bool).unwrap_or(true);
-    let link_workflow = body.get("linkWorkflow").and_then(Value::as_bool).unwrap_or(true);
+    let recursive = body
+        .get("recursive")
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
+    let link_workflow = body
+        .get("linkWorkflow")
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
     let limit = body
         .get("limit")
         .and_then(|v| v.as_i64())
@@ -221,7 +273,10 @@ pub async fn import_folder_json(state: &AppState, body: &Value) -> Result<Value,
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_default();
         match import_one(state, path, &name, link_workflow, &tags).await {
-            Ok(Outcome::Imported { prompt_id, created_prompt }) => {
+            Ok(Outcome::Imported {
+                prompt_id,
+                created_prompt,
+            }) => {
                 imported += 1;
                 if let Some(id) = prompt_id {
                     prompt_ids.push(id);
@@ -255,11 +310,16 @@ pub async fn import_folder_json(state: &AppState, body: &Value) -> Result<Value,
 }
 
 enum Outcome {
-    Imported { prompt_id: Option<i64>, created_prompt: bool },
+    Imported {
+        prompt_id: Option<i64>,
+        created_prompt: bool,
+    },
     /// 已经在库里（Kotlin 那边会把已有的 promptId 带出来，但 ImportFolderResult
     /// 只有计数与 rrors，带出来也没人用 —— 所以这里不存）。
     Duplicate,
-    Failed { reason: String },
+    Failed {
+        reason: String,
+    },
 }
 
 /// 一个文件：判重 → （PNG）读内嵌图 → 建提示词 → 收进 storage。
@@ -276,13 +336,12 @@ async fn import_one(
     // ① 内容已经在库里 → 重复（把已有的 promptId 带回去，界面能显示"已关联哪条提示词"）
     let existing: Option<(i64, Option<i64>)> = state.with(|conn| {
         use rusqlite::OptionalExtension;
-        conn
-            .query_row(
-                "SELECT id, prompt_id FROM media_assets WHERE sha256 = ?1 LIMIT 1",
-                rusqlite::params![sha],
-                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, Option<i64>>(1)?)),
-            )
-            .optional()
+        conn.query_row(
+            "SELECT id, prompt_id FROM media_assets WHERE sha256 = ?1 LIMIT 1",
+            rusqlite::params![sha],
+            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, Option<i64>>(1)?)),
+        )
+        .optional()
     })?;
     if let Some((_, prompt_id)) = existing {
         let _ = prompt_id;
@@ -298,13 +357,18 @@ async fn import_one(
             .get("prompt")
             .and_then(|text| serde_json::from_str::<Value>(text).ok())
             .filter(|value| value.is_object());
-        workflow = chunks.get("workflow").cloned().filter(|text| !text.trim().is_empty());
+        workflow = chunks
+            .get("workflow")
+            .cloned()
+            .filter(|text| !text.trim().is_empty());
     }
 
     let run_key = format!("import:{}", &sha[..sha.len().min(40)]);
     let notes = format!(
         "从 {} 导入，参数取自 PNG 内嵌的 prompt 元数据",
-        path.parent().map(|p| p.display().to_string()).unwrap_or_default()
+        path.parent()
+            .map(|p| p.display().to_string())
+            .unwrap_or_default()
     );
 
     let mut prompt_id: Option<i64> = None;
@@ -312,7 +376,13 @@ async fn import_one(
     if link_workflow {
         if let Some(graph) = graph.as_ref() {
             // `force = true`：上面已经确认过文件不在库里，历史运行记录不该拦住重新导入
-            let claim = crate::comfy::capture_ingest::begin_run(state, &run_key, "ComfyUI-Import", None, true)?;
+            let claim = crate::comfy::capture_ingest::begin_run(
+                state,
+                &run_key,
+                "ComfyUI-Import",
+                None,
+                true,
+            )?;
             if !claim.claimed {
                 return Ok(Outcome::Duplicate);
             }
@@ -339,7 +409,9 @@ async fn import_one(
                 }
                 Err(error) => {
                     failed_claim_cleanup(state, &run_key);
-                    return Ok(Outcome::Failed { reason: format!("建提示词失败：{error:?}") });
+                    return Ok(Outcome::Failed {
+                        reason: format!("建提示词失败：{error:?}"),
+                    });
                 }
             }
         }
@@ -362,7 +434,10 @@ async fn import_one(
         false,
     );
     match imported {
-        crate::comfy::capture_ingest::Imported::Created { .. } => Ok(Outcome::Imported { prompt_id, created_prompt }),
+        crate::comfy::capture_ingest::Imported::Created { .. } => Ok(Outcome::Imported {
+            prompt_id,
+            created_prompt,
+        }),
         crate::comfy::capture_ingest::Imported::Duplicate { .. } => Ok(Outcome::Duplicate),
         crate::comfy::capture_ingest::Imported::Failed { reason } => {
             failed_claim_cleanup(state, &run_key);
@@ -375,7 +450,10 @@ async fn import_one(
 /// （Kotlin 那条"删掉提示词之后再 load 永远回 LOAD_IN_PROGRESS"的亲戚）。
 fn failed_claim_cleanup(state: &AppState, run_key: &str) {
     let _ = state.write(|conn| {
-        conn.execute("DELETE FROM capture_runs WHERE run_key = ?1", rusqlite::params![run_key])?;
+        conn.execute(
+            "DELETE FROM capture_runs WHERE run_key = ?1",
+            rusqlite::params![run_key],
+        )?;
         Ok(())
     });
 }
@@ -394,7 +472,11 @@ fn make_import_title(parsed: &crate::workflow::graph_parse::Parsed, filename: &s
                 .trim_end_matches(['_', ' ', '-'])
                 .to_string()
         });
-    let base = if prefix.trim().is_empty() { "导入的产物".to_string() } else { prefix };
+    let base = if prefix.trim().is_empty() {
+        "导入的产物".to_string()
+    } else {
+        prefix
+    };
     let title = match parsed.seed {
         Some(seed) => format!("{base} · seed {seed}"),
         None => base,
@@ -414,14 +496,19 @@ fn collect_files(
     let mut out: Vec<std::path::PathBuf> = Vec::new();
     let mut stack: Vec<std::path::PathBuf> = vec![dir.to_path_buf()];
     while let Some(current) = stack.pop() {
-        let Ok(entries) = std::fs::read_dir(&current) else { continue };
+        let Ok(entries) = std::fs::read_dir(&current) else {
+            continue;
+        };
         let mut children: Vec<std::path::PathBuf> = entries.flatten().map(|e| e.path()).collect();
         children.sort(); // 稳定顺序：同样的目录每次导入的处理次序一致
         for path in children {
             if out.len() >= limit {
                 return out;
             }
-            let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+            let name = path
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_default();
             if name.starts_with('.') {
                 continue;
             }
@@ -436,7 +523,10 @@ fn collect_files(
             }
             // 只认**媒体**扩展名（复用同一张 MIME 表，别另写一份扩展名清单）
             let mime = crate::media::media_upload::detect_mime(&name, None);
-            if mime.starts_with("image/") || mime.starts_with("video/") || mime.starts_with("audio/") {
+            if mime.starts_with("image/")
+                || mime.starts_with("video/")
+                || mime.starts_with("audio/")
+            {
                 out.push(path);
             }
         }
@@ -451,9 +541,12 @@ fn collect_files(
 /// `dir` 不填就自动发现（[`crate::comfy::comfy_dirs::workflow_dirs`]），填了就当它是那个目录本身。
 pub async fn import_workflows(state: &AppState, body: &Value) -> Result<Value, ApiError> {
     let project_root = state.project_root();
-    let configured_output = capture_config(state).ok().and_then(|config| config.output_dir);
+    let configured_output = capture_config(state)
+        .ok()
+        .and_then(|config| config.output_dir);
 
-    let dirs: Vec<std::path::PathBuf> = match body.get("dir").and_then(Value::as_str).map(str::trim) {
+    let dirs: Vec<std::path::PathBuf> = match body.get("dir").and_then(Value::as_str).map(str::trim)
+    {
         Some(raw) if !raw.is_empty() => {
             let path = std::path::PathBuf::from(raw);
             if !path.is_dir() {
@@ -466,7 +559,10 @@ pub async fn import_workflows(state: &AppState, body: &Value) -> Result<Value, A
 
     let limit = body
         .get("limit")
-        .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.trim().parse().ok())))
+        .and_then(|v| {
+            v.as_i64()
+                .or_else(|| v.as_str().and_then(|s| s.trim().parse().ok()))
+        })
         .unwrap_or(MAX_FILES)
         .clamp(1, MAX_FILES) as usize;
     let query = body
@@ -502,7 +598,9 @@ pub async fn import_workflows(state: &AppState, body: &Value) -> Result<Value, A
             _ => {}
         }
         let path = std::path::PathBuf::from(&file.path);
-        match crate::workflow::workflow_load::load_from_file(state, &path, None, false, true, true).await {
+        match crate::workflow::workflow_load::load_from_file(state, &path, None, false, true, true)
+            .await
+        {
             Ok(loaded) => {
                 let prompt_id = loaded.get("promptId").and_then(|v| v.as_i64());
                 let runnable = loaded.get("runnable").and_then(Value::as_bool);
@@ -547,7 +645,10 @@ pub async fn import_workflows(state: &AppState, body: &Value) -> Result<Value, A
     } else if files.is_empty() {
         format!(
             "这些目录里没有工作流文件（.json）：{}",
-            dirs.iter().map(|d| d.display().to_string()).collect::<Vec<_>>().join("、")
+            dirs.iter()
+                .map(|d| d.display().to_string())
+                .collect::<Vec<_>>()
+                .join("、")
         )
     } else {
         format!(

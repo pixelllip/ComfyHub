@@ -179,8 +179,14 @@ class _AiProviderSettingsPageState extends State<AiProviderSettingsPage> {
           '可能产生少量费用。手动声明过的模型不会被覆盖。',
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
-          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('开始校准')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('开始校准'),
+          ),
         ],
       ),
     );
@@ -211,7 +217,10 @@ class _AiProviderSettingsPageState extends State<AiProviderSettingsPage> {
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisSize: MainAxisSize.min,
               children: [
-                Text(response.message, style: Theme.of(ctx).textTheme.bodySmall),
+                Text(
+                  response.message,
+                  style: Theme.of(ctx).textTheme.bodySmall,
+                ),
                 const SizedBox(height: 8),
                 for (final o in response.outcomes)
                   Padding(
@@ -222,11 +231,15 @@ class _AiProviderSettingsPageState extends State<AiProviderSettingsPage> {
                         Icon(
                           o.skipped
                               ? Icons.skip_next_outlined
-                              : (o.ok ? Icons.check_circle_outline : Icons.error_outline),
+                              : (o.ok
+                                    ? Icons.check_circle_outline
+                                    : Icons.error_outline),
                           size: 15,
                           color: o.skipped
                               ? Theme.of(ctx).colorScheme.outline
-                              : (o.ok ? Colors.green.shade600 : Theme.of(ctx).colorScheme.error),
+                              : (o.ok
+                                    ? Colors.green.shade600
+                                    : Theme.of(ctx).colorScheme.error),
                         ),
                         const SizedBox(width: 6),
                         Expanded(
@@ -243,7 +256,12 @@ class _AiProviderSettingsPageState extends State<AiProviderSettingsPage> {
             ),
           ),
         ),
-        actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('好的'))],
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('好的'),
+          ),
+        ],
       ),
     );
   }
@@ -270,7 +288,9 @@ class _AiProviderSettingsPageState extends State<AiProviderSettingsPage> {
       if (_selected != null) {
         _selected = _providers.where((p) => p.id == _selected!.id).firstOrNull;
       }
-      _models = _selected == null ? const [] : await _store.listModels(_selected!.id);
+      _models = _selected == null
+          ? const []
+          : await _store.listModels(_selected!.id);
     } catch (e) {
       _error = '$e';
     } finally {
@@ -287,7 +307,9 @@ class _AiProviderSettingsPageState extends State<AiProviderSettingsPage> {
     // 就回读了）。页面拿它当"当前选中项"，于是刚填进去的 key 在详情里显示成"未配置"，
     // 而 [credential_store] 里明明有那把。`_reload()` 是在存完密钥之后跑的，
     // 所以按 id 取回来的那一份才是最新的。
-    final fresh = p == null ? null : _providers.where((e) => e.id == p.id).firstOrNull ?? p;
+    final fresh = p == null
+        ? null
+        : _providers.where((e) => e.id == p.id).firstOrNull ?? p;
     setState(() {
       _selected = fresh;
       _models = const [];
@@ -332,7 +354,9 @@ class _AiProviderSettingsPageState extends State<AiProviderSettingsPage> {
               child: Text(
                 '选择一个 Provider 查看详情，或新建一个。\n填入的 API Key 保存后不会再显示。',
                 textAlign: TextAlign.center,
-                style: theme.textTheme.bodyMedium?.copyWith(color: theme.colorScheme.outline),
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  color: theme.colorScheme.outline,
+                ),
               ),
             ),
           )
@@ -390,28 +414,33 @@ class _AiProviderSettingsPageState extends State<AiProviderSettingsPage> {
 
   /// 顶部那条错误横幅（窄屏三个面板共用同一份渲染）。
   Widget _errorBanner(ThemeData theme) => Container(
-        width: double.infinity,
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-        color: theme.colorScheme.errorContainer,
-        child: Row(
-          children: [
-            Icon(Icons.error_outline, size: 18, color: theme.colorScheme.onErrorContainer),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Text(
-                _error!,
-                style: theme.textTheme.bodySmall
-                    ?.copyWith(color: theme.colorScheme.onErrorContainer),
-              ),
-            ),
-            IconButton(
-              tooltip: '关闭',
-              icon: const Icon(Icons.close, size: 16),
-              onPressed: () => setState(() => _error = null),
-            ),
-          ],
+    width: double.infinity,
+    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+    color: theme.colorScheme.errorContainer,
+    child: Row(
+      children: [
+        Icon(
+          Icons.error_outline,
+          size: 18,
+          color: theme.colorScheme.onErrorContainer,
         ),
-      );
+        const SizedBox(width: 8),
+        Expanded(
+          child: Text(
+            _error!,
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.onErrorContainer,
+            ),
+          ),
+        ),
+        IconButton(
+          tooltip: '关闭',
+          icon: const Icon(Icons.close, size: 16),
+          onPressed: () => setState(() => _error = null),
+        ),
+      ],
+    ),
+  );
 
   /// **手机上的这一页**：两块内容各自**整屏**，带返回箭头，一次只显示一块。
   ///
@@ -429,19 +458,21 @@ class _AiProviderSettingsPageState extends State<AiProviderSettingsPage> {
   /// 表现是"东西明明加载完了却还显示空的、改完不回显"。一个 `enum` 就没有这个缝。
   Widget _buildNarrow(ThemeData theme) {
     // 详情面板的前提是"有一个选中的 Provider"：删掉之后自动退回列表
-    final pane = (_selected == null && _pane == _NarrowPane.detail) ? _NarrowPane.list : _pane;
+    final pane = (_selected == null && _pane == _NarrowPane.detail)
+        ? _NarrowPane.list
+        : _pane;
     // 子面板上**接管系统返回**（用户实测报的 bug：划一下返回手势，整页直接退回设置首页了）。
     // 面板是同一个 State 里换 enum，不是路由 —— 所以系统返回默认弹的是"整个页面"。
     // `canPop: false` 把这一层拦住，由我们退回列表；在列表上时照旧放行（返回 = 退出这一页）。
     final interceptBack = pane != _NarrowPane.list;
     Widget withBackGuard(Widget child) => PopScope(
-          canPop: !interceptBack,
-          onPopInvokedWithResult: (didPop, _) {
-            if (didPop) return;
-            setState(() => _pane = _NarrowPane.list);
-          },
-          child: child,
-        );
+      canPop: !interceptBack,
+      onPopInvokedWithResult: (didPop, _) {
+        if (didPop) return;
+        setState(() => _pane = _NarrowPane.list);
+      },
+      child: child,
+    );
 
     switch (pane) {
       case _NarrowPane.detail:
@@ -481,7 +512,9 @@ class _AiProviderSettingsPageState extends State<AiProviderSettingsPage> {
                     capability: _cap,
                     capabilityBusy: _capBusy,
                     probeBusy: _probeBusy,
-                    onRefreshCapability: _loading ? null : _loadCapabilityCatalog,
+                    onRefreshCapability: _loading
+                        ? null
+                        : _loadCapabilityCatalog,
                     onUpdateCapabilityRemote: _refreshCapabilityCatalog,
                     onProbeToggle: _toggleProbe,
                     onProbe: _probeThinkingLadders,
@@ -512,7 +545,9 @@ class _AiProviderSettingsPageState extends State<AiProviderSettingsPage> {
                   onSelect: (p) async {
                     await _select(p);
                     // 手机上点一条 = **进子界面**（不是"在下面换个详情"）
-                    if (mounted && p != null) setState(() => _pane = _NarrowPane.detail);
+                    if (mounted && p != null) {
+                      setState(() => _pane = _NarrowPane.detail);
+                    }
                   },
                   onCreate: _createProvider,
                   onDelete: _deleteProvider,
@@ -543,7 +578,9 @@ class _AiProviderSettingsPageState extends State<AiProviderSettingsPage> {
           content: SingleChildScrollView(child: Text(message)),
           behavior: SnackBarBehavior.floating,
           duration: Duration(seconds: error ? 8 : 3),
-          backgroundColor: error ? Theme.of(context).colorScheme.errorContainer : null,
+          backgroundColor: error
+              ? Theme.of(context).colorScheme.errorContainer
+              : null,
         ),
       );
   }
@@ -574,9 +611,11 @@ class _AiProviderSettingsPageState extends State<AiProviderSettingsPage> {
       if (mounted && MediaQuery.sizeOf(context).width < 900) {
         setState(() => _pane = _NarrowPane.detail);
       }
-      _notify(saved
-          ? '已创建 Provider「${created.displayName}」，API Key 已保存。'
-          : '已创建 Provider「${created.displayName}」，接下来可以填 API Key 和模型目录。');
+      _notify(
+        saved
+            ? '已创建 Provider「${created.displayName}」，API Key 已保存。'
+            : '已创建 Provider「${created.displayName}」，接下来可以填 API Key 和模型目录。',
+      );
     } catch (e) {
       if (mounted) setState(() => _error = '$e');
       _notify('创建失败，$e', error: true);
@@ -616,28 +655,34 @@ class _AiProviderSettingsPageState extends State<AiProviderSettingsPage> {
     if (draft == null) return;
     final existingRef = (p.credentialRef ?? '').trim();
     try {
-      final updated = await _store.updateProvider(AiProvider(
-        id: p.id,
-        displayName: draft.displayName,
-        api: draft.api.wire,
-        baseURL: draft.baseURL,
-        // 见第 4 条：有就沿用，没有（历史数据）才由程序按 ID 推一个
-        credentialRef: existingRef.isEmpty ? defaultCredentialRef(p.id) : existingRef,
-        // 端点信任级别**不再由用户选**：桌面那份由后端按**新地址**重新推断
-        // （`RemoteProviderStore.updateProvider` 刻意不带这个键 —— 改地址后旧档位可能
-        //  已经不允许新地址了，"沿用旧档"会让用户撞上一个界面上再也改不动的错误）；
-        // 手机侧不读它，沿用原值。
-        endpointTrust: p.endpointTrust,
-        enabled: p.enabled,
-        revision: p.revision,
-        credential: p.credential,
-      ));
+      final updated = await _store.updateProvider(
+        AiProvider(
+          id: p.id,
+          displayName: draft.displayName,
+          api: draft.api.wire,
+          baseURL: draft.baseURL,
+          // 见第 4 条：有就沿用，没有（历史数据）才由程序按 ID 推一个
+          credentialRef: existingRef.isEmpty
+              ? defaultCredentialRef(p.id)
+              : existingRef,
+          // 端点信任级别**不再由用户选**：桌面那份由后端按**新地址**重新推断
+          // （`RemoteProviderStore.updateProvider` 刻意不带这个键 —— 改地址后旧档位可能
+          //  已经不允许新地址了，"沿用旧档"会让用户撞上一个界面上再也改不动的错误）；
+          // 手机侧不读它，沿用原值。
+          endpointTrust: p.endpointTrust,
+          enabled: p.enabled,
+          revision: p.revision,
+          credential: p.credential,
+        ),
+      );
       final saved = await _saveDialogKey(updated, draft.apiKey);
       await _reload();
       await _select(updated);
-      _notify(saved
-          ? '已保存 Provider「${updated.displayName}」（revision ${updated.revision}），API Key 已保存。'
-          : '已保存 Provider「${updated.displayName}」（revision ${updated.revision}）。');
+      _notify(
+        saved
+            ? '已保存 Provider「${updated.displayName}」（revision ${updated.revision}），API Key 已保存。'
+            : '已保存 Provider「${updated.displayName}」（revision ${updated.revision}）。',
+      );
     } catch (e) {
       if (mounted) setState(() => _error = '$e');
       _notify('保存失败，$e', error: true);
@@ -649,12 +694,20 @@ class _AiProviderSettingsPageState extends State<AiProviderSettingsPage> {
       context: context,
       builder: (ctx) => AlertDialog(
         title: Text('删除 Provider「${p.displayName}」？'),
-        content: Text(p.credential.configured
-            ? '已有会话会保留它的 Provider / 模型快照，但不能再继续发送。它配置的密钥会一并删除。'
-            : '已有会话会保留它的 Provider / 模型快照，但不能再继续发送。'),
+        content: Text(
+          p.credential.configured
+              ? '已有会话会保留它的 Provider / 模型快照，但不能再继续发送。它配置的密钥会一并删除。'
+              : '已有会话会保留它的 Provider / 模型快照，但不能再继续发送。',
+        ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
-          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('删除')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('删除'),
+          ),
         ],
       ),
     );
@@ -700,8 +753,14 @@ class _AiProviderSettingsPageState extends State<AiProviderSettingsPage> {
           ),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
-          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('开始同步')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('开始同步'),
+          ),
         ],
       ),
     );
@@ -748,8 +807,10 @@ class _AiProviderSettingsPageState extends State<AiProviderSettingsPage> {
       return;
     }
     final lines = <String>[
-      if (report.created.isNotEmpty) '新建 ${report.created.length} 个（${report.created.join('、')}）',
-      if (report.updated.isNotEmpty) '覆盖 ${report.updated.length} 个（${report.updated.join('、')}）',
+      if (report.created.isNotEmpty)
+        '新建 ${report.created.length} 个（${report.created.join('、')}）',
+      if (report.updated.isNotEmpty)
+        '覆盖 ${report.updated.length} 个（${report.updated.join('、')}）',
       if (report.unchanged.isNotEmpty) '${report.unchanged.length} 个与桌面一致，没有改动',
       '模型目录写入 ${report.modelsWritten} 条',
       if (report.localOnly.isNotEmpty)
@@ -764,10 +825,14 @@ class _AiProviderSettingsPageState extends State<AiProviderSettingsPage> {
     // 缺密钥只说给**能取**的人听（本机密钥库 + 已挂上 AI 工作台）。
     final missing = [
       for (final p in _providers)
-        if ((p.credentialRef ?? '').trim().isNotEmpty && !p.credential.configured) p.displayName,
+        if ((p.credentialRef ?? '').trim().isNotEmpty &&
+            !p.credential.configured)
+          p.displayName,
     ];
     final canPullKeys =
-        _credentials.isLocal && missing.isNotEmpty && context.read<AiWorkspaceStore?>() != null;
+        _credentials.isLocal &&
+        missing.isNotEmpty &&
+        context.read<AiWorkspaceStore?>() != null;
     if (missing.isNotEmpty) {
       lines.add(
         canPullKeys
@@ -783,9 +848,15 @@ class _AiProviderSettingsPageState extends State<AiProviderSettingsPage> {
         title: const Text('同步完成'),
         content: SingleChildScrollView(child: Text(lines.join('\n'))),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, 'ok'), child: const Text('好的')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, 'ok'),
+            child: const Text('好的'),
+          ),
           if (canPullKeys)
-            FilledButton(onPressed: () => Navigator.pop(ctx, 'keys'), child: const Text('再取回密钥')),
+            FilledButton(
+              onPressed: () => Navigator.pop(ctx, 'keys'),
+              child: const Text('再取回密钥'),
+            ),
         ],
       ),
     );
@@ -887,7 +958,8 @@ class _ProviderList extends StatelessWidget {
           Padding(
             padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
             child: _Note(
-              text: '这些 Provider 只在这台手机上，存在本机库里，桌面看不到它们。'
+              text:
+                  '这些 Provider 只在这台手机上，存在本机库里，桌面看不到它们。'
                   '两端的清单各归各，不会自动合并。桌面那份要手动点「从电脑同步 Provider」搬过来，'
                   '同 id 会被覆盖，只在手机上有的保留不动，API Key 不在其中。'
                   '桌面不在线时也能在这里新建、编辑、删除和改模型目录。',
@@ -898,8 +970,12 @@ class _ProviderList extends StatelessWidget {
         Expanded(
           child: providers.isEmpty
               ? Center(
-                  child: Text('还没有 Provider',
-                      style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.outline)),
+                  child: Text(
+                    '还没有 Provider',
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.colorScheme.outline,
+                    ),
+                  ),
                 )
               : ListView.builder(
                   itemCount: providers.length,
@@ -909,9 +985,15 @@ class _ProviderList extends StatelessWidget {
                       dense: true,
                       selected: p.id == selectedId,
                       leading: _CredentialDot(status: p.credential),
-                      title: Text(p.displayName, maxLines: 1, overflow: TextOverflow.ellipsis),
-                      subtitle: Text('${p.apiLabel} · ${p.endpointTrust}',
-                          style: theme.textTheme.labelSmall),
+                      title: Text(
+                        p.displayName,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      subtitle: Text(
+                        '${p.apiLabel} · ${p.endpointTrust}',
+                        style: theme.textTheme.labelSmall,
+                      ),
                       onTap: () => onSelect(p),
                       trailing: IconButton(
                         tooltip: '删除',
@@ -1025,7 +1107,9 @@ class _ProviderDetailState extends State<_ProviderDetail> {
           content: Text(message),
           behavior: SnackBarBehavior.floating,
           duration: Duration(seconds: error ? 8 : 3),
-          backgroundColor: error ? Theme.of(context).colorScheme.errorContainer : null,
+          backgroundColor: error
+              ? Theme.of(context).colorScheme.errorContainer
+              : null,
         ),
       );
   }
@@ -1090,7 +1174,9 @@ class _ProviderDetailState extends State<_ProviderDetail> {
       if (widget.showName)
         Row(
           children: [
-            Expanded(child: Text(p.displayName, style: theme.textTheme.titleLarge)),
+            Expanded(
+              child: Text(p.displayName, style: theme.textTheme.titleLarge),
+            ),
             // 「改个 baseURL / 协议」的路（用户要的"独立配置 provider"）：
             // 两端都走同一条 store（手机 = 本机库、桌面 = 后端），提交时带 revision（乐观锁）。
             OutlinedButton.icon(
@@ -1101,13 +1187,21 @@ class _ProviderDetailState extends State<_ProviderDetail> {
           ],
         ),
       if (widget.showName) const SizedBox(height: 4),
-      Text('${p.id} · ${p.apiLabel} · revision ${p.revision}',
-          style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline)),
+      Text(
+        '${p.id} · ${p.apiLabel} · revision ${p.revision}',
+        style: theme.textTheme.labelSmall?.copyWith(
+          color: theme.colorScheme.outline,
+        ),
+      ),
       const SizedBox(height: 6),
       SelectableText(p.baseURL, style: theme.textTheme.bodySmall),
       const SizedBox(height: 4),
-      Text('端点信任级别是 ${p.endpointTrust}（保存时校验，公网必须是 https）',
-          style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline)),
+      Text(
+        '端点信任级别是 ${p.endpointTrust}（保存时校验，公网必须是 https）',
+        style: theme.textTheme.labelSmall?.copyWith(
+          color: theme.colorScheme.outline,
+        ),
+      ),
       if (widget.info != null) ...[
         const SizedBox(height: 10),
         _Note(text: widget.info!, error: false),
@@ -1125,7 +1219,9 @@ class _ProviderDetailState extends State<_ProviderDetail> {
             // 手机上**还不能**：这一步要由本机自己向上游发请求（用本机密钥 + 端点信任档那套），
             // 而桌面那一份 `provider_probe` 手机侧还没实现。禁用 + 下面那句话，
             // 比让用户点下去拿到一句"Provider 不存在: x"（桌面不认识手机这条 id）诚实得多。
-            onPressed: (_busy || !widget.providers.supportsProbe) ? null : _test,
+            onPressed: (_busy || !widget.providers.supportsProbe)
+                ? null
+                : _test,
             icon: const Icon(Icons.network_check, size: 18),
             label: const Text('测试连接'),
           ),
@@ -1135,12 +1231,16 @@ class _ProviderDetailState extends State<_ProviderDetail> {
         Text(
           '连接测试与「获取模型」目前只在桌面可用，因为要由那一端自己向上游发请求。'
           '这台手机上还做不到，所以这两个按钮先禁用着。',
-          style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline),
+          style: theme.textTheme.labelSmall?.copyWith(
+            color: theme.colorScheme.outline,
+          ),
         )
       else
         Text(
           '测试只发一次请求，10 秒超时，密钥不会进日志。',
-          style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline),
+          style: theme.textTheme.labelSmall?.copyWith(
+            color: theme.colorScheme.outline,
+          ),
         ),
       if (_testResult != null) ...[
         const SizedBox(height: 8),
@@ -1158,8 +1258,12 @@ class _ProviderDetailState extends State<_ProviderDetail> {
       ),
       const SizedBox(height: 8),
       if (p.credential.source == 'env')
-        Text('该凭据由环境变量 ${p.credentialRef} 提供，是只读的，不能在应用内修改或移除。',
-            style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline))
+        Text(
+          '该凭据由环境变量 ${p.credentialRef} 提供，是只读的，不能在应用内修改或移除。',
+          style: theme.textTheme.labelSmall?.copyWith(
+            color: theme.colorScheme.outline,
+          ),
+        )
       else ...[
         // 手机上密钥存在**本机**（Android Keystore），桌面那份不会同步过来 ——
         // 不说清楚，用户会以为"桌面配过就够了"，然后每发一条都失败（M6）
@@ -1168,7 +1272,9 @@ class _ProviderDetailState extends State<_ProviderDetail> {
             padding: const EdgeInsets.only(bottom: 8),
             child: Text(
               '这一条保存在本机密钥库，只在这台手机上生效。想让桌面也用这一把，点下面的「推给桌面」（值会离开本机，桌面必须已允许这台设备改密钥）。反过来「从桌面同步密钥」在「远程访问与配对」那张卡里。',
-              style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline),
+              style: theme.textTheme.labelSmall?.copyWith(
+                color: theme.colorScheme.outline,
+              ),
             ),
           ),
         TextField(
@@ -1199,10 +1305,13 @@ class _ProviderDetailState extends State<_ProviderDetail> {
             ),
             // 密钥上行（§14.2）：只有"手机上、且有 ref、且本机真有这把"才出现。
             // 桌面自己就是真源，没有"推给桌面"这回事（`RemoteCredentialStore.reveal` 直接抛）。
-            if (widget.credentials.isLocal && (p.credentialRef ?? '').trim().isNotEmpty) ...[
+            if (widget.credentials.isLocal &&
+                (p.credentialRef ?? '').trim().isNotEmpty) ...[
               const SizedBox(width: 8),
               OutlinedButton.icon(
-                onPressed: _busy || !p.credential.configured ? null : _pushKeyToDesktop,
+                onPressed: _busy || !p.credential.configured
+                    ? null
+                    : _pushKeyToDesktop,
                 icon: const Icon(Icons.upload_outlined, size: 18),
                 label: const Text('推给桌面'),
               ),
@@ -1222,7 +1331,9 @@ class _ProviderDetailState extends State<_ProviderDetail> {
           Text('模型目录', style: theme.textTheme.titleSmall),
           TextButton.icon(
             // 同上：手机上还做不到（要本机自己去拉上游的 /models）
-            onPressed: (_busy || !widget.providers.supportsProbe) ? null : _discover,
+            onPressed: (_busy || !widget.providers.supportsProbe)
+                ? null
+                : _discover,
             icon: const Icon(Icons.cloud_download_outlined, size: 18),
             label: const Text('获取可用模型'),
           ),
@@ -1235,7 +1346,9 @@ class _ProviderDetailState extends State<_ProviderDetail> {
       ),
       Text(
         '本 harness 不按模型名字猜能力。',
-        style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline),
+        style: theme.textTheme.labelSmall?.copyWith(
+          color: theme.colorScheme.outline,
+        ),
       ),
       const SizedBox(height: 8),
       if (_models.isEmpty) Text('还没有模型', style: theme.textTheme.bodySmall),
@@ -1264,7 +1377,10 @@ class _ProviderDetailState extends State<_ProviderDetail> {
               SliverPadding(
                 padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
                 sliver: SliverToBoxAdapter(
-                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: header),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: header,
+                  ),
                 ),
               ),
               SliverFixedExtentList(
@@ -1288,10 +1404,19 @@ class _ProviderDetailState extends State<_ProviderDetail> {
           child: Row(
             children: [
               if (_dirty)
-                Text('有未保存的改动', style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.primary))
+                Text(
+                  '有未保存的改动',
+                  style: theme.textTheme.labelSmall?.copyWith(
+                    color: theme.colorScheme.primary,
+                  ),
+                )
               else
-                Text('模型目录已与后端一致',
-                    style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline)),
+                Text(
+                  '模型目录已与后端一致',
+                  style: theme.textTheme.labelSmall?.copyWith(
+                    color: theme.colorScheme.outline,
+                  ),
+                ),
               const Spacer(),
               FilledButton.icon(
                 onPressed: _busy || _models.isEmpty ? null : _saveModels,
@@ -1325,12 +1450,20 @@ class _ProviderDetailState extends State<_ProviderDetail> {
         childrenPadding: EdgeInsets.zero,
         title: Row(
           children: [
-            Icon(Icons.auto_awesome_motion_outlined, size: 18, color: theme.colorScheme.primary),
+            Icon(
+              Icons.auto_awesome_motion_outlined,
+              size: 18,
+              color: theme.colorScheme.primary,
+            ),
             const SizedBox(width: 6),
             Text('模型能力目录', style: theme.textTheme.titleSmall),
             const SizedBox(width: 8),
             if (widget.capabilityBusy || widget.probeBusy)
-              const SizedBox(width: 10, height: 12, child: CircularProgressIndicator(strokeWidth: 2))
+              const SizedBox(
+                width: 10,
+                height: 12,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              )
             else
               Flexible(
                 child: Text(
@@ -1340,7 +1473,9 @@ class _ProviderDetailState extends State<_ProviderDetail> {
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: theme.textTheme.labelSmall?.copyWith(
-                    color: s?.remoteStale == true ? theme.colorScheme.error : theme.colorScheme.outline,
+                    color: s?.remoteStale == true
+                        ? theme.colorScheme.error
+                        : theme.colorScheme.outline,
                   ),
                 ),
               ),
@@ -1377,13 +1512,21 @@ class _ProviderDetailState extends State<_ProviderDetail> {
                 mainAxisAlignment: MainAxisAlignment.center,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(m.displayName,
-                      maxLines: 1, overflow: TextOverflow.ellipsis, style: theme.textTheme.titleSmall),
+                  Text(
+                    m.displayName,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: theme.textTheme.titleSmall,
+                  ),
                   const SizedBox(height: 2),
-                  Text(m.id,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline)),
+                  Text(
+                    m.id,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: theme.textTheme.labelSmall?.copyWith(
+                      color: theme.colorScheme.outline,
+                    ),
+                  ),
                 ],
               ),
             ),
@@ -1399,7 +1542,12 @@ class _ProviderDetailState extends State<_ProviderDetail> {
               tooltip: '移除',
               visualDensity: VisualDensity.compact,
               icon: const Icon(Icons.close, size: 16),
-              onPressed: _busy ? null : () => setState(() { _models.removeAt(index); _markDirty(); }),
+              onPressed: _busy
+                  ? null
+                  : () => setState(() {
+                      _models.removeAt(index);
+                      _markDirty();
+                    }),
             ),
           ],
         ),
@@ -1423,7 +1571,11 @@ class _ProviderDetailState extends State<_ProviderDetail> {
             message: label,
             child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: 2),
-              child: Icon(icon, size: 15, color: theme.colorScheme.onSurfaceVariant),
+              child: Icon(
+                icon,
+                size: 15,
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
             ),
           ),
       ],
@@ -1460,7 +1612,10 @@ class _ProviderDetailState extends State<_ProviderDetail> {
     try {
       final result = await widget.api.testProvider(widget.provider.id);
       if (mounted) setState(() => _testResult = result);
-      _toast(result.ok ? '连接正常，${result.message}' : '连接失败，${result.display}', error: !result.ok);
+      _toast(
+        result.ok ? '连接正常，${result.message}' : '连接失败，${result.display}',
+        error: !result.ok,
+      );
     } catch (e) {
       _toast('连接测试失败，$e', error: true);
     } finally {
@@ -1525,8 +1680,14 @@ class _ProviderDetailState extends State<_ProviderDetail> {
           '桌面必须已经允许这台设备改密钥，否则会被拒（在桌面上的设备卡片里勾选）。',
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
-          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('推上去')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('推上去'),
+          ),
         ],
       ),
     );
@@ -1537,15 +1698,18 @@ class _ProviderDetailState extends State<_ProviderDetail> {
     try {
       final value = await widget.credentials.reveal(provider);
       if (value == null || value.isEmpty) {
-        _toast('本机没有这把密钥（没有可推的）—— 推空值会把桌面上那把好的覆盖掉，所以这里不发请求。',
-            error: true);
+        _toast('本机没有这把密钥（没有可推的）—— 推空值会把桌面上那把好的覆盖掉，所以这里不发请求。', error: true);
         return;
       }
       final factory = widget.authApiFactory;
-      final auth = factory != null ? factory(widget.api.baseUrl) : (owned = InboundAuthApi(widget.api.baseUrl));
+      final auth = factory != null
+          ? factory(widget.api.baseUrl)
+          : (owned = InboundAuthApi(widget.api.baseUrl));
       final CredentialUploadResult result;
       try {
-        result = await auth.uploadCredentials({ref: value}, token: PairingTokenCache.read());
+        result = await auth.uploadCredentials({
+          ref: value,
+        }, token: PairingTokenCache.read());
       } finally {
         // 自己建的客户端自己收；注入进来的（测试/MockClient）不许关
         owned?.dispose();
@@ -1554,7 +1718,10 @@ class _ProviderDetailState extends State<_ProviderDetail> {
         await widget.onChanged('「$ref」已推到桌面。');
         _toast('已推给桌面 $ref');
       } else if (result.rejected.isNotEmpty) {
-        final r = result.rejected.firstWhere((e) => e.ref == ref, orElse: () => result.rejected.first);
+        final r = result.rejected.firstWhere(
+          (e) => e.ref == ref,
+          orElse: () => result.rejected.first,
+        );
         _toast('桌面拒收「${r.ref}」，${r.hint}', error: true);
       } else {
         // 既没说成功也没说被拒 —— 如实说"桌面没回这一条"，别假装成功
@@ -1603,31 +1770,33 @@ class _ProviderDetailState extends State<_ProviderDetail> {
         _markDirty();
         for (final c in picked) {
           if (_models.any((m) => m.id == c.id)) continue;
-          _models.add(AiModel(
-            providerId: widget.provider.id,
-            id: c.id,
-            displayName: c.displayName,
-            // 用发现阶段预填/用户确认过的能力，而不是无脑"仅文本"
-            inputModalities: c.modalities.map((m) => m.wire).toList(),
-            attachmentTransports: {
-              for (final m in c.modalities)
-                if (m != AiModality.text) m.wire: const ['inline_base64'],
-            },
-            tools: c.tools,
-            reasoning: c.reasoning,
-            // 思考档位/方言也从内置目录预填（AIH-056）：用户能在模型卡片上改
-            thinkingEfforts: c.thinkingEfforts,
-            thinkingFormat: c.thinkingFormat,
-            contextWindow: c.contextWindow,
-            maxOutputTokens: c.maxOutputTokens,
-            // 来源如实记录：接口声明 → discovered；内置目录 → builtin；未识别 → manual（用户接受默认）
-            capabilitySource: switch (c.capabilitySource) {
-              'discovered' => 'discovered',
-              'builtin' => 'builtin',
-              'tested' => 'tested',
-              _ => 'manual',
-            },
-          ));
+          _models.add(
+            AiModel(
+              providerId: widget.provider.id,
+              id: c.id,
+              displayName: c.displayName,
+              // 用发现阶段预填/用户确认过的能力，而不是无脑"仅文本"
+              inputModalities: c.modalities.map((m) => m.wire).toList(),
+              attachmentTransports: {
+                for (final m in c.modalities)
+                  if (m != AiModality.text) m.wire: const ['inline_base64'],
+              },
+              tools: c.tools,
+              reasoning: c.reasoning,
+              // 思考档位/方言也从内置目录预填（AIH-056）：用户能在模型卡片上改
+              thinkingEfforts: c.thinkingEfforts,
+              thinkingFormat: c.thinkingFormat,
+              contextWindow: c.contextWindow,
+              maxOutputTokens: c.maxOutputTokens,
+              // 来源如实记录：接口声明 → discovered；内置目录 → builtin；未识别 → manual（用户接受默认）
+              capabilitySource: switch (c.capabilitySource) {
+                'discovered' => 'discovered',
+                'builtin' => 'builtin',
+                'tested' => 'tested',
+                _ => 'manual',
+              },
+            ),
+          );
           added++;
         }
       });
@@ -1661,18 +1830,20 @@ class _ProviderDetailState extends State<_ProviderDetail> {
     }
     setState(() {
       _markDirty();
-      _models.add(AiModel(
-        providerId: widget.provider.id,
-        id: draft.id,
-        displayName: draft.displayName,
-        inputModalities: draft.modalities.map((m) => m.wire).toList(),
-        attachmentTransports: {
-          for (final m in draft.modalities)
-            if (m != AiModality.text) m.wire: const ['inline_base64'],
-        },
-        tools: draft.tools,
-        capabilitySource: 'manual',
-      ));
+      _models.add(
+        AiModel(
+          providerId: widget.provider.id,
+          id: draft.id,
+          displayName: draft.displayName,
+          inputModalities: draft.modalities.map((m) => m.wire).toList(),
+          attachmentTransports: {
+            for (final m in draft.modalities)
+              if (m != AiModality.text) m.wire: const ['inline_base64'],
+          },
+          tools: draft.tools,
+          capabilitySource: 'manual',
+        ),
+      );
     });
     // 点一次「添加」就应该真的加上：立刻落库
     await _saveModels();
@@ -1691,7 +1862,10 @@ class _ProviderDetailState extends State<_ProviderDetail> {
       // 并没有在 AI 工作台应用"）。保存成功就当场把工作台那份刷掉，别等他再点一次选择器。
       if (mounted) {
         try {
-          final workspace = Provider.of<AiWorkspaceStore>(context, listen: false);
+          final workspace = Provider.of<AiWorkspaceStore>(
+            context,
+            listen: false,
+          );
           await workspace.refreshModels();
           await workspace.refreshProviders();
         } catch (_) {
@@ -1743,13 +1917,15 @@ class _Note extends StatelessWidget {
 /// 而推出来的 `2FAST_API_KEY` 不是合法引用名，前缀一个 `P` 就合法了（`P2FAST_API_KEY`）。
 /// 以前那种"ID 以数字开头就请用户手填"的做法，在表单里已经没有那一栏了。
 String defaultCredentialRef(String providerId) {
-  final name = '${providerId.trim().toUpperCase().replaceAll('-', '_')}_API_KEY';
+  final name =
+      '${providerId.trim().toUpperCase().replaceAll('-', '_')}_API_KEY';
   // 合法就原样用；不合法（ID 以数字开头）补一个前缀 —— **不改**名字本身
   return isValidCredentialRef(name) ? name : 'P$name';
 }
 
 /// 合法的引用名（后端 `require_credential_ref` 同一条正则）。
-bool isValidCredentialRef(String ref) => RegExp(r'^[A-Z][A-Z0-9_]{0,127}$').hasMatch(ref);
+bool isValidCredentialRef(String ref) =>
+    RegExp(r'^[A-Z][A-Z0-9_]{0,127}$').hasMatch(ref);
 
 class _ProviderDraft {
   final String id;
@@ -1763,7 +1939,13 @@ class _ProviderDraft {
   /// 建完之后由页面调 `CredentialStore.save` 单独存（桌面 = 后端托管，手机 = 本机密钥库）。
   final String apiKey;
 
-  const _ProviderDraft(this.id, this.displayName, this.api, this.baseURL, this.apiKey);
+  const _ProviderDraft(
+    this.id,
+    this.displayName,
+    this.api,
+    this.baseURL,
+    this.apiKey,
+  );
 }
 
 class _ProviderDialog extends StatefulWidget {
@@ -1831,7 +2013,9 @@ class _ProviderDialogState extends State<_ProviderDialog> {
     final v = _url.text.trim();
     if (v.isEmpty) return null;
     final uri = Uri.tryParse(v);
-    if (uri == null || (uri.scheme != 'http' && uri.scheme != 'https') || uri.host.isEmpty) {
+    if (uri == null ||
+        (uri.scheme != 'http' && uri.scheme != 'https') ||
+        uri.host.isEmpty) {
       return '要写成完整的 http(s)://主机/路径';
     }
     return null;
@@ -1871,12 +2055,19 @@ class _ProviderDialogState extends State<_ProviderDialog> {
               const SizedBox(height: 10),
               TextField(
                 controller: _name,
-                decoration: const InputDecoration(labelText: '显示名', hintText: '公司网关', isDense: true),
+                decoration: const InputDecoration(
+                  labelText: '显示名',
+                  hintText: '公司网关',
+                  isDense: true,
+                ),
               ),
               const SizedBox(height: 10),
               DropdownButtonFormField<AiApi>(
                 initialValue: _api,
-                decoration: const InputDecoration(labelText: 'API 协议', isDense: true),
+                decoration: const InputDecoration(
+                  labelText: 'API 协议',
+                  isDense: true,
+                ),
                 items: [
                   for (final a in AiApi.values)
                     DropdownMenuItem(value: a, child: Text(a.label)),
@@ -1914,7 +2105,8 @@ class _ProviderDialogState extends State<_ProviderDialog> {
               if (!_editing) ...[
                 const SizedBox(height: 8),
                 const _Note(
-                  text: '端点信任级别（公网 / 本机 / 局域网）与凭据引用名都由程序按地址与 ID 自动决定，'
+                  text:
+                      '端点信任级别（公网 / 本机 / 局域网）与凭据引用名都由程序按地址与 ID 自动决定，'
                       '不用你选。地址是本机就按本机放行，是公网就要求 https。',
                   error: false,
                 ),
@@ -1924,20 +2116,23 @@ class _ProviderDialogState extends State<_ProviderDialog> {
         ),
       ),
       actions: [
-        TextButton(onPressed: () => Navigator.pop(context), child: const Text('取消')),
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('取消'),
+        ),
         FilledButton(
           onPressed: !_canSubmit
               ? null
               : () => Navigator.pop(
-                    context,
-                    _ProviderDraft(
-                      _id.text.trim(),
-                      _name.text.trim(),
-                      _api,
-                      _url.text.trim(),
-                      _key.text,
-                    ),
+                  context,
+                  _ProviderDraft(
+                    _id.text.trim(),
+                    _name.text.trim(),
+                    _api,
+                    _url.text.trim(),
+                    _key.text,
                   ),
+                ),
           child: Text(_editing ? '保存' : '创建'),
         ),
       ],
@@ -1968,13 +2163,19 @@ class _DiscoverDialogState extends State<_DiscoverDialog> {
   late final Map<String, AiModelCandidate> _drafts = {
     for (final c in widget.result.candidates) c.id: c,
   };
-  late final Set<String> _selected = widget.result.candidates.map((c) => c.id).toSet();
+  late final Set<String> _selected = widget.result.candidates
+      .map((c) => c.id)
+      .toSet();
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final declared = widget.result.candidates.where((c) => c.capabilitySource == 'discovered').length;
-    final builtin = widget.result.candidates.where((c) => c.capabilitySource == 'builtin').length;
+    final declared = widget.result.candidates
+        .where((c) => c.capabilitySource == 'discovered')
+        .length;
+    final builtin = widget.result.candidates
+        .where((c) => c.capabilitySource == 'builtin')
+        .length;
 
     return AlertDialog(
       title: Text('发现 ${widget.result.candidates.length} 个候选模型'),
@@ -1987,7 +2188,9 @@ class _DiscoverDialogState extends State<_DiscoverDialog> {
             Text(
               '能力已按「接口声明（$declared 个）→ 内置目录（$builtin 个）→ 仅文本」自动预填，'
               '徽标可以逐个点开修改。确认后写入模型目录，随时可以在列表里再改。',
-              style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline),
+              style: theme.textTheme.labelSmall?.copyWith(
+                color: theme.colorScheme.outline,
+              ),
             ),
             const SizedBox(height: 8),
             Expanded(
@@ -2008,12 +2211,23 @@ class _DiscoverDialogState extends State<_DiscoverDialog> {
                           value: checked,
                           title: Row(
                             children: [
-                              Flexible(child: Text(c.displayName, overflow: TextOverflow.ellipsis)),
+                              Flexible(
+                                child: Text(
+                                  c.displayName,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
                               const SizedBox(width: 8),
-                              _SourceChip(source: c.capabilitySource, label: c.sourceLabel),
+                              _SourceChip(
+                                source: c.capabilitySource,
+                                label: c.sourceLabel,
+                              ),
                             ],
                           ),
-                          subtitle: Text(c.detail, style: theme.textTheme.labelSmall),
+                          subtitle: Text(
+                            c.detail,
+                            style: theme.textTheme.labelSmall,
+                          ),
                           onChanged: (on) => setState(() {
                             if (on == true) {
                               _selected.add(id);
@@ -2030,7 +2244,10 @@ class _DiscoverDialogState extends State<_DiscoverDialog> {
                               children: [
                                 for (final m in AiModality.values)
                                   FilterChip(
-                                    label: Text(m.label, style: theme.textTheme.labelSmall),
+                                    label: Text(
+                                      m.label,
+                                      style: theme.textTheme.labelSmall,
+                                    ),
                                     selected: c.modalities.contains(m),
                                     visualDensity: VisualDensity.compact,
                                     onSelected: (on) => setState(() {
@@ -2040,15 +2257,21 @@ class _DiscoverDialogState extends State<_DiscoverDialog> {
                                       } else {
                                         next.remove(m);
                                       }
-                                      _drafts[id] = c.copyWith(modalities: next);
+                                      _drafts[id] = c.copyWith(
+                                        modalities: next,
+                                      );
                                     }),
                                   ),
                                 FilterChip(
-                                  label: Text('工具', style: theme.textTheme.labelSmall),
+                                  label: Text(
+                                    '工具',
+                                    style: theme.textTheme.labelSmall,
+                                  ),
                                   selected: c.tools,
                                   visualDensity: VisualDensity.compact,
-                                  onSelected: (on) =>
-                                      setState(() => _drafts[id] = c.copyWith(tools: on)),
+                                  onSelected: (on) => setState(
+                                    () => _drafts[id] = c.copyWith(tools: on),
+                                  ),
                                 ),
                               ],
                             ),
@@ -2058,8 +2281,9 @@ class _DiscoverDialogState extends State<_DiscoverDialog> {
                             padding: const EdgeInsets.only(left: 8, bottom: 4),
                             child: Text(
                               c.capabilityNote!,
-                              style: theme.textTheme.labelSmall
-                                  ?.copyWith(color: theme.colorScheme.outline),
+                              style: theme.textTheme.labelSmall?.copyWith(
+                                color: theme.colorScheme.outline,
+                              ),
                             ),
                           ),
                       ],
@@ -2072,7 +2296,10 @@ class _DiscoverDialogState extends State<_DiscoverDialog> {
         ),
       ),
       actions: [
-        TextButton(onPressed: () => Navigator.pop(context), child: const Text('取消')),
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('取消'),
+        ),
         FilledButton(
           onPressed: () => Navigator.pop(
             context,
@@ -2095,15 +2322,33 @@ class _SourceChip extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final (bg, fg) = switch (source) {
-      'discovered' => (theme.colorScheme.primaryContainer, theme.colorScheme.onPrimaryContainer),
-      'builtin' => (theme.colorScheme.tertiaryContainer, theme.colorScheme.onTertiaryContainer),
-      'tested' => (theme.colorScheme.secondaryContainer, theme.colorScheme.onSecondaryContainer),
-      _ => (theme.colorScheme.surfaceContainerHighest, theme.colorScheme.outline),
+      'discovered' => (
+        theme.colorScheme.primaryContainer,
+        theme.colorScheme.onPrimaryContainer,
+      ),
+      'builtin' => (
+        theme.colorScheme.tertiaryContainer,
+        theme.colorScheme.onTertiaryContainer,
+      ),
+      'tested' => (
+        theme.colorScheme.secondaryContainer,
+        theme.colorScheme.onSecondaryContainer,
+      ),
+      _ => (
+        theme.colorScheme.surfaceContainerHighest,
+        theme.colorScheme.outline,
+      ),
     };
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
-      decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(6)),
-      child: Text(label, style: theme.textTheme.labelSmall?.copyWith(color: fg)),
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: BorderRadius.circular(6),
+      ),
+      child: Text(
+        label,
+        style: theme.textTheme.labelSmall?.copyWith(color: fg),
+      ),
     );
   }
 }
@@ -2151,7 +2396,10 @@ class _ModelDialogState extends State<_ModelDialog> {
             const SizedBox(height: 10),
             TextField(
               controller: _name,
-              decoration: const InputDecoration(labelText: '显示名', isDense: true),
+              decoration: const InputDecoration(
+                labelText: '显示名',
+                isDense: true,
+              ),
             ),
             const SizedBox(height: 12),
             const Text('输入能力（不勾就是不支持，也不做猜测）'),
@@ -2182,7 +2430,10 @@ class _ModelDialogState extends State<_ModelDialog> {
         ),
       ),
       actions: [
-        TextButton(onPressed: () => Navigator.pop(context), child: const Text('取消')),
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('取消'),
+        ),
         FilledButton(
           onPressed: () => Navigator.pop(
             context,
@@ -2255,7 +2506,11 @@ class _CapabilityCatalogCard extends StatelessWidget {
           children: [
             Row(
               children: [
-                Icon(Icons.auto_awesome_motion_outlined, size: 18, color: theme.colorScheme.primary),
+                Icon(
+                  Icons.auto_awesome_motion_outlined,
+                  size: 18,
+                  color: theme.colorScheme.primary,
+                ),
                 const SizedBox(width: 6),
                 Text('模型能力目录', style: theme.textTheme.titleSmall),
                 if (busy || probeBusy) ...[
@@ -2270,7 +2525,10 @@ class _CapabilityCatalogCard extends StatelessWidget {
                 IconButton(
                   tooltip: '刷新目录状态',
                   visualDensity: VisualDensity.compact,
-                  constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
+                  constraints: const BoxConstraints(
+                    minWidth: 28,
+                    minHeight: 28,
+                  ),
                   padding: EdgeInsets.zero,
                   onPressed: busy ? null : onRefreshStatus,
                   icon: const Icon(Icons.refresh, size: 16),
@@ -2281,14 +2539,20 @@ class _CapabilityCatalogCard extends StatelessWidget {
             Text(
               '能力先按在线目录 models.dev 预填，点「立即更新」可以拉取。其次才是手工目录。'
               '接口自己声明的永远优先，网关什么都不说时才轮到最后那层兜底推断。',
-              style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.outline),
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.outline,
+              ),
             ),
             const SizedBox(height: 6),
             if (s == null)
               Text('正在读取能力目录状态…', style: theme.textTheme.bodySmall)
             else if (s.error != null)
-              Text('读取失败，${s.error}',
-                  style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.error))
+              Text(
+                '读取失败，${s.error}',
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.error,
+                ),
+              )
             else ...[
               Wrap(
                 spacing: 6,
@@ -2297,7 +2561,10 @@ class _CapabilityCatalogCard extends StatelessWidget {
                 children: [
                   if (s.customEntries != null) _Tag('手工 ${s.customEntries} 条'),
                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 6,
+                      vertical: 2,
+                    ),
                     decoration: BoxDecoration(
                       color: remoteStale
                           ? theme.colorScheme.errorContainer
@@ -2352,12 +2619,18 @@ class _CapabilityCatalogCard extends StatelessWidget {
                   runSpacing: 6,
                   children: [
                     FilledButton.icon(
-                      onPressed: (busy || update == null) ? null : () => update(),
+                      onPressed: (busy || update == null)
+                          ? null
+                          : () => update(),
                       icon: const Icon(Icons.cloud_download_outlined, size: 16),
                       label: const Text('立即更新'),
                     ),
                     OutlinedButton.icon(
-                      onPressed: (busy || probeBusy || probe == null || s?.probeEnabled != true)
+                      onPressed:
+                          (busy ||
+                              probeBusy ||
+                              probe == null ||
+                              s?.probeEnabled != true)
                           ? null
                           : () => probe(),
                       icon: const Icon(Icons.fact_check_outlined, size: 16),
@@ -2422,26 +2695,27 @@ class _ModelEdit {
     String? thinkingFormat,
     bool clearThinkingFormat = false,
     bool manual = false,
-  }) =>
-      AiModel(
-        providerId: m.providerId,
-        id: m.id,
-        displayName: m.displayName,
-        inputModalities: inputModalities ?? m.inputModalities,
-        attachmentTransports: attachmentTransports ?? m.attachmentTransports,
-        mimeAllowlist: m.mimeAllowlist,
-        tools: tools ?? m.tools,
-        parallelTools: m.parallelTools,
-        reasoning: reasoning ?? m.reasoning,
-        thinkingEfforts: thinkingEfforts ?? m.thinkingEfforts,
-        thinkingFormat: clearThinkingFormat ? null : (thinkingFormat ?? m.thinkingFormat),
-        contextWindow: m.contextWindow,
-        maxOutputTokens: m.maxOutputTokens,
-        maxAttachmentCount: m.maxAttachmentCount,
-        // 用户手工动过能力就标成 manual（AIH-011：声明从哪来要看得见）
-        capabilitySource: manual ? 'manual' : m.capabilitySource,
-        enabled: m.enabled,
-      );
+  }) => AiModel(
+    providerId: m.providerId,
+    id: m.id,
+    displayName: m.displayName,
+    inputModalities: inputModalities ?? m.inputModalities,
+    attachmentTransports: attachmentTransports ?? m.attachmentTransports,
+    mimeAllowlist: m.mimeAllowlist,
+    tools: tools ?? m.tools,
+    parallelTools: m.parallelTools,
+    reasoning: reasoning ?? m.reasoning,
+    thinkingEfforts: thinkingEfforts ?? m.thinkingEfforts,
+    thinkingFormat: clearThinkingFormat
+        ? null
+        : (thinkingFormat ?? m.thinkingFormat),
+    contextWindow: m.contextWindow,
+    maxOutputTokens: m.maxOutputTokens,
+    maxAttachmentCount: m.maxAttachmentCount,
+    // 用户手工动过能力就标成 manual（AIH-011：声明从哪来要看得见）
+    capabilitySource: manual ? 'manual' : m.capabilitySource,
+    enabled: m.enabled,
+  );
 
   static AiModel toggleModality(AiModel m, AiModality modality, bool on) {
     final next = [...m.inputModalities];
@@ -2452,27 +2726,38 @@ class _ModelEdit {
     }
     // 传输方式跟着模态一起改：这里只登记"模型声明支持"，适配器是否实现了由后端另判（AIH-028）
     final transports = Map<String, List<String>>.from(m.attachmentTransports);
-    if (on && modality != AiModality.text && !transports.containsKey(modality.wire)) {
+    if (on &&
+        modality != AiModality.text &&
+        !transports.containsKey(modality.wire)) {
       transports[modality.wire] = const ['inline_base64'];
     }
     if (!on) transports.remove(modality.wire);
-    return copy(m, inputModalities: next, attachmentTransports: transports, manual: true);
+    return copy(
+      m,
+      inputModalities: next,
+      attachmentTransports: transports,
+      manual: true,
+    );
   }
 
   /// 切换"支持推理"：关掉时必须一并清掉思考档位声明（后端也会校验两者一致）。
-  static AiModel toggleReasoning(AiModel m, bool on) =>
-      copy(m, reasoning: on, thinkingEfforts: on ? m.thinkingEfforts : const {}, manual: true);
+  static AiModel toggleReasoning(AiModel m, bool on) => copy(
+    m,
+    reasoning: on,
+    thinkingEfforts: on ? m.thinkingEfforts : const {},
+    manual: true,
+  );
 
   /// 各档位的默认"过线拼写"（与后端 ThinkingLevels.DEFAULT 对齐）。
   static String defaultEffortWire(AiReasoningEffort e) => switch (e) {
-        AiReasoningEffort.off => 'none',
-        AiReasoningEffort.minimal => 'minimal',
-        AiReasoningEffort.low => 'low',
-        AiReasoningEffort.medium => 'medium',
-        AiReasoningEffort.high => 'high',
-        AiReasoningEffort.xhigh => 'xhigh',
-        AiReasoningEffort.max => 'high',
-      };
+    AiReasoningEffort.off => 'none',
+    AiReasoningEffort.minimal => 'minimal',
+    AiReasoningEffort.low => 'low',
+    AiReasoningEffort.medium => 'medium',
+    AiReasoningEffort.high => 'high',
+    AiReasoningEffort.xhigh => 'xhigh',
+    AiReasoningEffort.max => 'high',
+  };
 }
 
 /// 模型能力编辑弹窗：模态 / 工具 / 思考强度与方言。
@@ -2507,8 +2792,12 @@ class _ModelEditorDialogState extends State<_ModelEditorDialog> {
             crossAxisAlignment: CrossAxisAlignment.start,
             mainAxisSize: MainAxisSize.min,
             children: [
-              SelectableText(_m.id,
-                  style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline)),
+              SelectableText(
+                _m.id,
+                style: theme.textTheme.labelSmall?.copyWith(
+                  color: theme.colorScheme.outline,
+                ),
+              ),
               const SizedBox(height: 10),
               Text('输入模态与工具', style: theme.textTheme.titleSmall),
               const SizedBox(height: 6),
@@ -2518,36 +2807,51 @@ class _ModelEditorDialogState extends State<_ModelEditorDialog> {
                 children: [
                   for (final modality in AiModality.values)
                     FilterChip(
-                      label: Text(modality.label, style: theme.textTheme.labelSmall),
+                      label: Text(
+                        modality.label,
+                        style: theme.textTheme.labelSmall,
+                      ),
                       selected: _m.supports(modality),
                       onSelected: busy
                           ? null
-                          : (on) => _update(_ModelEdit.toggleModality(_m, modality, on)),
+                          : (on) => _update(
+                              _ModelEdit.toggleModality(_m, modality, on),
+                            ),
                     ),
                   FilterChip(
                     label: Text('工具', style: theme.textTheme.labelSmall),
                     selected: _m.tools,
-                    onSelected: busy ? null : (on) => _update(_ModelEdit.copy(_m, tools: on, manual: true)),
+                    onSelected: busy
+                        ? null
+                        : (on) => _update(
+                            _ModelEdit.copy(_m, tools: on, manual: true),
+                          ),
                   ),
                 ],
               ),
               const Divider(height: 24),
               Row(
                 children: [
-                  Expanded(child: Text('思考强度', style: theme.textTheme.titleSmall)),
+                  Expanded(
+                    child: Text('思考强度', style: theme.textTheme.titleSmall),
+                  ),
                   Switch(
                     value: _m.reasoning,
-                    onChanged: busy ? null : (on) => _update(_ModelEdit.toggleReasoning(_m, on)),
+                    onChanged: busy
+                        ? null
+                        : (on) => _update(_ModelEdit.toggleReasoning(_m, on)),
                   ),
                 ],
               ),
               Text(
                 _m.reasoning
                     ? '勾选该模型真正支持的档位。「默认」不在这个列表里，它不发任何思考参数，'
-                        '任何模型都成立，聊天界面永远可选。留空就是不声明。'
-                        '真正的思考档位宁可不给选，也不要发出去被上游 400。'
+                          '任何模型都成立，聊天界面永远可选。留空就是不声明。'
+                          '真正的思考档位宁可不给选，也不要发出去被上游 400。'
                     : '该模型不支持推理。勾选后可以逐档声明。',
-                style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline),
+                style: theme.textTheme.labelSmall?.copyWith(
+                  color: theme.colorScheme.outline,
+                ),
               ),
               if (_m.reasoning) ...[
                 const SizedBox(height: 8),
@@ -2556,20 +2860,32 @@ class _ModelEditorDialogState extends State<_ModelEditorDialog> {
                   runSpacing: 6,
                   children: [
                     // 「默认」不列在这里：它是"什么都不声明"的那一档，不是模型能力。
-                    for (final e in AiReasoningEffort.values.where((e) => e.isThinking))
+                    for (final e in AiReasoningEffort.values.where(
+                      (e) => e.isThinking,
+                    ))
                       FilterChip(
                         label: Text(e.label, style: theme.textTheme.labelSmall),
                         selected: _m.thinkingEfforts.containsKey(e.wire),
                         onSelected: busy
                             ? null
                             : (on) {
-                                final next = Map<String, String>.from(_m.thinkingEfforts);
+                                final next = Map<String, String>.from(
+                                  _m.thinkingEfforts,
+                                );
                                 if (on) {
-                                  next[e.wire] = _ModelEdit.defaultEffortWire(e);
+                                  next[e.wire] = _ModelEdit.defaultEffortWire(
+                                    e,
+                                  );
                                 } else {
                                   next.remove(e.wire);
                                 }
-                                _update(_ModelEdit.copy(_m, thinkingEfforts: next, manual: true));
+                                _update(
+                                  _ModelEdit.copy(
+                                    _m,
+                                    thinkingEfforts: next,
+                                    manual: true,
+                                  ),
+                                );
                               },
                       ),
                   ],
@@ -2583,27 +2899,41 @@ class _ModelEditorDialogState extends State<_ModelEditorDialog> {
                   isDense: true,
                   decoration: const InputDecoration(
                     labelText: '网关思考方言（同一个"高"落到哪个字段）',
-                    helperText:
-                        'OpenAI 风格用 reasoning_effort，DeepSeek / Qwen / Z.AI / OpenRouter 各有自己的字段组合。',
+                    helperText: 'OpenAI 风格用 reasoning_effort，DeepSeek / Qwen / Z.AI / OpenRouter 各有自己的字段组合。',
                     isDense: true,
                   ),
                   items: [
-                    const DropdownMenuItem(value: null, child: Text('按协议默认（OpenAI 风格）')),
+                    const DropdownMenuItem(
+                      value: null,
+                      child: Text('按协议默认（OpenAI 风格）'),
+                    ),
                     for (final f in AiThinkingFormat.values)
                       DropdownMenuItem(value: f.wire, child: Text(f.label)),
                   ],
                   onChanged: busy
                       ? null
-                      : (v) => _update(v == null
-                          ? _ModelEdit.copy(_m, clearThinkingFormat: true, manual: true)
-                          : _ModelEdit.copy(_m, thinkingFormat: v, manual: true)),
+                      : (v) => _update(
+                          v == null
+                              ? _ModelEdit.copy(
+                                  _m,
+                                  clearThinkingFormat: true,
+                                  manual: true,
+                                )
+                              : _ModelEdit.copy(
+                                  _m,
+                                  thinkingFormat: v,
+                                  manual: true,
+                                ),
+                        ),
                 ),
                 if (_m.thinkingEfforts.isNotEmpty)
                   Padding(
                     padding: const EdgeInsets.only(top: 6),
                     child: Text(
                       '实际发送的值是 ${_m.thinkingEfforts.entries.map((e) => '${e.key}→${e.value}').join('  ')}',
-                      style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline),
+                      style: theme.textTheme.labelSmall?.copyWith(
+                        color: theme.colorScheme.outline,
+                      ),
                     ),
                   ),
               ],
@@ -2612,8 +2942,14 @@ class _ModelEditorDialogState extends State<_ModelEditorDialog> {
         ),
       ),
       actions: [
-        TextButton(onPressed: () => Navigator.pop(context), child: const Text('取消')),
-        FilledButton(onPressed: () => Navigator.pop(context, _m), child: const Text('确定')),
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('取消'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.pop(context, _m),
+          child: const Text('确定'),
+        ),
       ],
     );
   }

@@ -241,7 +241,10 @@ pub fn is_stale(dir: &Path, now_secs: i64) -> bool {
 // ---------------------------------------------------------------------------
 
 /// builtin 的**包含匹配**（先命中先用；宽前缀规则排在后面，免得 `gpt-4` 抢走 `gpt-4o`）。
-fn lookup_builtin(rules: &[(&'static str, Capability)], id: &str) -> Option<(&'static str, Capability)> {
+fn lookup_builtin(
+    rules: &[(&'static str, Capability)],
+    id: &str,
+) -> Option<(&'static str, Capability)> {
     rules
         .iter()
         .find(|(pattern, _)| id.contains(pattern))
@@ -270,8 +273,12 @@ fn resolve_overlay(overlay: Option<&OverlayFile>, id: &str) -> Option<OverlayEnt
     // 网关 id 带前缀（"org/xxx"）、数据集条目不带（"xxx"）
     let bare = id.rsplit('/').next().unwrap_or(id);
     if bare != id {
-        let by_bare: Vec<&OverlayEntry> =
-            overlay.entries.iter().filter(|(key, _)| key.as_str() == bare).map(|(_, v)| v).collect();
+        let by_bare: Vec<&OverlayEntry> = overlay
+            .entries
+            .iter()
+            .filter(|(key, _)| key.as_str() == bare)
+            .map(|(_, v)| v)
+            .collect();
         if by_bare.len() == 1 {
             return Some(by_bare[0].clone());
         }
@@ -291,7 +298,10 @@ fn matched_by(
         parts.push("手工目录 custom.json".to_string());
     }
     if remote_hit.is_some() {
-        parts.push(format!("在线目录 {}", remote_source.unwrap_or("remote.json")));
+        parts.push(format!(
+            "在线目录 {}",
+            remote_source.unwrap_or("remote.json")
+        ));
     }
     if let Some((pattern, _)) = builtin_hit {
         parts.push(format!("内置规则「{pattern}」"));
@@ -346,7 +356,11 @@ pub fn lookup(overlays: &Overlays, model_id: &str) -> Option<Capability> {
         };
         let efforts = efforts_from_overlay(&custom_hit)
             .or_else(|| efforts_from_overlay(&remote_hit))
-            .or_else(|| builtin.as_ref().map(|(_, cap)| cap.thinking_efforts.clone()))
+            .or_else(|| {
+                builtin
+                    .as_ref()
+                    .map(|(_, cap)| cap.thinking_efforts.clone())
+            })
             .unwrap_or_default();
         let format = custom_hit
             .as_ref()
@@ -358,7 +372,11 @@ pub fn lookup(overlays: &Overlays, model_id: &str) -> Option<Capability> {
                     .and_then(|h| h.thinking_format.clone())
                     .filter(|f| !f.trim().is_empty())
             })
-            .or_else(|| builtin.as_ref().and_then(|(_, cap)| cap.thinking_format.clone()));
+            .or_else(|| {
+                builtin
+                    .as_ref()
+                    .and_then(|(_, cap)| cap.thinking_format.clone())
+            });
         (efforts, format)
     };
 

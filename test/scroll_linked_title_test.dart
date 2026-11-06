@@ -51,8 +51,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(progress.value, 1);
-    expect(find.text('页面标题'), findsNWidgets(2),
-        reason: '大标题还在树里（已透明），顶栏标题补上');
+    expect(find.text('页面标题'), findsNWidgets(2), reason: '大标题还在树里（已透明），顶栏标题补上');
     // **标题块本身要收掉高度**，不能只把字淡出 —— 否则页首永远空一条。
     expect(tester.getSize(find.byType(CollapsingPageTitle)).height, 0);
   });

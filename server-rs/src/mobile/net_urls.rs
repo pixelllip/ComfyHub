@@ -70,9 +70,7 @@ fn classify_v4(ip: &Ipv4Addr) -> &'static str {
 /// Funnel 或反代暴露出来时，那就是他想要的候选）。
 fn usable(ip: &IpAddr) -> bool {
     match ip {
-        IpAddr::V4(v4) => {
-            !v4.is_unspecified() && !v4.is_multicast() && !v4.is_link_local()
-        }
+        IpAddr::V4(v4) => !v4.is_unspecified() && !v4.is_multicast() && !v4.is_link_local(),
         IpAddr::V6(v6) => {
             !v6.is_unspecified() && !v6.is_multicast() && !(v6.segments()[0] & 0xffc0 == 0xfe80)
         }
@@ -108,7 +106,10 @@ pub fn assemble(port: u16, ips: &[IpAddr]) -> Vec<Endpoint> {
         if out.iter().any(|e| e.url == url) {
             continue;
         }
-        out.push(Endpoint { kind: classify(ip), url });
+        out.push(Endpoint {
+            kind: classify(ip),
+            url,
+        });
     }
     out.sort_by_key(|e| weight(e.kind));
     out

@@ -32,10 +32,10 @@ use serde_json::{json, Value};
 
 use crate::ai::conversations::{AiMessageDto, AiMessagePartDto};
 use crate::ai::events::event_type;
-use crate::provider::protocol::{Api, ChatTurn, ReasoningRequest, StreamEvent, ThinkingFormat};
-use crate::web::routes::{ApiError, AppState};
 use crate::ai::run_lifecycle::{finish_run, ModelRow};
+use crate::provider::protocol::{Api, ChatTurn, ReasoningRequest, StreamEvent, ThinkingFormat};
 use crate::provider::upstream::{stream_chat, ChatRequest, TokenUsage};
+use crate::web::routes::{ApiError, AppState};
 
 /// 正文超过这个长度就请求"接着写"（Kotlin `HarnessRunner.CONTINUE_INSTRUCTION` 的触发条件）。
 pub const CONTINUE_CHARS: usize = 12_000;
@@ -50,7 +50,10 @@ pub struct Executor {
 
 impl Default for Executor {
     fn default() -> Self {
-        Self { running: Mutex::new(HashSet::new()), cancelled: Mutex::new(HashSet::new()) }
+        Self {
+            running: Mutex::new(HashSet::new()),
+            cancelled: Mutex::new(HashSet::new()),
+        }
     }
 }
 
@@ -60,12 +63,21 @@ impl Executor {
     }
 
     pub fn mark_running(&self, run_id: &str) {
-        self.running.lock().unwrap_or_else(|e| e.into_inner()).insert(run_id.to_string());
+        self.running
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(run_id.to_string());
     }
 
     pub fn mark_done(&self, run_id: &str) {
-        self.running.lock().unwrap_or_else(|e| e.into_inner()).remove(run_id);
-        self.cancelled.lock().unwrap_or_else(|e| e.into_inner()).remove(run_id);
+        self.running
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(run_id);
+        self.cancelled
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(run_id);
     }
 
     /// 立取消旗标；返回 false 表示这次 Run 不在这台进程里跑（没什么可取消的）。
@@ -74,12 +86,18 @@ impl Executor {
         if !running.contains(run_id) {
             return false;
         }
-        self.cancelled.lock().unwrap_or_else(|e| e.into_inner()).insert(run_id.to_string());
+        self.cancelled
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(run_id.to_string());
         true
     }
 
     pub fn is_cancelled(&self, run_id: &str) -> bool {
-        self.cancelled.lock().unwrap_or_else(|e| e.into_inner()).contains(run_id)
+        self.cancelled
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .contains(run_id)
     }
 }
 
@@ -127,7 +145,10 @@ pub fn spawn(
             &model,
             crate::ai::run_kit::nsfw_enabled(&state).unwrap_or(false),
         );
-        if let Err(e) = state.bus.emit(&state, &run_id, event_type::RUN_STARTED, &started) {
+        if let Err(e) = state
+            .bus
+            .emit(&state, &run_id, event_type::RUN_STARTED, &started)
+        {
             eprintln!("执行器：发 run.started 失败：{}", e.human());
         }
         if !assistant_id.is_empty() {
@@ -211,13 +232,20 @@ async fn run_once(
     let conversation_id = run.conversation_id.clone();
     // `message.completed` 要报"这一轮跑了多久 / 用的是哪档思考"（与 Kotlin 同一个载荷）
     let started = std::time::Instant::now();
-    let effort_stored = run.reasoning_effort.clone().unwrap_or_else(|| "off".to_string());
+    let effort_stored = run
+        .reasoning_effort
+        .clone()
+        .unwrap_or_else(|| "off".to_string());
 
     // ---- 上下文（在发请求之前一次取齐）--------------------------------------
     let history = crate::ai::conversations::list_messages(state, &conversation_id)?;
     let nsfw = crate::ai::run_kit::nsfw_enabled(state)?;
     let policy = crate::tools::policy::ToolPolicy::load(state)?;
-    let storage = state.media_dir().parent().unwrap_or(state.media_dir()).to_path_buf();
+    let storage = state
+        .media_dir()
+        .parent()
+        .unwrap_or(state.media_dir())
+        .to_path_buf();
     let skills = crate::ai::skills::catalog(
         &state.project_root().join("skills").join("builtin"),
         &storage.join("ai").join("skills"),
@@ -232,7 +260,8 @@ async fn run_once(
     // 只取手机那 7 个的话，模型在桌面上永远不知道自己能动文件（P4 第 40 步修）。
     let mcp_views = state.mcp.tools();
     let tools = crate::tools::tools::specs_with(&policy, &mcp_views);
-    let tool_refs: Vec<crate::tools::tools::ToolView<'static>> = crate::tools::tools::catalog_with(&policy, &mcp_views);
+    let tool_refs: Vec<crate::tools::tools::ToolView<'static>> =
+        crate::tools::tools::catalog_with(&policy, &mcp_views);
     debug_assert_eq!(tool_refs.len(), tools.len());
 
     // 附件计划（R9）：哪些图片真的能内联、哪些只能如实说"没发出去"。
@@ -270,7 +299,11 @@ async fn run_once(
         nsfw,
     );
 
-    let mut turns = vec![ChatTurn { role: "system".into(), content: system_prompt, ..Default::default() }];
+    let mut turns = vec![ChatTurn {
+        role: "system".into(),
+        content: system_prompt,
+        ..Default::default()
+    }];
 
     // 起标题的附加指令：**只按轮带、且插在系统提示之后（第 2 条）**。
     // 两条理由都踩过（AGENTS §10.1）：常驻会让后面每一轮都再吐一次标记（漏进正文）；
@@ -283,7 +316,9 @@ async fn run_once(
     let title_wanted = user_count <= 1 && conversation_needs_title(state, &conversation_id);
     // 摘标记的状态机：只有真要起标题时才开（关掉时原样透传）。
     // ⚠ 放在 `Arc<Mutex<…>>` 里：流式回调（同步闭包）与轮循环都要用它。
-    let stripper = Arc::new(Mutex::new(crate::ai::title_strip::TitleStripper::new(title_wanted)));
+    let stripper = Arc::new(Mutex::new(crate::ai::title_strip::TitleStripper::new(
+        title_wanted,
+    )));
     // 关键步骤（环节）标记：`[步骤]正在查资料[/步骤]` → 落一个 `step` 块 + 一条 `step.started` 事件
     // （用户建议 2026-09-28：「关键步骤之间 AI 的操作再折叠」）。**永远开着** ——
     // 它不吃请求、不占预算，模型不写标记时它一个字都不动（见 `step_mark.rs` 的三条纪律）。
@@ -319,7 +354,10 @@ async fn run_once(
 
     // 系统提示里那段工具说明要跟着实际下发的工具走（`render` 收到的是同一个清单）
     let api = Api::parse(&provider.api).ok_or_else(|| {
-        ApiError::ai("CONFIG_ERROR", format!("Provider 协议非法: {}", provider.api))
+        ApiError::ai(
+            "CONFIG_ERROR",
+            format!("Provider 协议非法: {}", provider.api),
+        )
     })?;
 
     // `std::sync::Mutex`（不是 tokio 的那个）是**刻意的**：回调是同步的，
@@ -331,7 +369,10 @@ async fn run_once(
     let reasoning_request = ReasoningRequest {
         effort: effort_wire.clone(),
         wire_value: effort_wire.clone(),
-        format: model.thinking_format.as_deref().and_then(ThinkingFormat::parse),
+        format: model
+            .thinking_format
+            .as_deref()
+            .and_then(ThinkingFormat::parse),
         echo_all: false,
     };
     // 上游因为"思维链没回传"拒过一次之后：**每一轮都补空的 reasoning 项**，
@@ -388,7 +429,15 @@ async fn run_once(
                 usage_json(total_usage).as_ref(),
             )?;
             drop(sink);
-            finish_run(&state.bus, state, run_id, "cancelled", None, None, total_usage)?;
+            finish_run(
+                &state.bus,
+                state,
+                run_id,
+                "cancelled",
+                None,
+                None,
+                total_usage,
+            )?;
             return Ok(());
         }
 
@@ -398,7 +447,11 @@ async fn run_once(
         // 位置固定在系统提示之后（第 2 条）：挂末尾会挡住"最后一条消息是工具结果"这个事实。
         let still_want_title = title_wanted
             && !title_applied
-            && stripper.lock().unwrap_or_else(|e| e.into_inner()).title().is_none();
+            && stripper
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .title()
+                .is_none();
         if still_want_title {
             turns_now.insert(
                 1,
@@ -475,7 +528,10 @@ async fn run_once(
                             }
                             if !visible.is_empty() {
                                 sink.push_text(&visible);
-                                emit(json!({ "messageId": assistant, "text": visible }), event_type::TEXT_DELTA)?;
+                                emit(
+                                    json!({ "messageId": assistant, "text": visible }),
+                                    event_type::TEXT_DELTA,
+                                )?;
                             }
                         }
                         StreamEvent::ReasoningDelta(chunk) => {
@@ -530,9 +586,7 @@ async fn run_once(
         // ① 只是"这一轮没有思维链可回传"：**补条目，不降档**。余下的轮次照样思考。
         if idle.echo_forced && !echo_reasoning {
             echo_reasoning = true;
-            eprintln!(
-                "[run {run_id}] 思维链回传被拒：改为逐轮补空 reasoning 项，思考强度保持不变"
-            );
+            eprintln!("[run {run_id}] 思维链回传被拒：改为逐轮补空 reasoning 项，思考强度保持不变");
         }
         // ② 连补了条目都还被拒：只能降档，并且**在正文里说一句**（看不到的现象，
         //    用户与模型都只能靠猜）。
@@ -568,14 +622,22 @@ async fn run_once(
         // 这一轮有没有工具调用？没有就收尾（正常结束）
         let mut accumulator = crate::provider::protocol::ToolCallAccumulator::new();
         for (index, key, call_id, name, fragment) in &idle.tool_calls {
-            accumulator.push(*index, key, call_id.as_deref(), name.as_deref(), fragment.as_deref());
+            accumulator.push(
+                *index,
+                key,
+                call_id.as_deref(),
+                name.as_deref(),
+                fragment.as_deref(),
+            );
         }
         let calls = accumulator.finish();
         if calls.is_empty() {
             // **被输出长度上限截断**：再要一轮把话补完，而不是把半句当结尾（Kotlin `MAX_CONTINUATIONS`）。
             // 上限 3 次是个折中：常见模型一轮 4096 tokens（≈3000 汉字），3 次够写完一篇长回答；
             // 再多就是"模型陷在长回复里出不来"，用户等到的是账单和一直转圈的页面。
-            if is_truncated_by_output_limit(finish_reason.as_deref()) && continuations < MAX_CONTINUATIONS {
+            if is_truncated_by_output_limit(finish_reason.as_deref())
+                && continuations < MAX_CONTINUATIONS
+            {
                 continuations += 1;
                 // ⚠ 续写请求里要带上**已经说过的那半段**（作为最后一条 assistant 轮）：
                 // 少了它，模型看到的上下文是"用户突然说'接着写'"，它会从头再讲一遍
@@ -766,8 +828,8 @@ async fn run_once(
             .emit(state, run_id, event_type::USAGE_UPDATED, &usage.to_json())?;
     }
 
-    let provider_response_id = last_provider_response_id
-        .unwrap_or_else(|| format!("{}-{}", provider.id, run_id));
+    let provider_response_id =
+        last_provider_response_id.unwrap_or_else(|| format!("{}-{}", provider.id, run_id));
     crate::ai::runs::update_message(
         state,
         &assistant_id,
@@ -807,7 +869,15 @@ async fn run_once(
         }
     }
 
-    finish_run(&state.bus, state, run_id, "completed", None, None, total_usage)?;
+    finish_run(
+        &state.bus,
+        state,
+        run_id,
+        "completed",
+        None,
+        None,
+        total_usage,
+    )?;
     Ok(())
 }
 
@@ -916,12 +986,18 @@ fn apply_conversation_title(
     let updated = state.write(|tx| {
         tx.execute(
             "UPDATE ai_conversations SET title = ?1 WHERE id = ?2",
-            rusqlite::params![trimmed.chars().take(255).collect::<String>(), conversation_id],
+            rusqlite::params![
+                trimmed.chars().take(255).collect::<String>(),
+                conversation_id
+            ],
         )?;
         Ok(())
     });
     if let Err(error) = updated {
-        eprintln!("[title] 写自动标题失败 conversation={conversation_id}：{}", error.human());
+        eprintln!(
+            "[title] 写自动标题失败 conversation={conversation_id}：{}",
+            error.human()
+        );
         return Ok(());
     }
     state.bus.emit(
@@ -1063,7 +1139,13 @@ async fn handle_call(
 
     // ① 落库（R8：闸门开的同一刻就落，用户手快也点得到）
     if needs_approval {
-        crate::ai::runs::insert_pending_tool_call(state, run_id, call_id, &call.name, &call.arguments)?;
+        crate::ai::runs::insert_pending_tool_call(
+            state,
+            run_id,
+            call_id,
+            &call.name,
+            &call.arguments,
+        )?;
     }
     // ② 发事件，而且**立刻落库**
     //
@@ -1203,7 +1285,10 @@ async fn handle_call(
             sink,
             CallOutcome::failure(
                 "TOOL_DENIED",
-                &format!("工具「{}」被用户策略禁止使用（设置 → AI 工具权限）", call.name),
+                &format!(
+                    "工具「{}」被用户策略禁止使用（设置 → AI 工具权限）",
+                    call.name
+                ),
                 "denied",
                 0,
             ),
@@ -1212,7 +1297,12 @@ async fn handle_call(
     }
 
     // ⑤ 审批：等用户在**任何一台设备**上点（读库：跨端可见）
-    let mut approval = if needs_approval { "pending" } else { "not_required" }.to_string();
+    let mut approval = if needs_approval {
+        "pending"
+    } else {
+        "not_required"
+    }
+    .to_string();
     if needs_approval {
         if !wait_for_approval(state, run_id, call_id).await? {
             let outcome = CallOutcome::failure(
@@ -1221,7 +1311,8 @@ async fn handle_call(
                 "denied",
                 APPROVAL_TIMEOUT_SECONDS as i64 * 1000,
             );
-            return finish_failure(state, run_id, assistant_id, call_id, &call, sink, outcome).await;
+            return finish_failure(state, run_id, assistant_id, call_id, &call, sink, outcome)
+                .await;
         }
         approval = "approved".to_string();
         // 批准的那一刻就告诉界面"开始跑了"，而不是等它跑完再补发
@@ -1274,11 +1365,7 @@ async fn handle_call(
                     // 存缓存：**只对 `freshness` 认的纯读工具**、且**只存成功的那一次**
                     // （一次超时/429 是"这一次"的事实，存下来等于把偶发故障变成长达几分钟的必然失败）
                     crate::tools::tool_cache::store(
-                        policy,
-                        &call.name,
-                        &arguments,
-                        &content,
-                        &meta,
+                        policy, &call.name, &arguments, &content, &meta,
                     );
                     CallOutcome {
                         content,
@@ -1313,7 +1400,11 @@ async fn handle_call(
         arguments_json: call.arguments.clone(),
         approval: outcome.approval.clone(),
         status: if outcome.ok { "ok" } else { "failed" }.to_string(),
-        result_json: if outcome.result.is_null() { None } else { Some(outcome.result.clone()) },
+        result_json: if outcome.result.is_null() {
+            None
+        } else {
+            Some(outcome.result.clone())
+        },
         content: Some(outcome.content.clone()),
         error: outcome.code.as_ref().map(|_| outcome.error_text()),
         elapsed_ms: outcome.elapsed_ms,
@@ -1347,7 +1438,9 @@ async fn handle_call(
             }),
         )?;
     }
-    sink.lock().unwrap_or_else(|e| e.into_inner()).push_tool_result(call_id, &call.name, &outcome);
+    sink.lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .push_tool_result(call_id, &call.name, &outcome);
     Ok(outcome)
 }
 
@@ -1367,9 +1460,12 @@ impl CallOutcome {
 
 /// 只读工具 / 审批通过之后：`tool.started`（形状只有两个键，契约 §1）。
 fn emit_started(state: &AppState, run_id: &str, call_id: &str, name: &str) -> Result<(), ApiError> {
-    state
-        .bus
-        .emit(state, run_id, event_type::TOOL_STARTED, &json!({ "callId": call_id, "name": name }))?;
+    state.bus.emit(
+        state,
+        run_id,
+        event_type::TOOL_STARTED,
+        &json!({ "callId": call_id, "name": name }),
+    )?;
     Ok(())
 }
 
@@ -1412,7 +1508,9 @@ async fn finish_failure(
             "elapsedMs": outcome.elapsed_ms,
         }),
     )?;
-    sink.lock().unwrap_or_else(|e| e.into_inner()).push_tool_result(call_id, &call.name, &outcome);
+    sink.lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .push_tool_result(call_id, &call.name, &outcome);
     Ok(outcome)
 }
 
@@ -1427,7 +1525,9 @@ fn push_note(
     sink: &Arc<Mutex<Sink>>,
     note: &str,
 ) -> Result<(), ApiError> {
-    sink.lock().unwrap_or_else(|e| e.into_inner()).push_text(note);
+    sink.lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .push_text(note);
     state.bus.emit(
         state,
         run_id,
@@ -1445,8 +1545,13 @@ fn push_note(
 ///
 /// 超时**不在这里落终态** —— 返回 `false` 之后由调用方写 `denied`：终态的写法只有
 /// 一处（`record_tool_call`），两条路各写一遍迟早会漂移。
-async fn wait_for_approval(state: &AppState, run_id: &str, call_id: &str) -> Result<bool, ApiError> {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(APPROVAL_TIMEOUT_SECONDS);
+async fn wait_for_approval(
+    state: &AppState,
+    run_id: &str,
+    call_id: &str,
+) -> Result<bool, ApiError> {
+    let deadline =
+        std::time::Instant::now() + std::time::Duration::from_secs(APPROVAL_TIMEOUT_SECONDS);
     loop {
         if state.executor.is_cancelled(run_id) {
             return Ok(false);
@@ -1521,7 +1626,8 @@ impl Sink {
             return;
         }
         self.seal_text();
-        self.parts.push(("step".into(), phase.to_string(), None, None));
+        self.parts
+            .push(("step".into(), phase.to_string(), None, None));
     }
 
     /// 工具卡块。`arguments` 是**模型给的原文**（Kotlin 也把它当字符串放进 payload）——
@@ -1578,7 +1684,6 @@ impl Sink {
         ));
     }
 
-
     /// 落库用的完整正文（所有正文段拼起来）—— `ai_messages.text` 那一列。
     fn text_body(&self) -> String {
         let mut out = String::new();
@@ -1622,7 +1727,12 @@ fn parts_of(sink: &Sink) -> Vec<(String, String, Option<String>, Option<String>)
         parts.push(("reasoning".into(), sink.reasoning.clone(), None, None));
     }
     for (kind, text, tool_call_id, payload) in &sink.parts {
-        parts.push((kind.clone(), text.clone(), tool_call_id.clone(), payload.as_ref().map(|v| v.to_string())));
+        parts.push((
+            kind.clone(),
+            text.clone(),
+            tool_call_id.clone(),
+            payload.as_ref().map(|v| v.to_string()),
+        ));
     }
     if !sink.text.is_empty() {
         parts.push(("text".into(), sink.text.clone(), None, None));
@@ -1688,11 +1798,17 @@ struct AttachmentPlan {
 
 impl AttachmentPlan {
     fn empty() -> Self {
-        Self { names: std::collections::HashMap::new(), inline: std::collections::HashMap::new() }
+        Self {
+            names: std::collections::HashMap::new(),
+            inline: std::collections::HashMap::new(),
+        }
     }
 
     fn name_of(&self, id: &str) -> String {
-        self.names.get(id).cloned().unwrap_or_else(|| id.to_string())
+        self.names
+            .get(id)
+            .cloned()
+            .unwrap_or_else(|| id.to_string())
     }
 }
 
@@ -1729,16 +1845,23 @@ fn attachment_plan_of(
     }
 
     // ③ 该协议的适配器实现了哪些传输方式（图片才可能内联）
-    let can_inline_image = crate::media::strict_intake::adapter_transports(api, "image").contains(&"inline_base64");
+    let can_inline_image =
+        crate::media::strict_intake::adapter_transports(api, "image").contains(&"inline_base64");
     let model_takes_image = model.input_modalities.iter().any(|m| m == "image");
 
     // ④ 预算：只有"图片 + 适配器实现 + 模型声明了图片"的才参与
     let mut sizes: Vec<i64> = Vec::new();
     let mut eligible: Vec<bool> = Vec::new();
     for dto in facts.iter() {
-        let ok = can_inline_image && model_takes_image && dto.as_ref().map(|d| d.modality == "image").unwrap_or(false);
+        let ok = can_inline_image
+            && model_takes_image
+            && dto.as_ref().map(|d| d.modality == "image").unwrap_or(false);
         eligible.push(ok);
-        sizes.push(if ok { dto.as_ref().map(|d| d.size_bytes).unwrap_or(0) } else { 0 });
+        sizes.push(if ok {
+            dto.as_ref().map(|d| d.size_bytes).unwrap_or(0)
+        } else {
+            0
+        });
     }
     let chosen = crate::media::strict_intake::inline_budget_plan(&sizes);
 
@@ -1747,8 +1870,12 @@ fn attachment_plan_of(
         if !eligible[index] || !chosen[index] {
             continue;
         }
-        let Some(dto) = facts[index].as_ref() else { continue };
-        let Some(base64) = crate::media::attachments::inline_base64(state, dto) else { continue };
+        let Some(dto) = facts[index].as_ref() else {
+            continue;
+        };
+        let Some(base64) = crate::media::attachments::inline_base64(state, dto) else {
+            continue;
+        };
         plan.inline.insert(
             id.clone(),
             crate::provider::protocol::ChatImage {

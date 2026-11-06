@@ -37,12 +37,8 @@ Future<void> showAttachmentPreview(
   if (!context.mounted) return;
   await showDialog<void>(
     context: context,
-    builder: (_) => _AttachmentDialog(
-      url: url,
-      name: name,
-      kind: kind,
-      headers: headers,
-    ),
+    builder: (_) =>
+        _AttachmentDialog(url: url, name: name, kind: kind, headers: headers),
   );
 }
 
@@ -90,8 +86,26 @@ const _textExtensions = {
   'env',
 };
 
-const _videoExtensions = {'mp4', 'mov', 'mkv', 'webm', 'avi', 'm4v', 'wmv', 'flv'};
-const _audioExtensions = {'mp3', 'wav', 'flac', 'ogg', 'm4a', 'aac', 'opus', 'wma'};
+const _videoExtensions = {
+  'mp4',
+  'mov',
+  'mkv',
+  'webm',
+  'avi',
+  'm4v',
+  'wmv',
+  'flv',
+};
+const _audioExtensions = {
+  'mp3',
+  'wav',
+  'flac',
+  'ogg',
+  'm4a',
+  'aac',
+  'opus',
+  'wma',
+};
 
 String _extensionOf(String name, String url) {
   final source = name.trim().isNotEmpty ? name : url;
@@ -172,7 +186,11 @@ class _AttachmentDialog extends StatelessWidget {
               padding: const EdgeInsets.fromLTRB(14, 8, 6, 6),
               child: Row(
                 children: [
-                  Icon(_iconOf(kind), size: 18, color: theme.colorScheme.primary),
+                  Icon(
+                    _iconOf(kind),
+                    size: 18,
+                    color: theme.colorScheme.primary,
+                  ),
                   const SizedBox(width: 8),
                   Expanded(
                     child: Text(
@@ -349,7 +367,11 @@ class _Fallback extends StatelessWidget {
             color: theme.colorScheme.outline,
           ),
           const SizedBox(height: 10),
-          Text(title, style: theme.textTheme.titleSmall, textAlign: TextAlign.center),
+          Text(
+            title,
+            style: theme.textTheme.titleSmall,
+            textAlign: TextAlign.center,
+          ),
           const SizedBox(height: 4),
           Text(
             detail,

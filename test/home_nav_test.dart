@@ -45,7 +45,13 @@ MockClient _emptyBackend() {
         'byMediaKind': <String, int>{},
       };
     } else {
-      body = {'items': <Object>[], 'total': 0, 'page': 1, 'size': 24, 'pages': 0};
+      body = {
+        'items': <Object>[],
+        'total': 0,
+        'page': 1,
+        'size': 24,
+        'pages': 0,
+      };
     }
     return http.Response(
       jsonEncode(body),
@@ -60,7 +66,10 @@ Future<Widget> _makeShell() async {
   final settings = SettingsStore();
   await settings.load();
   final mock = _emptyBackend();
-  final library = LibraryStore(settings, api: ApiClient(settings.baseUrl, client: mock));
+  final library = LibraryStore(
+    settings,
+    api: ApiClient(settings.baseUrl, client: mock),
+  );
   await library.refreshAll();
   final ai = AiWorkspaceStore(api: AiApiClient(settings.baseUrl, client: mock));
 
@@ -81,7 +90,9 @@ Future<Widget> _makeShell() async {
 }
 
 void main() {
-  testWidgets('App 默认落在 AI 工作台，导航顺序是 AI 工作台 → 画廊 → 提示词 → 标签 → 设置', (tester) async {
+  testWidgets('App 默认落在 AI 工作台，导航顺序是 AI 工作台 → 画廊 → 提示词 → 标签 → 设置', (
+    tester,
+  ) async {
     // 宽屏（>=900）才会走 NavigationRail 布局，和真实桌面端一致
     tester.view.physicalSize = const Size(1600, 1100);
     tester.view.devicePixelRatio = 1.0;
@@ -173,9 +184,14 @@ void main() {
     final settings = SettingsStore();
     await settings.load();
     final mock = _emptyBackend();
-    final library = LibraryStore(settings, api: ApiClient(settings.baseUrl, client: mock));
+    final library = LibraryStore(
+      settings,
+      api: ApiClient(settings.baseUrl, client: mock),
+    );
     await library.refreshAll();
-    final ai = AiWorkspaceStore(api: AiApiClient(settings.baseUrl, client: mock));
+    final ai = AiWorkspaceStore(
+      api: AiApiClient(settings.baseUrl, client: mock),
+    );
     final launcher = BackendLauncher(settings)..skip();
 
     await tester.pumpWidget(
@@ -197,7 +213,9 @@ void main() {
     await tester.tap(find.text('预设'));
     await tester.pumpAndSettle();
     final railState = tester.state(find.byType(NavigationRail));
-    final galleryState = tester.state(find.byType(GalleryPage, skipOffstage: false));
+    final galleryState = tester.state(
+      find.byType(GalleryPage, skipOffstage: false),
+    );
     expect(find.byType(NavigationRail), findsOneWidget);
 
     // 模拟后端**重启**：isReady 变假（真去 kill 进程在单测里做不到）
@@ -205,8 +223,11 @@ void main() {
     await tester.pumpAndSettle();
 
     // ① 壳子还在、而且是**同一个 State**
-    expect(find.byType(NavigationRail), findsOneWidget,
-        reason: '后端重启不许把侧边栏换掉（老结构就是在这里换成加载页的）');
+    expect(
+      find.byType(NavigationRail),
+      findsOneWidget,
+      reason: '后端重启不许把侧边栏换掉（老结构就是在这里换成加载页的）',
+    );
     expect(
       identical(tester.state(find.byType(NavigationRail)), railState),
       isTrue,
@@ -228,7 +249,10 @@ void main() {
     // ④ 后端回来之后仍然一切照旧
     launcher.debugSetPhase(StartupPhase.ready, message: '已就绪');
     await tester.pumpAndSettle();
-    expect(identical(tester.state(find.byType(NavigationRail)), railState), isTrue);
+    expect(
+      identical(tester.state(find.byType(NavigationRail)), railState),
+      isTrue,
+    );
     expect(find.text('跳过，先进入界面'), findsNothing);
   });
 }

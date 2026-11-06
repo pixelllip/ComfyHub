@@ -11,7 +11,8 @@ fn tracker() -> ComfyProgress {
 // ---- 真帧（2026-09-27 在本机 ComfyUI 上实测抓到的原文）----------------
 
 const REAL_STATUS_HANDSHAKE: &str = r#"{"type": "status", "data": {"status": {"exec_info": {"queue_remaining": 0}}, "sid": "probe-dsh-14ebfb53"}}"#;
-const REAL_STATUS_QUEUED: &str = r#"{"type": "status", "data": {"status": {"exec_info": {"queue_remaining": 1}}}}"#;
+const REAL_STATUS_QUEUED: &str =
+    r#"{"type": "status", "data": {"status": {"exec_info": {"queue_remaining": 1}}}}"#;
 const REAL_EXECUTION_START: &str = r#"{"type": "execution_start", "data": {"prompt_id": "3cf2b8f7-babe-4a75-9b1c-4d120af3bc19", "timestamp": 1790510532242}}"#;
 const REAL_EXECUTION_CACHED: &str = r#"{"type": "execution_cached", "data": {"nodes": ["1", "2"], "prompt_id": "3cf2b8f7-babe-4a75-9b1c-4d120af3bc19", "timestamp": 1790510532243}}"#;
 const REAL_PROGRESS_STATE: &str = r#"{"type": "progress_state", "data": {"prompt_id": "bd810836-3331-4b52-832f-1514d6c3f5d4", "nodes": {"1": {"value": 1.0, "max": 1.0, "state": "finished", "node_id": "1", "prompt_id": "bd810836-3331-4b52-832f-1514d6c3f5d4", "display_node_id": "1", "parent_node_id": null, "real_node_id": "1"}, "2": {"value": 1.0, "max": 1.0, "state": "finished", "node_id": "2", "prompt_id": "bd810836-3331-4b52-832f-1514d6c3f5d4", "display_node_id": "2", "parent_node_id": null, "real_node_id": "2"}, "3": {"value": 0.0, "max": 1.0, "state": "running", "node_id": "3", "prompt_id": "bd810836-3331-4b52-832f-1514d6c3f5d4", "display_node_id": "3", "parent_node_id": null, "real_node_id": "3"}}}}"#;
@@ -31,11 +32,15 @@ const HANDWRITTEN_PROGRESS: &str = r#"{"type": "progress", "data": {"value": 12,
 fn 真帧_status_解析出队列剩余数() {
     assert_eq!(
         parse_frame(REAL_STATUS_HANDSHAKE),
-        Some(ProgressEvent::Status { queue_remaining: Some(0) })
+        Some(ProgressEvent::Status {
+            queue_remaining: Some(0)
+        })
     );
     assert_eq!(
         parse_frame(REAL_STATUS_QUEUED),
-        Some(ProgressEvent::Status { queue_remaining: Some(1) })
+        Some(ProgressEvent::Status {
+            queue_remaining: Some(1)
+        })
     );
 }
 
@@ -104,7 +109,11 @@ fn 真帧_progress_state_取正在跑的那个节点() {
 fn 真帧_execution_error_带节点与原始报错() {
     let event = parse_frame(REAL_EXECUTION_ERROR).expect("要认出来");
     match event {
-        ProgressEvent::ExecutionError { prompt_id, node_id, message } => {
+        ProgressEvent::ExecutionError {
+            prompt_id,
+            node_id,
+            message,
+        } => {
             assert_eq!(prompt_id, "3cf2b8f7-babe-4a75-9b1c-4d120af3bc19");
             assert_eq!(node_id.as_deref(), Some("5"));
             assert!(message.unwrap().contains("clip input is invalid"));
@@ -146,9 +155,9 @@ fn 未知帧与坏帧一律不许_panic() {
         // 自定义节点会发一堆我们不认识的东西
         r#"{"type": "logs", "data": {"entries": []}}"#,
         r#"{"type": "crystools.monitor", "data": {}}"#,
-        r#"{"type": "progress", "data": {}}"#,                       // 缺 value/max/promptId
-        r#"{"type": "progress", "data": {"value": 1, "max": 0}}"#,   // 缺 prompt_id
-        r#"{"type": "executing", "data": {}}"#,                      // 缺 prompt_id
+        r#"{"type": "progress", "data": {}}"#, // 缺 value/max/promptId
+        r#"{"type": "progress", "data": {"value": 1, "max": 0}}"#, // 缺 prompt_id
+        r#"{"type": "executing", "data": {}}"#, // 缺 prompt_id
         r#"{"type": "progress_state", "data": {"prompt_id": "p"}}"#, // 缺 nodes
         r#"{"type": "status", "data": null}"#,
         r#"{"type": "execution_error", "data": {"prompt_id": "p", "exception_message": null}}"#,
@@ -158,8 +167,7 @@ fn 未知帧与坏帧一律不许_panic() {
             parsed.is_none()
                 || matches!(
                     parsed,
-                    Some(ProgressEvent::ExecutionError { .. })
-                        | Some(ProgressEvent::Status { .. })
+                    Some(ProgressEvent::ExecutionError { .. }) | Some(ProgressEvent::Status { .. })
                 ),
             "这条不该被解析成进度事件：{text}（得到 {parsed:?}）"
         );
@@ -193,7 +201,9 @@ fn 整条真帧序列跑一遍_状态与百分比都对() {
     tracker.frame(REAL_EXECUTED);
     tracker.frame(REAL_EXECUTION_SUCCESS);
 
-    let progress = tracker.snapshot("bd810836-3331-4b52-832f-1514d6c3f5d4").unwrap();
+    let progress = tracker
+        .snapshot("bd810836-3331-4b52-832f-1514d6c3f5d4")
+        .unwrap();
     assert_eq!(progress.state, "success", "终态帧说了成功");
     assert_eq!(progress.value, Some(0), "0/1 也是 ComfyUI 自己报的");
     assert_eq!(progress.max, Some(1));
@@ -215,22 +225,46 @@ fn 可读名来自提交时登记的图_没有映射时只给节点_id() {
             "9": { "inputs": {} },   // 连 class_type 都没有 → 不登记
         }),
     );
-    tracker.apply(&ProgressEvent::ExecutionStart { prompt_id: "p1".into() });
+    tracker.apply(&ProgressEvent::ExecutionStart {
+        prompt_id: "p1".into(),
+    });
     // ① 有 `_meta.title` → 用人起的标题
-    tracker.apply(&ProgressEvent::Executing { prompt_id: "p1".into(), node_id: Some("1".into()) });
-    assert_eq!(tracker.snapshot("p1").unwrap().node_name.as_deref(), Some("加载 VAE"));
+    tracker.apply(&ProgressEvent::Executing {
+        prompt_id: "p1".into(),
+        node_id: Some("1".into()),
+    });
+    assert_eq!(
+        tracker.snapshot("p1").unwrap().node_name.as_deref(),
+        Some("加载 VAE")
+    );
     // ② 没有 title → 回落 class_type
-    tracker.apply(&ProgressEvent::Executing { prompt_id: "p1".into(), node_id: Some("3".into()) });
-    assert_eq!(tracker.snapshot("p1").unwrap().node_name.as_deref(), Some("KSampler"));
+    tracker.apply(&ProgressEvent::Executing {
+        prompt_id: "p1".into(),
+        node_id: Some("3".into()),
+    });
+    assert_eq!(
+        tracker.snapshot("p1").unwrap().node_name.as_deref(),
+        Some("KSampler")
+    );
     // ③ 没登记过 → **只给 id**，绝不编名字
-    tracker.apply(&ProgressEvent::Executing { prompt_id: "p1".into(), node_id: Some("9".into()) });
+    tracker.apply(&ProgressEvent::Executing {
+        prompt_id: "p1".into(),
+        node_id: Some("9".into()),
+    });
     let progress = tracker.snapshot("p1").unwrap();
     assert_eq!(progress.node_id.as_deref(), Some("9"));
     assert_eq!(progress.node_name, None, "没有映射时不许编一个名字");
-    assert!(progress.human().contains("正在执行节点 9"), "{}", progress.human());
+    assert!(
+        progress.human().contains("正在执行节点 9"),
+        "{}",
+        progress.human()
+    );
 
     // ④ 整个 prompt 都没登记过（不是我们提交的）→ 同样只给 id
-    tracker.apply(&ProgressEvent::Executing { prompt_id: "别人提交的".into(), node_id: Some("42".into()) });
+    tracker.apply(&ProgressEvent::Executing {
+        prompt_id: "别人提交的".into(),
+        node_id: Some("42".into()),
+    });
     let progress = tracker.snapshot("别人提交的").unwrap();
     assert_eq!(progress.node_name, None);
     assert_eq!(progress.node_id.as_deref(), Some("42"));
@@ -253,7 +287,11 @@ fn 同一个_prompt_的_percent_单调不倒退() {
     assert_eq!(tracker.snapshot("p1").unwrap().percent, Some(67));
     // ComfyUI 补发一条更早的帧 → 界面**不许**倒着走
     send(3.0);
-    assert_eq!(tracker.snapshot("p1").unwrap().percent, Some(67), "高水位只升不降");
+    assert_eq!(
+        tracker.snapshot("p1").unwrap().percent,
+        Some(67),
+        "高水位只升不降"
+    );
     send(30.0);
     assert_eq!(tracker.snapshot("p1").unwrap().percent, Some(100));
 }
@@ -262,12 +300,22 @@ fn 同一个_prompt_的_percent_单调不倒退() {
 fn 拿不到_value_max_时如实说进度未知() {
     let tracker = tracker();
     // `executing` 只说"轮到哪个节点了"，**没有任何 value/max** → percent 必须是 None
-    tracker.apply(&ProgressEvent::Executing { prompt_id: "p1".into(), node_id: Some("3".into()) });
+    tracker.apply(&ProgressEvent::Executing {
+        prompt_id: "p1".into(),
+        node_id: Some("3".into()),
+    });
     let progress = tracker.snapshot("p1").unwrap();
-    assert_eq!(progress.percent, None, "没有 progress 帧就是进度未知，不许拿别的凑");
+    assert_eq!(
+        progress.percent, None,
+        "没有 progress 帧就是进度未知，不许拿别的凑"
+    );
     assert_eq!(progress.value, None);
     assert_eq!(progress.max, None);
-    assert!(progress.human().contains("进度未知"), "{}", progress.human());
+    assert!(
+        progress.human().contains("进度未知"),
+        "{}",
+        progress.human()
+    );
     // 序列化之后 `percent` / `value` / `max` **整键不出现**（可空键省略规则）
     let json = progress.to_json();
     assert!(json.get("percent").is_none());
@@ -282,7 +330,9 @@ fn 拿不到_value_max_时如实说进度未知() {
 fn 断线重连后状态不丢() {
     let tracker = tracker();
     // 连上 → 收到几帧 → 断了（`note_error` 就是 `pump` 失败时做的事）
-    tracker.apply(&ProgressEvent::ExecutionStart { prompt_id: "p1".into() });
+    tracker.apply(&ProgressEvent::ExecutionStart {
+        prompt_id: "p1".into(),
+    });
     tracker.apply(&ProgressEvent::Progress {
         prompt_id: "p1".into(),
         node_id: Some("3".into()),
@@ -306,7 +356,11 @@ fn 断线重连后状态不丢() {
     assert_eq!(tracker.current().unwrap().prompt_id, "p1");
 
     // 断线期间 ComfyUI 把这一轮跑完了 → 重连后补到终态帧，进度还能对上
-    tracker.frame(REAL_EXECUTION_SUCCESS.replace("bd810836-3331-4b52-832f-1514d6c3f5d4", "p1").as_str());
+    tracker.frame(
+        REAL_EXECUTION_SUCCESS
+            .replace("bd810836-3331-4b52-832f-1514d6c3f5d4", "p1")
+            .as_str(),
+    );
     assert_eq!(tracker.snapshot("p1").unwrap().state, "success");
     assert!(tracker.current().is_none(), "终态之后就没有'正在跑的'了");
 }
@@ -315,7 +369,9 @@ fn 断线重连后状态不丢() {
 fn 报错与取消都记成人话状态() {
     let tracker = tracker();
     tracker.register_graph("p1", &json!({ "5": { "class_type": "CLIPTextEncode" } }));
-    tracker.apply(&ProgressEvent::ExecutionStart { prompt_id: "p1".into() });
+    tracker.apply(&ProgressEvent::ExecutionStart {
+        prompt_id: "p1".into(),
+    });
     tracker.apply(&ProgressEvent::ExecutionError {
         prompt_id: "p1".into(),
         node_id: Some("5".into()),
@@ -323,11 +379,17 @@ fn 报错与取消都记成人话状态() {
     });
     let progress = tracker.snapshot("p1").unwrap();
     assert_eq!(progress.state, "error");
-    assert_eq!(progress.node_name.as_deref(), Some("CLIPTextEncode"), "报错也要说清是哪个节点");
+    assert_eq!(
+        progress.node_name.as_deref(),
+        Some("CLIPTextEncode"),
+        "报错也要说清是哪个节点"
+    );
     assert!(progress.error.unwrap().contains("clip input is invalid"));
     assert!(tracker.current().is_none());
 
-    tracker.apply(&ProgressEvent::ExecutionInterrupted { prompt_id: "p2".into() });
+    tracker.apply(&ProgressEvent::ExecutionInterrupted {
+        prompt_id: "p2".into(),
+    });
     assert_eq!(tracker.snapshot("p2").unwrap().state, "cancelled");
 }
 
@@ -335,13 +397,28 @@ fn 报错与取消都记成人话状态() {
 fn current_只跟着正在跑的那一个走() {
     let tracker = tracker();
     assert!(tracker.current().is_none(), "什么都没跑");
-    tracker.apply(&ProgressEvent::ExecutionStart { prompt_id: "p1".into() });
+    tracker.apply(&ProgressEvent::ExecutionStart {
+        prompt_id: "p1".into(),
+    });
     assert_eq!(tracker.current().unwrap().prompt_id, "p1");
     // 队列里排上第二条：它还是 queued，**不该**抢走 current
-    tracker.apply(&ProgressEvent::Executing { prompt_id: "p2".into(), node_id: Some("1".into()) });
-    assert_eq!(tracker.current().unwrap().prompt_id, "p2", "真的开始执行了才轮到它");
-    tracker.apply(&ProgressEvent::ExecutionSuccess { prompt_id: "p1".into() });
-    assert_eq!(tracker.current().unwrap().prompt_id, "p2", "p1 结束了不该把 p2 也清掉");
+    tracker.apply(&ProgressEvent::Executing {
+        prompt_id: "p2".into(),
+        node_id: Some("1".into()),
+    });
+    assert_eq!(
+        tracker.current().unwrap().prompt_id,
+        "p2",
+        "真的开始执行了才轮到它"
+    );
+    tracker.apply(&ProgressEvent::ExecutionSuccess {
+        prompt_id: "p1".into(),
+    });
+    assert_eq!(
+        tracker.current().unwrap().prompt_id,
+        "p2",
+        "p1 结束了不该把 p2 也清掉"
+    );
     tracker.apply(&ProgressEvent::ExecutionError {
         prompt_id: "p2".into(),
         node_id: None,
@@ -354,7 +431,11 @@ fn current_只跟着正在跑的那一个走() {
 fn 给提交记录补进度_没有进度时原样不动() {
     let tracker = tracker();
     let submission = json!({ "promptId": "p1", "status": "running" });
-    assert_eq!(tracker.decorate(&submission), submission, "没有进度就原样返回（不塞一个空对象）");
+    assert_eq!(
+        tracker.decorate(&submission),
+        submission,
+        "没有进度就原样返回（不塞一个空对象）"
+    );
     tracker.apply(&ProgressEvent::ProgressState {
         prompt_id: "p1".into(),
         node_id: Some("3".into()),
@@ -403,7 +484,9 @@ fn 提交时带的就是_ws_同一个_client_id() {
 fn 进度表不会无限涨() {
     let tracker = tracker();
     for index in 0..(MAX_TRACKED_PROMPTS + 5) {
-        tracker.apply(&ProgressEvent::ExecutionSuccess { prompt_id: format!("p{index:03}") });
+        tracker.apply(&ProgressEvent::ExecutionSuccess {
+            prompt_id: format!("p{index:03}"),
+        });
     }
     let inner = tracker.lock();
     assert_eq!(inner.prompts.len(), MAX_TRACKED_PROMPTS);
@@ -431,12 +514,15 @@ async fn pump_against(frames: Vec<&'static str>, tracker: Arc<ComfyProgress>) ->
         let (stream, _) = listener.accept().await.unwrap();
         // `accept_hdr_async` 让我们看到客户端**真的**请求了哪条路径 ——
         // `?clientId=` 丢了的话 ComfyUI 会给一个随机 sid，进度一帧都收不到
-        let callback = |request: &tokio_tungstenite::tungstenite::handshake::server::Request,
-                        response: tokio_tungstenite::tungstenite::handshake::server::Response| {
-            let _ = path_tx.send(request.uri().to_string());
-            Ok(response)
-        };
-        let mut socket = tokio_tungstenite::accept_hdr_async(stream, callback).await.unwrap();
+        let callback =
+            |request: &tokio_tungstenite::tungstenite::handshake::server::Request,
+             response: tokio_tungstenite::tungstenite::handshake::server::Response| {
+                let _ = path_tx.send(request.uri().to_string());
+                Ok(response)
+            };
+        let mut socket = tokio_tungstenite::accept_hdr_async(stream, callback)
+            .await
+            .unwrap();
         for frame in frames {
             socket.send(Message::text(frame)).await.unwrap();
         }
@@ -448,7 +534,9 @@ async fn pump_against(frames: Vec<&'static str>, tracker: Arc<ComfyProgress>) ->
     });
 
     let url = format!("ws://{addr}/ws?clientId={}", tracker.client_id());
-    pump(&tracker, &url).await.expect("假服务端一直好好的，pump 该回 Ok");
+    pump(&tracker, &url)
+        .await
+        .expect("假服务端一直好好的，pump 该回 Ok");
     server.await.unwrap();
     path_rx.await.unwrap()
 }
@@ -473,7 +561,9 @@ async fn ws_客户端把真帧喂进跟踪器且带上_client_id() {
         path.starts_with("/ws?clientId=comfyhub-"),
         "握手请求必须是 /ws?clientId=<我们的 id>，实际是 {path}"
     );
-    let progress = tracker.snapshot("bd810836-3331-4b52-832f-1514d6c3f5d4").unwrap();
+    let progress = tracker
+        .snapshot("bd810836-3331-4b52-832f-1514d6c3f5d4")
+        .unwrap();
     assert_eq!(progress.state, "success");
     assert_eq!(progress.percent, Some(0), "0/1：ComfyUI 自己报的，没编");
     // 服务端正常关闭 → 如实说"断了"（`spawn` 据此退避重连），进度**不丢**

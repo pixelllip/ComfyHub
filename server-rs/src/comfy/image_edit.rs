@@ -66,8 +66,8 @@ use std::path::{Path, PathBuf};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
-use crate::web::routes::AppState;
 use crate::tools::tools::ToolFailure;
+use crate::web::routes::AppState;
 
 /// 遮罩边长上限（与产物同一量级；再大就是误传了）。
 pub const MAX_MASK_EDGE: i64 = 8192;
@@ -81,7 +81,11 @@ pub const MAX_FEATHER: i64 = 256;
 /// 参数写错了就当场报，别等去找实例。
 fn reject_removed_args(args: &Value) -> Result<(), ToolFailure> {
     for removed in REMOVED_ARGS {
-        if args.get(removed).map(|value| !value.is_null()).unwrap_or(false) {
+        if args
+            .get(removed)
+            .map(|value| !value.is_null())
+            .unwrap_or(false)
+        {
             return Err(ToolFailure::new(
                 "INVALID_ARGUMENT",
                 format!(
@@ -162,7 +166,10 @@ pub struct Delivery {
 impl Delivery {
     /// 绑定这次投放的目标 input 目录（算 subfolder 用）。
     pub fn for_input_dir(input_dir: &Path) -> Self {
-        Delivery { input_dir: input_dir.to_path_buf(), pending: Vec::new() }
+        Delivery {
+            input_dir: input_dir.to_path_buf(),
+            pending: Vec::new(),
+        }
     }
 
     /// 记下一次"直写没成功、改走 ComfyUI"的投递。
@@ -199,7 +206,10 @@ impl Delivery {
         }
         let queued = std::mem::take(&mut self.pending);
         let config = crate::comfy::capture::capture_config(state).map_err(|e| {
-            ToolFailure::new("COMFY_NOT_FOUND", format!("读不到 ComfyUI 配置：{}", e.human()))
+            ToolFailure::new(
+                "COMFY_NOT_FOUND",
+                format!("读不到 ComfyUI 配置：{}", e.human()),
+            )
         })?;
         let mut delivered: Vec<(String, String)> = Vec::new();
         let mut failed: Vec<String> = Vec::new();
@@ -258,7 +268,11 @@ pub fn apply_uploaded_names(result: &mut Value, delivered: &[(String, String)]) 
     }
     result["channel"] = json!("comfy-upload");
     for key in ["filename", "personFilename", "placedSubjectFilename"] {
-        let current = result.get(key).and_then(Value::as_str).unwrap_or("").to_string();
+        let current = result
+            .get(key)
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
         if let Some((_, remote)) = delivered.iter().find(|(local, _)| local == &current) {
             result[key] = json!(remote);
         }
@@ -327,8 +341,9 @@ pub fn input_dir_candidates(state: &AppState) -> Vec<(PathBuf, &'static str)> {
         .unwrap_or_else(|| "http://127.0.0.1:8188".to_string());
     let port = crate::comfy::comfy_launch::port_of(&comfy_url);
     let launched = crate::comfy::comfy_launch::launched_input_dir(&state.project_root(), port);
-    let home_input = crate::comfy::comfy_dirs::find_home(&state.project_root(), configured.as_deref())
-        .map(|home| home.join("input"));
+    let home_input =
+        crate::comfy::comfy_dirs::find_home(&state.project_root(), configured.as_deref())
+            .map(|home| home.join("input"));
 
     let mut out: Vec<(PathBuf, &'static str)> = Vec::new();
     for (dir, source) in [
@@ -350,7 +365,8 @@ pub fn input_dir_candidates(state: &AppState) -> Vec<(PathBuf, &'static str)> {
 /// 两份路径是不是同一个目录（只做字面比较 + 大小写不敏感 —— Windows 上够了，
 /// 也避免为了一次比较去 `canonicalize` 而引入 IO 失败分支）。
 fn paths_equal(a: &Path, b: &Path) -> bool {
-    a.to_string_lossy().eq_ignore_ascii_case(&b.to_string_lossy())
+    a.to_string_lossy()
+        .eq_ignore_ascii_case(&b.to_string_lossy())
 }
 
 /// 配置的输出目录 → 它的兄弟 `input` 目录。
@@ -418,7 +434,9 @@ pub struct TargetInputDir {
 /// 拿它去比对候选目录，**覆盖面最高**的那个就是它的 input（见 [`crate::comfy::comfy_client::dir_owning`]）。
 pub async fn target_input_dir(state: &AppState) -> Result<TargetInputDir, ToolFailure> {
     let candidates = input_dir_candidates(state);
-    let comfy_url = crate::comfy::capture::capture_config(state).map(|c| c.comfy_url).unwrap_or_default();
+    let comfy_url = crate::comfy::capture::capture_config(state)
+        .map(|c| c.comfy_url)
+        .unwrap_or_default();
     let dirs: Vec<PathBuf> = candidates.iter().map(|(dir, _)| dir.clone()).collect();
     let probed = crate::comfy::comfy_client::instance_input_dir(&comfy_url, &dirs).await;
     choose_input_dir(&candidates, probed)
@@ -433,7 +451,10 @@ fn choose_input_dir(
     probed: Option<PathBuf>,
 ) -> Result<TargetInputDir, ToolFailure> {
     if let Some(probed) = probed {
-        let guessed = candidates.iter().find(|(dir, _)| dir.is_dir()).map(|(dir, _)| dir.clone());
+        let guessed = candidates
+            .iter()
+            .find(|(dir, _)| dir.is_dir())
+            .map(|(dir, _)| dir.clone());
         let note = match &guessed {
             Some(first) if !paths_equal(first, &probed) => Some(format!(
                 "实例报出来的 input 是 {}，而我们按配置推出来的是 {} —— **以实例为准**\
@@ -445,7 +466,11 @@ fn choose_input_dir(
             )),
             _ => None,
         };
-        return Ok(TargetInputDir { dir: probed, source: "instance", note });
+        return Ok(TargetInputDir {
+            dir: probed,
+            source: "instance",
+            note,
+        });
     }
 
     let (dir, source) = candidates
@@ -459,7 +484,11 @@ fn choose_input_dir(
                  让用户在「设置 → ComfyUI 自动捕获」里确认 ComfyUI 位置后再试。",
             )
         })?;
-    Ok(TargetInputDir { dir, source, note: None })
+    Ok(TargetInputDir {
+        dir,
+        source,
+        note: None,
+    })
 }
 
 /// 投放进 `input` 目录的文件名。
@@ -475,7 +504,13 @@ pub fn input_filename_for(original_name: &str, tag: &str, wanted_name: Option<&s
         .trim();
     let safe: String = raw
         .chars()
-        .map(|c| if c.is_alphanumeric() || c == '.' || c == '-' || c == '_' { c } else { '_' })
+        .map(|c| {
+            if c.is_alphanumeric() || c == '.' || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect();
     // Kotlin：`trimStart('.')` → `takeLast(120)` → 空则 `image.png`
     let safe: String = safe.trim_start_matches('.').to_string();
@@ -485,7 +520,11 @@ pub fn input_filename_for(original_name: &str, tag: &str, wanted_name: Option<&s
     } else {
         safe
     };
-    let safe = if safe.is_empty() { "image.png".to_string() } else { safe };
+    let safe = if safe.is_empty() {
+        "image.png".to_string()
+    } else {
+        safe
+    };
 
     let dot = safe.rfind('.');
     // `dot > 0` 而不是 `>= 0`：`.png` 这种"只有扩展名"的形状要当**没有扩展名**处理
@@ -495,8 +534,16 @@ pub fn input_filename_for(original_name: &str, tag: &str, wanted_name: Option<&s
     };
     let stem = if stem.is_empty() { "image" } else { stem };
     let ext: String = ext.chars().take(10).collect();
-    let tag: String = tag.chars().filter(|c| c.is_alphanumeric()).take(8).collect();
-    let tag = if tag.is_empty() { "ref".to_string() } else { tag };
+    let tag: String = tag
+        .chars()
+        .filter(|c| c.is_alphanumeric())
+        .take(8)
+        .collect();
+    let tag = if tag.is_empty() {
+        "ref".to_string()
+    } else {
+        tag
+    };
     format!("{stem}-{tag}{ext}")
 }
 
@@ -510,11 +557,19 @@ fn file_name_only(raw: &str) -> String {
 ///
 /// ⚠ 直写失败**不再当场报错**（2026-09-28）：真机上这条路本来就是被系统拒的，
 /// 记进 [Delivery] 交给 ComfyUI 自己写（`/upload/image`）—— 那条路才是永远成立的。
-fn copy_if_needed(source: &Path, target: &Path, delivery: &mut Delivery) -> Result<(), ToolFailure> {
+fn copy_if_needed(
+    source: &Path,
+    target: &Path,
+    delivery: &mut Delivery,
+) -> Result<(), ToolFailure> {
     let bytes = std::fs::read(source).map_err(|e| {
         ToolFailure::new(
             "COMFY_INPUT_FAILED",
-            format!("读不出要投放的原件（{}）：{}", source.display(), take_text(&e.to_string(), 200)),
+            format!(
+                "读不出要投放的原件（{}）：{}",
+                source.display(),
+                take_text(&e.to_string(), 200)
+            ),
         )
     })?;
     let same = match (std::fs::metadata(target), std::fs::metadata(source)) {
@@ -534,7 +589,9 @@ fn take_text(text: &str, max: usize) -> String {
 
 /// 原图尺寸（读不出来回 `None` —— 调用方按"如实报错"处理）。
 fn read_size(file: &Path) -> Option<(i64, i64)> {
-    image::image_dimensions(file).ok().map(|(w, h)| (w as i64, h as i64))
+    image::image_dimensions(file)
+        .ok()
+        .map(|(w, h)| (w as i64, h as i64))
 }
 
 // ---------------------------------------------------------------------------
@@ -563,7 +620,9 @@ pub fn use_media(
     let media = crate::media::media::get(state, media_id).map_err(|_| {
         ToolFailure::new(
             "MEDIA_NOT_FOUND",
-            format!("画廊里没有 id={media_id} 的产物（先用媒体列表 / 刚生成的 mediaIds 确认它还在）"),
+            format!(
+                "画廊里没有 id={media_id} 的产物（先用媒体列表 / 刚生成的 mediaIds 确认它还在）"
+            ),
         )
     })?;
     if !media.kind.eq_ignore_ascii_case("image") {
@@ -575,12 +634,13 @@ pub fn use_media(
             ),
         ));
     }
-    let source = crate::media::media::resolve_media(state.media_dir(), &media.stored_name).ok_or_else(|| {
-        ToolFailure::new(
-            "MEDIA_NOT_FOUND",
-            format!("产物 #{media_id} 的落盘名不合法：{}", media.stored_name),
-        )
-    })?;
+    let source = crate::media::media::resolve_media(state.media_dir(), &media.stored_name)
+        .ok_or_else(|| {
+            ToolFailure::new(
+                "MEDIA_NOT_FOUND",
+                format!("产物 #{media_id} 的落盘名不合法：{}", media.stored_name),
+            )
+        })?;
     if !source.is_file() {
         return Err(ToolFailure::new(
             "MEDIA_NOT_FOUND",
@@ -729,7 +789,10 @@ pub fn make_mask_with(
     let base_filename = str_arg(args, "baseFilename");
     let mut width = int_arg(args, "width");
     let mut height = int_arg(args, "height");
-    if let Some(base) = base_filename.as_deref().filter(|name| !name.trim().is_empty()) {
+    if let Some(base) = base_filename
+        .as_deref()
+        .filter(|name| !name.trim().is_empty())
+    {
         let base_path = input_dir.join(file_name_only(base));
         if !base_path.is_file() {
             return Err(ToolFailure::new(
@@ -750,10 +813,16 @@ pub fn make_mask_with(
         height = Some(size.1);
     }
     let w = width.ok_or_else(|| {
-        ToolFailure::new("INVALID_ARGUMENT", "要么给 baseFilename，要么给 width 与 height")
+        ToolFailure::new(
+            "INVALID_ARGUMENT",
+            "要么给 baseFilename，要么给 width 与 height",
+        )
     })?;
     let h = height.ok_or_else(|| {
-        ToolFailure::new("INVALID_ARGUMENT", "要么给 baseFilename，要么给 width 与 height")
+        ToolFailure::new(
+            "INVALID_ARGUMENT",
+            "要么给 baseFilename，要么给 width 与 height",
+        )
     })?;
     if w < 16 || h < 16 || w > MAX_MASK_EDGE || h > MAX_MASK_EDGE {
         return Err(ToolFailure::new(
@@ -764,7 +833,9 @@ pub fn make_mask_with(
 
     let region_text = str_arg(args, "region").unwrap_or_else(|| "full".to_string());
     let region = parse_region(&region_text)?;
-    let shape = str_arg(args, "shape").unwrap_or_else(|| "rect".to_string()).to_lowercase();
+    let shape = str_arg(args, "shape")
+        .unwrap_or_else(|| "rect".to_string())
+        .to_lowercase();
     if shape != "rect" && shape != "ellipse" {
         return Err(ToolFailure::new(
             "INVALID_ARGUMENT",
@@ -774,7 +845,9 @@ pub fn make_mask_with(
     let invert = bool_arg(args, "invert").unwrap_or(false);
     let feather = int_arg(args, "feather").unwrap_or(0).clamp(0, MAX_FEATHER);
     // `mode`：`rect`（默认，框）/ `subject`（**照某张图里主体的形状抠** —— 贴人物图必须用这个）
-    let mode = str_arg(args, "mode").unwrap_or_else(|| "rect".to_string()).to_lowercase();
+    let mode = str_arg(args, "mode")
+        .unwrap_or_else(|| "rect".to_string())
+        .to_lowercase();
     if mode != "rect" && mode != "subject" {
         return Err(ToolFailure::new(
             "INVALID_ARGUMENT",
@@ -812,8 +885,15 @@ pub fn make_mask_with(
             ));
         }
         let use_region = region_text != "full";
-        let (mask, background, ratio) =
-            subject_mask(&subject_path, w as usize, h as usize, tolerance, &region, use_region, explicit_background)?;
+        let (mask, background, ratio) = subject_mask(
+            &subject_path,
+            w as usize,
+            h as usize,
+            tolerance,
+            &region,
+            use_region,
+            explicit_background,
+        )?;
         subject_info = Some((subject, background, ratio));
         // ⚠ 这个剪影**只当定位器**：算 bbox（摆放要用）、报 `subjectRatio` / `background` 供诊断。
         //    它**不写盘、也不当合成遮罩** —— 合成用的 alpha 由工作流里的抠图节点现算。
@@ -834,7 +914,10 @@ pub fn make_mask_with(
     let center_y = args.get("y").and_then(Value::as_f64);
     if mode == "subject" && (scale != 1.0 || center_x.is_some() || center_y.is_some()) {
         if let Some((x0, y0, x1, y1)) = mask_bbox(&pixels, w as usize, h as usize) {
-            let subject_file = subject_info.as_ref().map(|info| info.0.clone()).unwrap_or_default();
+            let subject_file = subject_info
+                .as_ref()
+                .map(|info| info.0.clone())
+                .unwrap_or_default();
             let person_image = image::open(input_dir.join(&subject_file))
                 .map_err(|e| ToolFailure::new("COMFY_INPUT_FAILED", format!("读不出人物图：{e}")))?
                 .to_rgb8();
@@ -908,16 +991,29 @@ pub fn make_mask_with(
         .filter(|name| !name.trim().is_empty())
         .map(|name| file_name_only(&name))
         .unwrap_or_else(|| {
-            format!("comfyhub_mask_{}.png", content_tag(w, h, &region, &shape, invert, feather))
+            format!(
+                "comfyhub_mask_{}.png",
+                content_tag(w, h, &region, &shape, invert, feather)
+            )
         });
     // `mode="subject"`（贴人物图）**不写遮罩**：真正的 alpha 由工作流里的抠图节点现算
     // （写一张没人用的文件只会在 input 目录里攒垃圾，还会让调用方以为该去覆盖 LoadImageMask）。
     let mask_written = mode != "subject";
     if mask_written {
-        write_mask_png(&pixels, w as u32, h as u32, &input_dir.join(&filename), delivery)?;
+        write_mask_png(
+            &pixels,
+            w as u32,
+            h as u32,
+            &input_dir.join(&filename),
+            delivery,
+        )?;
     }
 
-    let region_joined = region.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(",");
+    let region_joined = region
+        .iter()
+        .map(|v| v.to_string())
+        .collect::<Vec<_>>()
+        .join(",");
     // `mode="subject"` 要告诉调用方"拿哪张人物图去覆盖 20.image"
     let person_filename = placed_subject
         .as_ref()
@@ -964,7 +1060,10 @@ pub fn make_mask_with(
         // 定位器诊断：这几项只说明"我们猜的人物在哪、占多大"，**画面不受它们影响**
         // （合成用的 alpha 是工作流里抠图节点给的）。所以它们只用来判断"摆放靠不靠谱"。
         out["subjectFilename"] = json!(subject);
-        out["background"] = json!(format!("#{:02x}{:02x}{:02x}", background[0], background[1], background[2]));
+        out["background"] = json!(format!(
+            "#{:02x}{:02x}{:02x}",
+            background[0], background[1], background[2]
+        ));
         out["subjectRatio"] = json!((ratio * 1000.0).round() / 1000.0);
         out["locatorNote"] = json!(
             "剪影**只当定位器**（bbox / 摆放 / 这份诊断），不参与合成 —— \
@@ -1036,7 +1135,11 @@ pub fn parse_region(raw: &str) -> Result<[f64; 4], ToolFailure> {
         "person" => return Ok([0.22, 0.05, 0.56, 0.92]),
         _ => {}
     }
-    let parts: Vec<&str> = text.split(',').map(str::trim).filter(|part| !part.is_empty()).collect();
+    let parts: Vec<&str> = text
+        .split(',')
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+        .collect();
     if parts.len() != 4 {
         return Err(ToolFailure::new(
             "INVALID_ARGUMENT",
@@ -1110,11 +1213,22 @@ pub fn subject_mask(
         .map_err(|e| {
             ToolFailure::new(
                 "INVALID_ARGUMENT",
-                format!("读不出「{}」的像素（抠主体要用它的形状）：{e}", source.display()),
+                format!(
+                    "读不出「{}」的像素（抠主体要用它的形状）：{e}",
+                    source.display()
+                ),
             )
         })?
         .to_rgb8();
-    subject_mask_from_image(&image, out_w, out_h, tolerance, region, use_region, explicit_background)
+    subject_mask_from_image(
+        &image,
+        out_w,
+        out_h,
+        tolerance,
+        region,
+        use_region,
+        explicit_background,
+    )
 }
 
 /// [`subject_mask`] 的**不落盘那一半**（用例直接喂一张内存图，不必造临时文件）。
@@ -1194,8 +1308,6 @@ pub fn subject_mask_from_image(
     let background = used_background;
     let _ = foreground_ratio;
 
-
-
     // ③ 内部空洞：
     //
     // 这里有一条**必须记住的取舍**（用户 2026-09-26 指出的）：
@@ -1230,8 +1342,12 @@ pub fn subject_mask_from_image(
     if use_region {
         let x = (region[0] * out_w as f64).round().clamp(0.0, out_w as f64) as usize;
         let y = (region[1] * out_h as f64).round().clamp(0.0, out_h as f64) as usize;
-        let rw = (region[2] * out_w as f64).round().clamp(0.0, (out_w - x) as f64) as usize;
-        let rh = (region[3] * out_h as f64).round().clamp(0.0, (out_h - y) as f64) as usize;
+        let rw = (region[2] * out_w as f64)
+            .round()
+            .clamp(0.0, (out_w - x) as f64) as usize;
+        let rh = (region[3] * out_h as f64)
+            .round()
+            .clamp(0.0, (out_h - y) as f64) as usize;
         for py in 0..out_h {
             for px in 0..out_w {
                 if px < x || px >= x + rw || py < y || py >= y + rh {
@@ -1325,7 +1441,10 @@ fn dilate_box(mask: &[u8], w: usize, h: usize, radius: usize) -> Vec<u8> {
             }
         }
     }
-    anywhere.into_iter().map(|v| if v { 255 } else { 0 }).collect()
+    anywhere
+        .into_iter()
+        .map(|v| if v { 255 } else { 0 })
+        .collect()
 }
 
 /// 只保留最大的一块 4 邻接连通区（其余清零）。
@@ -1407,7 +1526,11 @@ fn resize_mask(src: &[u8], w: usize, h: usize, out_w: usize, out_h: usize) -> Ve
                     count += 1;
                 }
             }
-            out[oy * out_w + ox] = if count > 0 && sum * 2 >= count * 255 { 255 } else { 0 };
+            out[oy * out_w + ox] = if count > 0 && sum * 2 >= count * 255 {
+                255
+            } else {
+                0
+            };
         }
     }
     out
@@ -1442,18 +1565,31 @@ pub fn place_patch(
     let mut patch_mask = vec![0u8; bw * bh];
     for y in 0..bh {
         for x in 0..bw {
-            patch_img.put_pixel(x as u32, y as u32, *image.get_pixel((x0 + x) as u32, (y0 + y) as u32));
+            patch_img.put_pixel(
+                x as u32,
+                y as u32,
+                *image.get_pixel((x0 + x) as u32, (y0 + y) as u32),
+            );
             patch_mask[y * bw + x] = mask[(y0 + y) * w + x0 + x];
         }
     }
     // 缩放（图用三角滤波、遮罩用最近邻再二值化 —— 遮罩只该是 0/255）
-    let scaled_img = image::imageops::resize(&patch_img, tw as u32, th as u32, image::imageops::FilterType::Triangle);
+    let scaled_img = image::imageops::resize(
+        &patch_img,
+        tw as u32,
+        th as u32,
+        image::imageops::FilterType::Triangle,
+    );
     let mut scaled_mask = vec![0u8; tw * th];
     for y in 0..th {
         let sy = (y * bh / th).min(bh - 1);
         for x in 0..tw {
             let sx = (x * bw / tw).min(bw - 1);
-            scaled_mask[y * tw + x] = if patch_mask[sy * bw + sx] > 127 { 255 } else { 0 };
+            scaled_mask[y * tw + x] = if patch_mask[sy * bw + sx] > 127 {
+                255
+            } else {
+                0
+            };
         }
     }
 
@@ -1473,7 +1609,11 @@ pub fn place_patch(
             if dx < 0 || dx >= w as i64 {
                 continue;
             }
-            out_img.put_pixel(dx as u32, dy as u32, *scaled_img.get_pixel(x as u32, y as u32));
+            out_img.put_pixel(
+                dx as u32,
+                dy as u32,
+                *scaled_img.get_pixel(x as u32, y as u32),
+            );
             out_mask[dy as usize * w + dx as usize] = scaled_mask[y * tw + x];
         }
     }
@@ -1543,7 +1683,11 @@ pub fn matting_models(roots: &[std::path::PathBuf]) -> Value {
             continue;
         }
         let dir = root.join("models").join("rembg");
-        let files: Vec<&str> = FILES.iter().copied().filter(|name| dir.join(name).is_file()).collect();
+        let files: Vec<&str> = FILES
+            .iter()
+            .copied()
+            .filter(|name| dir.join(name).is_file())
+            .collect();
         if !files.is_empty() {
             usable = true;
         }
@@ -1598,8 +1742,12 @@ fn draw_mask(w: usize, h: usize, region: &[f64; 4], shape: &str) -> Vec<u8> {
     let mut pixels = vec![0u8; w * h];
     let x = (region[0] * w as f64).round().clamp(0.0, w as f64) as i64;
     let y = (region[1] * h as f64).round().clamp(0.0, h as f64) as i64;
-    let rw = (region[2] * w as f64).round().clamp(0.0, (w as i64 - x) as f64) as i64;
-    let rh = (region[3] * h as f64).round().clamp(0.0, (h as i64 - y) as f64) as i64;
+    let rw = (region[2] * w as f64)
+        .round()
+        .clamp(0.0, (w as i64 - x) as f64) as i64;
+    let rh = (region[3] * h as f64)
+        .round()
+        .clamp(0.0, (h as i64 - y) as f64) as i64;
     if rw <= 0 || rh <= 0 {
         return pixels;
     }
@@ -1671,11 +1819,26 @@ fn box_blur(src: &[u8], w: usize, h: usize, feather: i64) -> Vec<u8> {
 }
 
 /// 参数指纹（同一组参数 → 同一个文件名，重复调用不会在 input 目录里堆垃圾）。
-fn content_tag(w: i64, h: i64, region: &[f64; 4], shape: &str, invert: bool, feather: i64) -> String {
-    let region_joined = region.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(",");
+fn content_tag(
+    w: i64,
+    h: i64,
+    region: &[f64; 4],
+    shape: &str,
+    invert: bool,
+    feather: i64,
+) -> String {
+    let region_joined = region
+        .iter()
+        .map(|v| v.to_string())
+        .collect::<Vec<_>>()
+        .join(",");
     let text = format!("{w}|{h}|{region_joined}|{shape}|{invert}|{feather}");
     let digest = Sha256::digest(text.as_bytes());
-    digest.iter().take(6).map(|byte| format!("{byte:02x}")).collect()
+    digest
+        .iter()
+        .take(6)
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }
 
 /// 写 PNG（**8 位灰度**：ComfyUI 的 `LoadImageMask(channel="red")` 直接取第一个通道，
@@ -1714,7 +1877,9 @@ fn str_arg(args: &Value, field: &str) -> Option<String> {
 /// 整数参数：**数字与字符串都认**（模型经常把 `768` 写成 `"768"`）。
 fn int_arg(args: &Value, field: &str) -> Option<i64> {
     match args.get(field)? {
-        Value::Number(number) => number.as_i64().or_else(|| number.as_f64().map(|f| f as i64)),
+        Value::Number(number) => number
+            .as_i64()
+            .or_else(|| number.as_f64().map(|f| f as i64)),
         Value::String(text) => text.trim().parse::<i64>().ok(),
         _ => None,
     }
@@ -1748,15 +1913,29 @@ pub async fn tool_use_attachment(
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|text| !text.is_empty())
-        .ok_or_else(|| ToolFailure::new("INVALID_ARGUMENT", "缺少参数 attachmentId（见用户消息里的附件说明）"))?
+        .ok_or_else(|| {
+            ToolFailure::new(
+                "INVALID_ARGUMENT",
+                "缺少参数 attachmentId（见用户消息里的附件说明）",
+            )
+        })?
         .to_string();
     let wanted = str_arg(arguments, "filename");
     let target = target_input_dir(state).await?;
     let mut delivery = Delivery::for_input_dir(&target.dir);
-    let mut result = use_attachment(state, &attachment_id, wanted.as_deref(), &target.dir, &mut delivery)?;
+    let mut result = use_attachment(
+        state,
+        &attachment_id,
+        wanted.as_deref(),
+        &target.dir,
+        &mut delivery,
+    )?;
     apply_uploaded_names(&mut result, &delivery.flush(state).await?);
     annotate_target(&mut result, &target);
-    Ok(crate::tools::tools::ToolOutcome::new(result.to_string(), result))
+    Ok(crate::tools::tools::ToolOutcome::new(
+        result.to_string(),
+        result,
+    ))
 }
 
 /// `comfy_use_media` 的工具入口。
@@ -1766,15 +1945,28 @@ pub async fn tool_use_media(
     state: &AppState,
     arguments: &Value,
 ) -> Result<crate::tools::tools::ToolOutcome, ToolFailure> {
-    let media_id = int_arg(arguments, "mediaId")
-        .ok_or_else(|| ToolFailure::new("INVALID_ARGUMENT", "缺少参数 mediaId（画廊里的图片产物 id）"))?;
+    let media_id = int_arg(arguments, "mediaId").ok_or_else(|| {
+        ToolFailure::new(
+            "INVALID_ARGUMENT",
+            "缺少参数 mediaId（画廊里的图片产物 id）",
+        )
+    })?;
     let wanted = str_arg(arguments, "filename");
     let target = target_input_dir(state).await?;
     let mut delivery = Delivery::for_input_dir(&target.dir);
-    let mut result = use_media(state, media_id, wanted.as_deref(), &target.dir, &mut delivery)?;
+    let mut result = use_media(
+        state,
+        media_id,
+        wanted.as_deref(),
+        &target.dir,
+        &mut delivery,
+    )?;
     apply_uploaded_names(&mut result, &delivery.flush(state).await?);
     annotate_target(&mut result, &target);
-    Ok(crate::tools::tools::ToolOutcome::new(result.to_string(), result))
+    Ok(crate::tools::tools::ToolOutcome::new(
+        result.to_string(),
+        result,
+    ))
 }
 
 /// `comfy_make_mask` 的工具入口。
@@ -1790,7 +1982,10 @@ pub async fn tool_make_mask(
     let delivered = delivery.flush(state).await?;
     apply_uploaded_names(&mut result, &delivered);
     annotate_target(&mut result, &target);
-    Ok(crate::tools::tools::ToolOutcome::new(result.to_string(), result))
+    Ok(crate::tools::tools::ToolOutcome::new(
+        result.to_string(),
+        result,
+    ))
 }
 
 /// 把"这份目录是怎么定下来的"如实写进结果里。

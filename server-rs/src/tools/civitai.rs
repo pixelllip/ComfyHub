@@ -42,11 +42,11 @@ use std::time::Duration;
 
 use serde_json::{json, Map, Value};
 
-use crate::web::routes::AppState;
 use crate::tools::tools::{
     collapse_spaces, java_error_name, outbound_error_kind, str_arg, url_encode, OutboundError,
     ToolFailure, ToolOutcome,
 };
+use crate::web::routes::AppState;
 
 pub const SAFE_BASE_URL: &str = "https://civitai.com";
 pub const NSFW_BASE_URL: &str = "https://civitai.red";
@@ -81,8 +81,16 @@ pub const MAX_DESCRIPTION_CHARS: usize = 600;
 /// **线上大小写敏感**（实测：`LORA` 200，`lora` / `Lora` 400），所以这里的拼写就是官方拼写，
 /// [`CivitaiClient::search`] 会先把调用方给的值归一成它。这里每一个值都实测过 200。
 /// 顺序就是报错文案里列出来的顺序（Kotlin 那边是 `setOf` = 插入序）。
-pub const TYPES: [&str; 8] =
-    ["Checkpoint", "LORA", "TextualInversion", "Controlnet", "Upscaler", "VAE", "LoCon", "DoRA"];
+pub const TYPES: [&str; 8] = [
+    "Checkpoint",
+    "LORA",
+    "TextualInversion",
+    "Controlnet",
+    "Upscaler",
+    "VAE",
+    "LoCon",
+    "DoRA",
+];
 
 /// 一条 Civitai 模型 / LoRA（只留"用得上"的那几个字段）。
 #[derive(Debug, Clone)]
@@ -283,7 +291,11 @@ impl CivitaiClient {
         //   · 显式 `allowNsfw=true` 仍然必须（工具默认 ASK，用户点过头才走到这里）；
         //   · 配了令牌就带上（登录态更稳，也符合"模拟用户真机搜索"的本意）；
         //   · 没配也不拒绝，但**必须如实说明这次是匿名通道**（见 [`render`] 那行提示）。
-        let base = if allow_nsfw { &self.nsfw_base } else { &self.safe_base };
+        let base = if allow_nsfw {
+            &self.nsfw_base
+        } else {
+            &self.safe_base
+        };
         let mut url = String::new();
         url.push_str(base);
         url.push_str("/api/v1/models?");
@@ -308,12 +320,19 @@ impl CivitaiClient {
         let models: Vec<CivitaiModel> = body
             .get("items")
             .and_then(Value::as_array)
-            .map(|items| items.iter().filter_map(|item| item.as_object().and_then(to_model)).collect())
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(|item| item.as_object().and_then(to_model))
+                    .collect()
+            })
             .unwrap_or_default();
 
         let tokenless = self.token.is_none();
         let context = render(&models, q, allow_nsfw, tokenless);
-        let host = reqwest::Url::parse(base).ok().and_then(|u| u.host_str().map(str::to_string));
+        let host = reqwest::Url::parse(base)
+            .ok()
+            .and_then(|u| u.host_str().map(str::to_string));
         let meta = json!({
             "count": models.len(),
             "query": q,
@@ -321,7 +340,12 @@ impl CivitaiClient {
             "host": host.unwrap_or_default(),
             "tokenless": tokenless,
         });
-        Ok(CivitaiOutcome { query: q.to_string(), models, context, meta })
+        Ok(CivitaiOutcome {
+            query: q.to_string(),
+            models,
+            context,
+            meta,
+        })
     }
 
     // -----------------------------------------------------------------------
@@ -350,33 +374,36 @@ impl CivitaiClient {
             request = request.header("Authorization", format!("Bearer {token}"));
         }
 
-        let response = request.send().await.map_err(|e| match outbound_error_kind(&e) {
-            OutboundError::ConnectTimeout => ToolFailure::new(
-                "CIVITAI_TIMEOUT",
-                format!(
-                    "连不上 Civitai：{host} 在 {CONNECT_TIMEOUT_SECONDS} 秒内没连上。\
+        let response = request
+            .send()
+            .await
+            .map_err(|e| match outbound_error_kind(&e) {
+                OutboundError::ConnectTimeout => ToolFailure::new(
+                    "CIVITAI_TIMEOUT",
+                    format!(
+                        "连不上 Civitai：{host} 在 {CONNECT_TIMEOUT_SECONDS} 秒内没连上。\
                      本次出网路径是「{route}」。\
                      如果本机需要代理才能访问 civitai.com，请确认系统代理可用（或设环境变量 {}，\
                      写 direct 表示强制直连）；**不要**反复重试同一个查询，\
                      如实告诉用户「本机连不上 Civitai」。",
-                    crate::infra::outbound::ENV_PROXY
+                        crate::infra::outbound::ENV_PROXY
+                    ),
                 ),
-            ),
-            OutboundError::ReadTimeout => ToolFailure::new(
-                "CIVITAI_TIMEOUT",
-                format!(
+                OutboundError::ReadTimeout => ToolFailure::new(
+                    "CIVITAI_TIMEOUT",
+                    format!(
                     "搜 Civitai 超时（连上了但 {} 秒没回完），稍后再试；本次出网路径是「{route}」",
                     self.timeout.as_secs()
                 ),
-            ),
-            OutboundError::Other => ToolFailure::new(
-                "CIVITAI_FAILED",
-                format!(
-                    "连不上 Civitai（{}）；本机需要能访问 {host}（本次出网路径：{route}）",
-                    java_error_name(&e)
                 ),
-            ),
-        })?;
+                OutboundError::Other => ToolFailure::new(
+                    "CIVITAI_FAILED",
+                    format!(
+                        "连不上 Civitai（{}）；本机需要能访问 {host}（本次出网路径：{route}）",
+                        java_error_name(&e)
+                    ),
+                ),
+            })?;
 
         let status = response.status().as_u16();
         let text = response.text().await.unwrap_or_default();
@@ -396,7 +423,10 @@ impl CivitaiClient {
 
         match serde_json::from_str::<Value>(&text) {
             Ok(Value::Object(obj)) => Ok(obj),
-            _ => Err(ToolFailure::new("CIVITAI_FAILED", "Civitai 返回了无法解析的内容")),
+            _ => Err(ToolFailure::new(
+                "CIVITAI_FAILED",
+                "Civitai 返回了无法解析的内容",
+            )),
         }
     }
 
@@ -410,8 +440,9 @@ impl CivitaiClient {
             .redirect(reqwest::redirect::Policy::none());
         match crate::infra::outbound::route(host) {
             crate::infra::outbound::Route::Proxy(addr) => {
-                let proxy = reqwest::Proxy::all(format!("http://{addr}"))
-                    .map_err(|e| ToolFailure::new("CIVITAI_FAILED", format!("代理地址不合法：{e}")))?;
+                let proxy = reqwest::Proxy::all(format!("http://{addr}")).map_err(|e| {
+                    ToolFailure::new("CIVITAI_FAILED", format!("代理地址不合法：{e}"))
+                })?;
                 builder = builder.proxy(proxy);
             }
             crate::infra::outbound::Route::Direct => {
@@ -487,7 +518,12 @@ fn to_model(obj: &Map<String, Value>) -> Option<CivitaiModel> {
     let trained_words: Vec<String> = first_version
         .and_then(|v| v.get("trainedWords"))
         .and_then(Value::as_array)
-        .map(|words| words.iter().filter_map(|w| w.as_str().map(str::to_string)).collect())
+        .map(|words| {
+            words
+                .iter()
+                .filter_map(|w| w.as_str().map(str::to_string))
+                .collect()
+        })
         .unwrap_or_default();
 
     // 体积与下载地址：线上 `modelVersions[0].files[]` 里 `primary=true` 那条就是主文件，
@@ -512,7 +548,11 @@ fn to_model(obj: &Map<String, Value>) -> Option<CivitaiModel> {
         .filter(|v| v.is_finite());
     // sha256：线上形如 `files[primary].hashes = {"SHA256":"<64位>","AutoV2":"…"}`。
     // 只在 `hashes` 里找 SHA256 —— 别把 `AutoV2` 当成 sha256 报出去。
-    let sha256 = primary_sha256(primary.and_then(|f| f.get("hashes")).and_then(Value::as_object));
+    let sha256 = primary_sha256(
+        primary
+            .and_then(|f| f.get("hashes"))
+            .and_then(Value::as_object),
+    );
     let stats = obj.get("stats").and_then(Value::as_object);
     Some(CivitaiModel {
         id,
@@ -524,8 +564,12 @@ fn to_model(obj: &Map<String, Value>) -> Option<CivitaiModel> {
             .get("creator")
             .and_then(Value::as_object)
             .and_then(|creator| str_field(creator, "username")),
-        downloads: stats.and_then(|s| int_field(s, "downloadCount")).unwrap_or(0),
-        thumbs_up: stats.and_then(|s| int_field(s, "thumbsUpCount")).unwrap_or(0),
+        downloads: stats
+            .and_then(|s| int_field(s, "downloadCount"))
+            .unwrap_or(0),
+        thumbs_up: stats
+            .and_then(|s| int_field(s, "thumbsUpCount"))
+            .unwrap_or(0),
         // 链接给**正式站**，不是本次请求用的 base：base 可以被环境变量指到本机假服务 /
         // 自建代理（测试就是这么用的），把那种地址写进给用户的链接是错的
         page_url: format!("{SAFE_BASE_URL}/models/{id}"),
@@ -643,7 +687,11 @@ fn render(models: &[CivitaiModel], query: &str, nsfw: bool, tokenless: bool) -> 
             let mut out = format!("[{}] {}", index + 1, m.name);
             out.push_str(&format!(
                 "（{}",
-                if m.r#type.trim().is_empty() { "未知类型" } else { &m.r#type }
+                if m.r#type.trim().is_empty() {
+                    "未知类型"
+                } else {
+                    &m.r#type
+                }
             ));
             if !m.base_model.trim().is_empty() {
                 out.push_str(&format!(" · 底模 {}", m.base_model));
@@ -655,7 +703,11 @@ fn render(models: &[CivitaiModel], query: &str, nsfw: bool, tokenless: bool) -> 
             out.push('\n');
             out.push_str(&format!(
                 "用途：{}",
-                if m.description.trim().is_empty() { "（作者没写简介）" } else { &m.description }
+                if m.description.trim().is_empty() {
+                    "（作者没写简介）"
+                } else {
+                    &m.description
+                }
             ));
             out.push('\n');
             if !m.trained_words.is_empty() {
@@ -696,8 +748,9 @@ pub async fn tool_search(state: &AppState, arguments: &Value) -> Result<ToolOutc
             ));
         }
     }
-    let type_filter =
-        raw_type.as_deref().and_then(|raw| TYPES.iter().find(|t| t.eq_ignore_ascii_case(raw)).copied());
+    let type_filter = raw_type
+        .as_deref()
+        .and_then(|raw| TYPES.iter().find(|t| t.eq_ignore_ascii_case(raw)).copied());
 
     let client = CivitaiClient::from_env(state)?;
     let outcome = client

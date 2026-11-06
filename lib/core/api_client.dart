@@ -247,8 +247,11 @@ class ApiClient {
   /// 415 / 400 拒掉（`createBackup` 那条没有 body 提取器，才能传 null）。
   Future<OrphanScan> scanOrphans() async => OrphanScan.fromJson(
     Map<String, dynamic>.from(
-      await _send('POST', '/api/system/storage/orphans', const <String, dynamic>{})
-          as Map,
+      await _send(
+        'POST',
+        '/api/system/storage/orphans',
+        const <String, dynamic>{},
+      ) as Map,
     ),
   );
 

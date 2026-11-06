@@ -33,7 +33,10 @@ fn 大图缩到_1024_长边且正文写明原始分辨率() {
     let batch = plan(&result, true, &mut budget, &mut already).expect("能看图就该附上");
     assert_eq!(batch.images.len(), 1);
     assert_eq!(batch.images[0].mime_type, "image/jpeg");
-    assert!(batch.images[0].base64.starts_with("/9j/"), "base64 应该是一张 JPEG");
+    assert!(
+        batch.images[0].base64.starts_with("/9j/"),
+        "base64 应该是一张 JPEG"
+    );
     assert!(batch.text.contains("原图 1600×900"), "{}", batch.text);
     assert!(batch.text.contains("1024×576"), "{}", batch.text);
     assert!(batch.text.contains("等比缩图"), "{}", batch.text);
@@ -91,27 +94,46 @@ fn 每批最多四张_每轮最多六张() {
     let mut entries: Vec<Value> = Vec::new();
     for index in 0..5 {
         let path = write_png(&root, &format!("r{index}.png"), 80, 60);
-        entries.push(entry(&index.to_string(), &format!("r{index}.png"), &path, true));
+        entries.push(entry(
+            &index.to_string(),
+            &format!("r{index}.png"),
+            &path,
+            true,
+        ));
     }
     let result = refs(entries);
     let mut budget = Budget::default();
     let mut already = HashSet::new();
     let first = plan(&result, true, &mut budget, &mut already).unwrap();
-    assert_eq!(first.images.len(), MAX_PER_RESULT, "单次结果最多 {MAX_PER_RESULT} 张");
+    assert_eq!(
+        first.images.len(),
+        MAX_PER_RESULT,
+        "单次结果最多 {MAX_PER_RESULT} 张"
+    );
     assert_eq!(budget.attached(), MAX_PER_RESULT);
 
     // 换一批新图：这次 Run 的总额度只剩两张
     let mut more: Vec<Value> = Vec::new();
     for index in 5..9 {
         let path = write_png(&root, &format!("r{index}.png"), 80, 60);
-        more.push(entry(&index.to_string(), &format!("r{index}.png"), &path, true));
+        more.push(entry(
+            &index.to_string(),
+            &format!("r{index}.png"),
+            &path,
+            true,
+        ));
     }
     let second = plan(&refs(more), true, &mut budget, &mut already).unwrap();
     assert_eq!(second.images.len(), MAX_PER_RUN - MAX_PER_RESULT);
     assert_eq!(budget.attached(), MAX_PER_RUN);
     // 到顶之后一张都不给
     let third = write_png(&root, "last.png", 80, 60);
-    assert!(plan(&refs(vec![entry("99", "last.png", &third, true)]), true, &mut budget, &mut already)
-        .is_none());
+    assert!(plan(
+        &refs(vec![entry("99", "last.png", &third, true)]),
+        true,
+        &mut budget,
+        &mut already
+    )
+    .is_none());
     testpaths::cleanup(&root);
 }

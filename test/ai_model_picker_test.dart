@@ -23,63 +23,70 @@ import 'package:viewer/core/settings_store.dart';
 import 'package:viewer/pages/ai_home_page.dart';
 import 'package:viewer/state/ai_workspace_store.dart';
 
-Map<String, dynamic> _provider(String id, String name, {bool credential = true}) => {
-      'id': id,
-      'displayName': name,
-      'api': 'openai-completions',
-      'baseURL': 'https://api.$id.example/v1',
-      'credentialRef': '${id.toUpperCase()}_KEY',
-      'endpointTrust': 'public',
-      'enabled': true,
-      'revision': 1,
-      'credential': {
-        'configured': credential,
-        'source': credential ? 'managed' : 'none',
-        'writable': true,
-      },
-    };
+Map<String, dynamic> _provider(
+  String id,
+  String name, {
+  bool credential = true,
+}) => {
+  'id': id,
+  'displayName': name,
+  'api': 'openai-completions',
+  'baseURL': 'https://api.$id.example/v1',
+  'credentialRef': '${id.toUpperCase()}_KEY',
+  'endpointTrust': 'public',
+  'enabled': true,
+  'revision': 1,
+  'credential': {
+    'configured': credential,
+    'source': credential ? 'managed' : 'none',
+    'writable': true,
+  },
+};
 
 Map<String, dynamic> _model(String providerId, String id, String name) => {
-      'providerId': providerId,
-      'id': id,
-      'displayName': name,
-      'inputModalities': ['text'],
-      'tools': false,
-      'capabilitySource': 'manual',
-      'enabled': true,
-    };
+  'providerId': providerId,
+  'id': id,
+  'displayName': name,
+  'inputModalities': ['text'],
+  'tools': false,
+  'capabilitySource': 'manual',
+  'enabled': true,
+};
 
 /// 两条 Provider，各有一个模型；「DeepSeek」那把 key 还没配。
 MockClient _backend() => MockClient((request) async {
-      final path = request.url.path;
-      Object body;
-      if (path == '/api/ai/providers') {
-        body = [
-          _provider('deepseek', 'DeepSeek', credential: false),
-          _provider('local-gw', '本机网关'),
-        ];
-      } else if (path == '/api/ai/providers/deepseek/models') {
-        body = [_model('deepseek', 'deepseek-chat', 'DeepSeek Chat')];
-      } else if (path == '/api/ai/providers/local-gw/models') {
-        body = [_model('local-gw', 'qwen3', 'Qwen3')];
-      } else if (path == '/api/ai/conversations' && request.method == 'POST') {
-        // 冷启动会顺手建一条空会话（`_startFreshConversation`）；回的必须是**一个对象**，
-        // 回 `[]` 会让 `load()` 整个失败，页面停在"连接后端失败"。
-        body = {
-          'id': 'c1',
-          'title': '新对话',
-          'providerId': 'deepseek',
-          'modelId': 'deepseek-chat',
-          'messageCount': 0,
-        };
-      } else if (path == '/api/ai/conversations') {
-        body = <Object>[];
-      } else {
-        body = <Object>[];
-      }
-      return http.Response(jsonEncode(body), 200,
-          headers: {'content-type': 'application/json; charset=utf-8'});
-    });
+  final path = request.url.path;
+  Object body;
+  if (path == '/api/ai/providers') {
+    body = [
+      _provider('deepseek', 'DeepSeek', credential: false),
+      _provider('local-gw', '本机网关'),
+    ];
+  } else if (path == '/api/ai/providers/deepseek/models') {
+    body = [_model('deepseek', 'deepseek-chat', 'DeepSeek Chat')];
+  } else if (path == '/api/ai/providers/local-gw/models') {
+    body = [_model('local-gw', 'qwen3', 'Qwen3')];
+  } else if (path == '/api/ai/conversations' && request.method == 'POST') {
+    // 冷启动会顺手建一条空会话（`_startFreshConversation`）；回的必须是**一个对象**，
+    // 回 `[]` 会让 `load()` 整个失败，页面停在"连接后端失败"。
+    body = {
+      'id': 'c1',
+      'title': '新对话',
+      'providerId': 'deepseek',
+      'modelId': 'deepseek-chat',
+      'messageCount': 0,
+    };
+  } else if (path == '/api/ai/conversations') {
+    body = <Object>[];
+  } else {
+    body = <Object>[];
+  }
+  return http.Response(
+    jsonEncode(body),
+    200,
+    headers: {'content-type': 'application/json; charset=utf-8'},
+  );
+});
 
 Future<AiWorkspaceStore> _pump(WidgetTester tester) async {
   tester.view.physicalSize = const Size(1400, 1000);
@@ -92,13 +99,15 @@ Future<AiWorkspaceStore> _pump(WidgetTester tester) async {
   final store = AiWorkspaceStore(
     api: AiApiClient(settings.baseUrl, client: _backend()),
   );
-  await tester.pumpWidget(MultiProvider(
-    providers: [
-      ChangeNotifierProvider<SettingsStore>.value(value: settings),
-      ChangeNotifierProvider<AiWorkspaceStore>.value(value: store),
-    ],
-    child: const MaterialApp(home: AiHomePage()),
-  ));
+  await tester.pumpWidget(
+    MultiProvider(
+      providers: [
+        ChangeNotifierProvider<SettingsStore>.value(value: settings),
+        ChangeNotifierProvider<AiWorkspaceStore>.value(value: store),
+      ],
+      child: const MaterialApp(home: AiHomePage()),
+    ),
+  );
   await tester.pumpAndSettle();
   return store;
 }
@@ -123,12 +132,18 @@ void main() {
 
     // 布局的硬要求：**模型在 padding 里面，来源那一行在 padding 外面**
     expect(
-      find.ancestor(of: find.text('DeepSeek Chat'), matching: find.byType(SliverPadding)),
+      find.ancestor(
+        of: find.text('DeepSeek Chat'),
+        matching: find.byType(SliverPadding),
+      ),
       findsWidgets,
       reason: '模型行必须套在同一个 padding 里（用户原话）',
     );
     expect(
-      find.ancestor(of: find.text('来自 DeepSeek'), matching: find.byType(SliverPadding)),
+      find.ancestor(
+        of: find.text('来自 DeepSeek'),
+        matching: find.byType(SliverPadding),
+      ),
       findsNothing,
       reason: '来源标注必须在 padding 外面（用户原话）',
     );
@@ -140,16 +155,22 @@ void main() {
 
   testWidgets('点另一条 Provider 的模型 = 真的把 Provider 也切过去', (tester) async {
     final store = await _pump(tester);
-    expect(store.selectedProvider?.id, 'deepseek',
-        reason: '按显示名排序，DeepSeek 是第一条');
+    expect(
+      store.selectedProvider?.id,
+      'deepseek',
+      reason: '按显示名排序，DeepSeek 是第一条',
+    );
 
     await tester.tap(find.text('DeepSeek Chat').first);
     await tester.pumpAndSettle();
     await tester.tap(find.text('Qwen3'));
     await tester.pumpAndSettle();
 
-    expect(store.selectedProvider?.id, 'local-gw',
-        reason: '选谁家的模型就用谁家的 Provider（用户 bug：新加入的 provider 选不上）');
+    expect(
+      store.selectedProvider?.id,
+      'local-gw',
+      reason: '选谁家的模型就用谁家的 Provider（用户 bug：新加入的 provider 选不上）',
+    );
     expect(store.selectedModel?.id, 'qwen3');
 
     // 反方向也验一次：换回另一条
@@ -175,11 +196,21 @@ void main() {
     expect(find.text('来自 本机网关'), findsOneWidget);
     expect(find.text('Qwen3'), findsOneWidget);
     // 圈在对话框里找：右侧栏「模型能力」那张卡也写着当前模型的名字
-    expect(find.descendant(of: find.byType(Dialog), matching: find.text('来自 DeepSeek')),
-        findsNothing,
-        reason: '一条都搜不到的组不许留一个空标题占屏');
-    expect(find.descendant(of: find.byType(Dialog), matching: find.text('DeepSeek Chat')),
-        findsNothing);
+    expect(
+      find.descendant(
+        of: find.byType(Dialog),
+        matching: find.text('来自 DeepSeek'),
+      ),
+      findsNothing,
+      reason: '一条都搜不到的组不许留一个空标题占屏',
+    );
+    expect(
+      find.descendant(
+        of: find.byType(Dialog),
+        matching: find.text('DeepSeek Chat'),
+      ),
+      findsNothing,
+    );
   });
 
   testWidgets('一条 Provider 也没有时，说清楚去哪儿建', (tester) async {
@@ -191,24 +222,37 @@ void main() {
     final settings = SettingsStore();
     await settings.load();
     final store = AiWorkspaceStore(
-      api: AiApiClient(settings.baseUrl, client: MockClient((request) async {
-            return http.Response(jsonEncode(<Object>[]), 200,
-                headers: {'content-type': 'application/json; charset=utf-8'});
-          })),
+      api: AiApiClient(
+        settings.baseUrl,
+        client: MockClient((request) async {
+          return http.Response(
+            jsonEncode(<Object>[]),
+            200,
+            headers: {'content-type': 'application/json; charset=utf-8'},
+          );
+        }),
+      ),
     );
-    await tester.pumpWidget(MultiProvider(
-      providers: [
-        ChangeNotifierProvider<SettingsStore>.value(value: settings),
-        ChangeNotifierProvider<AiWorkspaceStore>.value(value: store),
-      ],
-      child: const MaterialApp(home: AiHomePage()),
-    ));
+    await tester.pumpWidget(
+      MultiProvider(
+        providers: [
+          ChangeNotifierProvider<SettingsStore>.value(value: settings),
+          ChangeNotifierProvider<AiWorkspaceStore>.value(value: store),
+        ],
+        child: const MaterialApp(home: AiHomePage()),
+      ),
+    );
     await tester.pumpAndSettle();
 
     // 没有 Provider 时输入区那一条就是入口（`_ModelPicker` 的按钮；宽屏与右侧栏各有一个）
     await tester.tap(find.text('未选择模型').first);
     await tester.pumpAndSettle();
-    expect(find.descendant(of: find.byType(Dialog), matching: find.textContaining('还没有配置 Provider')),
-        findsOneWidget);
+    expect(
+      find.descendant(
+        of: find.byType(Dialog),
+        matching: find.textContaining('还没有配置 Provider'),
+      ),
+      findsOneWidget,
+    );
   });
 }

@@ -23,10 +23,10 @@
 
 use rusqlite::{params, OptionalExtension};
 
-use crate::web::inputs::MediaUpdate;
-use crate::media::media;
-use crate::web::models::MediaDto;
 use crate::library::repo::{self, WriteError};
+use crate::media::media;
+use crate::web::inputs::MediaUpdate;
+use crate::web::models::MediaDto;
 use crate::web::routes::{ApiError, AppState};
 
 /// 改标题 / 关联 / 收藏 / 备注 / NSFW 标记。
@@ -35,14 +35,18 @@ pub fn update(state: &AppState, id: i64, input: &MediaUpdate) -> Result<MediaDto
     if let Some(prompt_id) = input.prompt_id.filter(|_| !input.clear_prompt) {
         let exists = state.with(|conn| {
             Ok(conn
-                .query_row("SELECT id FROM prompts WHERE id = ?1", params![prompt_id], |row| {
-                    row.get::<_, i64>(0)
-                })
+                .query_row(
+                    "SELECT id FROM prompts WHERE id = ?1",
+                    params![prompt_id],
+                    |row| row.get::<_, i64>(0),
+                )
                 .optional()?
                 .is_some())
         })?;
         if !exists {
-            return Err(ApiError::bad_request(format!("promptId={prompt_id} 对应的提示词不存在")));
+            return Err(ApiError::bad_request(format!(
+                "promptId={prompt_id} 对应的提示词不存在"
+            )));
         }
     }
 
@@ -94,28 +98,33 @@ pub fn update(state: &AppState, id: i64, input: &MediaUpdate) -> Result<MediaDto
             return Ok(collection_touched);
         }
         args.push(Box::new(id));
-        let sql = format!("UPDATE media_assets SET {} WHERE id = ?{}", sets.join(", "), args.len());
+        let sql = format!(
+            "UPDATE media_assets SET {} WHERE id = ?{}",
+            sets.join(", "),
+            args.len()
+        );
         let refs: Vec<&dyn rusqlite::ToSql> = args.iter().map(|a| a.as_ref()).collect();
         Ok(tx.execute(&sql, refs.as_slice())? > 0)
     })?;
 
     if !ok {
-        return Err(ApiError::not_found(format!("产物 {id} 不存在或无字段需要更新")));
+        return Err(ApiError::not_found(format!(
+            "产物 {id} 不存在或无字段需要更新"
+        )));
     }
     media::get(state, id)
 }
 
 /// 删产物：先删库（走事务），再删原件 / 缩略图 / 封面。
 pub fn delete(state: &AppState, id: i64) -> Result<(), ApiError> {
-    let Some(existing) = state
-        .with(|conn| {
-            conn.query_row(
-                "SELECT stored_name FROM media_assets WHERE id = ?1",
-                params![id],
-                |row| row.get::<_, String>(0),
-            )
-            .optional()
-        })?
+    let Some(existing) = state.with(|conn| {
+        conn.query_row(
+            "SELECT stored_name FROM media_assets WHERE id = ?1",
+            params![id],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+    })?
     else {
         return Err(ApiError::not_found(format!("产物 {id} 不存在")));
     };

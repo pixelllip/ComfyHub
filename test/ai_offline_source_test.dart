@@ -83,18 +83,23 @@ class _FakeLocalSource implements RunEventSource {
   final List<String?> pulledTokens = [];
 
   @override
-  Future<({bool ok, String mode, int applied, int cursor, String? error})> pullChanges({
-    String? baseUrl,
-    String? token,
-  }) async {
+  Future<({bool ok, String mode, int applied, int cursor, String? error})>
+  pullChanges({String? baseUrl, String? token}) async {
     calls.add('pullChanges');
     pulledBaseUrls.add(baseUrl);
     pulledTokens.add(token);
-    return (ok: pullOk, mode: pullMode, applied: pullApplied, cursor: pullCursor, error: pullError);
+    return (
+      ok: pullOk,
+      mode: pullMode,
+      applied: pullApplied,
+      cursor: pullCursor,
+      error: pullError,
+    );
   }
 
   /// 每次 `ensureRunKit` 带上来的配对令牌。
-  final List<String?> kitTokens = [];  @override
+  final List<String?> kitTokens = [];
+  @override
   Future<({bool ok, String? kitVersion, String? reason})> ensureRunKit({
     String? baseUrl,
     String? token,
@@ -216,39 +221,48 @@ class _FakeLocalSource implements RunEventSource {
   Future<void> cancelRun(String runId) async => calls.add('cancelRun');
 
   @override
-  Stream<AiRunEvent> events(String runId, {int after = 0}) => Stream.fromIterable(const [
+  Stream<AiRunEvent> events(String runId, {int after = 0}) =>
+      Stream.fromIterable(const [
         AiRunEvent('run.completed', {'runId': 'local-run-1'}),
       ]);
 
   @override
-  Future<bool> answerQuestion(String questionId, String? answer, {int? optionIndex}) async {
+  Future<bool> answerQuestion(
+    String questionId,
+    String? answer, {
+    int? optionIndex,
+  }) async {
     calls.add('answerQuestion');
     return true;
   }
 }
 
 AiProvider _provider() => const AiProvider(
-      id: 'p1',
-      displayName: '本机网关',
-      api: 'openai-completions',
-      baseURL: 'http://127.0.0.1:11434/v1',
-      credentialRef: 'PHONE_KEY',
-      endpointTrust: 'loopback',
-      enabled: true,
-      revision: 1,
-      credential: AiCredentialStatus(configured: true, source: 'keystore', writable: true),
-    );
+  id: 'p1',
+  displayName: '本机网关',
+  api: 'openai-completions',
+  baseURL: 'http://127.0.0.1:11434/v1',
+  credentialRef: 'PHONE_KEY',
+  endpointTrust: 'loopback',
+  enabled: true,
+  revision: 1,
+  credential: AiCredentialStatus(
+    configured: true,
+    source: 'keystore',
+    writable: true,
+  ),
+);
 
 AiModel _model() => const AiModel(
-      providerId: 'p1',
-      id: 'm-text',
-      displayName: '纯文本模型',
-      inputModalities: ['text'],
-      tools: true,
-      reasoning: false,
-      capabilitySource: 'manual',
-      enabled: true,
-    );
+  providerId: 'p1',
+  id: 'm-text',
+  displayName: '纯文本模型',
+  inputModalities: ['text'],
+  tools: true,
+  reasoning: false,
+  capabilitySource: 'manual',
+  enabled: true,
+);
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -264,8 +278,14 @@ void main() {
     final api = AiApiClient('http://127.0.0.1:8080');
     // `forceLocal` 就是 Android 那条分支的开关（测试进程里 Platform.isAndroid 恒为 false，
     // 所以用显式参数走同一条代码路径）
-    expect(openRunEventSource(api: api, forceLocal: true), isA<LocalHarnessRunEventSource>());
-    expect(openRunEventSource(api: api, forceLocal: false), isA<RemoteRunEventSource>());
+    expect(
+      openRunEventSource(api: api, forceLocal: true),
+      isA<LocalHarnessRunEventSource>(),
+    );
+    expect(
+      openRunEventSource(api: api, forceLocal: false),
+      isA<RemoteRunEventSource>(),
+    );
     // 传了假通道：证明它真的不去碰真通道（构造不抛异常即算过）
     final local = openRunEventSource(
       api: api,
@@ -352,11 +372,14 @@ void main() {
 
   test('切会话时从本地库拉消息（不是远端 HTTP）', () async {
     final source = _FakeLocalSource();
-    final store = AiWorkspaceStore(
-      api: AiApiClient('http://127.0.0.1:8080'),
-      source: source,
-    )
-      ..conversations = const [AiConversation(id: 'local-conv-1', title: '离线时起的会话')];
+    final store =
+        AiWorkspaceStore(
+            api: AiApiClient('http://127.0.0.1:8080'),
+            source: source,
+          )
+          ..conversations = const [
+            AiConversation(id: 'local-conv-1', title: '离线时起的会话'),
+          ];
 
     await store.openConversation('local-conv-1');
 
@@ -366,13 +389,14 @@ void main() {
 
   test('事件源没回传助手消息 id 时当场失败（不许悄悄兜一个本地 id）', () async {
     final source = _BrokenSource();
-    final store = AiWorkspaceStore(
-      api: AiApiClient('http://127.0.0.1:8080'),
-      source: source,
-    )
-      ..providers = [_provider()]
-      ..selectedProvider = _provider()
-      ..selectedModel = _model();
+    final store =
+        AiWorkspaceStore(
+            api: AiApiClient('http://127.0.0.1:8080'),
+            source: source,
+          )
+          ..providers = [_provider()]
+          ..selectedProvider = _provider()
+          ..selectedModel = _model();
 
     await store.send('画一只猫');
 
@@ -386,7 +410,9 @@ void main() {
 
   test('手机：清单来自**本机库**，"有没有 key"以本机密钥库为准（不借桌面那一份）', () async {
     // 本机库里那条 provider：桥回的 DTO 里**没有** `credential` 键
-    mockPairingChannel(providers: [localProviderJson(credentialRef: 'PHONE_KEY')]);
+    mockPairingChannel(
+      providers: [localProviderJson(credentialRef: 'PHONE_KEY')],
+    );
     final hits = <String>[];
     final store = AiWorkspaceStore(
       api: offlineApiWith(hits),
@@ -401,7 +427,11 @@ void main() {
     expect(store.providers.first.credential.source, 'none');
     expect(store.providers.first.credential.configured, isFalse);
     expect(store.providers.first.credential.label, '未配置');
-    expect(store.providers.first.credentialRef, 'PHONE_KEY', reason: '引用名来自本机库那一行');
+    expect(
+      store.providers.first.credentialRef,
+      'PHONE_KEY',
+      reason: '引用名来自本机库那一行',
+    );
     expect(
       hits.where((h) => h.contains('/api/ai/providers')),
       isEmpty,
@@ -430,7 +460,11 @@ void main() {
     await store.load();
 
     expect(store.providers, isEmpty);
-    expect(store.error, contains('还没有配置任何 Provider'), reason: '要如实说，而不是让用户对着空选择器猜');
+    expect(
+      store.error,
+      contains('还没有配置任何 Provider'),
+      reason: '要如实说，而不是让用户对着空选择器猜',
+    );
     expect(store.error, contains('不会自动合并'), reason: '顺带说清手机与桌面是两份清单');
     expect(store.error, contains('AI 模型与凭据'), reason: '要说清去哪儿建');
   });
@@ -462,7 +496,8 @@ void main() {
     expect(prefs.getString('comfyhub.ai.cachedModels.p1'), isNull);
   });
 
-  test('手机：没有规则工件（run-kit）时**不许开跑**，而且要说清为什么', () async {    final source = _FakeLocalSource()..hasKit = false;
+  test('手机：没有规则工件（run-kit）时**不许开跑**，而且要说清为什么', () async {
+    final source = _FakeLocalSource()..hasKit = false;
     final store = AiWorkspaceStore(
       api: _okApi(),
       source: source,
@@ -494,7 +529,9 @@ void main() {
     expect(source.calls, contains('recoverUnfinishedRuns'));
     expect(store.recoveredRuns, 1);
     // 顺序：收尾必须在拉会话**之前**（否则界面上先出现一个永远转圈的幽灵气泡）
-    final order = source.calls.where((c) => c == 'recoverUnfinishedRuns' || c == 'listConversations');
+    final order = source.calls.where(
+      (c) => c == 'recoverUnfinishedRuns' || c == 'listConversations',
+    );
     expect(order.first, 'recoverUnfinishedRuns');
   });
 
@@ -525,7 +562,10 @@ void main() {
 
     // 列表按更新时间倒序：只留最新那条，其余两条清掉
     expect(store.conversation?.id, 'local-conv-1');
-    expect(source.deleted, ['local-old', 'local-older'], reason: '空壳要在**本地库**里删掉');
+    expect(source.deleted, [
+      'local-old',
+      'local-older',
+    ], reason: '空壳要在**本地库**里删掉');
     expect(
       remoteCalls.where((c) => c.startsWith('DELETE /api/ai/conversations/')),
       isEmpty,
@@ -535,7 +575,9 @@ void main() {
 
   test('手机：空壳删完之后，列表与本地库里都不该再有它', () async {
     final source = _FakeLocalSource()
-      ..conversations.addAll(const [AiConversation(id: 'local-old', title: '新对话')]);
+      ..conversations.addAll(const [
+        AiConversation(id: 'local-old', title: '新对话'),
+      ]);
     final store = AiWorkspaceStore(
       api: _okApi(),
       source: source,
@@ -587,7 +629,10 @@ void main() {
       contains('DELETE /api/ai/conversations/local-conv-1'),
       reason: '远端仍然要调：桌面是唯一真源，桌面那份也该删（这不是上行 op，R3 不变）',
     );
-    expect(store.conversations.map((c) => c.id), isNot(contains('local-conv-1')));
+    expect(
+      store.conversations.map((c) => c.id),
+      isNot(contains('local-conv-1')),
+    );
     expect(store.conversation?.id, isNot('local-conv-1'));
     expect(
       store.error,
@@ -609,7 +654,11 @@ void main() {
     await store.load();
     await store.deleteConversation('local-conv-1');
 
-    expect(store.conversations.map((c) => c.id), contains('local-conv-1'), reason: '本机还在，列表就不许少它');
+    expect(
+      store.conversations.map((c) => c.id),
+      contains('local-conv-1'),
+      reason: '本机还在，列表就不许少它',
+    );
     expect(store.error, contains('本机没删掉'));
   });
 
@@ -688,7 +737,8 @@ void main() {
         return http.Response('{}', 200);
       }),
     );
-    final r = await RemoteRunEventSource(api).pullChanges(baseUrl: 'http://10.0.0.5:8081', token: 'tok');
+    final r = await RemoteRunEventSource(api)
+        .pullChanges(baseUrl: 'http://10.0.0.5:8081', token: 'tok');
 
     expect(r.ok, isTrue);
     expect(r.mode, 'up_to_date');
@@ -782,7 +832,8 @@ void main() {
     );
   });
 
-  testWidgets('回到前台：推那一路没待办就不打，拉那一路照常来一次（两条纪律各归各）', (tester) async {    mockPairingChannel(); // 见 [mockPairingChannel]：fakeAsync 里没人应答的通道会挂死
+  testWidgets('回到前台：推那一路没待办就不打，拉那一路照常来一次（两条纪律各归各）', (tester) async {
+    mockPairingChannel(); // 见 [mockPairingChannel]：fakeAsync 里没人应答的通道会挂死
     final source = _FakeLocalSource()
       ..outboxPending = 3
       ..outboxError = '连不上上游：ConnectException';
@@ -873,7 +924,11 @@ void main() {
     expect(store.loaded, isTrue, reason: '模型没配过也不该让整页起不来（以前会冒成"连接后端失败"）');
     expect(store.providers.single.id, 'p1', reason: 'provider 清单来自本机库');
     expect(store.models, isEmpty);
-    expect(store.modelsIssue, isNotNull, reason: '空目录要说清楚，不能装作"这个 Provider 没模型"');
+    expect(
+      store.modelsIssue,
+      isNotNull,
+      reason: '空目录要说清楚，不能装作"这个 Provider 没模型"',
+    );
     expect(store.error, contains('还没为'), reason: '如实说"本机还没给它配过模型清单"');
     expect(store.error, contains('AI 模型与凭据'), reason: '要说清去哪儿配');
     expect(store.error, isNot(contains('连接后端失败')));
@@ -906,7 +961,11 @@ void main() {
 
     expect(store.models, isEmpty);
     expect(store.modelsIssue, contains('网关二'));
-    expect(store.error, contains('网关二'), reason: '换完 Provider 要当场说明，别让用户对着空选择器猜');
+    expect(
+      store.error,
+      contains('网关二'),
+      reason: '换完 Provider 要当场说明，别让用户对着空选择器猜',
+    );
   });
 
   test('手机：那份 SharedPreferences 清单缓存**退役了**，密钥只进密钥库（AIH-012）', () async {
@@ -922,7 +981,7 @@ void main() {
         client: MockClient(
           (request) async => http.Response(
             jsonEncode({
-              'credentials': {'PHONE_KEY': 'sk-secret-a'}
+              'credentials': {'PHONE_KEY': 'sk-secret-a'},
             }),
             200,
             headers: const {'content-type': 'application/json; charset=utf-8'},
@@ -940,7 +999,12 @@ void main() {
     expect(prefs.getString('comfyhub.ai.cachedModels.p1'), isNull);
     // 密钥只进密钥库，本地任何一份盘上的东西都不许出现它
     expect(creds.saved['PHONE_KEY'], 'sk-secret-a');
-    expect('${prefs.getString('comfyhub.ai.lastProviderId')}'.contains('sk-secret-a'), isFalse);
+    expect(
+      '${prefs.getString('comfyhub.ai.lastProviderId')}'.contains(
+        'sk-secret-a',
+      ),
+      isFalse,
+    );
     // （"清单里只有能力声明与端点、没有 `credential` 键"这条防线现在由**本机库**承载：
     //   DTO 键集合由 harness 的 `ProviderStoreTest` 盯着；桥也不回 `credential`。）
   });
@@ -957,10 +1021,18 @@ void main() {
         calls.add('${request.method} ${request.url.path}');
         const json = {'content-type': 'application/json; charset=utf-8'};
         if (request.url.path == '/api/ai/providers') {
-          return http.Response(jsonEncode([localProviderJson()]), 200, headers: json);
+          return http.Response(
+            jsonEncode([localProviderJson()]),
+            200,
+            headers: json,
+          );
         }
         if (request.url.path == '/api/ai/providers/p1/models') {
-          return http.Response(jsonEncode([localModelJson()]), 200, headers: json);
+          return http.Response(
+            jsonEncode([localModelJson()]),
+            200,
+            headers: json,
+          );
         }
         return http.Response('[]', 200, headers: json);
       }),
@@ -974,7 +1046,11 @@ void main() {
 
     await store.load();
 
-    expect(calls, contains('GET /api/ai/providers'), reason: '桌面侧清单照旧来自后端（一个字未改）');
+    expect(
+      calls,
+      contains('GET /api/ai/providers'),
+      reason: '桌面侧清单照旧来自后端（一个字未改）',
+    );
     expect(calls, contains('GET /api/ai/providers/p1/models'));
     expect(store.providers.single.id, 'p1');
     expect(store.models, isNotEmpty, reason: '桌面的模型目录也照旧来自后端');
@@ -982,7 +1058,8 @@ void main() {
     expect(
       prefs.getString('comfyhub.ai.cachedProviders'),
       isNull,
-      reason: '那份缓存是**手机专有**的（旧代码里 `if (!credentials.isLocal) return`），'
+      reason:
+          '那份缓存是**手机专有**的（旧代码里 `if (!credentials.isLocal) return`），'
           '手机侧改读本机库之后它整体退役了 —— 桌面侧不该凭空多出一份缓存',
     );
     expect(prefs.getString('comfyhub.ai.cachedModels.p1'), isNull);
@@ -1032,14 +1109,15 @@ void main() {
 
   test('一轮跑完之后也会顺手推一次（那时内容才定稿）', () async {
     final source = _FakeLocalSource()..outboxApplied = 2;
-    final store = AiWorkspaceStore(
-      api: AiApiClient('http://127.0.0.1:8080'),
-      source: source,
-      credentials: _FakeDeviceCredentials(configured: true),
-    )
-      ..providers = [_provider()]
-      ..selectedProvider = _provider()
-      ..selectedModel = _model();
+    final store =
+        AiWorkspaceStore(
+            api: AiApiClient('http://127.0.0.1:8080'),
+            source: source,
+            credentials: _FakeDeviceCredentials(configured: true),
+          )
+          ..providers = [_provider()]
+          ..selectedProvider = _provider()
+          ..selectedModel = _model();
 
     await store.send('画一只猫');
 
@@ -1060,7 +1138,11 @@ void main() {
   // -------------------------------------------------------------------------
 
   test('冷启动读到的配对令牌，必须带在 ensureRunKit / syncNow 上', () async {
-    mockPairingChannel(token: 'tok-phone-1', deviceId: 'phone-1', deviceName: 'OnePlus 8T');
+    mockPairingChannel(
+      token: 'tok-phone-1',
+      deviceId: 'phone-1',
+      deviceName: 'OnePlus 8T',
+    );
 
     final source = _FakeLocalSource();
     final store = AiWorkspaceStore(
@@ -1072,7 +1154,11 @@ void main() {
 
     await store.load();
 
-    expect(store.pairingToken, 'tok-phone-1', reason: '令牌在内存里，真源是 Android Keystore');
+    expect(
+      store.pairingToken,
+      'tok-phone-1',
+      reason: '令牌在内存里，真源是 Android Keystore',
+    );
     expect(source.kitTokens, ['tok-phone-1'], reason: '取规则工件不带令牌 = 闸门一开就 403');
     expect(source.syncedTokens, contains('tok-phone-1'), reason: '上行同步同理');
     expect(source.syncedBaseUrls.last, 'http://10.0.0.5:8081');
@@ -1111,7 +1197,7 @@ void main() {
           // 桌面只下发被允许的那一把；另一把**不出现也不报错**（§11.2）
           return http.Response(
             jsonEncode({
-              'credentials': {'A_KEY': 'sk-secret-a'}
+              'credentials': {'A_KEY': 'sk-secret-a'},
             }),
             200,
             headers: const {'content-type': 'application/json; charset=utf-8'},
@@ -1121,7 +1207,10 @@ void main() {
     );
     await store.load();
     // 清单里两条 provider，各自一把密钥（ref 是它俩的 credentialRef）
-    store.providers = [_providerWithRef('p1', 'A_KEY'), _providerWithRef('p2', 'B_KEY')];
+    store.providers = [
+      _providerWithRef('p1', 'A_KEY'),
+      _providerWithRef('p2', 'B_KEY'),
+    ];
 
     final text = await store.syncCredentialsFromDesktop();
 
@@ -1133,7 +1222,11 @@ void main() {
     expect(text, contains('B_KEY'), reason: '"哪几把没拿到"必须说出来，否则用户以为都拿到了');
     // 密钥值**绝不能**进返回句 / 日志 / 界面状态（AIH-012）
     expect(text, isNot(contains('sk-secret-a')));
-    expect(store.providers.first.credential.source, 'keystore', reason: '取完要把"已配置"对齐到本机');
+    expect(
+      store.providers.first.credential.source,
+      'keystore',
+      reason: '取完要把"已配置"对齐到本机',
+    );
   });
 
   test('从桌面同步密钥：没配对 / 非手机时不打请求，只回一句人话', () async {
@@ -1185,6 +1278,7 @@ void mockPairingChannel({
   String? token,
   String deviceId = 'phone-1',
   String deviceName = 'OnePlus 8T',
+
   /// **本机库那份清单**（手机侧 provider 的唯一真源，`ProviderStore` → 桥）。
   ///
   /// 默认空 = "这台手机上还没配过"（就是用户第一次打开 App 时的样子）。
@@ -1194,9 +1288,12 @@ void mockPairingChannel({
   Map<String, List<Map<String, dynamic>>> models = const {},
 }) {
   const channel = MethodChannel('comfyhub/harness');
-  final messenger = TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+  final messenger =
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
   messenger.setMockMethodCallHandler(channel, (call) async {
-    final args = Map<String, dynamic>.from((call.arguments as Map?) ?? const {});
+    final args = Map<String, dynamic>.from(
+      (call.arguments as Map?) ?? const {},
+    );
     switch (call.method) {
       case 'getCredential':
         return args['ref'] == PairingTokenStore.ref ? token : null;
@@ -1224,51 +1321,57 @@ Map<String, dynamic> localProviderJson({
   String id = 'p1',
   String name = '公司网关',
   String credentialRef = 'PHONE_KEY',
-}) =>
-    {
-      'id': id,
-      'displayName': name,
-      'api': 'openai-completions',
-      'baseURL': 'https://api.example.com/v1',
-      'credentialRef': credentialRef,
-      'endpointTrust': 'public',
-      'enabled': true,
-      'revision': 1,
-      'createdAt': '2026-09-27T00:00:00.000Z',
-      'updatedAt': '2026-09-27T00:00:00.000Z',
-    };
+}) => {
+  'id': id,
+  'displayName': name,
+  'api': 'openai-completions',
+  'baseURL': 'https://api.example.com/v1',
+  'credentialRef': credentialRef,
+  'endpointTrust': 'public',
+  'enabled': true,
+  'revision': 1,
+  'createdAt': '2026-09-27T00:00:00.000Z',
+  'updatedAt': '2026-09-27T00:00:00.000Z',
+};
 
 /// 本机库里的一个模型（能力声明是"发得出去"的前提）。
-Map<String, dynamic> localModelJson({String id = 'm-text', String name = '纯文本模型'}) => {
-      'providerId': 'p1',
-      'id': id,
-      'displayName': name,
-      'inputModalities': ['text'],
-      'tools': true,
-      'capabilitySource': 'manual',
-      'enabled': true,
-    };
+Map<String, dynamic> localModelJson({
+  String id = 'm-text',
+  String name = '纯文本模型',
+}) => {
+  'providerId': 'p1',
+  'id': id,
+  'displayName': name,
+  'inputModalities': ['text'],
+  'tools': true,
+  'capabilitySource': 'manual',
+  'enabled': true,
+};
 
 /// 一个**桌面永远离线**的客户端 + 命中记录：用来证明"手机侧清单一条网络请求都不打"。
 AiApiClient offlineApiWith(List<String> hits) => AiApiClient(
-      'http://127.0.0.1:8080',
-      client: MockClient((request) async {
-        hits.add('${request.method} ${request.url.path}');
-        return http.Response('offline', 500);
-      }),
-    );
+  'http://127.0.0.1:8080',
+  client: MockClient((request) async {
+    hits.add('${request.method} ${request.url.path}');
+    return http.Response('offline', 500);
+  }),
+);
 
 AiProvider _providerWithRef(String id, String ref) => AiProvider(
-      id: id,
-      displayName: id,
-      api: 'openai-completions',
-      baseURL: 'http://127.0.0.1:11434/v1',
-      credentialRef: ref,
-      endpointTrust: 'loopback',
-      enabled: true,
-      revision: 1,
-      credential: const AiCredentialStatus(configured: false, source: 'none', writable: true),
-    );
+  id: id,
+  displayName: id,
+  api: 'openai-completions',
+  baseURL: 'http://127.0.0.1:11434/v1',
+  credentialRef: ref,
+  endpointTrust: 'loopback',
+  enabled: true,
+  revision: 1,
+  credential: const AiCredentialStatus(
+    configured: false,
+    source: 'none',
+    writable: true,
+  ),
+);
 
 /// 桌面在线：provider 清单 + 模型目录都正常返回（用来灌"本机缓存"）。
 ///
@@ -1278,55 +1381,59 @@ AiProvider _providerWithRef(String id, String ref) => AiProvider(
 /// ⚠ 响应必须带 `charset=utf-8`：`http.Response` 默认按 **Latin-1** 编码 body，
 /// 中文显示名会在 `http` 层就抛 "Contains invalid characters"（看起来像后端挂了）。
 AiApiClient _okApi({bool modelsOk = true}) => AiApiClient(
-      'http://127.0.0.1:8080',
-      client: MockClient((request) async {
-        const json = {'content-type': 'application/json; charset=utf-8'};
-        if (request.url.path == '/api/ai/providers') {
-          return http.Response(
-            jsonEncode([
-              {
-                'id': 'p1',
-                'displayName': '本机网关',
-                'api': 'openai-completions',
-                'baseURL': 'http://127.0.0.1:11434/v1',
-                'credentialRef': 'PHONE_KEY',
-                'endpointTrust': 'loopback',
-                'enabled': true,
-                'revision': 1,
-                // 桌面侧说"已配置" —— 手机必须用自己的状态覆盖它
-                'credential': {'configured': true, 'source': 'managed', 'writable': true},
-              }
-            ]),
-            200,
-            headers: json,
-          );
-        }
-        if (request.url.path == '/api/ai/providers/p1/models') {
-          if (!modelsOk) return http.Response('模型目录这次挂了', 500, headers: json);
-          return http.Response(
-            jsonEncode([
-              {
-                'providerId': 'p1',
-                'id': 'm-text',
-                'displayName': '纯文本模型',
-                'inputModalities': ['text'],
-                'attachmentTransports': <String, dynamic>{},
-                'mimeAllowlist': <String>[],
-                'tools': true,
-                'parallelTools': false,
-                'reasoning': false,
-                'thinkingEfforts': <String, dynamic>{},
-                'capabilitySource': 'manual',
-                'enabled': true,
-              }
-            ]),
-            200,
-            headers: json,
-          );
-        }
-        return http.Response(jsonEncode(<String, dynamic>{}), 200, headers: json);
-      }),
-    );
+  'http://127.0.0.1:8080',
+  client: MockClient((request) async {
+    const json = {'content-type': 'application/json; charset=utf-8'};
+    if (request.url.path == '/api/ai/providers') {
+      return http.Response(
+        jsonEncode([
+          {
+            'id': 'p1',
+            'displayName': '本机网关',
+            'api': 'openai-completions',
+            'baseURL': 'http://127.0.0.1:11434/v1',
+            'credentialRef': 'PHONE_KEY',
+            'endpointTrust': 'loopback',
+            'enabled': true,
+            'revision': 1,
+            // 桌面侧说"已配置" —— 手机必须用自己的状态覆盖它
+            'credential': {
+              'configured': true,
+              'source': 'managed',
+              'writable': true,
+            },
+          },
+        ]),
+        200,
+        headers: json,
+      );
+    }
+    if (request.url.path == '/api/ai/providers/p1/models') {
+      if (!modelsOk) return http.Response('模型目录这次挂了', 500, headers: json);
+      return http.Response(
+        jsonEncode([
+          {
+            'providerId': 'p1',
+            'id': 'm-text',
+            'displayName': '纯文本模型',
+            'inputModalities': ['text'],
+            'attachmentTransports': <String, dynamic>{},
+            'mimeAllowlist': <String>[],
+            'tools': true,
+            'parallelTools': false,
+            'reasoning': false,
+            'thinkingEfforts': <String, dynamic>{},
+            'capabilitySource': 'manual',
+            'enabled': true,
+          },
+        ]),
+        200,
+        headers: json,
+      );
+    }
+    return http.Response(jsonEncode(<String, dynamic>{}), 200, headers: json);
+  }),
+);
 
 /// 假的本机密钥库（手机上真身是 Android Keystore，走桥）。
 class _FakeDeviceCredentials implements CredentialStore {
@@ -1344,7 +1451,11 @@ class _FakeDeviceCredentials implements CredentialStore {
   Future<AiCredentialStatus> statusOf(AiProvider provider) async {
     final ref = provider.credentialRef?.trim();
     if (ref == null || ref.isEmpty) {
-      return const AiCredentialStatus(configured: false, source: 'none', writable: false);
+      return const AiCredentialStatus(
+        configured: false,
+        source: 'none',
+        writable: false,
+      );
     }
     return AiCredentialStatus(
       configured: configured,
@@ -1371,7 +1482,8 @@ class _FakeDeviceCredentials implements CredentialStore {
   /// 它回 `saved` 里那把（没存过就回 null —— 调用方要如实说"没有可推的"，
   /// 而不是拿空串把桌面上那把好的覆盖掉）。
   @override
-  Future<String?> reveal(AiProvider provider) async => saved[provider.credentialRef?.trim() ?? ''];
+  Future<String?> reveal(AiProvider provider) async =>
+      saved[provider.credentialRef?.trim() ?? ''];
 }
 
 /// 只回 `runId`、不回消息 id 的事件源（模拟桥漏传那一对主键）。

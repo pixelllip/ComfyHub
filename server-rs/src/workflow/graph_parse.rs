@@ -97,8 +97,13 @@ const VIDEO_CLASS_HINTS: [&str; 12] = [
     "",
 ];
 /// 音频类节点的名字片段。
-const AUDIO_CLASS_HINTS: [&str; 5] =
-    ["saveaudio", "previewaudio", "audioupload", "saveaudiomp3", "voiceclone"];
+const AUDIO_CLASS_HINTS: [&str; 5] = [
+    "saveaudio",
+    "previewaudio",
+    "audioupload",
+    "saveaudiomp3",
+    "voiceclone",
+];
 
 /// 节点上哪些标量输入算"提示词正文"。
 const TEXT_INPUT_KEYS: [&str; 10] = [
@@ -134,7 +139,14 @@ const LINKED_TEXT_KEYS: [&str; 8] = [
 ];
 
 /// 继续下钻时认这些"条件 / 文本"转发键。
-const CHAIN_KEYS: [&str; 6] = ["conditioning", "cond", "positive", "negative", "clip", "prompt"];
+const CHAIN_KEYS: [&str; 6] = [
+    "conditioning",
+    "cond",
+    "positive",
+    "negative",
+    "clip",
+    "prompt",
+];
 
 /// 已经单独入库的字段，不再重复塞进 `extra_params`。
 const SKIP_INPUT_KEYS: [&str; 32] = [
@@ -175,7 +187,9 @@ const SKIP_INPUT_KEYS: [&str; 32] = [
 
 /// 解析一份 API 节点图（`null` / 空图 → 全默认，**不报错**）。
 pub fn parse(graph: Option<&Map<String, Value>>) -> Parsed {
-    let Some(graph) = graph else { return Parsed::default() };
+    let Some(graph) = graph else {
+        return Parsed::default();
+    };
     if graph.is_empty() {
         return Parsed::default();
     }
@@ -200,22 +214,31 @@ pub fn parse(graph: Option<&Map<String, Value>>) -> Parsed {
         });
 
     // --- 采样参数：先看采样器自己，再看链上的兄弟节点，最后全图兜底 ---
-    let sigmas = sampler.and_then(|node| input_ref(node, "sigmas")).and_then(|id| lookup(&nodes, &id));
-    let sampler_select =
-        sampler.and_then(|node| input_ref(node, "sampler")).and_then(|id| lookup(&nodes, &id));
-    let noise = sampler.and_then(|node| input_ref(node, "noise")).and_then(|id| lookup(&nodes, &id));
+    let sigmas = sampler
+        .and_then(|node| input_ref(node, "sigmas"))
+        .and_then(|id| lookup(&nodes, &id));
+    let sampler_select = sampler
+        .and_then(|node| input_ref(node, "sampler"))
+        .and_then(|id| lookup(&nodes, &id));
+    let noise = sampler
+        .and_then(|node| input_ref(node, "noise"))
+        .and_then(|id| lookup(&nodes, &id));
 
     let steps_node = [sampler, sigmas, guider]
         .into_iter()
         .flatten()
         .find(|node| input_int(node, "steps").is_some())
         .or_else(|| {
+            nodes.iter().map(|(_, node)| *node).find(|node| {
+                cls(node).to_lowercase().contains("scheduler") && input_int(node, "steps").is_some()
+            })
+        })
+        .or_else(|| {
             nodes
                 .iter()
                 .map(|(_, node)| *node)
-                .find(|node| cls(node).to_lowercase().contains("scheduler") && input_int(node, "steps").is_some())
-        })
-        .or_else(|| nodes.iter().map(|(_, node)| *node).find(|node| input_int(node, "steps").is_some()));
+                .find(|node| input_int(node, "steps").is_some())
+        });
 
     let sampler_name = sampler
         .and_then(|node| input_text(node, "sampler_name"))
@@ -309,13 +332,14 @@ pub fn parse(graph: Option<&Map<String, Value>>) -> Parsed {
         kind,
         positive: positive_text.clone(),
         // 与正向相同、或空白的负向一律丢掉（Kotlin `takeIf { it.isNotBlank() && it != positive }`）
-        negative: negative
-            .filter(|text| !text.trim().is_empty() && *text != positive_text),
+        negative: negative.filter(|text| !text.trim().is_empty() && *text != positive_text),
         checkpoint: checkpoint.or_else(|| find_checkpoint(&nodes)),
         loras,
         sampler: sampler_name,
         scheduler: scheduler_name,
-        steps: steps_node.and_then(|node| input_int(node, "steps")).map(|v| v as i64),
+        steps: steps_node
+            .and_then(|node| input_int(node, "steps"))
+            .map(|v| v as i64),
         cfg,
         seed,
         width: dims.map(|(w, _, _)| w as i64),
@@ -394,11 +418,17 @@ pub fn final_positive(
         if depth > 8 || id.trim().is_empty() || !seen.insert(id.clone()) {
             continue;
         }
-        let Some(node) = lookup(&nodes, &id) else { continue };
+        let Some(node) = lookup(&nodes, &id) else {
+            continue;
+        };
         if cls(node).to_ascii_lowercase().contains("textencode") {
-            let Some(text) = input(node, "text") else { continue };
+            let Some(text) = input(node, "text") else {
+                continue;
+            };
             // 字面量（parse 已经拿得到）不在这里处理；只有连线才需要看运行时输出。
-            let Some(upstream) = reference_ref(Some(text)) else { continue };
+            let Some(upstream) = reference_ref(Some(text)) else {
+                continue;
+            };
             if let Some(found) = runtime_text_in_chain(&upstream, &nodes, outputs, 0) {
                 let trimmed = found.trim();
                 if !trimmed.is_empty() {
@@ -434,7 +464,15 @@ fn positive_chain_key(key: &str) -> bool {
 fn runtime_text_chain_key(key: &str) -> bool {
     matches!(
         key,
-        "source" | "text" | "value" | "string" | "string_a" | "string_b" | "prompt" | "on_true" | "on_false"
+        "source"
+            | "text"
+            | "value"
+            | "string"
+            | "string_a"
+            | "string_b"
+            | "prompt"
+            | "on_true"
+            | "on_false"
     )
 }
 
@@ -484,7 +522,9 @@ fn runtime_text_in_chain(
         if !runtime_text_chain_key(key) {
             continue;
         }
-        let Some(up) = reference_ref(Some(value)) else { continue };
+        let Some(up) = reference_ref(Some(value)) else {
+            continue;
+        };
         if let Some(text) = runtime_text_in_chain(&up, nodes, outputs, depth + 1) {
             return Some(text);
         }
@@ -500,17 +540,23 @@ fn runtime_text_in_chain(
 fn find_sampler<'a>(nodes: &[(&'a str, &'a Map<String, Value>)]) -> Option<&'a Map<String, Value>> {
     let all: Vec<&Map<String, Value>> = nodes.iter().map(|(_, node)| *node).collect();
     // 经典 KSampler：steps + cfg 都在自己身上
-    if let Some(node) = all.iter().find(|n| input_int(n, "steps").is_some() && input_double(n, "cfg").is_some()) {
-        return Some(node);
-    }
-    // 自定义采样链的根节点：有 sigmas 且（有 noise 或 guider）
     if let Some(node) = all
         .iter()
-        .find(|n| input(n, "sigmas").is_some() && (input(n, "noise").is_some() || input(n, "guider").is_some()))
+        .find(|n| input_int(n, "steps").is_some() && input_double(n, "cfg").is_some())
     {
         return Some(node);
     }
-    if let Some(node) = all.iter().find(|n| cls(n).to_lowercase().contains("samplercustom")) {
+    // 自定义采样链的根节点：有 sigmas 且（有 noise 或 guider）
+    if let Some(node) = all.iter().find(|n| {
+        input(n, "sigmas").is_some()
+            && (input(n, "noise").is_some() || input(n, "guider").is_some())
+    }) {
+        return Some(node);
+    }
+    if let Some(node) = all
+        .iter()
+        .find(|n| cls(n).to_lowercase().contains("samplercustom"))
+    {
         return Some(node);
     }
     // 注意 KSamplerSelect 也含 "KSampler"，但它只有 sampler_name，别优先选它
@@ -520,10 +566,15 @@ fn find_sampler<'a>(nodes: &[(&'a str, &'a Map<String, Value>)]) -> Option<&'a M
     {
         return Some(node);
     }
-    if let Some(node) = all.iter().find(|n| cls(n).to_lowercase().contains("ksampler")) {
+    if let Some(node) = all
+        .iter()
+        .find(|n| cls(n).to_lowercase().contains("ksampler"))
+    {
         return Some(node);
     }
-    all.iter().find(|n| cls(n).to_lowercase().contains("sampler")).copied()
+    all.iter()
+        .find(|n| cls(n).to_lowercase().contains("sampler"))
+        .copied()
 }
 
 /// 顺着 `model` 引用往回走，收集 LoRA 链和模型名（Kotlin `walkModel`）。
@@ -553,7 +604,9 @@ fn walk_model(
             if guard > 40 {
                 break;
             }
-            let Some(node) = lookup(nodes, &current) else { break };
+            let Some(node) = lookup(nodes, &current) else {
+                break;
+            };
 
             if looks_like_lora_node(node) {
                 // 从当前节点往**上游**收：本节点的槽位 + 它引用的 LoRA 栈（WAS 那类把名字
@@ -564,8 +617,15 @@ fn walk_model(
             }
 
             if checkpoint.is_none() {
-                for key in ["ckpt_name", "model_name", "unet_name", "gguf_name", "diffusion_model"] {
-                    if let Some(text) = input_text(node, key).filter(|text| !text.trim().is_empty()) {
+                for key in [
+                    "ckpt_name",
+                    "model_name",
+                    "unet_name",
+                    "gguf_name",
+                    "diffusion_model",
+                ] {
+                    if let Some(text) = input_text(node, key).filter(|text| !text.trim().is_empty())
+                    {
                         checkpoint = Some(text);
                         break;
                     }
@@ -661,7 +721,13 @@ fn lora_weight(node: &Map<String, Value>, key: &str) -> f64 {
             candidates.push(format!("{prefix}{index}"));
         }
     }
-    for prefix in ["strength_model", "strength", "weight", "model_weight", "lora_strength"] {
+    for prefix in [
+        "strength_model",
+        "strength",
+        "weight",
+        "model_weight",
+        "lora_strength",
+    ] {
         candidates.push(prefix.to_string());
     }
     candidates
@@ -681,7 +747,9 @@ fn lora_weight(node: &Map<String, Value>, key: &str) -> f64 {
 /// ⚠ `["节点id", 槽位]` 是**连线**，不是文件名 —— 必须挡掉，否则会把节点 id 当成 LoRA 名。
 fn collect_lora_entries(node: &Map<String, Value>) -> Vec<(String, f64)> {
     let mut out: Vec<(String, f64)> = Vec::new();
-    let Some(inputs) = inputs(node) else { return out };
+    let Some(inputs) = inputs(node) else {
+        return out;
+    };
     for (key, value) in inputs {
         if !lora_slot_key(key) {
             continue;
@@ -769,7 +837,9 @@ fn collect_loras(
         if !key.to_lowercase().starts_with("lora") || !is_link(value) {
             continue;
         }
-        let Some(id) = reference_ref(Some(value)) else { continue };
+        let Some(id) = reference_ref(Some(value)) else {
+            continue;
+        };
         if !visited.insert(id.clone()) {
             continue;
         }
@@ -799,16 +869,19 @@ fn push_lora(loras: &mut Vec<LoraRef>, raw: &str, weight: f64) {
         return;
     }
     if !loras.iter().any(|existing| existing.name == short) {
-        loras.push(LoraRef { name: short.to_string(), weight });
+        loras.push(LoraRef {
+            name: short.to_string(),
+            weight,
+        });
     }
 }
 
 /// `["节点id", 槽位]` 形状的连线（第二项是数字才算；名字数组没有数字第二项）。
 fn is_link(value: &Value) -> bool {
-    let Some(items) = value.as_array() else { return false };
-    items.len() >= 2
-        && items[1].is_number()
-        && (items[0].is_string() || items[0].is_number())
+    let Some(items) = value.as_array() else {
+        return false;
+    };
+    items.len() >= 2 && items[1].is_number() && (items[0].is_string() || items[0].is_number())
 }
 
 /// 兜底找 checkpoint（Kotlin `findCheckpoint`）。
@@ -820,7 +893,13 @@ fn find_checkpoint(nodes: &[(&str, &Map<String, Value>)]) -> Option<String> {
             }
         }
     }
-    for key in ["ckpt_name", "model_name", "unet_name", "gguf_name", "diffusion_model"] {
+    for key in [
+        "ckpt_name",
+        "model_name",
+        "unet_name",
+        "gguf_name",
+        "diffusion_model",
+    ] {
         for (_, node) in nodes {
             let class = cls(node);
             if class.to_lowercase().contains("loader") || class.to_lowercase().contains("unet") {
@@ -915,9 +994,7 @@ fn text_from_ref(
 ///
 /// ⚠ **并列取第一个**（Kotlin `maxByOrNull` 的语义）：Rust 的 `max_by_key` 并列时取**最后一个**，
 /// 直接用它会让"一个空负向 + 一个等长负向表"这类常见图选到不同节点。
-fn longest_text_input(
-    nodes: &[(&str, &Map<String, Value>)],
-) -> Option<(String, String)> {
+fn longest_text_input(nodes: &[(&str, &Map<String, Value>)]) -> Option<(String, String)> {
     let mut best: Option<(String, String)> = None;
     for (_, node) in nodes {
         for key in TEXT_INPUT_KEYS {
@@ -937,9 +1014,7 @@ fn longest_text_input(
 }
 
 /// 负向提示词兜底：键名或类名里带 negative 的文本输入（并列同样取第一个）。
-fn negative_text_input(
-    nodes: &[(&str, &Map<String, Value>)],
-) -> Option<(String, String)> {
+fn negative_text_input(nodes: &[(&str, &Map<String, Value>)]) -> Option<(String, String)> {
     let mut best: Option<(String, String)> = None;
     for (_, node) in nodes {
         let by_key = NEGATIVE_HINT_KEYS.iter().find_map(|key| {
@@ -1015,7 +1090,10 @@ fn detect_kind(nodes: &[(&str, &Map<String, Value>)]) -> String {
     let mut image = false;
     for (_, node) in nodes {
         let class = cls(node).to_lowercase();
-        if VIDEO_CLASS_HINTS.iter().any(|hint| !hint.is_empty() && class.contains(hint)) {
+        if VIDEO_CLASS_HINTS
+            .iter()
+            .any(|hint| !hint.is_empty() && class.contains(hint))
+        {
             video = true;
         } else if AUDIO_CLASS_HINTS.iter().any(|hint| class.contains(hint)) {
             audio = true;
@@ -1064,12 +1142,19 @@ fn find_filename_prefix(nodes: &[(&str, &Map<String, Value>)]) -> Option<String>
 fn collect_extra(nodes: &[(&str, &Map<String, Value>)]) -> Vec<(String, String)> {
     let mut out: Vec<(String, String)> = Vec::new();
     'outer: for (id, node) in nodes {
-        let class = cls(node).split('(').next().unwrap_or_default().trim().to_string();
+        let class = cls(node)
+            .split('(')
+            .next()
+            .unwrap_or_default()
+            .trim()
+            .to_string();
         for (key, value) in input_pairs(node) {
             if SKIP_INPUT_KEYS.contains(&key.as_str()) {
                 continue;
             }
-            let Some(text) = primitive_text(&value) else { continue };
+            let Some(text) = primitive_text(&value) else {
+                continue;
+            };
             if text.trim().is_empty() || text.chars().count() > 400 {
                 continue;
             }
@@ -1078,7 +1163,10 @@ fn collect_extra(nodes: &[(&str, &Map<String, Value>)]) -> Vec<(String, String)>
                 break 'outer;
             }
         }
-        if out.len() < 60 && !class.is_empty() && !out.iter().any(|(k, _)| k == &format!("{class}.__node_id")) {
+        if out.len() < 60
+            && !class.is_empty()
+            && !out.iter().any(|(k, _)| k == &format!("{class}.__node_id"))
+        {
             out.push((format!("{class}.__node_id"), id.to_string()));
         }
     }
@@ -1091,7 +1179,10 @@ fn collect_extra(nodes: &[(&str, &Map<String, Value>)]) -> Vec<(String, String)>
 
 /// `class_type`（Kotlin `JsonObject.cls()`）。
 fn cls(node: &Map<String, Value>) -> String {
-    node.get("class_type").and_then(Value::as_str).unwrap_or_default().to_string()
+    node.get("class_type")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string()
 }
 
 /// `inputs` 对象（Kotlin `JsonObject.inputs()`）。
@@ -1139,7 +1230,10 @@ fn as_int(value: Option<&Value>) -> Option<i32> {
     if let Ok(parsed) = trimmed.parse::<f64>() {
         return Some(parsed.trunc().clamp(i32::MIN as f64, i32::MAX as f64) as i32);
     }
-    trimmed.parse::<i64>().ok().map(|v| v.clamp(i32::MIN as i64, i32::MAX as i64) as i32)
+    trimmed
+        .parse::<i64>()
+        .ok()
+        .map(|v| v.clamp(i32::MIN as i64, i32::MAX as i64) as i32)
 }
 
 /// Kotlin `asLong`：`toLongOrNull ?: toDoubleOrNull?.toLong() ?: toULongOrNull?.toLong()`。
@@ -1202,13 +1296,22 @@ fn input_ref(node: &Map<String, Value>, key: &str) -> Option<String> {
 }
 
 /// 按 id 找节点（顺序无关，直接线性找）。
-fn lookup<'a>(nodes: &[(&'a str, &'a Map<String, Value>)], id: &str) -> Option<&'a Map<String, Value>> {
-    nodes.iter().find(|(node_id, _)| *node_id == id).map(|(_, node)| *node)
+fn lookup<'a>(
+    nodes: &[(&'a str, &'a Map<String, Value>)],
+    id: &str,
+) -> Option<&'a Map<String, Value>> {
+    nodes
+        .iter()
+        .find(|(node_id, _)| *node_id == id)
+        .map(|(_, node)| *node)
 }
 
 /// Kotlin `firstNonBlank(vararg)`：按顺序取第一个非空白（参数个数有意放宽）。
 fn first_non_blank<const N: usize>(values: [Option<String>; N]) -> Option<String> {
-    values.into_iter().flatten().find(|text| !text.trim().is_empty())
+    values
+        .into_iter()
+        .flatten()
+        .find(|text| !text.trim().is_empty())
 }
 
 #[cfg(test)]

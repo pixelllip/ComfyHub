@@ -207,10 +207,8 @@ abstract class RunEventSource {
   ///
   /// ⚠ `ok=false` 时别拿 `mode` 当结论（判据永远是 `ok`）；失败**不许**拦聊天页 ——
   /// 桌面不在线是手机的常态（与 [syncNow] 同一条纪律）。
-  Future<({bool ok, String mode, int applied, int cursor, String? error})> pullChanges({
-    String? baseUrl,
-    String? token,
-  });
+  Future<({bool ok, String mode, int applied, int cursor, String? error})>
+  pullChanges({String? baseUrl, String? token});
 
   /// 回答 `user.question`（提问闸门；桌面是 HTTP，手机是本地闸门）。
   ///
@@ -220,7 +218,11 @@ abstract class RunEventSource {
   ///
   /// 返回**是否真的被采纳**：`false` = 这条提问已经结束（超时 / Run 停了），
   /// 界面要如实说出来，不能假装收到。
-  Future<bool> answerQuestion(String questionId, String? answer, {int? optionIndex});
+  Future<bool> answerQuestion(
+    String questionId,
+    String? answer, {
+    int? optionIndex,
+  });
 }
 
 /// 桌面实现：转发给 `AiApiClient`（远端 SSE）。
@@ -260,14 +262,20 @@ class RemoteRunEventSource implements RunEventSource {
     String? modelId,
   }) =>
       // 远端由后端生成主键：请求里那份（如果有）不是真源，**回传什么就用什么**
-      _api.createConversation(title: title, providerId: providerId, modelId: modelId);
+      _api.createConversation(
+        title: title,
+        providerId: providerId,
+        modelId: modelId,
+      );
 
   @override
-  Future<List<AiMessage>> listMessages(String conversationId) => _api.listMessages(conversationId);
+  Future<List<AiMessage>> listMessages(String conversationId) =>
+      _api.listMessages(conversationId);
 
   /// 桌面：删的是**后端库**里那一条（`DELETE /api/ai/conversations/{id}`）。
   @override
-  Future<void> deleteConversation(String conversationId) => _api.deleteConversation(conversationId);
+  Future<void> deleteConversation(String conversationId) =>
+      _api.deleteConversation(conversationId);
 
   /// 桌面：上行队列在**手机**手上（`_outbox` 是手机侧的东西），这里恒 0。
   @override
@@ -280,10 +288,15 @@ class RemoteRunEventSource implements RunEventSource {
   Future<void> cancelRun(String runId) => _api.cancelRun(runId);
 
   @override
-  Stream<AiRunEvent> events(String runId, {int after = 0}) => _api.runEvents(runId, after: after);
+  Stream<AiRunEvent> events(String runId, {int after = 0}) =>
+      _api.runEvents(runId, after: after);
 
   @override
-  Future<bool> answerQuestion(String questionId, String? answer, {int? optionIndex}) =>
+  Future<bool> answerQuestion(
+    String questionId,
+    String? answer, {
+    int? optionIndex,
+  }) =>
       _api.answerQuestion(questionId, answer: answer, optionIndex: optionIndex);
 
   /// 桌面不需要本地规则工件：系统提示 / 工具清单本来就在后端手里
@@ -292,8 +305,7 @@ class RemoteRunEventSource implements RunEventSource {
   Future<({bool ok, String? kitVersion, String? reason})> ensureRunKit({
     String? baseUrl,
     String? token,
-  }) async =>
-      (ok: true, kitVersion: null, reason: null);
+  }) async => (ok: true, kitVersion: null, reason: null);
 
   /// 桌面：Run 的收尾归后端进程自己管，手机冷启动不该因此打任何请求。
   @override
@@ -301,17 +313,17 @@ class RemoteRunEventSource implements RunEventSource {
 
   /// 桌面：上行队列在**手机**手上（`_outbox` 是手机侧的东西），这里没什么可推的。
   @override
-  Future<({bool ok, int applied, int pending, String? error})> syncNow({String? baseUrl, String? token}) async =>
-      (ok: true, applied: 0, pending: 0, error: null);
+  Future<({bool ok, int applied, int pending, String? error})> syncNow({
+    String? baseUrl,
+    String? token,
+  }) async => (ok: true, applied: 0, pending: 0, error: null);
 
   /// 桌面：**恒 `up_to_date`** —— 后端自己就是真源，没有"从别人那里拉"这回事。
   ///
   /// （手机上这条路会把 `manifest` / `changes` / `bootstrap` 走一遍，见本地实现。）
   @override
-  Future<({bool ok, String mode, int applied, int cursor, String? error})> pullChanges({
-    String? baseUrl,
-    String? token,
-  }) async =>
+  Future<({bool ok, String mode, int applied, int cursor, String? error})>
+  pullChanges({String? baseUrl, String? token}) async =>
       (ok: true, mode: 'up_to_date', applied: 0, cursor: 0, error: null);
 }
 
@@ -324,8 +336,8 @@ class LocalHarnessRunEventSource implements RunEventSource {
     MethodChannel? methodChannel,
     EventChannel? eventChannel,
     this.onEventChannelError,
-  })  : _method = methodChannel ?? const MethodChannel(methodChannelName),
-        _events = eventChannel ?? const EventChannel(eventChannelName);
+  }) : _method = methodChannel ?? const MethodChannel(methodChannelName),
+       _events = eventChannel ?? const EventChannel(eventChannelName);
 
   /// 与 Kotlin 侧 `HarnessBridge.METHOD_CHANNEL` 同名（改了要同时改两边）。
   static const String methodChannelName = 'comfyhub/harness';
@@ -352,14 +364,15 @@ class LocalHarnessRunEventSource implements RunEventSource {
     String? token,
     String? providerId,
     String? modelId,
-  }) async =>
-      _map(await _method.invokeMethod<String>('fetchRunKit', {
-        'baseUrl': ?baseUrl,
-        'token': ?token,
-        'providerId': ?providerId,
-        'modelId': ?modelId,
-      }) ??
-      '{}');
+  }) async => _map(
+    await _method.invokeMethod<String>('fetchRunKit', {
+          'baseUrl': ?baseUrl,
+          'token': ?token,
+          'providerId': ?providerId,
+          'modelId': ?modelId,
+        }) ??
+        '{}',
+  );
 
   /// 桌面离线时用缓存的那一份（拿不到返回 null）。
   Future<Map<String, dynamic>?> cachedRunKit() async {
@@ -447,12 +460,20 @@ class LocalHarnessRunEventSource implements RunEventSource {
   }
 
   /// 消息行（不含 `parts`）。
-  Future<List<Map<String, dynamic>>> listMessageRows(String conversationId) async =>
-      _list(await _method.invokeMethod<String>('listMessages', {'conversationId': conversationId}) ?? '[]');
+  Future<List<Map<String, dynamic>>> listMessageRows(
+    String conversationId,
+  ) async => _list(
+    await _method.invokeMethod<String>('listMessages', {
+          'conversationId': conversationId,
+        }) ??
+        '[]',
+  );
 
   /// 一条消息的有序块。
-  Future<List<Map<String, dynamic>>> listParts(String messageId) async =>
-      _list(await _method.invokeMethod<String>('listParts', {'messageId': messageId}) ?? '[]');
+  Future<List<Map<String, dynamic>>> listParts(String messageId) async => _list(
+    await _method.invokeMethod<String>('listParts', {'messageId': messageId}) ??
+        '[]',
+  );
 
   /// 拉一条会话的消息，**把 `parts` 并进来**。
   ///
@@ -468,7 +489,9 @@ class LocalHarnessRunEventSource implements RunEventSource {
     final out = <AiMessage>[];
     for (final row in rows) {
       final id = row['id']?.toString() ?? '';
-      final parts = id.isEmpty ? const <Map<String, dynamic>>[] : await listParts(id);
+      final parts = id.isEmpty
+          ? const <Map<String, dynamic>>[]
+          : await listParts(id);
       out.add(AiMessage.fromJson({...row, 'parts': parts}));
     }
     return out;
@@ -482,21 +505,22 @@ class LocalHarnessRunEventSource implements RunEventSource {
   /// 静默成功会让界面以为删掉了、空壳其实还在。
   @override
   Future<void> deleteConversation(String conversationId) =>
-      _method.invokeMethod<bool>('deleteConversation', {'conversationId': conversationId});
+      _method.invokeMethod<bool>('deleteConversation', {
+        'conversationId': conversationId,
+      });
 
   /// 本机 `_outbox` 里还剩几条（**只读本地库**，不出网）。
   @override
-  Future<int> pendingOutbox() async => await _method.invokeMethod<int>('pendingOutbox') ?? 0;
+  Future<int> pendingOutbox() async =>
+      await _method.invokeMethod<int>('pendingOutbox') ?? 0;
 
   /// 从桌面拉一次（M4 的下行半边，契约 §1~§3）。
   ///
   /// 桥那边已经把"能不能拉成"分好了：`ok` 是唯一判据，`mode` 只在 `ok=true` 时是结论
   /// （`ok=false` 时它只是"本来打算走哪条"）。`pending` 那套与上行无关，这里没有。
   @override
-  Future<({bool ok, String mode, int applied, int cursor, String? error})> pullChanges({
-    String? baseUrl,
-    String? token,
-  }) async {
+  Future<({bool ok, String mode, int applied, int cursor, String? error})>
+  pullChanges({String? baseUrl, String? token}) async {
     final raw = await _method.invokeMethod<String>('syncPull', {
       'baseUrl': ?baseUrl,
       'token': ?token,
@@ -549,11 +573,14 @@ class LocalHarnessRunEventSource implements RunEventSource {
     final map = _map(raw ?? '{}');
     return RunHandles(
       runId: (map['runId'] ?? '').toString(),
-      conversationId: (map['conversationId'] ?? request.conversationId).toString(),
+      conversationId: (map['conversationId'] ?? request.conversationId)
+          .toString(),
       // harness 回显的就是库里那条；拿不到才回落到本地那份（两者应当相等，
       // 不相等说明桥没把 id 透下去 —— 那时界面会画不出字，所以别在这里悄悄兜住）
-      userMessageId: (map['userMessageId'] ?? request.userMessageId)?.toString(),
-      assistantMessageId: (map['assistantMessageId'] ?? request.assistantMessageId)?.toString(),
+      userMessageId: (map['userMessageId'] ?? request.userMessageId)
+          ?.toString(),
+      assistantMessageId:
+          (map['assistantMessageId'] ?? request.assistantMessageId)?.toString(),
       kitVersion: map['kitVersion']?.toString(),
       promptVersion: map['promptVersion']?.toString(),
     );
@@ -564,7 +591,11 @@ class LocalHarnessRunEventSource implements RunEventSource {
       _method.invokeMethod<bool>('cancelRun', {'runId': runId});
 
   @override
-  Future<bool> answerQuestion(String questionId, String? answer, {int? optionIndex}) async =>
+  Future<bool> answerQuestion(
+    String questionId,
+    String? answer, {
+    int? optionIndex,
+  }) async =>
       await _method.invokeMethod<bool>('answerQuestion', {
         'questionId': questionId,
         // Kotlin 侧 `argument<String>("answer").orEmpty()`：null 与空串等价，这里如实传
@@ -579,20 +610,25 @@ class LocalHarnessRunEventSource implements RunEventSource {
   /// 类型映射在两端各有一套规则，字符串最不容易出意外）。
   @override
   Stream<AiRunEvent> events(String runId, {int after = 0}) {
-    final raw = _events.receiveBroadcastStream({'runId': runId, 'after': after});
-    return raw.map((dynamic event) {
-      final map = (event as Map).cast<Object?, Object?>();
-      final type = (map['type'] ?? 'message').toString();
-      final seq = (map['seq'] as num?)?.toInt() ?? 0;
-      final payloadRaw = map['payloadJson']?.toString() ?? '{}';
-      final data = _map(payloadRaw);
-      // seq 也放进 payload：`after` 续传与"这条是不是老事件"的判断都靠它
-      data['seq'] = seq;
-      return AiRunEvent(type, data);
-    }).handleError((Object e, StackTrace s) {
-      onEventChannelError?.call(e, s);
-      throw e;
+    final raw = _events.receiveBroadcastStream({
+      'runId': runId,
+      'after': after,
     });
+    return raw
+        .map((dynamic event) {
+          final map = (event as Map).cast<Object?, Object?>();
+          final type = (map['type'] ?? 'message').toString();
+          final seq = (map['seq'] as num?)?.toInt() ?? 0;
+          final payloadRaw = map['payloadJson']?.toString() ?? '{}';
+          final data = _map(payloadRaw);
+          // seq 也放进 payload：`after` 续传与"这条是不是老事件"的判断都靠它
+          data['seq'] = seq;
+          return AiRunEvent(type, data);
+        })
+        .handleError((Object e, StackTrace s) {
+          onEventChannelError?.call(e, s);
+          throw e;
+        });
   }
 }
 
@@ -609,7 +645,10 @@ RunEventSource openRunEventSource({
 }) {
   final local = forceLocal ?? Platform.isAndroid;
   if (local) {
-    return LocalHarnessRunEventSource(methodChannel: methodChannel, eventChannel: eventChannel);
+    return LocalHarnessRunEventSource(
+      methodChannel: methodChannel,
+      eventChannel: eventChannel,
+    );
   }
   return RemoteRunEventSource(api);
 }
@@ -617,11 +656,16 @@ RunEventSource openRunEventSource({
 Map<String, dynamic> _map(String raw) {
   if (raw.trim().isEmpty) return <String, dynamic>{};
   final decoded = jsonDecode(raw);
-  return decoded is Map ? Map<String, dynamic>.from(decoded) : <String, dynamic>{};
+  return decoded is Map
+      ? Map<String, dynamic>.from(decoded)
+      : <String, dynamic>{};
 }
 
 List<Map<String, dynamic>> _list(String raw) {
   final decoded = jsonDecode(raw);
   if (decoded is! List) return const [];
-  return decoded.whereType<Map>().map((e) => Map<String, dynamic>.from(e)).toList();
+  return decoded
+      .whereType<Map>()
+      .map((e) => Map<String, dynamic>.from(e))
+      .toList();
 }

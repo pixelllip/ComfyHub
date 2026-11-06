@@ -44,7 +44,9 @@ pub async fn queue(comfy_url: &str) -> Result<QueueSnapshot, String> {
     Ok(QueueSnapshot {
         running: running.map(Vec::len).unwrap_or(0),
         pending: pending.map(Vec::len).unwrap_or(0),
-        running_label: running.and_then(|items| items.first()).and_then(label_of_queue_item),
+        running_label: running
+            .and_then(|items| items.first())
+            .and_then(label_of_queue_item),
     })
 }
 
@@ -81,14 +83,25 @@ pub async fn upload_image(
     // 非 ASCII 要么被服务端按 latin1 解出乱码，要么直接 400
     let safe: String = filename
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_') { c } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_') {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect();
-    let safe = if safe.is_empty() { "image.png".to_string() } else { safe };
+    let safe = if safe.is_empty() {
+        "image.png".to_string()
+    } else {
+        safe
+    };
 
     let mut body: Vec<u8> = Vec::with_capacity(bytes.len() + 512);
     body.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
     body.extend_from_slice(
-        format!("Content-Disposition: form-data; name=\"image\"; filename=\"{safe}\"\r\n").as_bytes(),
+        format!("Content-Disposition: form-data; name=\"image\"; filename=\"{safe}\"\r\n")
+            .as_bytes(),
     );
     body.extend_from_slice(b"Content-Type: application/octet-stream\r\n\r\n");
     body.extend_from_slice(bytes);
@@ -104,7 +117,10 @@ pub async fn upload_image(
         .map_err(|e| format!("HTTP 客户端创建失败：{}", e.human()))?;
     let response = client
         .post(&url)
-        .header("Content-Type", format!("multipart/form-data; boundary={boundary}"))
+        .header(
+            "Content-Type",
+            format!("multipart/form-data; boundary={boundary}"),
+        )
         .header("Accept", "application/json")
         // 几十 MB 的图在慢盘上要几十秒；20 秒会把正常情况判成失败
         .timeout(std::time::Duration::from_secs(120))
@@ -113,12 +129,19 @@ pub async fn upload_image(
         .await
         .map_err(|e| friendly_error(&e, &url))?;
     let status = response.status();
-    let text = response.text().await.map_err(|e| format!("读响应失败：{e}"))?;
+    let text = response
+        .text()
+        .await
+        .map_err(|e| format!("读响应失败：{e}"))?;
     if !status.is_success() {
-        return Err(format!("HTTP {}：{}", status.as_u16(), take_chars(&text, 300)));
+        return Err(format!(
+            "HTTP {}：{}",
+            status.as_u16(),
+            take_chars(&text, 300)
+        ));
     }
-    let parsed: serde_json::Value =
-        serde_json::from_str(&text).map_err(|e| format!("响应不是 JSON：{e}（原文：{}）", take_chars(&text, 200)))?;
+    let parsed: serde_json::Value = serde_json::from_str(&text)
+        .map_err(|e| format!("响应不是 JSON：{e}（原文：{}）", take_chars(&text, 200)))?;
     let name = parsed
         .get("name")
         .and_then(|v| v.as_str())
@@ -128,8 +151,16 @@ pub async fn upload_image(
     // 返回给模型的必须是 **LoadImage 认得的那串**：ComfyUI 把 subfolder 与原文件名分开回，
     // 而 `LoadImage.image` 在有子目录时要写成 `子目录/文件名`。我们恒用空 subfolder，
     // 但这条兜住"ComfyUI 自己给了子目录"的情况。
-    let sub = parsed.get("subfolder").and_then(|v| v.as_str()).unwrap_or("").trim();
-    Ok(if sub.is_empty() { name.to_string() } else { format!("{sub}/{name}") })
+    let sub = parsed
+        .get("subfolder")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim();
+    Ok(if sub.is_empty() {
+        name.to_string()
+    } else {
+        format!("{sub}/{name}")
+    })
 }
 
 /// 往 multipart 体里追加一个普通字段（`upload_image` 用；抽成函数是为了能同时借用 `body`）。
@@ -160,11 +191,19 @@ pub async fn post_json(url: &str, body: &serde_json::Value) -> Result<serde_json
         .await
         .map_err(|e| friendly_error(&e, url))?;
     let status = response.status();
-    let text = response.text().await.map_err(|e| format!("读响应失败：{e}"))?;
+    let text = response
+        .text()
+        .await
+        .map_err(|e| format!("读响应失败：{e}"))?;
     if !status.is_success() {
-        return Err(format!("HTTP {}：{}", status.as_u16(), take_chars(&text, 600)));
+        return Err(format!(
+            "HTTP {}：{}",
+            status.as_u16(),
+            take_chars(&text, 600)
+        ));
     }
-    serde_json::from_str(&text).map_err(|e| format!("响应不是 JSON：{e}（原文：{}）", take_chars(&text, 300)))
+    serde_json::from_str(&text)
+        .map_err(|e| format!("响应不是 JSON：{e}（原文：{}）", take_chars(&text, 300)))
 }
 
 /// 按**字符**截断（别把 UTF-8 字符劈成两半）。
@@ -181,7 +220,10 @@ pub async fn get_json(url: &str) -> Result<serde_json::Value, String> {
 
 /// 同上，但**超时自定**：探测实例 input 目录那条路要一个短超时
 /// （实例没起来时"连不上"是瞬间的，但地址写错时不该把投放卡 20 秒）。
-pub async fn get_json_with_timeout(url: &str, timeout_secs: u64) -> Result<serde_json::Value, String> {
+pub async fn get_json_with_timeout(
+    url: &str,
+    timeout_secs: u64,
+) -> Result<serde_json::Value, String> {
     let host = host_of(url);
     let client = crate::provider::upstream::client_for(&host)
         .map_err(|e| format!("HTTP 客户端创建失败：{}", e.human()))?;
@@ -196,7 +238,10 @@ pub async fn get_json_with_timeout(url: &str, timeout_secs: u64) -> Result<serde
     if !status.is_success() {
         return Err(format!("HTTP {}", status.as_u16()));
     }
-    let text = response.text().await.map_err(|e| format!("读响应失败：{e}"))?;
+    let text = response
+        .text()
+        .await
+        .map_err(|e| format!("读响应失败：{e}"))?;
     serde_json::from_str(&text).map_err(|e| format!("响应不是 JSON：{e}"))
 }
 
@@ -219,7 +264,8 @@ pub async fn instance_input_names(comfy_url: &str) -> Result<Vec<String>, String
     if base.is_empty() {
         return Err("ComfyUI 地址没配置".to_string());
     }
-    let body = get_json_with_timeout(&format!("{base}/object_info/LoadImage"), PROBE_TIMEOUT_SECS).await?;
+    let body =
+        get_json_with_timeout(&format!("{base}/object_info/LoadImage"), PROBE_TIMEOUT_SECS).await?;
     let names = body
         .get("LoadImage")
         .and_then(|node| node.get("input"))
@@ -229,9 +275,15 @@ pub async fn instance_input_names(comfy_url: &str) -> Result<Vec<String>, String
         .and_then(|spec| spec.first())
         .and_then(Value::as_array)
         .map(|values| {
-            values.iter().filter_map(Value::as_str).map(str::to_string).collect::<Vec<_>>()
+            values
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect::<Vec<_>>()
         });
-    names.ok_or_else(|| "object_info 里没有 LoadImage.image 的候选名单（这个实例不认识 LoadImage？）".to_string())
+    names.ok_or_else(|| {
+        "object_info 里没有 LoadImage.image 的候选名单（这个实例不认识 LoadImage？）".to_string()
+    })
 }
 
 /// **哪一个候选目录装着实例报出来的那些文件** —— 也就是"实例真正在读的那个 input"。
@@ -257,7 +309,9 @@ pub fn dir_owning(candidates: &[PathBuf], names: &[String]) -> Option<PathBuf> {
     let mut best: Option<(PathBuf, usize)> = None;
     let mut tied = false;
     for candidate in candidates {
-        let Ok(entries) = std::fs::read_dir(candidate) else { continue };
+        let Ok(entries) = std::fs::read_dir(candidate) else {
+            continue;
+        };
         let present: std::collections::HashSet<String> = entries
             .flatten()
             .map(|entry| entry.file_name().to_string_lossy().to_lowercase())
@@ -305,7 +359,11 @@ pub async fn get_bytes(url: &str, timeout_secs: u64) -> Result<Vec<u8>, String> 
     if !status.is_success() {
         return Err(format!("HTTP {}", status.as_u16()));
     }
-    response.bytes().await.map(|b| b.to_vec()).map_err(|e| format!("读响应失败：{e}"))
+    response
+        .bytes()
+        .await
+        .map(|b| b.to_vec())
+        .map_err(|e| format!("读响应失败：{e}"))
 }
 
 /// URL → 主机名（给 [`crate::infra::outbound::route`] 判"公网还是本机"用）。
@@ -366,7 +424,8 @@ trait SourceIo {
 
 impl SourceIo for reqwest::Error {
     fn source_io(&self) -> Option<&std::io::Error> {
-        let mut cursor: Option<&(dyn std::error::Error + 'static)> = std::error::Error::source(self);
+        let mut cursor: Option<&(dyn std::error::Error + 'static)> =
+            std::error::Error::source(self);
         while let Some(current) = cursor {
             if let Some(io) = current.downcast_ref::<std::io::Error>() {
                 return Some(io);
@@ -386,7 +445,11 @@ fn label_of_queue_item(item: &serde_json::Value) -> Option<String> {
         let obj = entry.as_object()?;
         obj.contains_key("extra_pnginfo").then_some(obj)
     })?;
-    let workflow = extra.get("extra_pnginfo")?.as_object()?.get("workflow")?.as_object()?;
+    let workflow = extra
+        .get("extra_pnginfo")?
+        .as_object()?
+        .get("workflow")?
+        .as_object()?;
     let title = workflow.get("extra")?.as_object()?.get("title")?.as_str()?;
     let trimmed = title.trim();
     if trimmed.is_empty() {

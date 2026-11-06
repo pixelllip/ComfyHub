@@ -75,8 +75,14 @@ impl CapturePoller {
     /// `(lastPollAt, lastError)` —— 两个都可空，`/api/capture/status` 直接用它。
     pub fn snapshot(&self) -> (Option<String>, Option<String>) {
         (
-            self.last_poll_at.lock().unwrap_or_else(|e| e.into_inner()).clone(),
-            self.last_error.lock().unwrap_or_else(|e| e.into_inner()).clone(),
+            self.last_poll_at
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone(),
+            self.last_error
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone(),
         )
     }
 
@@ -95,10 +101,24 @@ impl CapturePoller {
     /// `config` 传 `None` = 读配置失败/停用 → 空转（`ran=false`），与 Kotlin 同。
     pub async fn tick(&self, state: &AppState, config: Option<&CaptureConfig>) -> PollTick {
         let Some(config) = config else {
-            return PollTick { ran: false, ok: false, checked: 0, new_runs: 0, new_media: 0, error: None };
+            return PollTick {
+                ran: false,
+                ok: false,
+                checked: 0,
+                new_runs: 0,
+                new_media: 0,
+                error: None,
+            };
         };
         if !config.enabled {
-            return PollTick { ran: false, ok: false, checked: 0, new_runs: 0, new_media: 0, error: None };
+            return PollTick {
+                ran: false,
+                ok: false,
+                checked: 0,
+                new_runs: 0,
+                new_media: 0,
+                error: None,
+            };
         }
         // 上一轮还没结束就让开（Kotlin `pollInFlight`）—— 绝不并发收同一次运行
         if self.in_flight.swap(true, Ordering::SeqCst) {
@@ -116,9 +136,14 @@ impl CapturePoller {
 
         let ok = result.get("ok").and_then(|v| v.as_bool()).unwrap_or(false);
         let num = |key: &str| result.get(key).and_then(|v| v.as_i64()).unwrap_or(0);
-        let message = result.get("message").and_then(|v| v.as_str()).map(|s| s.to_string());
+        let message = result
+            .get("message")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
         if ok {
-            self.mark_ok(crate::infra::iso_time::from_system_time(std::time::SystemTime::now()));
+            self.mark_ok(crate::infra::iso_time::from_system_time(
+                std::time::SystemTime::now(),
+            ));
         } else if let Some(message) = message.clone() {
             self.mark_error(message);
         }
@@ -150,13 +175,16 @@ impl CapturePoller {
                         tick.checked,
                         tick.new_runs,
                         tick.new_media,
-                        tick.error.as_deref().map(|e| format!(" error={e}")).unwrap_or_default()
+                        tick.error
+                            .as_deref()
+                            .map(|e| format!(" error={e}"))
+                            .unwrap_or_default()
                     );
                 }
                 let interval = match config {
-                    Some(config) if config.enabled => {
-                        config.poll_seconds.clamp(MIN_INTERVAL_SECONDS, MAX_INTERVAL_SECONDS)
-                    }
+                    Some(config) if config.enabled => config
+                        .poll_seconds
+                        .clamp(MIN_INTERVAL_SECONDS, MAX_INTERVAL_SECONDS),
                     _ => (DISABLED_INTERVAL_MS / 1000) as i64,
                 };
                 tokio::time::sleep(std::time::Duration::from_secs(interval.max(1) as u64)).await;

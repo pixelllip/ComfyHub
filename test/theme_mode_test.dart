@@ -44,7 +44,9 @@ void main() {
   });
 
   test('偏好里是认不出的值 → 回默认，不抛（启动路径上不许崩）', () async {
-    SharedPreferences.setMockInitialValues({'comfyhub.themeMode': 'darkmode-v2'});
+    SharedPreferences.setMockInitialValues({
+      'comfyhub.themeMode': 'darkmode-v2',
+    });
 
     final settings = SettingsStore();
     await settings.load();
@@ -68,12 +70,18 @@ void main() {
     final launcher = BackendLauncher(settings);
     addTearDown(launcher.dispose);
 
-    await tester.pumpWidget(ComfyHubApp(settings: settings, launcher: launcher));
+    await tester.pumpWidget(
+      ComfyHubApp(settings: settings, launcher: launcher),
+    );
     await tester.pumpAndSettle();
 
     // 落地页是 AI 工作台（AIH-001）；这里只借它拿一个"在 App 里面"的 context
     final context = tester.element(find.byType(AiHomePage));
-    expect(Theme.of(context).brightness, Brightness.light, reason: '偏好是浅色，就该装浅色主题');
+    expect(
+      Theme.of(context).brightness,
+      Brightness.light,
+      reason: '偏好是浅色，就该装浅色主题',
+    );
 
     await settings.setThemeMode(AppThemeMode.dark);
     await tester.pumpAndSettle();

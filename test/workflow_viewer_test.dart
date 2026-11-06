@@ -34,7 +34,8 @@ const _uiWorkflowJson =
     '"links":[],"groups":[],"config":{},"extra":{},"version":0.4}';
 
 /// API 格式节点图：agent / 脚本直接调 `/prompt` 生图时，history 里只有这一份
-const _apiGraphJson = '{"3":{"class_type":"KSampler","inputs":{"seed":42,"steps":32}},'
+const _apiGraphJson =
+    '{"3":{"class_type":"KSampler","inputs":{"seed":42,"steps":32}},'
     '"4":{"class_type":"CheckpointLoaderSimple","inputs":{"ckpt_name":"sd_xl_base_1.0.safetensors"}}}';
 
 final _promptJson = {
@@ -72,10 +73,10 @@ final _mediaJson = {
 };
 
 http.Response _json(Object? body, [int status = 200]) => http.Response(
-      jsonEncode(body),
-      status,
-      headers: {'content-type': 'application/json; charset=utf-8'},
-    );
+  jsonEncode(body),
+  status,
+  headers: {'content-type': 'application/json; charset=utf-8'},
+);
 
 MockClient _buildMockClient({
   int promptWorkflowStatus = 200,
@@ -141,8 +142,10 @@ Future<LibraryStore> _makeStore({
 /// 注意别在它外面再套一层 MaterialApp —— 嵌套 MaterialApp 会造出两个
 /// ScaffoldMessenger，弹窗挂在根 Navigator 上，SnackBar 就会找不到 Scaffold。
 Widget _harness(Future<String?> Function() load) => Scaffold(
-      body: Center(child: WorkflowButton(title: '测试工作流', load: load)),
-    );
+  body: Center(
+    child: WorkflowButton(title: '测试工作流', load: load),
+  ),
+);
 
 Widget _wrapStore(LibraryStore store, Widget home) =>
     ChangeNotifierProvider<LibraryStore>.value(
@@ -169,15 +172,21 @@ List<String> _captureClipboard(WidgetTester tester) {
       return null;
     },
   );
-  addTearDown(() => tester.binding.defaultBinaryMessenger
-      .setMockMethodCallHandler(SystemChannels.platform, null));
+  addTearDown(
+    () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+      SystemChannels.platform,
+      null,
+    ),
+  );
   return copied;
 }
 
 void main() {
   testWidgets('读取过程中先转圈，读完再显示内容', (tester) async {
     final completer = Completer<String?>();
-    await tester.pumpWidget(MaterialApp(home: _harness(() => completer.future)));
+    await tester.pumpWidget(
+      MaterialApp(home: _harness(() => completer.future)),
+    );
 
     await tester.tap(find.text('查看工作流'));
     await tester.pump();
@@ -195,7 +204,9 @@ void main() {
   testWidgets('接口返回界面工作流时弹窗展示格式化后的 JSON', (tester) async {
     _desktopSurface(tester);
     final store = await _makeStore();
-    await tester.pumpWidget(_wrapStore(store, _harness(() => store.api.promptWorkflow(1))));
+    await tester.pumpWidget(
+      _wrapStore(store, _harness(() => store.api.promptWorkflow(1))),
+    );
 
     await tester.tap(find.text('查看工作流'));
     await tester.pumpAndSettle();
@@ -211,7 +222,9 @@ void main() {
   testWidgets('API 格式节点图会换成对应的提示语', (tester) async {
     _desktopSurface(tester);
     final store = await _makeStore(mediaWorkflowStatus: 200);
-    await tester.pumpWidget(_wrapStore(store, _harness(() => store.api.mediaWorkflow(1))));
+    await tester.pumpWidget(
+      _wrapStore(store, _harness(() => store.api.mediaWorkflow(1))),
+    );
 
     await tester.tap(find.text('查看工作流'));
     await tester.pumpAndSettle();
@@ -232,7 +245,9 @@ void main() {
   testWidgets('后端没有存工作流时显示空状态', (tester) async {
     _desktopSurface(tester);
     final store = await _makeStore(mediaWorkflowStatus: 204);
-    await tester.pumpWidget(_wrapStore(store, _harness(() => store.api.mediaWorkflow(1))));
+    await tester.pumpWidget(
+      _wrapStore(store, _harness(() => store.api.mediaWorkflow(1))),
+    );
 
     await tester.tap(find.text('查看工作流'));
     await tester.pumpAndSettle();
@@ -247,7 +262,9 @@ void main() {
     _desktopSurface(tester);
     final copied = _captureClipboard(tester);
     final store = await _makeStore();
-    await tester.pumpWidget(_wrapStore(store, _harness(() => store.api.promptWorkflow(1))));
+    await tester.pumpWidget(
+      _wrapStore(store, _harness(() => store.api.promptWorkflow(1))),
+    );
 
     await tester.tap(find.text('查看工作流'));
     await tester.pumpAndSettle();
@@ -255,7 +272,11 @@ void main() {
     await tester.tap(find.text('复制'));
     await tester.pumpAndSettle();
 
-    expect(copied.single, _uiWorkflowJson, reason: '复制的必须是后端原文，而不是格式化/截断后的展示文本');
+    expect(
+      copied.single,
+      _uiWorkflowJson,
+      reason: '复制的必须是后端原文，而不是格式化/截断后的展示文本',
+    );
     expect(find.text('已复制，可以直接粘回 ComfyUI'), findsOneWidget);
 
     // 把 SnackBar 的自动关闭计时器走完，否则测试结束时会留下 pending timer
@@ -266,7 +287,9 @@ void main() {
   testWidgets('读取失败时弹窗内展示错误并可重试', (tester) async {
     _desktopSurface(tester);
     final store = await _makeStore(promptWorkflowStatus: 500);
-    await tester.pumpWidget(_wrapStore(store, _harness(() => store.api.promptWorkflow(1))));
+    await tester.pumpWidget(
+      _wrapStore(store, _harness(() => store.api.promptWorkflow(1))),
+    );
 
     await tester.tap(find.text('查看工作流'));
     await tester.pumpAndSettle();
@@ -284,7 +307,9 @@ void main() {
   testWidgets('提示词详情在有工作流时显示来源徽标和查看工作流', (tester) async {
     _desktopSurface(tester);
     final store = await _makeStore();
-    await tester.pumpWidget(_wrapStore(store, const PromptDetailPage(promptId: 1)));
+    await tester.pumpWidget(
+      _wrapStore(store, const PromptDetailPage(promptId: 1)),
+    );
     await tester.pumpAndSettle();
 
     expect(find.text('ComfyUI 自动捕获'), findsOneWidget);
@@ -302,7 +327,9 @@ void main() {
   testWidgets('产物详情在有工作流时也能打开同一个弹窗', (tester) async {
     _desktopSurface(tester);
     final store = await _makeStore(mediaWorkflowStatus: 200);
-    await tester.pumpWidget(_wrapStore(store, const MediaDetailPage(mediaId: 1)));
+    await tester.pumpWidget(
+      _wrapStore(store, const MediaDetailPage(mediaId: 1)),
+    );
     await tester.pumpAndSettle();
 
     expect(find.text('查看工作流'), findsOneWidget);

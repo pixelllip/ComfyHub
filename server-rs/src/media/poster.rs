@@ -88,7 +88,10 @@ pub fn write_video_poster(project_root: &Path, source: &Path, dest: &Path, size:
             return false;
         }
     };
-    let ok = dest.is_file() && std::fs::metadata(dest).map(|m| m.len() > 0).unwrap_or(false);
+    let ok = dest.is_file()
+        && std::fs::metadata(dest)
+            .map(|m| m.len() > 0)
+            .unwrap_or(false);
     if !ok {
         // 脚本自己会打印 `FAIL <原因>`；把它带回日志（排错就靠这一行）
         let text = String::from_utf8_lossy(&output.stdout);

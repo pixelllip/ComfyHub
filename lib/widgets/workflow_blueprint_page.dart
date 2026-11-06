@@ -1117,7 +1117,9 @@ class _WorkflowBlueprintPageState extends State<WorkflowBlueprintPage> {
                 value?.toString() ?? '—',
                 // 一段提示词在面板里只露三行等于看不到内容；多行文本给到 8 行，
                 // 再长的仍然靠滚动看（列表本身就能滚）。
-                maxLines: value is String && (value.contains('\n') || value.length > 48)
+                maxLines:
+                    value is String &&
+                        (value.contains('\n') || value.length > 48)
                     ? 8
                     : 3,
                 style: theme.textTheme.bodySmall,

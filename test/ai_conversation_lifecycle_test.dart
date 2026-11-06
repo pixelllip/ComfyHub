@@ -29,12 +29,16 @@ final List<String> created = [];
 /// 被删掉的会话 id（按顺序）。
 final List<String> deleted = [];
 
-Map<String, dynamic> _conv(String id, {String title = '新对话', int messageCount = 0}) => {
-      'id': id,
-      'title': title,
-      'messageCount': messageCount,
-      'archived': false,
-    };
+Map<String, dynamic> _conv(
+  String id, {
+  String title = '新对话',
+  int messageCount = 0,
+}) => {
+  'id': id,
+  'title': title,
+  'messageCount': messageCount,
+  'archived': false,
+};
 
 MockClient _fakeBackend(
   List<Map<String, dynamic>> conversations, {
@@ -56,8 +60,12 @@ MockClient _fakeBackend(
           'endpointTrust': 'loopback',
           'enabled': true,
           'revision': 1,
-          'credential': {'configured': true, 'source': 'managed', 'writable': true},
-        }
+          'credential': {
+            'configured': true,
+            'source': 'managed',
+            'writable': true,
+          },
+        },
       ];
     } else if (path == '/api/ai/providers/local-gw/models') {
       body = [
@@ -71,7 +79,7 @@ MockClient _fakeBackend(
           'thinkingEfforts': <String, String>{},
           'capabilitySource': 'manual',
           'enabled': true,
-        }
+        },
       ];
     } else if (path == '/api/ai/conversations' && request.method == 'POST') {
       final id = 'created-${++seq}';
@@ -81,7 +89,8 @@ MockClient _fakeBackend(
       body = row;
     } else if (path == '/api/ai/conversations') {
       body = conversations;
-    } else if (RegExp(r'^/api/ai/conversations/[^/]+/messages$').hasMatch(path)) {
+    } else if (RegExp(r'^/api/ai/conversations/[^/]+/messages$')
+        .hasMatch(path)) {
       final id = path.split('/')[4];
       body = messages[id] ?? <Object>[];
     } else if (RegExp(r'^/api/ai/conversations/[^/]+/runs$').hasMatch(path)) {
@@ -89,7 +98,8 @@ MockClient _fakeBackend(
       body = {'runId': 'r1', 'assistantMessageId': 'a1', 'userMessageId': 'u1'};
     } else if (RegExp(r'^/api/ai/runs/[^/]+/events$').hasMatch(path)) {
       // 冒号后必须有空格，否则客户端会把整行当未知事件丢掉
-      final sse = 'id: 1\nevent: run.started\ndata: {"runId":"r1"}\n\n'
+      final sse =
+          'id: 1\nevent: run.started\ndata: {"runId":"r1"}\n\n'
           'id: 2\nevent: message.completed\n'
           'data: {"messageId":"a1","text":"收到","steps":0}\n\n'
           'id: 3\nevent: run.completed\ndata: {"runId":"r1"}\n\n';
@@ -152,7 +162,8 @@ Widget _page(AiWorkspaceStore store) {
   );
 }
 
-String _inputText(WidgetTester tester) => tester.widget<TextField>(find.byType(TextField)).controller!.text;
+String _inputText(WidgetTester tester) =>
+    tester.widget<TextField>(find.byType(TextField)).controller!.text;
 
 void main() {
   setUp(() {
@@ -258,7 +269,10 @@ void main() {
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
 
-    final store = await _store([_conv('c-empty'), _conv('c-other', title: '别的', messageCount: 1)]);
+    final store = await _store([
+      _conv('c-empty'),
+      _conv('c-other', title: '别的', messageCount: 1),
+    ]);
     await tester.pumpWidget(_page(store));
     await tester.pumpAndSettle();
 
@@ -292,9 +306,16 @@ void main() {
     await tester.tap(find.text('发送'));
     await tester.pumpAndSettle();
 
-    expect(_inputText(tester), isEmpty,
-        reason: '发出去之后输入框必须是空的：同一句话不能被草稿灌回来（那就是同一条消息发两遍）');
-    expect((await store.loadDraft('c-empty')).text, isEmpty, reason: '发出去 = 这条会话的草稿作废');
+    expect(
+      _inputText(tester),
+      isEmpty,
+      reason: '发出去之后输入框必须是空的：同一句话不能被草稿灌回来（那就是同一条消息发两遍）',
+    );
+    expect(
+      (await store.loadDraft('c-empty')).text,
+      isEmpty,
+      reason: '发出去 = 这条会话的草稿作废',
+    );
   });
 
   test('生成答复时切到别的会话再切回来：已流出来的部分答复还在（用户 bug：切窗口丢正文）', () async {
@@ -326,7 +347,10 @@ void main() {
       },
     ];
 
-    Future<http.StreamedResponse> handler(http.BaseRequest request, http.ByteStream _) async {
+    Future<http.StreamedResponse> handler(
+      http.BaseRequest request,
+      http.ByteStream _,
+    ) async {
       final path = request.url.path;
       Object body;
       if (path == '/api/ai/providers') {
@@ -340,8 +364,12 @@ void main() {
             'endpointTrust': 'loopback',
             'enabled': true,
             'revision': 1,
-            'credential': {'configured': true, 'source': 'managed', 'writable': true},
-          }
+            'credential': {
+              'configured': true,
+              'source': 'managed',
+              'writable': true,
+            },
+          },
         ];
       } else if (path == '/api/ai/providers/local-gw/models') {
         body = [
@@ -355,17 +383,27 @@ void main() {
             'thinkingEfforts': <String, String>{},
             'capabilitySource': 'manual',
             'enabled': true,
-          }
+          },
         ];
       } else if (path == '/api/ai/conversations') {
         body = [
-          {'id': 'c-empty', 'title': '新对话', 'messageCount': 0, 'archived': false},
+          {
+            'id': 'c-empty',
+            'title': '新对话',
+            'messageCount': 0,
+            'archived': false,
+          },
           {'id': 'c-old', 'title': '聊过的', 'messageCount': 1, 'archived': false},
         ];
-      } else if (RegExp(r'^/api/ai/conversations/[^/]+/messages$').hasMatch(path)) {
+      } else if (RegExp(r'^/api/ai/conversations/[^/]+/messages$')
+          .hasMatch(path)) {
         body = path.contains('c-empty') ? db : db.take(1).toList();
       } else if (RegExp(r'^/api/ai/conversations/[^/]+/runs$').hasMatch(path)) {
-        body = {'runId': 'r1', 'assistantMessageId': 'a1', 'userMessageId': 'u1'};
+        body = {
+          'runId': 'r1',
+          'assistantMessageId': 'a1',
+          'userMessageId': 'u1',
+        };
       } else if (RegExp(r'^/api/ai/runs/[^/]+/events$').hasMatch(path)) {
         return http.StreamedResponse(
           deltas.stream,
@@ -397,9 +435,13 @@ void main() {
     expect(store.messages.last.status, 'streaming');
 
     // 流出一半正文
-    deltas.add(utf8.encode('id: 1\nevent: run.started\ndata: {"runId":"r1"}\n\n'));
+    deltas.add(
+      utf8.encode('id: 1\nevent: run.started\ndata: {"runId":"r1"}\n\n'),
+    );
     await _settle();
-    deltas.add(utf8.encode('id: 2\nevent: text.delta\ndata: {"text":"部分答复"}\n\n'));
+    deltas.add(
+      utf8.encode('id: 2\nevent: text.delta\ndata: {"text":"部分答复"}\n\n'),
+    );
     await _settle();
     expect(store.messages.last.text, '部分答复');
 
@@ -416,8 +458,14 @@ void main() {
       db.first,
       {...db.last, 'status': 'complete', 'text': '完整答复'},
     ];
-    deltas.add(utf8.encode('id: 3\nevent: message.completed\ndata: {"messageId":"a1","text":"完整答复"}\n\n'));
-    deltas.add(utf8.encode('id: 4\nevent: run.completed\ndata: {"runId":"r1"}\n\n'));
+    deltas.add(
+      utf8.encode(
+        'id: 3\nevent: message.completed\ndata: {"messageId":"a1","text":"完整答复"}\n\n',
+      ),
+    );
+    deltas.add(
+      utf8.encode('id: 4\nevent: run.completed\ndata: {"runId":"r1"}\n\n'),
+    );
     await deltas.close();
     await running;
 

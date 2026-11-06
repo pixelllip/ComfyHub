@@ -389,7 +389,8 @@ class SettingsStore extends ChangeNotifier {
     // 缓存预算：只认档位表里的值（老版本 / 手改的野值回默认），并**立刻应用到缓存**
     // —— 用户上次把 2GB 调到 512MB，下次冷启动就该按 512MB 淘汰，不能等下一次下载。
     final rawBudgetMb = prefs.getInt(_kMediaCacheOrigBudgetMb);
-    _mediaCacheOrigBudgetMb = kOriginalCacheBudgetChoicesMb.contains(rawBudgetMb)
+    _mediaCacheOrigBudgetMb =
+        kOriginalCacheBudgetChoicesMb.contains(rawBudgetMb)
         ? rawBudgetMb!
         : kOriginalCacheBudgetBytes ~/ (1024 * 1024);
     MediaCache.instance.setOriginalBudget(

@@ -5,7 +5,11 @@
 use super::*;
 
 fn object(text: &str) -> Map<String, Value> {
-    serde_json::from_str::<Value>(text).unwrap().as_object().unwrap().clone()
+    serde_json::from_str::<Value>(text)
+        .unwrap()
+        .as_object()
+        .unwrap()
+        .clone()
 }
 
 /// 一份最小但真实的 `/object_info`（三个节点，含 `control_after_generate`）。
@@ -238,7 +242,10 @@ fn converts_a_classic_ui_workflow() {
     assert_eq!(sampler["inputs"]["cfg"], 2.5);
     assert_eq!(sampler["inputs"]["sampler_name"], "euler");
     assert_eq!(sampler["inputs"]["scheduler"], "normal");
-    assert_eq!(converted.graph["2"]["inputs"]["text"], "1girl, ink painting");
+    assert_eq!(
+        converted.graph["2"]["inputs"]["text"],
+        "1girl, ink painting"
+    );
     assert_eq!(converted.graph["4"]["inputs"]["width"], 768);
     assert!(converted.warnings.is_empty(), "{:?}", converted.warnings);
 }
@@ -248,7 +255,12 @@ fn converts_a_classic_ui_workflow() {
 fn named_widgets_win_over_positional() {
     let mut workflow = ui();
     let nodes = workflow.get_mut("nodes").unwrap().as_array_mut().unwrap();
-    let sampler = nodes.iter_mut().find(|n| n["id"] == 5).unwrap().as_object_mut().unwrap();
+    let sampler = nodes
+        .iter_mut()
+        .find(|n| n["id"] == 5)
+        .unwrap()
+        .as_object_mut()
+        .unwrap();
     sampler.insert(
         "widgets_values_named".into(),
         json!({"seed": 777, "steps": 8, "unknown_widget": "x"}),
@@ -257,9 +269,15 @@ fn named_widgets_win_over_positional() {
     let inputs = &converted.graph["5"]["inputs"];
     assert_eq!(inputs["seed"], 777);
     assert_eq!(inputs["steps"], 8);
-    assert!(inputs.get("sampler_name").is_none(), "named 那份只认声明过的键");
     assert!(
-        converted.warnings.iter().any(|w| w.contains("unknown_widget")),
+        inputs.get("sampler_name").is_none(),
+        "named 那份只认声明过的键"
+    );
+    assert!(
+        converted
+            .warnings
+            .iter()
+            .any(|w| w.contains("unknown_widget")),
         "多出来的键要如实警告：{:?}",
         converted.warnings
     );
@@ -300,7 +318,12 @@ fn reroute_and_set_get_are_rewritten() {
     let converted = to_api_graph(&workflow, &info, false).unwrap();
     let inputs = &converted.graph["6"]["inputs"];
     // Reroute 穿透：model ← 节点 1（不是节点 2）
-    assert_eq!(inputs["model"], json!(["1", 0]), "{:?}", converted.rewritten);
+    assert_eq!(
+        inputs["model"],
+        json!(["1", 0]),
+        "{:?}",
+        converted.rewritten
+    );
     assert!(
         converted.rewritten.iter().any(|r| r.contains("Reroute"))
             && converted.rewritten.iter().any(|r| r.contains("Note")),
@@ -311,12 +334,23 @@ fn reroute_and_set_get_are_rewritten() {
     // 它们不是"悬挂引用"（那是"指向一个没转换出来的节点"），而是**空着的连线型输入**，
     // 正好是广播型节点原来要灌值的地方（也是模型补线的作业本）
     assert!(
-        converted.open_inputs.iter().any(|u| u.contains("6.positive (CONDITIONING)")),
+        converted
+            .open_inputs
+            .iter()
+            .any(|u| u.contains("6.positive (CONDITIONING)")),
         "{:?}",
         converted.open_inputs
     );
-    assert!(converted.unresolved_inputs.is_empty(), "{:?}", converted.unresolved_inputs);
-    assert!(converted.runnable(), "空着的连线型输入不算「不能跑」：{:?}", converted.unsupported_nodes);
+    assert!(
+        converted.unresolved_inputs.is_empty(),
+        "{:?}",
+        converted.unresolved_inputs
+    );
+    assert!(
+        converted.runnable(),
+        "空着的连线型输入不算「不能跑」：{:?}",
+        converted.unsupported_nodes
+    );
 }
 
 /// 旁路（mode=4）：输出要接到**同类型**的已连接输入上；找不到就如实警告。
@@ -375,13 +409,19 @@ fn muted_and_unknown_modes_are_reported() {
         converted.warnings
     );
     assert!(
-        converted.unsupported_nodes.iter().any(|u| u.contains("mode=7")),
+        converted
+            .unsupported_nodes
+            .iter()
+            .any(|u| u.contains("mode=7")),
         "{:?}",
         converted.unsupported_nodes
     );
     // 静音节点留下的悬挂引用必须报出来（下游会缺输入）
     assert!(
-        converted.unresolved_inputs.iter().any(|u| u.contains("3.images")),
+        converted
+            .unresolved_inputs
+            .iter()
+            .any(|u| u.contains("3.images")),
         "{:?}",
         converted.unresolved_inputs
     );
@@ -398,7 +438,11 @@ fn kotlin_case_classic_ui_workflow() {
     let object_info = kotlin_object_info();
     let ui = kotlin_ui_workflow();
     let converted = to_api_graph(&ui, &object_info, false).unwrap();
-    assert!(converted.unsupported_nodes.is_empty(), "{:?}", converted.unsupported_nodes);
+    assert!(
+        converted.unsupported_nodes.is_empty(),
+        "{:?}",
+        converted.unsupported_nodes
+    );
     assert_eq!(converted.node_count, 6);
     let sampler = &converted.graph["3"]["inputs"];
     assert_eq!(sampler["model"], json!(["4", 0]));
@@ -412,12 +456,19 @@ fn kotlin_case_classic_ui_workflow() {
     assert_eq!(sampler["denoise"], 1.0);
     let latent = &converted.graph["5"]["inputs"];
     assert_eq!(
-        (latent["width"].clone(), latent["height"].clone(), latent["batch_size"].clone()),
+        (
+            latent["width"].clone(),
+            latent["height"].clone(),
+            latent["batch_size"].clone()
+        ),
         (json!(896), json!(1264), json!(1))
     );
     assert_eq!(converted.graph["6"]["inputs"]["text"], "一只赛博朋克猫");
     // SaveImage 的 `filename_prefix` 在 optional 里 —— 也要按声明顺序拿到
-    assert_eq!(converted.graph["9"]["inputs"]["filename_prefix"], "krea2/out");
+    assert_eq!(
+        converted.graph["9"]["inputs"]["filename_prefix"],
+        "krea2/out"
+    );
 }
 
 /// Kotlin `forceInput 的输入不算控件 位置不会被它挤位`：`forceInput` 是**插口**，
@@ -441,18 +492,22 @@ fn kotlin_case_force_input_is_not_a_widget() {
 fn empty_and_dirty_workflows_are_safe() {
     let empty = object(r#"{"nodes": [], "links": []}"#);
     assert!(to_api_graph(&empty, &info(), false).is_err());
-    let dirty = object(
-        r#"{"nodes": ["nope", {"id": 1, "type": "Unknown Thing"}], "links": [null, 7]}"#,
-    );
+    let dirty =
+        object(r#"{"nodes": ["nope", {"id": 1, "type": "Unknown Thing"}], "links": [null, 7]}"#);
     let converted = to_api_graph(&dirty, &info(), false).unwrap();
-    assert!(converted.unsupported_nodes.iter().any(|u| u.contains("Unknown Thing")));
+    assert!(converted
+        .unsupported_nodes
+        .iter()
+        .any(|u| u.contains("Unknown Thing")));
     assert!(converted.graph.is_empty());
 }
 
 #[test]
 fn ui_detection_only_looks_at_nodes() {
     assert!(is_ui_workflow(&object(r#"{"nodes": []}"#)));
-    assert!(!is_ui_workflow(&object(r#"{"1": {"class_type": "KSampler"}}"#)));
+    assert!(!is_ui_workflow(&object(
+        r#"{"1": {"class_type": "KSampler"}}"#
+    )));
     assert!(!is_ui_workflow(&object(r#"{"nodes": "nope"}"#)));
 }
 
@@ -477,7 +532,11 @@ fn kotlin_case_note_like_nodes_are_dropped() {
     assert_eq!(converted.node_count, 1, "界面专用节点不该进 API 图");
     assert!(converted.graph.contains_key("4"));
     assert!(!converted.graph.contains_key("1"));
-    assert!(converted.rewritten.iter().any(|r| r.contains("Note")), "{:?}", converted.rewritten);
+    assert!(
+        converted.rewritten.iter().any(|r| r.contains("Note")),
+        "{:?}",
+        converted.rewritten
+    );
 }
 
 /// Kotlin `纯前端节点转换不了就如实报错 不猜`（`emulateFrontend=false` 的那一档）。
@@ -492,7 +551,12 @@ fn kotlin_case_pure_frontend_node_is_reported_when_not_emulating() {
           "links": [[1, 2, 0, 1, 0, "LATENT"]] }"#,
     );
     let converted = to_api_graph(&ui, &kotlin_object_info(), false).unwrap();
-    assert_eq!(converted.unsupported_nodes.len(), 1, "{:?}", converted.unsupported_nodes);
+    assert_eq!(
+        converted.unsupported_nodes.len(),
+        1,
+        "{:?}",
+        converted.unsupported_nodes
+    );
     assert!(
         converted.unsupported_nodes[0].contains("Anything Everywhere"),
         "{:?}",
@@ -510,7 +574,10 @@ fn kotlin_case_unknown_custom_node_is_reported() {
             "links": [] }"#,
     );
     let converted = to_api_graph(&ui, &kotlin_object_info(), false).unwrap();
-    assert_eq!(converted.unsupported_nodes, vec!["7 MyCustomNode".to_string()]);
+    assert_eq!(
+        converted.unsupported_nodes,
+        vec!["7 MyCustomNode".to_string()]
+    );
 }
 
 /// Kotlin `控件值个数对不上时给警告 但仍然转出来`。
@@ -571,7 +638,10 @@ fn kotlin_case_bypass_without_same_type_input_warns() {
     );
     let converted = to_api_graph(&ui, &kotlin_object_info(), false).unwrap();
     assert!(
-        converted.warnings.iter().any(|w| w.contains("旁路") && w.contains("同类型")),
+        converted
+            .warnings
+            .iter()
+            .any(|w| w.contains("旁路") && w.contains("同类型")),
         "接不过去必须说清楚：{:?}",
         converted.warnings
     );
@@ -601,7 +671,11 @@ fn kotlin_case_reroute_set_get_chain() {
           ] }"#,
     );
     let converted = to_api_graph(&ui, &kotlin_object_info(), false).unwrap();
-    assert!(converted.unsupported_nodes.is_empty(), "{:?}", converted.unsupported_nodes);
+    assert!(
+        converted.unsupported_nodes.is_empty(),
+        "{:?}",
+        converted.unsupported_nodes
+    );
     assert_eq!(converted.graph["5"]["inputs"]["model"], json!(["1", 0]));
     assert!(!converted.graph.contains_key("2"));
     assert!(!converted.graph.contains_key("3"));
@@ -621,7 +695,10 @@ fn kotlin_case_muted_node_leaves_a_named_dangling_input() {
           "links": [[8, 1, 0, 3, 1, "CONDITIONING"]] }"#,
     );
     let converted = to_api_graph(&ui, &kotlin_object_info(), false).unwrap();
-    assert_eq!(converted.unresolved_inputs, vec!["3.positive ← 节点 1（没有转换出来）".to_string()]);
+    assert_eq!(
+        converted.unresolved_inputs,
+        vec!["3.positive ← 节点 1（没有转换出来）".to_string()]
+    );
 }
 
 /// Kotlin `空着的连线型输入列成清单（纯前端广播节点原来就是往这些地方灌值的）`。
@@ -634,9 +711,19 @@ fn kotlin_case_open_inputs_list_only_sockets() {
     );
     let converted = to_api_graph(&ui, &kotlin_object_info(), false).unwrap();
     // value 是 forceInput（插口）：空着 = 缺输入，要列出来
-    assert!(converted.open_inputs.contains(&"1.value (STRING)".to_string()), "{:?}", converted.open_inputs);
+    assert!(
+        converted
+            .open_inputs
+            .contains(&"1.value (STRING)".to_string()),
+        "{:?}",
+        converted.open_inputs
+    );
     // note 是普通控件：空着时 ComfyUI 用默认值，不算缺口
-    assert!(!converted.open_inputs.iter().any(|i| i.contains("note")), "{:?}", converted.open_inputs);
+    assert!(
+        !converted.open_inputs.iter().any(|i| i.contains("note")),
+        "{:?}",
+        converted.open_inputs
+    );
 }
 
 // -----------------------------------------------------------------------
@@ -646,7 +733,8 @@ fn kotlin_case_open_inputs_list_only_sockets() {
 /// Kotlin `组节点按定义展开：内部节点换新号 连线与控件值都接对 输出穿透到真正的产出节点`。
 #[test]
 fn kotlin_case_subgraph_is_flattened() {
-    let converted = to_api_graph(&kotlin_subgraph_workflow(), &kotlin_object_info(), false).unwrap();
+    let converted =
+        to_api_graph(&kotlin_subgraph_workflow(), &kotlin_object_info(), false).unwrap();
 
     assert!(
         converted.unsupported_nodes.is_empty(),
@@ -655,7 +743,10 @@ fn kotlin_case_subgraph_is_flattened() {
     );
     // 顶层 1（CheckpointLoaderSimple）+ 20（KSampler）+ 展开出来的两个内部节点
     assert_eq!(converted.node_count, 4);
-    assert!(!converted.graph.contains_key("10"), "被展开的组节点实例自己不该再出现");
+    assert!(
+        !converted.graph.contains_key("10"),
+        "被展开的组节点实例自己不该再出现"
+    );
     assert!(
         converted.rewritten.iter().any(|r| r.contains("组节点")),
         "{:?}",
@@ -694,7 +785,11 @@ fn kotlin_case_subgraph_is_flattened() {
         json!([inner_latent_id.as_str(), 0]),
         "下游拿到的必须是内部那个 EmptyLatentImage"
     );
-    assert!(converted.unresolved_inputs.is_empty(), "{:?}", converted.unresolved_inputs);
+    assert!(
+        converted.unresolved_inputs.is_empty(),
+        "{:?}",
+        converted.unresolved_inputs
+    );
 }
 
 /// Kotlin `组节点里的组节点这一版不展开 如实报错（不猜）`。
@@ -717,7 +812,10 @@ fn kotlin_case_nested_subgraph_is_reported() {
     );
     let converted = to_api_graph(&ui, &kotlin_object_info(), false).unwrap();
     assert!(
-        converted.unsupported_nodes.iter().any(|u| u.contains("还套着一层组节点")),
+        converted
+            .unsupported_nodes
+            .iter()
+            .any(|u| u.contains("还套着一层组节点")),
         "{:?}",
         converted.unsupported_nodes
     );
@@ -740,7 +838,10 @@ fn subgraph_without_proxies_is_reported_not_guessed() {
     );
     let converted = to_api_graph(&ui, &kotlin_object_info(), false).unwrap();
     assert!(
-        converted.unsupported_nodes.iter().any(|u| u.contains("缺少输入 / 输出代理")),
+        converted
+            .unsupported_nodes
+            .iter()
+            .any(|u| u.contains("缺少输入 / 输出代理")),
         "{:?}",
         converted.unsupported_nodes
     );
@@ -765,7 +866,10 @@ fn subgraph_with_mismatched_input_count_is_reported() {
     );
     let converted = to_api_graph(&ui, &kotlin_object_info(), false).unwrap();
     assert!(
-        converted.unsupported_nodes.iter().any(|u| u.contains("对不上，不敢猜着展开")),
+        converted
+            .unsupported_nodes
+            .iter()
+            .any(|u| u.contains("对不上，不敢猜着展开")),
         "{:?}",
         converted.unsupported_nodes
     );
@@ -849,23 +953,35 @@ fn kotlin_case_emulate_frontend_changes_the_graph() {
     let raw = to_api_graph(&ui, &object_info, false).unwrap();
     assert!(!raw.runnable(), "纯前端节点还在 unsupported 里");
     assert!(
-        raw.unsupported_nodes.iter().any(|u| u.contains("Anything Everywhere")),
+        raw.unsupported_nodes
+            .iter()
+            .any(|u| u.contains("Anything Everywhere")),
         "{:?}",
         raw.unsupported_nodes
     );
     assert!(
-        raw.unsupported_nodes.iter().any(|u| u.contains("PreviewImage")),
+        raw.unsupported_nodes
+            .iter()
+            .any(|u| u.contains("PreviewImage")),
         "{:?}",
         raw.unsupported_nodes
     );
-    assert_eq!(raw.graph["5"]["inputs"].get("positive"), None, "关着就不许自己灌值");
+    assert_eq!(
+        raw.graph["5"]["inputs"].get("positive"),
+        None,
+        "关着就不许自己灌值"
+    );
     assert!(
-        raw.open_inputs.iter().any(|input| input.contains("5.positive (CONDITIONING)")),
+        raw.open_inputs
+            .iter()
+            .any(|input| input.contains("5.positive (CONDITIONING)")),
         "{:?}",
         raw.open_inputs
     );
     assert!(
-        raw.graph.values().all(|value| value["class_type"] != json!("SaveImage")),
+        raw.graph
+            .values()
+            .all(|value| value["class_type"] != json!("SaveImage")),
         "关着就不许自己补输出节点"
     );
     assert!(
@@ -878,39 +994,68 @@ fn kotlin_case_emulate_frontend_changes_the_graph() {
 
     // --- emulateFrontend = true：照 ComfyUI 前端排队前的行为等价改写 ---
     let emulated = to_api_graph(&ui, &object_info, true).unwrap();
-    assert!(emulated.unsupported_nodes.is_empty(), "{:?}", emulated.unsupported_nodes);
+    assert!(
+        emulated.unsupported_nodes.is_empty(),
+        "{:?}",
+        emulated.unsupported_nodes
+    );
     assert!(emulated.runnable(), "{:?}", emulated.unsupported_nodes);
     // ① 广播：上游那一路（节点 2 的 CONDITIONING）填进所有同类型且空着的输入
     assert_eq!(emulated.graph["5"]["inputs"]["positive"], json!(["2", 0]));
     assert_eq!(emulated.graph["5"]["inputs"]["negative"], json!(["2", 0]));
-    assert_eq!(emulated.broadcast_lines.len(), 2, "{:?}", emulated.broadcast_lines);
+    assert_eq!(
+        emulated.broadcast_lines.len(),
+        2,
+        "{:?}",
+        emulated.broadcast_lines
+    );
     assert!(
-        emulated.broadcast_lines.iter().any(|line| line.contains("5.positive ← 节点 14")),
+        emulated
+            .broadcast_lines
+            .iter()
+            .any(|line| line.contains("5.positive ← 节点 14")),
         "{:?}",
         emulated.broadcast_lines
     );
     // 灌完之后"还空着"的清单要重算（不然模型会去补一根已经接好的线）
     assert!(
-        !emulated.open_inputs.iter().any(|input| input.contains("5.positive")),
+        !emulated
+            .open_inputs
+            .iter()
+            .any(|input| input.contains("5.positive")),
         "{:?}",
         emulated.open_inputs
     );
     // ② 显示节点：丢掉并如实报告
     assert!(
-        emulated.frontend_rewritten.iter().any(|line| line.contains("Anything Everywhere（广播 2 处）")),
+        emulated
+            .frontend_rewritten
+            .iter()
+            .any(|line| line.contains("Anything Everywhere（广播 2 处）")),
         "{:?}",
         emulated.frontend_rewritten
     );
     assert!(
-        emulated.frontend_rewritten.iter().any(|line| line.contains("显示节点，已忽略")),
+        emulated
+            .frontend_rewritten
+            .iter()
+            .any(|line| line.contains("显示节点，已忽略")),
         "{:?}",
         emulated.frontend_rewritten
     );
     // ③ 一个输出节点都没有 → 照前端的做法补一个 SaveImage，接在产出 IMAGE 的那个节点上
-    assert_eq!(emulated.injected_nodes.len(), 1, "{:?}", emulated.injected_nodes);
+    assert_eq!(
+        emulated.injected_nodes.len(),
+        1,
+        "{:?}",
+        emulated.injected_nodes
+    );
     assert_eq!(emulated.graph["7"]["class_type"], json!("SaveImage"));
     assert_eq!(emulated.graph["7"]["inputs"]["images"], json!(["6", 0]));
-    assert_eq!(emulated.graph["7"]["inputs"]["filename_prefix"], json!("ComfyHub"));
+    assert_eq!(
+        emulated.graph["7"]["inputs"]["filename_prefix"],
+        json!("ComfyHub")
+    );
     assert_eq!(emulated.node_count, 6, "补完之后节点数要多一个");
 }
 
@@ -923,14 +1068,23 @@ fn emulate_does_not_guess_an_undeclared_broadcast_type() {
     let broadcaster = nodes.iter_mut().find(|node| node["id"] == 14).unwrap();
     broadcaster.as_object_mut().unwrap().remove("properties");
     let emulated = to_api_graph(&ui, &object_info, true).unwrap();
-    assert_eq!(emulated.unsupported_nodes.len(), 1, "{:?}", emulated.unsupported_nodes);
+    assert_eq!(
+        emulated.unsupported_nodes.len(),
+        1,
+        "{:?}",
+        emulated.unsupported_nodes
+    );
     assert!(
         emulated.unsupported_nodes[0].contains("类型 未声明：全图没有对得上的空输入"),
         "{:?}",
         emulated.unsupported_nodes
     );
     assert!(emulated.broadcast_lines.is_empty());
-    assert_eq!(emulated.graph["5"]["inputs"].get("positive"), None, "不猜就不许灌值");
+    assert_eq!(
+        emulated.graph["5"]["inputs"].get("positive"),
+        None,
+        "不猜就不许灌值"
+    );
 }
 
 /// 广播节点自己**没接上游**时：没有东西可广播，如实报（前端这时候也不会灌值）。
@@ -940,7 +1094,10 @@ fn emulate_reports_a_broadcaster_without_upstream() {
     let mut ui = emulate_workflow();
     let nodes = ui.get_mut("nodes").unwrap().as_array_mut().unwrap();
     let broadcaster = nodes.iter_mut().find(|node| node["id"] == 14).unwrap();
-    broadcaster.as_object_mut().unwrap().insert("inputs".into(), json!([]));
+    broadcaster
+        .as_object_mut()
+        .unwrap()
+        .insert("inputs".into(), json!([]));
     let emulated = to_api_graph(&ui, &object_info, true).unwrap();
     assert_eq!(
         emulated.unsupported_nodes,
@@ -953,7 +1110,8 @@ fn emulate_reports_a_broadcaster_without_upstream() {
 /// 结果里也不会冒出任何"前端改写清单"（工具描述里那半句"一个字都不改"说的就是这个）。
 #[test]
 fn emulate_off_leaves_the_frontend_report_empty() {
-    let emulated = to_api_graph(&emulate_workflow(), &emulate_workflow_object_info(), false).unwrap();
+    let emulated =
+        to_api_graph(&emulate_workflow(), &emulate_workflow_object_info(), false).unwrap();
     assert!(emulated.frontend_rewritten.is_empty());
     assert!(emulated.broadcast_lines.is_empty());
     assert!(emulated.injected_nodes.is_empty());
@@ -1012,13 +1170,24 @@ fn rgthree_直通开关把下游接到真正的上游() {
     let converted = to_api_graph(&ui, &object_info, false).unwrap();
     assert_eq!(converted.graph["105"]["inputs"]["model"], json!(["89", 0]));
     assert!(!converted.graph.contains_key("90"), "直通节点自己不进图");
-    assert!(converted.unsupported_nodes.is_empty(), "{:?}", converted.unsupported_nodes);
     assert!(
-        converted.rewritten.iter().any(|line| line.contains("90 Fast Bypasser (rgthree)（直通）")),
+        converted.unsupported_nodes.is_empty(),
+        "{:?}",
+        converted.unsupported_nodes
+    );
+    assert!(
+        converted
+            .rewritten
+            .iter()
+            .any(|line| line.contains("90 Fast Bypasser (rgthree)（直通）")),
         "{:?}",
         converted.rewritten
     );
-    assert!(converted.unresolved_inputs.is_empty(), "{:?}", converted.unresolved_inputs);
+    assert!(
+        converted.unresolved_inputs.is_empty(),
+        "{:?}",
+        converted.unresolved_inputs
+    );
 }
 
 /// 形状不对就**不猜**：直通节点有 2 个接了线的输入时判不出该透传哪一路，如实报；
@@ -1069,9 +1238,16 @@ fn 直通开关的形状不对时不猜() {
         }"#,
     );
     let converted = to_api_graph(&no_input, &object_info, false).unwrap();
-    assert!(converted.unsupported_nodes.is_empty(), "{:?}", converted.unsupported_nodes);
     assert!(
-        converted.rewritten.iter().any(|line| line.contains("只是开关，没有接上游")),
+        converted.unsupported_nodes.is_empty(),
+        "{:?}",
+        converted.unsupported_nodes
+    );
+    assert!(
+        converted
+            .rewritten
+            .iter()
+            .any(|line| line.contains("只是开关，没有接上游")),
         "{:?}",
         converted.rewritten
     );
@@ -1128,7 +1304,10 @@ fn 动态下拉框的子项要跟着主项一起进图() {
     assert_eq!(inputs["sampling_mode.top_k"], json!(64));
     assert_eq!(inputs["mtp"], json!("auto"));
     assert!(
-        !converted.open_inputs.iter().any(|line| line.starts_with("43.sampling_mode")),
+        !converted
+            .open_inputs
+            .iter()
+            .any(|line| line.starts_with("43.sampling_mode")),
         "它是控件不是插口：{:?}",
         converted.open_inputs
     );
@@ -1189,12 +1368,37 @@ fn 注册成零输出桩的广播节点照样等价改写() {
     );
     // 不开：注册过的桩被当普通节点留在图里，`vae` 一直空着（而且**不报错**）
     let plain = to_api_graph(&ui, &object_info, false).unwrap();
-    assert!(plain.unsupported_nodes.is_empty(), "它注册过，所以不会被报成 unsupported：{:?}", plain.unsupported_nodes);
-    assert!(plain.open_inputs.iter().any(|line| line.starts_with("4.vae")), "{:?}", plain.open_inputs);
+    assert!(
+        plain.unsupported_nodes.is_empty(),
+        "它注册过，所以不会被报成 unsupported：{:?}",
+        plain.unsupported_nodes
+    );
+    assert!(
+        plain
+            .open_inputs
+            .iter()
+            .any(|line| line.starts_with("4.vae")),
+        "{:?}",
+        plain.open_inputs
+    );
 
     // 开：按前端行为广播填上
     let emulated = to_api_graph(&ui, &object_info, true).unwrap();
     assert_eq!(emulated.graph["4"]["inputs"]["vae"], json!(["1", 2]));
-    assert!(!emulated.open_inputs.iter().any(|line| line.starts_with("4.vae")), "{:?}", emulated.open_inputs);
-    assert!(emulated.broadcast_lines.iter().any(|line| line.starts_with("4.vae")), "{:?}", emulated.broadcast_lines);
+    assert!(
+        !emulated
+            .open_inputs
+            .iter()
+            .any(|line| line.starts_with("4.vae")),
+        "{:?}",
+        emulated.open_inputs
+    );
+    assert!(
+        emulated
+            .broadcast_lines
+            .iter()
+            .any(|line| line.starts_with("4.vae")),
+        "{:?}",
+        emulated.broadcast_lines
+    );
 }

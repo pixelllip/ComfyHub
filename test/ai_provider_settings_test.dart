@@ -59,12 +59,18 @@ MockClient _backend(_Recorder recorder) {
           'endpointTrust': 'loopback',
           'enabled': true,
           'revision': 3,
-          'credential': {'configured': true, 'source': 'managed', 'writable': true},
-        }
+          'credential': {
+            'configured': true,
+            'source': 'managed',
+            'writable': true,
+          },
+        },
       ];
     } else if (path == '/api/ai/providers/local-gw/models') {
       if (request.method == 'PUT') recorder.modelSaves.add(request.body);
-      final sent = request.method == 'PUT' ? jsonDecode(request.body) as Map<String, dynamic> : null;
+      final sent = request.method == 'PUT'
+          ? jsonDecode(request.body) as Map<String, dynamic>
+          : null;
       body = sent == null
           ? [
               {
@@ -75,7 +81,7 @@ MockClient _backend(_Recorder recorder) {
                 'tools': true,
                 'capabilitySource': 'manual',
                 'enabled': true,
-              }
+              },
             ]
           : (sent['models'] as List);
     } else if (path.endsWith('/discover-models')) {
@@ -154,7 +160,9 @@ void main() {
     expect(find.text('已配置'), findsOneWidget);
 
     // 密钥输入框必须为空 —— 这是"只写不读"的界面保证
-    final fields = tester.widgetList<TextField>(find.byType(TextField)).toList();
+    final fields = tester
+        .widgetList<TextField>(find.byType(TextField))
+        .toList();
     expect(fields, isNotEmpty);
     for (final f in fields) {
       expect(f.controller?.text ?? '', isEmpty);
@@ -219,12 +227,20 @@ void main() {
     // 模拟"填完就点创建"的真实操作。
     expect(find.text('端点信任级别'), findsNothing);
     expect(find.text('凭据引用名（可选）'), findsNothing);
-    await tester.enterText(find.widgetWithText(TextField, 'Provider ID（创建后不可改）'), 'deepseek-gw');
+    await tester.enterText(
+      find.widgetWithText(TextField, 'Provider ID（创建后不可改）'),
+      'deepseek-gw',
+    );
     await tester.enterText(find.widgetWithText(TextField, '显示名'), 'DeepSeek');
     await tester.enterText(
-        find.widgetWithText(TextField, 'Base URL'), 'https://api.deepseek.com/v1');
+      find.widgetWithText(TextField, 'Base URL'),
+      'https://api.deepseek.com/v1',
+    );
     // API Key 顺手填上：创建与存密钥是**两条**请求，两条都要发出去
-    await tester.enterText(find.widgetWithText(TextField, 'API Key（可选）'), 'sk-e2e-secret');
+    await tester.enterText(
+      find.widgetWithText(TextField, 'API Key（可选）'),
+      'sk-e2e-secret',
+    );
     await tester.pumpAndSettle();
 
     await tester.tap(find.text('创建'));
@@ -232,12 +248,24 @@ void main() {
 
     // 1) 请求体里**不带 endpointTrust**（由后端按地址推断），也不带密钥
     expect(recorder.providerCreates, hasLength(1));
-    final sent = jsonDecode(recorder.providerCreates.single) as Map<String, dynamic>;
-    expect(sent.containsKey('endpointTrust'), isFalse,
-        reason: '信任档由软件按地址决定：不带这个键，后端就不会拿一个"仅本机"去挡公网地址');
-    expect(sent['credentialRef'], 'DEEPSEEK_GW_API_KEY', reason: '引用名由程序按 ID 推出');
+    final sent =
+        jsonDecode(recorder.providerCreates.single) as Map<String, dynamic>;
+    expect(
+      sent.containsKey('endpointTrust'),
+      isFalse,
+      reason: '信任档由软件按地址决定：不带这个键，后端就不会拿一个"仅本机"去挡公网地址',
+    );
+    expect(
+      sent['credentialRef'],
+      'DEEPSEEK_GW_API_KEY',
+      reason: '引用名由程序按 ID 推出',
+    );
     expect(sent['baseURL'], 'https://api.deepseek.com/v1');
-    expect(sent.values.contains('sk-e2e-secret'), isFalse, reason: '密钥不进 provider 行（AIH-012）');
+    expect(
+      sent.values.contains('sk-e2e-secret'),
+      isFalse,
+      reason: '密钥不进 provider 行（AIH-012）',
+    );
 
     // 2) 密钥单独存一次（对话框里填了就必须落到 CredentialStore）
     expect(recorder.puts, hasLength(1));
@@ -260,9 +288,15 @@ void main() {
     await tester.tap(find.text('新建 Provider'));
     await tester.pumpAndSettle();
 
-    await tester.enterText(find.widgetWithText(TextField, 'Provider ID（创建后不可改）'), 'My Gateway');
+    await tester.enterText(
+      find.widgetWithText(TextField, 'Provider ID（创建后不可改）'),
+      'My Gateway',
+    );
     await tester.enterText(find.widgetWithText(TextField, '显示名'), 'x');
-    await tester.enterText(find.widgetWithText(TextField, 'Base URL'), 'https://api.deepseek.com/v1');
+    await tester.enterText(
+      find.widgetWithText(TextField, 'Base URL'),
+      'https://api.deepseek.com/v1',
+    );
     await tester.pumpAndSettle();
 
     expect(find.textContaining('只能小写字母/数字'), findsOneWidget);
@@ -285,19 +319,31 @@ void main() {
     await tester.pumpAndSettle();
     // 懒构建表头（Provider/密钥区）比视口高，模型行要拖一下才进视口 ——
     // 与 model_list_scroll_test 的同一约定。
-    await tester.drag(find.byType(CustomScrollView).first, const Offset(0, -400));
+    await tester.drag(
+      find.byType(CustomScrollView).first,
+      const Offset(0, -400),
+    );
     await tester.pumpAndSettle();
 
     await tester.tap(find.text('手动添加'));
     await tester.pumpAndSettle();
 
-    await tester.enterText(find.widgetWithText(TextField, '模型 ID（请求里用的那个）'), 'deepseek-chat');
-    await tester.enterText(find.widgetWithText(TextField, '显示名'), 'DeepSeek Chat');
+    await tester.enterText(
+      find.widgetWithText(TextField, '模型 ID（请求里用的那个）'),
+      'deepseek-chat',
+    );
+    await tester.enterText(
+      find.widgetWithText(TextField, '显示名'),
+      'DeepSeek Chat',
+    );
     await tester.pumpAndSettle();
 
     await tester.tap(find.text('添加'));
     await tester.pumpAndSettle();
-    await tester.drag(find.byType(CustomScrollView).first, const Offset(0, -400));
+    await tester.drag(
+      find.byType(CustomScrollView).first,
+      const Offset(0, -400),
+    );
     await tester.pumpAndSettle();
 
     // 界面里出现新模型
@@ -308,7 +354,11 @@ void main() {
     final saved = jsonDecode(recorder.modelSaves.last) as Map<String, dynamic>;
     final models = (saved['models'] as List).cast<Map<String, dynamic>>();
     expect(models.map((m) => m['id']), contains('deepseek-chat'));
-    expect(models.map((m) => m['id']), contains('m-text'), reason: '原有模型不能被覆盖掉');
+    expect(
+      models.map((m) => m['id']),
+      contains('m-text'),
+      reason: '原有模型不能被覆盖掉',
+    );
   });
 
   testWidgets('获取可用模型：能力自动预填并标出来源，加入时按预填写库', (tester) async {
@@ -340,12 +390,20 @@ void main() {
     final vision = models.firstWhere((m) => m['id'] == 'vision-model');
     final mystery = models.firstWhere((m) => m['id'] == 'acme-mystery');
 
-    expect(vision['inputModalities'], contains('image'), reason: '接口声明的图片能力要带过来');
+    expect(
+      vision['inputModalities'],
+      contains('image'),
+      reason: '接口声明的图片能力要带过来',
+    );
     expect(vision['capabilitySource'], 'discovered');
     expect(vision['tools'], isTrue);
 
     expect(mystery['inputModalities'], ['text'], reason: '未识别的模型不能凭空多出图片能力');
-    expect(mystery['capabilitySource'], 'manual', reason: '未识别＝用户接受了保守默认，标成手工声明');
+    expect(
+      mystery['capabilitySource'],
+      'manual',
+      reason: '未识别＝用户接受了保守默认，标成手工声明',
+    );
   });
 
   testWidgets('新建时填了密钥，详情立刻显示「已配置」而不是「未配置」', (tester) async {
@@ -376,7 +434,11 @@ void main() {
           'endpointTrust': 'public',
           'enabled': true,
           'revision': 1,
-          'credential': {'configured': false, 'source': 'none', 'writable': true},
+          'credential': {
+            'configured': false,
+            'source': 'none',
+            'writable': true,
+          },
         };
       } else if (path == '/api/ai/providers' && request.method == 'GET') {
         body = [
@@ -394,7 +456,7 @@ void main() {
               'source': stored.isEmpty ? 'none' : 'managed',
               'writable': true,
             },
-          }
+          },
         ];
       } else if (path.endsWith('/credentials') && request.method == 'PUT') {
         stored.add(request.body);
@@ -402,26 +464,40 @@ void main() {
       } else {
         body = <Object>[];
       }
-      return http.Response(jsonEncode(body), 200,
-          headers: {'content-type': 'application/json; charset=utf-8'});
+      return http.Response(
+        jsonEncode(body),
+        200,
+        headers: {'content-type': 'application/json; charset=utf-8'},
+      );
     });
 
-    await tester.pumpWidget(ChangeNotifierProvider<SettingsStore>.value(
-      value: settings,
-      child: MaterialApp(
-        home: AiProviderSettingsPage(api: AiApiClient(settings.baseUrl, client: client)),
+    await tester.pumpWidget(
+      ChangeNotifierProvider<SettingsStore>.value(
+        value: settings,
+        child: MaterialApp(
+          home: AiProviderSettingsPage(
+            api: AiApiClient(settings.baseUrl, client: client),
+          ),
+        ),
       ),
-    ));
+    );
     await tester.pumpAndSettle();
 
     await tester.tap(find.text('新建 Provider'));
     await tester.pumpAndSettle();
     await tester.enterText(
-        find.widgetWithText(TextField, 'Provider ID（创建后不可改）'), 'deepseek');
+      find.widgetWithText(TextField, 'Provider ID（创建后不可改）'),
+      'deepseek',
+    );
     await tester.enterText(find.widgetWithText(TextField, '显示名'), 'DeepSeek');
     await tester.enterText(
-        find.widgetWithText(TextField, 'Base URL'), 'https://api.deepseek.com/v1');
-    await tester.enterText(find.widgetWithText(TextField, 'API Key（可选）'), 'sk-demo-123');
+      find.widgetWithText(TextField, 'Base URL'),
+      'https://api.deepseek.com/v1',
+    );
+    await tester.enterText(
+      find.widgetWithText(TextField, 'API Key（可选）'),
+      'sk-demo-123',
+    );
     await tester.tap(find.widgetWithText(FilledButton, '创建'));
     await tester.pumpAndSettle();
 

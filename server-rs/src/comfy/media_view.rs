@@ -45,10 +45,7 @@ struct MediaRow {
 }
 
 /// `comfy_view_outputs` 的实现（`limit` / `mediaId` 二选一，都不给就取最近的）。
-pub fn tool_view_outputs(
-    state: &AppState,
-    arguments: &Value,
-) -> Result<ToolOutcome, ToolFailure> {
+pub fn tool_view_outputs(state: &AppState, arguments: &Value) -> Result<ToolOutcome, ToolFailure> {
     let limit = arguments
         .get("limit")
         .and_then(Value::as_i64)
@@ -56,9 +53,8 @@ pub fn tool_view_outputs(
         .clamp(1, MAX_LIMIT);
     let media_id = arguments.get("mediaId").and_then(Value::as_i64);
 
-    let rows = load(state, media_id, limit).map_err(|error| {
-        ToolFailure::new("INTERNAL", format!("读取画廊产物失败：{error:?}"))
-    })?;
+    let rows = load(state, media_id, limit)
+        .map_err(|error| ToolFailure::new("INTERNAL", format!("读取画廊产物失败：{error:?}")))?;
 
     if rows.is_empty() {
         let text = match media_id {
@@ -197,13 +193,17 @@ fn load(
         let sql = if media_id.is_some() {
             format!("{SELECT} WHERE m.id = ?1")
         } else {
-            format!("{SELECT} WHERE m.kind = 'IMAGE' ORDER BY m.created_at DESC, m.id DESC LIMIT ?1")
+            format!(
+                "{SELECT} WHERE m.kind = 'IMAGE' ORDER BY m.created_at DESC, m.id DESC LIMIT ?1"
+            )
         };
         let mut stmt = conn.prepare(&sql)?;
         let rows = if let Some(id) = media_id {
-            stmt.query_map(params![id], row_of)?.collect::<rusqlite::Result<Vec<_>>>()?
+            stmt.query_map(params![id], row_of)?
+                .collect::<rusqlite::Result<Vec<_>>>()?
         } else {
-            stmt.query_map(params![limit], row_of)?.collect::<rusqlite::Result<Vec<_>>>()?
+            stmt.query_map(params![limit], row_of)?
+                .collect::<rusqlite::Result<Vec<_>>>()?
         };
         Ok(rows)
     })
@@ -217,7 +217,9 @@ const SELECT: &str = "SELECT m.id, m.kind, m.original_name, m.stored_name, m.wid
 fn row_of(row: &rusqlite::Row<'_>) -> rusqlite::Result<MediaRow> {
     Ok(MediaRow {
         id: row.get("id")?,
-        kind: row.get::<_, Option<String>>("kind")?.unwrap_or_else(|| "IMAGE".to_string()),
+        kind: row
+            .get::<_, Option<String>>("kind")?
+            .unwrap_or_else(|| "IMAGE".to_string()),
         original_name: row.get("original_name")?,
         stored_name: row.get("stored_name")?,
         width: row.get("width")?,

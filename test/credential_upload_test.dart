@@ -21,7 +21,8 @@ import 'package:viewer/core/ai_api_client.dart';
 import 'package:viewer/core/api_client.dart' show ApiException;
 import 'package:viewer/core/credential_store.dart';
 import 'package:viewer/core/inbound_auth_api.dart';
-import 'package:viewer/core/run_event_source.dart' show LocalHarnessRunEventSource;
+import 'package:viewer/core/run_event_source.dart'
+    show LocalHarnessRunEventSource;
 import 'package:viewer/core/settings_store.dart';
 import 'package:viewer/models/ai_models.dart';
 import 'package:viewer/pages/ai_provider_settings_page.dart';
@@ -29,8 +30,11 @@ import 'package:viewer/pages/ai_provider_settings_page.dart';
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
-  const harnessChannel = MethodChannel(LocalHarnessRunEventSource.methodChannelName);
-  final messenger = TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+  const harnessChannel = MethodChannel(
+    LocalHarnessRunEventSource.methodChannelName,
+  );
+  final messenger =
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
 
   final store = <String, String>{};
   final channelCalls = <MethodCall>[];
@@ -45,7 +49,9 @@ void main() {
     hideRevealed = false;
     messenger.setMockMethodCallHandler(harnessChannel, (call) async {
       channelCalls.add(call);
-      final args = Map<String, dynamic>.from((call.arguments as Map?) ?? const {});
+      final args = Map<String, dynamic>.from(
+        (call.arguments as Map?) ?? const {},
+      );
       switch (call.method) {
         case 'hasCredential':
           return store.containsKey(args['ref']);
@@ -59,46 +65,57 @@ void main() {
   tearDown(() => messenger.setMockMethodCallHandler(harnessChannel, null));
 
   AiProvider provider({String? ref = 'PHONE_KEY'}) => AiProvider(
-        id: 'p1',
-        displayName: '本机网关',
-        api: 'openai-completions',
-        baseURL: 'http://127.0.0.1:11434/v1',
-        credentialRef: ref,
-        endpointTrust: 'loopback',
-        enabled: true,
-        revision: 1,
-        credential: const AiCredentialStatus(configured: true, source: 'keystore', writable: true),
-      );
+    id: 'p1',
+    displayName: '本机网关',
+    api: 'openai-completions',
+    baseURL: 'http://127.0.0.1:11434/v1',
+    credentialRef: ref,
+    endpointTrust: 'loopback',
+    enabled: true,
+    revision: 1,
+    credential: const AiCredentialStatus(
+      configured: true,
+      source: 'keystore',
+      writable: true,
+    ),
+  );
 
   group('上行请求的形状', () {
-    test('PUT /api/ai/credentials：带令牌、body 是 {credentials, rev}，回执逐条解析', () async {
-      late http.Request seen;
-      final api = InboundAuthApi(
-        'http://192.168.1.9:8080',
-        client: MockClient((request) async {
-          seen = request;
-          // 响应体用 ASCII：`http.Response(String, …)` 没有 charset 时按 latin1 编码，
-          // 中文会当场抛异常（那样测的就不是我们的判据了）。
-          return http.Response(
-            '{"applied":["PHONE_KEY"],"rejected":[{"ref":"OTHER","code":"STALE_IGNORED","message":"stale"}],"rev":13}',
-            200,
-          );
-        }),
-      );
+    test(
+      'PUT /api/ai/credentials：带令牌、body 是 {credentials, rev}，回执逐条解析',
+      () async {
+        late http.Request seen;
+        final api = InboundAuthApi(
+          'http://192.168.1.9:8080',
+          client: MockClient((request) async {
+            seen = request;
+            // 响应体用 ASCII：`http.Response(String, …)` 没有 charset 时按 latin1 编码，
+            // 中文会当场抛异常（那样测的就不是我们的判据了）。
+            return http.Response(
+              '{"applied":["PHONE_KEY"],"rejected":[{"ref":"OTHER","code":"STALE_IGNORED","message":"stale"}],"rev":13}',
+              200,
+            );
+          }),
+        );
 
-      final r = await api.uploadCredentials({'PHONE_KEY': 'sk-1'}, rev: 12, token: 'tok-1');
+        final r = await api.uploadCredentials(
+          {'PHONE_KEY': 'sk-1'},
+          rev: 12,
+          token: 'tok-1',
+        );
 
-      expect(seen.method, 'PUT');
-      expect(seen.url.path, '/api/ai/credentials');
-      expect(seen.headers['X-ComfyHub-Token'], 'tok-1');
-      final body = seen.body;
-      expect(body, contains('PHONE_KEY'));
-      expect(body, contains('sk-1'));
-      expect(body, contains('"rev":12'));
-      expect(r.applied, ['PHONE_KEY']);
-      expect(r.rejected.single.code, 'STALE_IGNORED');
-      expect(r.rev, 13);
-    });
+        expect(seen.method, 'PUT');
+        expect(seen.url.path, '/api/ai/credentials');
+        expect(seen.headers['X-ComfyHub-Token'], 'tok-1');
+        final body = seen.body;
+        expect(body, contains('PHONE_KEY'));
+        expect(body, contains('sk-1'));
+        expect(body, contains('"rev":12'));
+        expect(r.applied, ['PHONE_KEY']);
+        expect(r.rejected.single.code, 'STALE_IGNORED');
+        expect(r.rev, 13);
+      },
+    );
 
     test('不带 rev 时**不发这个键**（= 用户显式点的强制覆盖）', () async {
       late http.Request seen;
@@ -114,10 +131,15 @@ void main() {
     });
 
     test('旧后端 404 要抛 ApiException（界面据此说"还没有这条接口"）', () async {
-      final api = InboundAuthApi('http://x', client: MockClient((_) async => http.Response('', 404)));
+      final api = InboundAuthApi(
+        'http://x',
+        client: MockClient((_) async => http.Response('', 404)),
+      );
       await expectLater(
         () => api.uploadCredentials({'A': 'v'}),
-        throwsA(isA<ApiException>().having((e) => e.statusCode, 'statusCode', 404)),
+        throwsA(
+          isA<ApiException>().having((e) => e.statusCode, 'statusCode', 404),
+        ),
       );
     });
 
@@ -131,7 +153,11 @@ void main() {
         contains('先从桌面同步'),
       );
       expect(
-        const CredentialRejection(ref: 'A', code: 'BAD_PAYLOAD', message: '名字太长').hint,
+        const CredentialRejection(
+          ref: 'A',
+          code: 'BAD_PAYLOAD',
+          message: '名字太长',
+        ).hint,
         contains('名字太长'),
       );
     });
@@ -157,8 +183,11 @@ void main() {
       expect(bodies.last.contains('allowUpload'), isTrue);
 
       await api.setAllowCredentials('dev-1', false);
-      expect(bodies.last.contains('allowUpload'), isFalse,
-          reason: '只动下行开关时多发一个键，旧后端会当成"用户没开上行"，那种静默最坑');
+      expect(
+        bodies.last.contains('allowUpload'),
+        isFalse,
+        reason: '只动下行开关时多发一个键，旧后端会当成"用户没开上行"，那种静默最坑',
+      );
     });
 
     test('旧后端没有 allowCredentialsUpload 字段 → 恒 false（不是"用户没开"）', () {
@@ -181,13 +210,18 @@ void main() {
     });
 
     test('桌面：直接抛（桌面自己就是真源）', () async {
-      final remote = RemoteCredentialStore(AiApiClient('http://127.0.0.1:8080'));
+      final remote = RemoteCredentialStore(
+        AiApiClient('http://127.0.0.1:8080'),
+      );
       await expectLater(() => remote.reveal(provider()), throwsStateError);
     });
   });
 
   group('界面：推给桌面', () {
-    MockClient backend({int uploadStatus = 200, String uploadBody = '{"applied":["PHONE_KEY"]}'}) {
+    MockClient backend({
+      int uploadStatus = 200,
+      String uploadBody = '{"applied":["PHONE_KEY"]}',
+    }) {
       return MockClient((request) async {
         final path = request.url.path;
         if (path == '/api/ai/credentials' && request.method == 'PUT') {
@@ -195,21 +229,29 @@ void main() {
         }
         final body = switch (path) {
           '/api/ai/providers' => [
-              {
-                'id': 'p1',
-                'displayName': '本机网关',
-                'api': 'openai-completions',
-                'baseURL': 'http://127.0.0.1:11434/v1',
-                'credentialRef': 'PHONE_KEY',
-                'endpointTrust': 'loopback',
-                'enabled': true,
-                'revision': 1,
-                'credential': {'configured': true, 'source': 'keystore', 'writable': true},
-              }
-            ],
+            {
+              'id': 'p1',
+              'displayName': '本机网关',
+              'api': 'openai-completions',
+              'baseURL': 'http://127.0.0.1:11434/v1',
+              'credentialRef': 'PHONE_KEY',
+              'endpointTrust': 'loopback',
+              'enabled': true,
+              'revision': 1,
+              'credential': {
+                'configured': true,
+                'source': 'keystore',
+                'writable': true,
+              },
+            },
+          ],
           _ => <Object>[],
         };
-        return http.Response(_json(body), 200, headers: {'content-type': 'application/json; charset=utf-8'});
+        return http.Response(
+          _json(body),
+          200,
+          headers: {'content-type': 'application/json; charset=utf-8'},
+        );
       });
     }
 
@@ -268,27 +310,36 @@ void main() {
 
       var uploadCalls = 0;
       final client = MockClient((request) async {
-        if (request.url.path == '/api/ai/credentials' && request.method == 'PUT') {
+        if (request.url.path == '/api/ai/credentials' &&
+            request.method == 'PUT') {
           uploadCalls++;
           return http.Response('{"applied":["PHONE_KEY"]}', 200);
         }
         final body = switch (request.url.path) {
           '/api/ai/providers' => [
-              {
-                'id': 'p1',
-                'displayName': '本机网关',
-                'api': 'openai-completions',
-                'baseURL': 'http://127.0.0.1:11434/v1',
-                'credentialRef': 'PHONE_KEY',
-                'endpointTrust': 'loopback',
-                'enabled': true,
-                'revision': 1,
-                'credential': {'configured': true, 'source': 'keystore', 'writable': true},
-              }
-            ],
+            {
+              'id': 'p1',
+              'displayName': '本机网关',
+              'api': 'openai-completions',
+              'baseURL': 'http://127.0.0.1:11434/v1',
+              'credentialRef': 'PHONE_KEY',
+              'endpointTrust': 'loopback',
+              'enabled': true,
+              'revision': 1,
+              'credential': {
+                'configured': true,
+                'source': 'keystore',
+                'writable': true,
+              },
+            },
+          ],
           _ => <Object>[],
         };
-        return http.Response(_json(body), 200, headers: {'content-type': 'application/json; charset=utf-8'});
+        return http.Response(
+          _json(body),
+          200,
+          headers: {'content-type': 'application/json; charset=utf-8'},
+        );
       });
 
       await tester.pumpWidget(await page(client));
@@ -313,7 +364,9 @@ void main() {
       addTearDown(tester.view.reset);
       store['PHONE_KEY'] = 'sk-phone';
 
-      await tester.pumpWidget(await page(backend(uploadStatus: 404, uploadBody: '')));
+      await tester.pumpWidget(
+        await page(backend(uploadStatus: 404, uploadBody: '')),
+      );
       await tester.pumpAndSettle();
       await tester.tap(find.text('本机网关'));
       await tester.pumpAndSettle();

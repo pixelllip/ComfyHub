@@ -33,8 +33,15 @@ pub const ENV_FALLBACKS: [&str; 4] = ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY"
 /// 明确要求"别走代理"的写法。
 const DIRECT_WORDS: [&str; 5] = ["direct", "none", "off", "-", "no"];
 /// 一看就是本机 / 内网的名字后缀。
-const LOCAL_SUFFIXES: [&str; 7] =
-    [".local", ".lan", ".internal", ".intranet", ".home", ".home.arpa", ".localdomain"];
+const LOCAL_SUFFIXES: [&str; 7] = [
+    ".local",
+    ".lan",
+    ".internal",
+    ".intranet",
+    ".home",
+    ".home.arpa",
+    ".localdomain",
+];
 
 /// 这次出网会怎么走（**只用来写进错误信息**）。
 #[derive(Debug, Clone, PartialEq)]
@@ -64,7 +71,10 @@ impl Route {
 /// ⚠ 解析不出来的**按本机处理**：代理本来就只该用来解决"公网连不上"，
 /// 把不确定的东西交给代理反而会把本机调用打死。
 pub fn is_local_host(host: &str) -> bool {
-    let h = host.trim().trim_matches(|c| c == '[' || c == ']').to_ascii_lowercase();
+    let h = host
+        .trim()
+        .trim_matches(|c| c == '[' || c == ']')
+        .to_ascii_lowercase();
     if h.is_empty() || h == "localhost" || h.ends_with(".localhost") {
         return true;
     }
@@ -76,7 +86,11 @@ pub fn is_local_host(host: &str) -> bool {
     }
     match h.parse::<std::net::IpAddr>() {
         Ok(std::net::IpAddr::V4(v4)) => {
-            v4.is_loopback() || v4.is_private() || v4.is_link_local() || v4.is_unspecified() || v4.is_broadcast()
+            v4.is_loopback()
+                || v4.is_private()
+                || v4.is_link_local()
+                || v4.is_unspecified()
+                || v4.is_broadcast()
         }
         Ok(std::net::IpAddr::V6(v6)) => {
             v6.is_loopback()
@@ -147,7 +161,10 @@ pub fn route_for(
             return parse_proxy(&raw).map(Route::Proxy).unwrap_or(Route::Direct);
         }
     }
-    system().and_then(|raw| parse_proxy(&raw)).map(Route::Proxy).unwrap_or(Route::Direct)
+    system()
+        .and_then(|raw| parse_proxy(&raw))
+        .map(Route::Proxy)
+        .unwrap_or(Route::Direct)
 }
 
 /// 进程真正用的那一档。
@@ -175,7 +192,13 @@ fn system_proxy() -> Option<String> {
         .lines()
         .find(|line| line.contains("ProxyEnable"))
         .and_then(|line| line.split_whitespace().last())
-        .map(|value| value.trim_start_matches("0x").trim_start_matches('0').eq("1") || value == "0x1")
+        .map(|value| {
+            value
+                .trim_start_matches("0x")
+                .trim_start_matches('0')
+                .eq("1")
+                || value == "0x1"
+        })
         .unwrap_or(false);
     if !enabled {
         return None;

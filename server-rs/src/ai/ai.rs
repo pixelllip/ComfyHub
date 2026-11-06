@@ -47,7 +47,11 @@ pub struct CredentialStatus {
 
 impl CredentialStatus {
     fn none_readonly() -> Self {
-        Self { configured: false, source: "none".into(), writable: false }
+        Self {
+            configured: false,
+            source: "none".into(),
+            writable: false,
+        }
     }
 }
 
@@ -96,12 +100,20 @@ pub fn describe_credential(
     let from_env = env_of(reference).or_else(|| env_of(&format!("{ENV_PREFIX}{reference}")));
     if let Some(value) = from_env {
         // ⚠ 环境变量那一档 `writable=false`：界面不该改一个由环境变量给的 key
-        return CredentialStatus { configured: !value.is_empty(), source: "env".into(), writable: false };
+        return CredentialStatus {
+            configured: !value.is_empty(),
+            source: "env".into(),
+            writable: false,
+        };
     }
     let stored = stored_has(reference);
     CredentialStatus {
         configured: stored,
-        source: if stored { "managed".into() } else { "none".into() },
+        source: if stored {
+            "managed".into()
+        } else {
+            "none".into()
+        },
         // 走到这里说明没有环境变量挡着：界面可以写（也为"清掉一把配错的 key"留着）
         writable: true,
     }
@@ -226,8 +238,11 @@ impl AiProviderRow {
 /// 文件不存在 / 读坏了一律当"没有"—— 那正是"没配过"的意思，不能因此让整个端点 500。
 fn read_credential_refs(state: &AppState) -> Vec<String> {
     let file = credential_store_path(state);
-    let Ok(text) = std::fs::read_to_string(&file) else { return Vec::new() };
-    let Ok(serde_json::Value::Object(map)) = serde_json::from_str::<serde_json::Value>(&text) else {
+    let Ok(text) = std::fs::read_to_string(&file) else {
+        return Vec::new();
+    };
+    let Ok(serde_json::Value::Object(map)) = serde_json::from_str::<serde_json::Value>(&text)
+    else {
         return Vec::new();
     };
     map.keys().cloned().collect()
@@ -388,7 +403,9 @@ fn provider_exists(state: &AppState, provider_id: &str) -> Result<bool, ApiError
 /// 与 [`model_from_row`] 走**同一个** `parse_string_array`：两处各写一份解析，
 /// 迟早出现"目录页说这模型能吃图、起 Run 时说它不能"这种自相矛盾。
 pub fn model_input_modalities_of(row: &rusqlite::Row<'_>) -> rusqlite::Result<Vec<String>> {
-    Ok(parse_string_array(row.get::<_, Option<String>>("input_modalities")?.as_deref()))
+    Ok(parse_string_array(
+        row.get::<_, Option<String>>("input_modalities")?.as_deref(),
+    ))
 }
 
 /// 与 [`model_from_row`] 走**同一个**解析函数：两处各写一份 `parse_string_map` 调用，
@@ -396,11 +413,14 @@ pub fn model_input_modalities_of(row: &rusqlite::Row<'_>) -> rusqlite::Result<Ve
 pub fn thinking_efforts_of(
     row: &rusqlite::Row<'_>,
 ) -> rusqlite::Result<std::collections::BTreeMap<String, String>> {
-    Ok(parse_string_map(row.get::<_, Option<String>>("thinking_efforts")?.as_deref()))
+    Ok(parse_string_map(
+        row.get::<_, Option<String>>("thinking_efforts")?.as_deref(),
+    ))
 }
 
 /// 一行 `ai_models` → DTO（列名按 `db/schema.sqlite.sql`）。
-pub fn model_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<AiModelDto> {    let model_id: String = row.get("model_id")?;
+pub fn model_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<AiModelDto> {
+    let model_id: String = row.get("model_id")?;
     // `display_name` 为 NULL 时回落成 model_id（Kotlin `toModel` 就是这么写的）——
     // 回落成空串会让列表里出现一行没有名字的模型
     let display_name: Option<String> = row.get("display_name")?;
@@ -414,11 +434,16 @@ pub fn model_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<AiModelDto> {
         // 上才走得到 —— 但"回落"与"回落到空串"是两回事：列表里出现一行没有名字的模型，
         // 用户既点不出所以然，也搜不到。
         display_name: display_name.unwrap_or(model_id),
-        input_modalities: parse_string_array(row.get::<_, Option<String>>("input_modalities")?.as_deref()),
-        attachment_transports: parse_string_list_map(
-            row.get::<_, Option<String>>("attachment_transports")?.as_deref(),
+        input_modalities: parse_string_array(
+            row.get::<_, Option<String>>("input_modalities")?.as_deref(),
         ),
-        mime_allowlist: parse_string_array(row.get::<_, Option<String>>("mime_allowlist")?.as_deref()),
+        attachment_transports: parse_string_list_map(
+            row.get::<_, Option<String>>("attachment_transports")?
+                .as_deref(),
+        ),
+        mime_allowlist: parse_string_array(
+            row.get::<_, Option<String>>("mime_allowlist")?.as_deref(),
+        ),
         tools: row.get::<_, Option<i64>>("tools")?.unwrap_or(0) != 0,
         parallel_tools: row.get::<_, Option<i64>>("parallel_tools")?.unwrap_or(0) != 0,
         reasoning: row.get::<_, Option<i64>>("reasoning")?.unwrap_or(0) != 0,
@@ -433,7 +458,8 @@ pub fn model_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<AiModelDto> {
         max_attachment_count: row.get("max_attachment_count")?,
         capability_source: capability_source.unwrap_or_else(|| "manual".into()),
         capability_verified_at: crate::infra::iso_time::iso_time(
-            row.get::<_, Option<String>>("capability_verified_at")?.as_deref(),
+            row.get::<_, Option<String>>("capability_verified_at")?
+                .as_deref(),
         ),
         // ⚠ NULL → **false**（Kotlin 的裸 `getBoolean("enabled")` 在 NULL 上就给 false）。
         // 本 schema 里是 NOT NULL DEFAULT 1，所以只在脏行上才走得到 ——
@@ -447,7 +473,9 @@ pub fn model_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<AiModelDto> {
 /// 与 Kotlin `parseStringArray` 同口径：数组里的标量按 `contentOrNull` 取文本
 /// （数字 → `"4096"`、布尔 → `"true"`），**JSON null 与对象/数组元素丢掉**。
 fn parse_string_array(raw: Option<&str>) -> Vec<String> {
-    let Some(text) = raw.map(str::trim).filter(|s| !s.is_empty()) else { return Vec::new() };
+    let Some(text) = raw.map(str::trim).filter(|s| !s.is_empty()) else {
+        return Vec::new();
+    };
     match serde_json::from_str::<serde_json::Value>(text) {
         Ok(serde_json::Value::Array(items)) => items.iter().filter_map(scalar_text).collect(),
         _ => Vec::new(),
@@ -457,7 +485,9 @@ fn parse_string_array(raw: Option<&str>) -> Vec<String> {
 /// `{"image":["inline_base64"]}` → map；值不是数组时按空数组处理（与 Kotlin 同）。
 fn parse_string_list_map(raw: Option<&str>) -> std::collections::BTreeMap<String, Vec<String>> {
     let mut out = std::collections::BTreeMap::new();
-    let Some(text) = raw.map(str::trim).filter(|s| !s.is_empty()) else { return out };
+    let Some(text) = raw.map(str::trim).filter(|s| !s.is_empty()) else {
+        return out;
+    };
     if let Ok(serde_json::Value::Object(map)) = serde_json::from_str::<serde_json::Value>(text) {
         for (key, value) in map {
             let list = match value {
@@ -473,7 +503,9 @@ fn parse_string_list_map(raw: Option<&str>) -> std::collections::BTreeMap<String
 /// `{"high":"high","max":4096}` → map（**数字按字面文本存**，AIH-056）。
 fn parse_string_map(raw: Option<&str>) -> std::collections::BTreeMap<String, String> {
     let mut out = std::collections::BTreeMap::new();
-    let Some(text) = raw.map(str::trim).filter(|s| !s.is_empty()) else { return out };
+    let Some(text) = raw.map(str::trim).filter(|s| !s.is_empty()) else {
+        return out;
+    };
     if let Ok(serde_json::Value::Object(map)) = serde_json::from_str::<serde_json::Value>(text) {
         for (key, value) in map {
             if let Some(text) = scalar_text(&value) {
@@ -511,7 +543,10 @@ pub fn require_provider_id(raw: Option<&str>) -> Result<String, ApiError> {
         return Err(ApiError::ai("CONFIG_ERROR", "Provider ID 不能为空"));
     }
     if id.chars().count() > 96 {
-        return Err(ApiError::ai("CONFIG_ERROR", "Provider ID 不能超过 96 个字符"));
+        return Err(ApiError::ai(
+            "CONFIG_ERROR",
+            "Provider ID 不能超过 96 个字符",
+        ));
     }
     if !is_kebab(&id) {
         return Err(ApiError::ai(
@@ -560,7 +595,9 @@ pub fn require_credential_ref(raw: Option<&str>) -> Result<Option<String>, ApiEr
     let bytes = reference.as_bytes();
     let ok = bytes.len() <= 128
         && bytes[0].is_ascii_uppercase()
-        && bytes.iter().all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || *b == b'_');
+        && bytes
+            .iter()
+            .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || *b == b'_');
     if !ok {
         return Err(ApiError::ai(
             "CONFIG_ERROR",
@@ -650,10 +687,15 @@ pub fn normalize_base_url(raw: Option<&str>, trust: &str) -> Result<String, ApiE
         // 端口不是数字 / 主机为空 → Java 的 "registry-based authority"（host 为 null）
         Err(HostError::Missing) => return Err(ApiError::ai("CONFIG_ERROR", "Base URL 缺少主机名")),
         // IPv6 字面量写坏了 → Java 在 URI 解析阶段就抛
-        Err(HostError::Syntax) => return Err(ApiError::ai("CONFIG_ERROR", "Base URL 不是合法 URL")),
+        Err(HostError::Syntax) => {
+            return Err(ApiError::ai("CONFIG_ERROR", "Base URL 不是合法 URL"))
+        }
     };
     if user_info.is_some() {
-        return Err(ApiError::ai("CONFIG_ERROR", "Base URL 不能包含用户名密码，请使用凭据配置"));
+        return Err(ApiError::ai(
+            "CONFIG_ERROR",
+            "Base URL 不能包含用户名密码，请使用凭据配置",
+        ));
     }
     // Java 的 `getQuery()` / `getFragment()`：`?` / `#` 后面为空串也算"有"（不是 null）
     if text.contains('?') {
@@ -665,7 +707,8 @@ pub fn normalize_base_url(raw: Option<&str>, trust: &str) -> Result<String, ApiE
     if trust == "public" && scheme != "https" {
         return Err(ApiError::ai("CONFIG_ERROR", "公网端点必须使用 https"));
     }
-    crate::web::endpoint_guard::assert_allowed(&host, trust).map_err(|e| ApiError::ai("CONFIG_ERROR", e))?;
+    crate::web::endpoint_guard::assert_allowed(&host, trust)
+        .map_err(|e| ApiError::ai("CONFIG_ERROR", e))?;
     Ok(text.trim_end_matches('/').to_string())
 }
 
@@ -683,7 +726,9 @@ enum HostError {
 /// 否则整个 authority 退化成 registry-based（host = null）—— 这是 `:-1` 那条实测行为。
 fn parse_authority_host(host_port: &str) -> Result<String, HostError> {
     if let Some(rest) = host_port.strip_prefix('[') {
-        let Some(close) = rest.find(']') else { return Err(HostError::Syntax) };
+        let Some(close) = rest.find(']') else {
+            return Err(HostError::Syntax);
+        };
         let literal = &rest[..close];
         if literal.parse::<std::net::Ipv6Addr>().is_err() {
             return Err(HostError::Syntax);
@@ -691,7 +736,9 @@ fn parse_authority_host(host_port: &str) -> Result<String, HostError> {
         match &rest[close + 1..] {
             "" => return Ok(format!("[{literal}]")),
             tail => {
-                let Some(port) = tail.strip_prefix(':') else { return Err(HostError::Syntax) };
+                let Some(port) = tail.strip_prefix(':') else {
+                    return Err(HostError::Syntax);
+                };
                 if port.is_empty() || !port.bytes().all(|b| b.is_ascii_digit()) {
                     return Err(HostError::Missing);
                 }
@@ -755,7 +802,9 @@ fn uri_syntax_ok(text: &str) -> bool {
     if opens.len() != 1 || closes.len() != 1 || closes[0] < opens[0] {
         return false;
     }
-    let Some(scheme_end) = text.find("//") else { return false };
+    let Some(scheme_end) = text.find("//") else {
+        return false;
+    };
     let authority_start = scheme_end + 2;
     let authority_end = text[authority_start..]
         .find(['/', '?', '#'])
@@ -773,7 +822,11 @@ pub fn host_of(url: &str) -> String {
 }
 
 /// 支持的三种协议（`AiApi.wireValues`，**不含已淘汰的文本 /completions**）。
-pub const API_WIRE_VALUES: [&str; 3] = ["openai-completions", "openai-responses", "anthropic-messages"];
+pub const API_WIRE_VALUES: [&str; 3] = [
+    "openai-completions",
+    "openai-responses",
+    "anthropic-messages",
+];
 
 /// 输入模态（`Modality.wireValues`）。
 const MODALITIES: [&str; 5] = ["text", "image", "video", "audio", "document"];
@@ -798,16 +851,29 @@ pub fn validate_model(model: &AiModelDto) -> Result<(), ApiError> {
         .filter(|m| !MODALITIES.contains(&m.as_str()))
         .collect();
     if !bad.is_empty() {
-        let list = bad.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", ");
-        return Err(ApiError::ai("CONFIG_ERROR", format!("未知的输入模态: {list}")));
+        let list = bad
+            .iter()
+            .map(|s| s.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        return Err(ApiError::ai(
+            "CONFIG_ERROR",
+            format!("未知的输入模态: {list}"),
+        ));
     }
     for (key, list) in &model.attachment_transports {
         if !MODALITIES.contains(&key.as_str()) {
-            return Err(ApiError::ai("CONFIG_ERROR", format!("未知的传输方式键: {key}")));
+            return Err(ApiError::ai(
+                "CONFIG_ERROR",
+                format!("未知的传输方式键: {key}"),
+            ));
         }
         for transport in list {
             if !TRANSPORTS.contains(&transport.as_str()) {
-                return Err(ApiError::ai("CONFIG_ERROR", format!("未知的传输方式: {transport}")));
+                return Err(ApiError::ai(
+                    "CONFIG_ERROR",
+                    format!("未知的传输方式: {transport}"),
+                ));
             }
         }
     }
@@ -820,14 +886,17 @@ pub fn validate_model(model: &AiModelDto) -> Result<(), ApiError> {
     // 思考等级：等级必须认识、表达必须非空且不能带控制字符（`LevelSpec.of` 的三档）
     for (level, value) in &model.thinking_efforts {
         if !REASONING_LEVELS.contains(&level.as_str()) {
-            return Err(ApiError::ai("CONFIG_ERROR", format!("未知的思考等级: {level}")));
+            return Err(ApiError::ai(
+                "CONFIG_ERROR",
+                format!("未知的思考等级: {level}"),
+            ));
         }
         let trimmed = value.trim();
         // 空 / 0 / 负数一律"表达不能为空"（Kotlin `LevelSpec.of` 就是这么判的：
         // 数字必须 > 0，否则当"没写"）；≥2^31 的数字在 Kotlin 那边会退化成 `Name` 而通过，
         // 这里同样通过（都算"能用"），差别只在归类，不在结果。
-        let empty_or_nonpositive = trimmed.is_empty()
-            || trimmed.parse::<i64>().map(|n| n <= 0).unwrap_or(false);
+        let empty_or_nonpositive =
+            trimmed.is_empty() || trimmed.parse::<i64>().map(|n| n <= 0).unwrap_or(false);
         if empty_or_nonpositive {
             return Err(ApiError::ai(
                 "CONFIG_ERROR",
@@ -841,9 +910,17 @@ pub fn validate_model(model: &AiModelDto) -> Result<(), ApiError> {
             ));
         }
     }
-    if let Some(format) = model.thinking_format.as_deref().map(str::trim).filter(|f| !f.is_empty()) {
+    if let Some(format) = model
+        .thinking_format
+        .as_deref()
+        .map(str::trim)
+        .filter(|f| !f.is_empty())
+    {
         if crate::provider::protocol::ThinkingFormat::parse(format).is_none() {
-            let all: Vec<&str> = crate::provider::protocol::ThinkingFormat::ALL.iter().map(|f| f.wire()).collect();
+            let all: Vec<&str> = crate::provider::protocol::ThinkingFormat::ALL
+                .iter()
+                .map(|f| f.wire())
+                .collect();
             return Err(ApiError::ai(
                 "CONFIG_ERROR",
                 format!("未知的思考方言: {format}（可选 {}）", all.join(" / ")),
@@ -895,10 +972,12 @@ pub fn update_provider(
     expected_revision: i64,
 ) -> Result<AiProviderDto, ApiError> {
     if expected_revision <= 0 {
-        return Err(ApiError::ai("CONFIG_ERROR", "缺少 revision，无法进行并发安全更新"));
+        return Err(ApiError::ai(
+            "CONFIG_ERROR",
+            "缺少 revision，无法进行并发安全更新",
+        ));
     }
-    let current = get_provider_row(state, &dto.id)?
-        .ok_or_else(|| provider_missing(&dto.id))?;
+    let current = get_provider_row(state, &dto.id)?.ok_or_else(|| provider_missing(&dto.id))?;
     if current.revision != expected_revision {
         return Err(ApiError::ai(
             "CONFIG_ERROR",
@@ -946,7 +1025,10 @@ pub fn delete_provider(state: &AppState, id: &str) -> Result<bool, ApiError> {
         .map(|r| r.trim().to_string())
         .filter(|r| !r.is_empty());
     let removed = state.write(|tx| {
-        let n = tx.execute("DELETE FROM ai_providers WHERE id = ?1", rusqlite::params![id])?;
+        let n = tx.execute(
+            "DELETE FROM ai_providers WHERE id = ?1",
+            rusqlite::params![id],
+        )?;
         Ok(n)
     })?;
     if removed > 0 {
@@ -1070,7 +1152,11 @@ pub fn insert_model(state: &AppState, model: &AiModelDto) -> Result<AiModelDto, 
                 model.parallel_tools as i64,
                 model.reasoning as i64,
                 to_json_string_map(&model.thinking_efforts),
-                model.thinking_format.as_deref().map(str::trim).filter(|f| !f.is_empty()),
+                model
+                    .thinking_format
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|f| !f.is_empty()),
                 model.context_window,
                 model.max_output_tokens,
                 model.max_attachment_bytes,
@@ -1089,7 +1175,10 @@ pub fn insert_model(state: &AppState, model: &AiModelDto) -> Result<AiModelDto, 
 ///
 /// 刻意不碰 `display_name` / `enabled` / 附件相关列 / `capability_verified_at`：
 /// 用户改过的显示名、用户关掉的模型、用户的实测时间，都不是"对齐能力"该动的东西。
-pub fn update_model_capabilities(state: &AppState, model: &AiModelDto) -> Result<AiModelDto, ApiError> {
+pub fn update_model_capabilities(
+    state: &AppState,
+    model: &AiModelDto,
+) -> Result<AiModelDto, ApiError> {
     state.write(|tx| {
         tx.execute(
             "UPDATE ai_models
@@ -1103,7 +1192,11 @@ pub fn update_model_capabilities(state: &AppState, model: &AiModelDto) -> Result
                 model.parallel_tools as i64,
                 model.reasoning as i64,
                 to_json_string_map(&model.thinking_efforts),
-                model.thinking_format.as_deref().map(str::trim).filter(|f| !f.is_empty()),
+                model
+                    .thinking_format
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|f| !f.is_empty()),
                 model.context_window,
                 model.capability_source,
                 model.provider_id,
@@ -1116,11 +1209,14 @@ pub fn update_model_capabilities(state: &AppState, model: &AiModelDto) -> Result
 }
 
 /// 写完立刻回读（返回库里的那份，不是我们手上这份）。
-fn read_back_model(state: &AppState, provider_id: &str, model_id: &str) -> Result<AiModelDto, ApiError> {
+fn read_back_model(
+    state: &AppState,
+    provider_id: &str,
+    model_id: &str,
+) -> Result<AiModelDto, ApiError> {
     let found = state.with(|conn| {
-        let mut stmt = conn.prepare(
-            "SELECT * FROM ai_models WHERE provider_id = ?1 AND model_id = ?2",
-        )?;
+        let mut stmt =
+            conn.prepare("SELECT * FROM ai_models WHERE provider_id = ?1 AND model_id = ?2")?;
         let mut rows = stmt.query_map(rusqlite::params![provider_id, model_id], model_from_row)?;
         match rows.next() {
             Some(row) => Ok(Some(row?)),
@@ -1142,8 +1238,10 @@ fn read_back_provider(state: &AppState, id: &str) -> Result<AiProviderDto, ApiEr
 /// 三份 JSON 列的编码（与 Kotlin `AppJson.encodeToString` 同口径：
 /// **数组/对象都按紧凑分隔符**，中文不转义）。
 fn to_json_array(items: &[String]) -> String {
-    let values: Vec<serde_json::Value> =
-        items.iter().map(|s| serde_json::Value::String(s.clone())).collect();
+    let values: Vec<serde_json::Value> = items
+        .iter()
+        .map(|s| serde_json::Value::String(s.clone()))
+        .collect();
     serde_json::Value::Array(values).to_string()
 }
 
@@ -1153,7 +1251,9 @@ fn to_json_list_map(map: &std::collections::BTreeMap<String, Vec<String>>) -> St
         out.insert(
             key.clone(),
             serde_json::Value::Array(
-                list.iter().map(|s| serde_json::Value::String(s.clone())).collect(),
+                list.iter()
+                    .map(|s| serde_json::Value::String(s.clone()))
+                    .collect(),
             ),
         );
     }

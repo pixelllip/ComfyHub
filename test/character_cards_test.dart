@@ -26,18 +26,17 @@ void main() {
     int id = 7,
     String title = '示例图',
     String kind = 'IMAGE',
-  }) =>
-      {
-        'id': id,
-        'kind': kind,
-        'title': title,
-        'originalName': 'sample.png',
-        'storedName': 'sample.png',
-        'sizeBytes': 1024,
-        'nsfw': false,
-        'fileUrl': '/api/media/$id/file',
-        'thumbUrl': '/api/media/$id/thumb',
-      };
+  }) => {
+    'id': id,
+    'kind': kind,
+    'title': title,
+    'originalName': 'sample.png',
+    'storedName': 'sample.png',
+    'sizeBytes': 1024,
+    'nsfw': false,
+    'fileUrl': '/api/media/$id/file',
+    'thumbUrl': '/api/media/$id/thumb',
+  };
 
   Map<String, dynamic> card({
     int id = 1,
@@ -66,7 +65,9 @@ void main() {
     final calls = <String>[];
     final bodies = <Map<String, dynamic>>[];
     final client = MockClient((req) async {
-      calls.add('${req.method} ${req.url.path}${req.url.query.isEmpty ? '' : '?${req.url.query}'}');
+      calls.add(
+        '${req.method} ${req.url.path}${req.url.query.isEmpty ? '' : '?${req.url.query}'}',
+      );
       if (req.method != 'GET') {
         bodies.add(jsonDecode(req.body) as Map<String, dynamic>);
       }
@@ -82,7 +83,11 @@ void main() {
       } else if (req.method == 'GET') {
         body = cards;
       } else if (req.method == 'POST') {
-        body = {...(jsonDecode(req.body) as Map<String, dynamic>), 'id': 9, 'examples': []};
+        body = {
+          ...(jsonDecode(req.body) as Map<String, dynamic>),
+          'id': 9,
+          'examples': [],
+        };
       } else if (req.method == 'PUT') {
         final sent = jsonDecode(req.body) as Map<String, dynamic>;
         // 示例端点回整张卡；普通编辑回改过的卡
@@ -97,8 +102,11 @@ void main() {
       } else {
         body = {'deleted': 1};
       }
-      return http.Response(jsonEncode(body), req.method == 'POST' ? 201 : 200,
-          headers: {'content-type': 'application/json; charset=utf-8'});
+      return http.Response(
+        jsonEncode(body),
+        req.method == 'POST' ? 201 : 200,
+        headers: {'content-type': 'application/json; charset=utf-8'},
+      );
     });
     return (client: client, calls: calls, bodies: bodies);
   }
@@ -117,15 +125,24 @@ void main() {
     ]);
     await pumpPage(
       tester,
-      CharacterCardsPage(api: AiApiClient('http://127.0.0.1:8080', client: b.client)),
+      CharacterCardsPage(
+        api: AiApiClient('http://127.0.0.1:8080', client: b.client),
+      ),
     );
 
     expect(b.calls, ['GET /api/ai/character-cards'], reason: '除了列表不该再问别的端点');
     expect(find.text('shinku'), findsOneWidget);
     expect(find.text('iroi'), findsOneWidget);
-    expect(find.text('A quiet girl with red eyes and silver hair.'), findsOneWidget);
+    expect(
+      find.text('A quiet girl with red eyes and silver hair.'),
+      findsOneWidget,
+    );
     expect(find.text('负面提示词是 bad hands'), findsOneWidget);
-    expect(find.textContaining('还没有正面提示词'), findsOneWidget, reason: '空着是个事实，要显式画出来');
+    expect(
+      find.textContaining('还没有正面提示词'),
+      findsOneWidget,
+      reason: '空着是个事实，要显式画出来',
+    );
   });
 
   testWidgets('点卡片本体 = 编辑（不是改示例图）', (tester) async {
@@ -133,7 +150,9 @@ void main() {
     final b = backend([card()]);
     await pumpPage(
       tester,
-      CharacterCardsPage(api: AiApiClient('http://127.0.0.1:8080', client: b.client)),
+      CharacterCardsPage(
+        api: AiApiClient('http://127.0.0.1:8080', client: b.client),
+      ),
     );
 
     await tester.tap(find.text('shinku'));
@@ -147,7 +166,9 @@ void main() {
     final b = backend([card()]);
     await pumpPage(
       tester,
-      CharacterCardsPage(api: AiApiClient('http://127.0.0.1:8080', client: b.client)),
+      CharacterCardsPage(
+        api: AiApiClient('http://127.0.0.1:8080', client: b.client),
+      ),
     );
 
     await tester.enterText(find.byType(TextField).first, '真红');
@@ -165,7 +186,9 @@ void main() {
     final b = backend([card()]);
     await pumpPage(
       tester,
-      CharacterCardsPage(api: AiApiClient('http://127.0.0.1:8080', client: b.client)),
+      CharacterCardsPage(
+        api: AiApiClient('http://127.0.0.1:8080', client: b.client),
+      ),
     );
 
     // 编辑：打开菜单 → 编辑 → 改正文 → 保存
@@ -179,14 +202,20 @@ void main() {
       find.widgetWithText(TextField, '正面提示词'),
       'A girl with blue eyes, every detail from head to toe.',
     );
-    await tester.enterText(find.widgetWithText(TextField, '负面提示词'), 'bad hands');
+    await tester.enterText(
+      find.widgetWithText(TextField, '负面提示词'),
+      'bad hands',
+    );
     await tester.tap(find.widgetWithText(FilledButton, '保存'));
     await tester.pumpAndSettle();
 
     expect(b.calls.where((c) => c.startsWith('PUT')), isNotEmpty);
     final sent = b.bodies.last;
     expect(sent['name'], 'shinku');
-    expect(sent['prompt'], 'A girl with blue eyes, every detail from head to toe.');
+    expect(
+      sent['prompt'],
+      'A girl with blue eyes, every detail from head to toe.',
+    );
     expect(sent['negative'], 'bad hands');
     // ★ 全量替换的形状：**恰好**这三个键（tag 版已经彻底删掉）
     expect(sent.keys.toList()..sort(), ['name', 'negative', 'prompt']);
@@ -197,7 +226,9 @@ void main() {
     final b = backend([card()]);
     await pumpPage(
       tester,
-      CharacterCardsPage(api: AiApiClient('http://127.0.0.1:8080', client: b.client)),
+      CharacterCardsPage(
+        api: AiApiClient('http://127.0.0.1:8080', client: b.client),
+      ),
     );
 
     await tester.tap(find.byTooltip('更多操作').first);
@@ -227,13 +258,14 @@ void main() {
 
   testWidgets('画风卡走自己的端点 并与角色卡共用 UI', (tester) async {
     SharedPreferences.setMockInitialValues({});
-    final b = backend(
-      [card(name: '赛博国风', prompt: 'semi-thick line work')],
-      cardsPath: '/api/ai/style-cards',
-    );
+    final b = backend([
+      card(name: '赛博国风', prompt: 'semi-thick line work'),
+    ], cardsPath: '/api/ai/style-cards');
     await pumpPage(
       tester,
-      StyleCardsPage(api: AiApiClient('http://127.0.0.1:8080', client: b.client)),
+      StyleCardsPage(
+        api: AiApiClient('http://127.0.0.1:8080', client: b.client),
+      ),
     );
 
     expect(find.text('画风卡'), findsOneWidget);
@@ -249,7 +281,10 @@ void main() {
     await tester.enterText(find.widgetWithText(TextField, '画风名 *'), '厚涂');
     await tester.tap(find.widgetWithText(FilledButton, '保存'));
     await tester.pumpAndSettle();
-    expect(b.calls.where((c) => c.startsWith('POST')).single, 'POST /api/ai/style-cards');
+    expect(
+      b.calls.where((c) => c.startsWith('POST')).single,
+      'POST /api/ai/style-cards',
+    );
   });
 
   testWidgets('管理示例把最终 mediaIds 发给 examples 端点', (tester) async {
@@ -261,7 +296,9 @@ void main() {
     );
     await pumpPage(
       tester,
-      StyleCardsPage(api: AiApiClient('http://127.0.0.1:8080', client: b.client)),
+      StyleCardsPage(
+        api: AiApiClient('http://127.0.0.1:8080', client: b.client),
+      ),
     );
 
     await tester.tap(find.text('添加示例'));
@@ -288,8 +325,11 @@ void main() {
       final body = req.url.path == '/api/ai/style-cards'
           ? [card(name: '赛博国风', prompt: 'semi-thick')]
           : [card()];
-      return http.Response(jsonEncode(body), 200,
-          headers: {'content-type': 'application/json; charset=utf-8'});
+      return http.Response(
+        jsonEncode(body),
+        200,
+        headers: {'content-type': 'application/json; charset=utf-8'},
+      );
     });
     await pumpPage(
       tester,
@@ -318,7 +358,9 @@ void main() {
     ]);
     await pumpPage(
       tester,
-      CharacterCardsPage(api: AiApiClient('http://127.0.0.1:8080', client: b.client)),
+      CharacterCardsPage(
+        api: AiApiClient('http://127.0.0.1:8080', client: b.client),
+      ),
     );
     expect(find.text('shinku'), findsOneWidget);
     // 弹窗在窄屏也要能开、能滚（AlertDialog 的 width 560 会被屏幕夹住）

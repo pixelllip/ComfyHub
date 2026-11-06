@@ -45,7 +45,10 @@ pub fn store_path(state: &AppState) -> PathBuf {
 pub fn sanitize(raw: &str) -> Result<String, ApiError> {
     // Kotlin `isBlank()`（含 Unicode 空白）；这里用 `trim().is_empty()` 同口径
     if raw.trim().is_empty() {
-        return Err(ApiError::ai("CONFIG_ERROR", "密钥不能为空；留空表示不修改已有密钥"));
+        return Err(ApiError::ai(
+            "CONFIG_ERROR",
+            "密钥不能为空；留空表示不修改已有密钥",
+        ));
     }
     let value = raw.trim().to_string();
 
@@ -65,7 +68,10 @@ pub fn sanitize(raw: &str) -> Result<String, ApiError> {
     }
     // `^[\x21-\x7E]+$`：可打印 ASCII，且不许有空格/换行（值要进 HTTP Header）
     if !value.chars().all(|c| ('\u{21}'..='\u{7E}').contains(&c)) {
-        return Err(ApiError::ai("CONFIG_ERROR", "密钥只能包含可打印字符，且不能有空格或换行"));
+        return Err(ApiError::ai(
+            "CONFIG_ERROR",
+            "密钥只能包含可打印字符，且不能有空格或换行",
+        ));
     }
     Ok(value)
 }
@@ -89,7 +95,8 @@ pub fn read_store(path: &Path) -> BTreeMap<String, String> {
     let Ok(text) = std::fs::read_to_string(path) else {
         return BTreeMap::new();
     };
-    let Ok(serde_json::Value::Object(map)) = serde_json::from_str::<serde_json::Value>(&text) else {
+    let Ok(serde_json::Value::Object(map)) = serde_json::from_str::<serde_json::Value>(&text)
+    else {
         return BTreeMap::new();
     };
     map.into_iter()
@@ -105,8 +112,12 @@ pub fn read_store(path: &Path) -> BTreeMap<String, String> {
 /// 写整个库：先写 `*.tmp`、**收紧权限**、再 `rename` 覆盖（同目录，Windows 上也原子）。
 pub fn write_store(path: &Path, store: &BTreeMap<String, String>) -> Result<(), ApiError> {
     if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir)
-            .map_err(|e| ApiError::ai("CONFIG_ERROR", format!("无法创建凭据目录（{}）：{e}", dir.display())))?;
+        std::fs::create_dir_all(dir).map_err(|e| {
+            ApiError::ai(
+                "CONFIG_ERROR",
+                format!("无法创建凭据目录（{}）：{e}", dir.display()),
+            )
+        })?;
     }
     let mut map = serde_json::Map::with_capacity(store.len());
     for (key, value) in store {
@@ -118,11 +129,19 @@ pub fn write_store(path: &Path, store: &BTreeMap<String, String>) -> Result<(), 
     let mut tmp_name = path.as_os_str().to_os_string();
     tmp_name.push(".tmp");
     let tmp = PathBuf::from(tmp_name);
-    std::fs::write(&tmp, text)
-        .map_err(|e| ApiError::ai("CONFIG_ERROR", format!("无法写入凭据文件（{}）：{e}", tmp.display())))?;
+    std::fs::write(&tmp, text).map_err(|e| {
+        ApiError::ai(
+            "CONFIG_ERROR",
+            format!("无法写入凭据文件（{}）：{e}", tmp.display()),
+        )
+    })?;
     restrict_permissions(&tmp);
-    std::fs::rename(&tmp, path)
-        .map_err(|e| ApiError::ai("CONFIG_ERROR", format!("无法替换凭据文件（{}）：{e}", path.display())))?;
+    std::fs::rename(&tmp, path).map_err(|e| {
+        ApiError::ai(
+            "CONFIG_ERROR",
+            format!("无法替换凭据文件（{}）：{e}", path.display()),
+        )
+    })?;
     Ok(())
 }
 
@@ -154,20 +173,33 @@ pub fn env_source(reference: &str) -> Option<String> {
 }
 
 /// 存一把 key（`set`）：校验 → DPAPI 加密 → 合并进库 → 原子落盘。
-pub fn set(state: &AppState, reference: &str, raw_value: &str) -> Result<crate::ai::ai::CredentialStatus, ApiError> {
+pub fn set(
+    state: &AppState,
+    reference: &str,
+    raw_value: &str,
+) -> Result<crate::ai::ai::CredentialStatus, ApiError> {
     let value = sanitize(raw_value)?;
     let sealed = crate::mobile::auth::protect_secret(value.as_bytes()).map_err(|e| {
-        ApiError::ai("CONFIG_ERROR", format!("无法加密保存密钥（Windows DPAPI 不可用）：{e}"))
+        ApiError::ai(
+            "CONFIG_ERROR",
+            format!("无法加密保存密钥（Windows DPAPI 不可用）：{e}"),
+        )
     })?;
     let path = store_path(state);
     let mut store = read_store(&path);
-    store.insert(reference.to_string(), crate::mobile::auth::base64_std(&sealed));
+    store.insert(
+        reference.to_string(),
+        crate::mobile::auth::base64_std(&sealed),
+    );
     write_store(&path, &store)?;
     Ok(describe_now(state, reference))
 }
 
 /// 删一把 key（`unset`）。文件里本来就没有它时**不写文件**（Kotlin 同样只在 `removed` 时落盘）。
-pub fn unset(state: &AppState, reference: &str) -> Result<crate::ai::ai::CredentialStatus, ApiError> {
+pub fn unset(
+    state: &AppState,
+    reference: &str,
+) -> Result<crate::ai::ai::CredentialStatus, ApiError> {
     let path = store_path(state);
     let mut store = read_store(&path);
     if store.remove(reference).is_some() {
@@ -310,7 +342,11 @@ pub fn apply_upload(
             }),
         }
     }
-    let next = if applied.is_empty() { current } else { bump_rev(state)? };
+    let next = if applied.is_empty() {
+        current
+    } else {
+        bump_rev(state)?
+    };
     Ok((applied, rejected, next))
 }
 

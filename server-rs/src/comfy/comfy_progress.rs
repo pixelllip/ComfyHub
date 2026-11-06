@@ -79,23 +79,53 @@ pub const MAX_TRACKED_PROMPTS: usize = 50;
 #[derive(Debug, Clone, PartialEq)]
 pub enum ProgressEvent {
     /// `status`：队列里还剩几个。
-    Status { queue_remaining: Option<i64> },
+    Status {
+        queue_remaining: Option<i64>,
+    },
     /// `execution_start`：这次运行开始了。
-    ExecutionStart { prompt_id: String },
+    ExecutionStart {
+        prompt_id: String,
+    },
     /// `execution_cached`：这些节点的结果直接命中缓存（**不是**进度）。
-    ExecutionCached { prompt_id: String },
+    ExecutionCached {
+        prompt_id: String,
+    },
     /// `executing`：`node` 是**正在执行**的那个节点；`node: null` 表示**没有节点在执行了**
     /// （`main.py:374` 在队列任务收尾时发的就是这一种）。
-    Executing { prompt_id: String, node_id: Option<String> },
+    Executing {
+        prompt_id: String,
+        node_id: Option<String>,
+    },
     /// `progress`：**最标准的采样进度**（`main.py:435`）。
-    Progress { prompt_id: String, node_id: Option<String>, value: f64, max: f64 },
+    Progress {
+        prompt_id: String,
+        node_id: Option<String>,
+        value: f64,
+        max: f64,
+    },
     /// `progress_state`：新版按节点的进度表（`comfy_execution/progress.py:184`）。
-    ProgressState { prompt_id: String, node_id: Option<String>, value: f64, max: f64 },
+    ProgressState {
+        prompt_id: String,
+        node_id: Option<String>,
+        value: f64,
+        max: f64,
+    },
     /// `executed`：某个节点跑完了（**不推进 percent** —— 见文件头那条纪律）。
-    Executed { prompt_id: String, node_id: Option<String> },
-    ExecutionSuccess { prompt_id: String },
-    ExecutionError { prompt_id: String, node_id: Option<String>, message: Option<String> },
-    ExecutionInterrupted { prompt_id: String },
+    Executed {
+        prompt_id: String,
+        node_id: Option<String>,
+    },
+    ExecutionSuccess {
+        prompt_id: String,
+    },
+    ExecutionError {
+        prompt_id: String,
+        node_id: Option<String>,
+        message: Option<String>,
+    },
+    ExecutionInterrupted {
+        prompt_id: String,
+    },
 }
 
 fn str_field(value: &Value, key: &str) -> Option<String> {
@@ -108,7 +138,10 @@ fn str_field(value: &Value, key: &str) -> Option<String> {
 }
 
 fn num_field(value: &Value, key: &str) -> Option<f64> {
-    value.get(key).and_then(Value::as_f64).filter(|n| n.is_finite())
+    value
+        .get(key)
+        .and_then(Value::as_f64)
+        .filter(|n| n.is_finite())
 }
 
 /// 把一条 WS 文本帧解析成 [`ProgressEvent`]。
@@ -132,12 +165,12 @@ pub fn parse_frame(text: &str) -> Option<ProgressEvent> {
                 .and_then(|e| e.get("queue_remaining"))
                 .and_then(Value::as_i64),
         }),
-        "execution_start" => {
-            Some(ProgressEvent::ExecutionStart { prompt_id: str_field(data, "prompt_id")? })
-        }
-        "execution_cached" => {
-            Some(ProgressEvent::ExecutionCached { prompt_id: str_field(data, "prompt_id")? })
-        }
+        "execution_start" => Some(ProgressEvent::ExecutionStart {
+            prompt_id: str_field(data, "prompt_id")?,
+        }),
+        "execution_cached" => Some(ProgressEvent::ExecutionCached {
+            prompt_id: str_field(data, "prompt_id")?,
+        }),
         // ⚠ `node` 允许是 null（"没有节点在执行"）；`prompt_id` 才是必备的那个
         "executing" => Some(ProgressEvent::Executing {
             prompt_id: str_field(data, "prompt_id")?,
@@ -171,23 +204,28 @@ pub fn parse_frame(text: &str) -> Option<ProgressEvent> {
                 running = Some((node_id.clone(), value, max));
             }
             let (node_id, value, max) = running?;
-            Some(ProgressEvent::ProgressState { prompt_id, node_id: Some(node_id), value, max })
+            Some(ProgressEvent::ProgressState {
+                prompt_id,
+                node_id: Some(node_id),
+                value,
+                max,
+            })
         }
         "executed" => Some(ProgressEvent::Executed {
             prompt_id: str_field(data, "prompt_id")?,
             node_id: str_field(data, "node").or_else(|| str_field(data, "display_node")),
         }),
-        "execution_success" => {
-            Some(ProgressEvent::ExecutionSuccess { prompt_id: str_field(data, "prompt_id")? })
-        }
+        "execution_success" => Some(ProgressEvent::ExecutionSuccess {
+            prompt_id: str_field(data, "prompt_id")?,
+        }),
         "execution_error" => Some(ProgressEvent::ExecutionError {
             prompt_id: str_field(data, "prompt_id")?,
             node_id: str_field(data, "node_id").or_else(|| str_field(data, "node")),
             message: str_field(data, "exception_message"),
         }),
-        "execution_interrupted" => {
-            Some(ProgressEvent::ExecutionInterrupted { prompt_id: str_field(data, "prompt_id")? })
-        }
+        "execution_interrupted" => Some(ProgressEvent::ExecutionInterrupted {
+            prompt_id: str_field(data, "prompt_id")?,
+        }),
         // `logs` / 二进制预览 / 自定义节点自己的事件 → **不是错误，只是不关我们的事**
         _ => None,
     }
@@ -334,7 +372,10 @@ impl ComfyProgress {
     }
 
     pub fn last_error(&self) -> Option<String> {
-        self.last_error.lock().unwrap_or_else(|e| e.into_inner()).clone()
+        self.last_error
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
 
     pub fn queue_remaining(&self) -> Option<i64> {
@@ -351,7 +392,9 @@ impl ComfyProgress {
     /// **两者都没有就不登记** —— 于是 `executing` 帧只会给出节点 id，
     /// 界面显示"正在执行节点 33"而不是一个编出来的名字。
     pub fn register_graph(&self, prompt_id: &str, graph: &Value) {
-        let Some(nodes) = graph.as_object() else { return };
+        let Some(nodes) = graph.as_object() else {
+            return;
+        };
         let mut names = HashMap::new();
         for (node_id, node) in nodes {
             let title = node
@@ -416,11 +459,13 @@ impl ComfyProgress {
                 inner.current = Some(prompt_id.clone());
             }
             ProgressEvent::Executing { prompt_id, node_id } => {
-                let name = node_id
-                    .as_ref()
-                    .and_then(|id| {
-                        inner.node_names.get(prompt_id).and_then(|map| map.get(id)).cloned()
-                    });
+                let name = node_id.as_ref().and_then(|id| {
+                    inner
+                        .node_names
+                        .get(prompt_id)
+                        .and_then(|map| map.get(id))
+                        .cloned()
+                });
                 let entry = entry_of(&mut inner, prompt_id, &now);
                 if !is_terminal(&entry.state) {
                     entry.state = "running".to_string();
@@ -434,18 +479,33 @@ impl ComfyProgress {
                     inner.current = Some(prompt_id.clone());
                 }
             }
-            ProgressEvent::Progress { prompt_id, node_id, value, max }
-            | ProgressEvent::ProgressState { prompt_id, node_id, value, max } => {
-                let name = node_id
-                    .as_ref()
-                    .and_then(|id| {
-                        inner.node_names.get(prompt_id).and_then(|map| map.get(id)).cloned()
-                    });
+            ProgressEvent::Progress {
+                prompt_id,
+                node_id,
+                value,
+                max,
+            }
+            | ProgressEvent::ProgressState {
+                prompt_id,
+                node_id,
+                value,
+                max,
+            } => {
+                let name = node_id.as_ref().and_then(|id| {
+                    inner
+                        .node_names
+                        .get(prompt_id)
+                        .and_then(|map| map.get(id))
+                        .cloned()
+                });
                 let percent = percent_of(*value, *max);
                 // `percent` 的**高水位**先算（与下面 `entry` 的可变借用分开，否则借用冲突）：
                 // 单调不倒退 —— ComfyUI 偶尔会补发一条更早的帧，界面进度条倒着走会被当成"卡了又重来"
                 let effective = percent.map(|p| {
-                    let high = inner.percent_high_water.entry(prompt_id.clone()).or_insert(p);
+                    let high = inner
+                        .percent_high_water
+                        .entry(prompt_id.clone())
+                        .or_insert(p);
                     if p > *high {
                         *high = p;
                     }
@@ -467,7 +527,8 @@ impl ComfyProgress {
                 entry.updated_at = now;
                 inner.current = Some(prompt_id.clone());
             }
-            ProgressEvent::ExecutionCached { prompt_id } | ProgressEvent::Executed { prompt_id, .. } => {
+            ProgressEvent::ExecutionCached { prompt_id }
+            | ProgressEvent::Executed { prompt_id, .. } => {
                 let entry = entry_of(&mut inner, prompt_id, &now);
                 if !is_terminal(&entry.state) {
                     entry.state = "running".to_string();
@@ -483,12 +544,18 @@ impl ComfyProgress {
                 entry.updated_at = now;
                 clear_current(&mut inner, prompt_id);
             }
-            ProgressEvent::ExecutionError { prompt_id, node_id, message } => {
-                let name = node_id
-                    .as_ref()
-                    .and_then(|id| {
-                        inner.node_names.get(prompt_id).and_then(|map| map.get(id)).cloned()
-                    });
+            ProgressEvent::ExecutionError {
+                prompt_id,
+                node_id,
+                message,
+            } => {
+                let name = node_id.as_ref().and_then(|id| {
+                    inner
+                        .node_names
+                        .get(prompt_id)
+                        .and_then(|map| map.get(id))
+                        .cloned()
+                });
                 let entry = entry_of(&mut inner, prompt_id, &now);
                 entry.state = "error".to_string();
                 if node_id.is_some() {

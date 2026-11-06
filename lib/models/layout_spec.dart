@@ -231,61 +231,60 @@ class LayoutRegion {
     String? relationTo,
     bool clearRelation = false,
     LayoutSurface? surface,
-  }) =>
-      LayoutRegion(
-        id: id,
-        rect: rect ?? this.rect,
-        kind: kind ?? this.kind,
-        label: label ?? this.label,
-        caption: caption ?? this.caption,
-        text: text ?? this.text,
-        relation: relation ?? this.relation,
-        relationTo: clearRelation ? null : (relationTo ?? this.relationTo),
-        surface: surface ?? this.surface,
-      );
+  }) => LayoutRegion(
+    id: id,
+    rect: rect ?? this.rect,
+    kind: kind ?? this.kind,
+    label: label ?? this.label,
+    caption: caption ?? this.caption,
+    text: text ?? this.text,
+    relation: relation ?? this.relation,
+    relationTo: clearRelation ? null : (relationTo ?? this.relationTo),
+    surface: surface ?? this.surface,
+  );
 
   Map<String, Object?> toJson() => <String, Object?>{
-        'id': id,
-        'x': rect.x,
-        'y': rect.y,
-        'w': rect.w,
-        'h': rect.h,
-        'kind': kind.name,
-        'label': label,
-        'caption': caption,
-        'text': text,
-        'relation': relation.name,
-        'relationTo': relationTo,
-        'surface': surface.id,
-      };
+    'id': id,
+    'x': rect.x,
+    'y': rect.y,
+    'w': rect.w,
+    'h': rect.h,
+    'kind': kind.name,
+    'label': label,
+    'caption': caption,
+    'text': text,
+    'relation': relation.name,
+    'relationTo': relationTo,
+    'surface': surface.id,
+  };
 
   /// 读一份存下来的框。**认不出来的字段一律回默认，绝不抛** ——
   /// 这些 JSON 会被用户手改，也会被老版本写坏，读的时候崩掉等于布局全丢。
   static LayoutRegion fromJson(Map<String, Object?> json) => LayoutRegion(
-        id: (json['id'] as String?) ?? 'r0',
-        rect: LayoutRect(
-          _asInt(json['x']),
-          _asInt(json['y']),
-          _asInt(json['w'], 200),
-          _asInt(json['h'], 200),
-        ).clampedInside(),
-        kind: LayoutBoxKind.values.firstWhere(
-          (k) => k.name == json['kind'],
-          orElse: () => LayoutBoxKind.object,
-        ),
-        label: (json['label'] as String?) ?? '',
-        caption: (json['caption'] as String?) ?? '',
-        text: (json['text'] as String?) ?? '',
-        relation: LayoutRelation.values.firstWhere(
-          (r) => r.name == json['relation'],
-          orElse: () => LayoutRelation.none,
-        ),
-        relationTo: json['relationTo'] as String?,
-        surface: LayoutSurface.values.firstWhere(
-          (s) => s.id == json['surface'],
-          orElse: () => LayoutSurface.none,
-        ),
-      );
+    id: (json['id'] as String?) ?? 'r0',
+    rect: LayoutRect(
+      _asInt(json['x']),
+      _asInt(json['y']),
+      _asInt(json['w'], 200),
+      _asInt(json['h'], 200),
+    ).clampedInside(),
+    kind: LayoutBoxKind.values.firstWhere(
+      (k) => k.name == json['kind'],
+      orElse: () => LayoutBoxKind.object,
+    ),
+    label: (json['label'] as String?) ?? '',
+    caption: (json['caption'] as String?) ?? '',
+    text: (json['text'] as String?) ?? '',
+    relation: LayoutRelation.values.firstWhere(
+      (r) => r.name == json['relation'],
+      orElse: () => LayoutRelation.none,
+    ),
+    relationTo: json['relationTo'] as String?,
+    surface: LayoutSurface.values.firstWhere(
+      (s) => s.id == json['surface'],
+      orElse: () => LayoutSurface.none,
+    ),
+  );
 }
 
 /// 翻译结果：两条出口 + 一份"我损失了什么"的清单。
@@ -361,13 +360,13 @@ class LayoutSpec {
 
   /// 存盘用的形状（也是"发给 AI 的布局规格"的形状）。
   Map<String, Object?> toJson() => <String, Object?>{
-        'v': 1,
-        'width': width,
-        'height': height,
-        'brief': brief,
-        'camera': camera.id,
-        'regions': [for (final r in regions) r.toJson()],
-      };
+    'v': 1,
+    'width': width,
+    'height': height,
+    'brief': brief,
+    'camera': camera.id,
+    'regions': [for (final r in regions) r.toJson()],
+  };
 
   static LayoutSpec fromJson(Map<String, Object?> json) {
     final regions = <LayoutRegion>[];
@@ -393,10 +392,10 @@ class LayoutSpec {
 
   /// 翻译成两条出口。纯函数：同一份 spec 调两次，输出逐字节相同。
   LayoutTranslation translate() => LayoutTranslation(
-        prose: _prose(),
-        mossJson: _mossJson(),
-        warnings: _warnings(),
-      );
+    prose: _prose(),
+    mossJson: _mossJson(),
+    warnings: _warnings(),
+  );
 
   // ── 散文投影 ────────────────────────────────────────────────────────────
   //
@@ -425,7 +424,8 @@ class LayoutSpec {
     }
 
     // 面积大的先写：读者（和模型）都会把先出现的当成主体。
-    final sorted = [...regions]..sort((a, c) {
+    final sorted = [...regions]
+      ..sort((a, c) {
         final byArea = c.rect.areaFraction.compareTo(a.rect.areaFraction);
         if (byArea != 0) return byArea;
         final byY = a.rect.y.compareTo(c.rect.y);
@@ -471,8 +471,7 @@ class LayoutSpec {
     final name = target.displayName;
     return switch (r.relation) {
       LayoutRelation.none => '',
-      LayoutRelation.mirror =>
-        '，与「$name」是同一个人的镜像，姿势必须一致、仅左右翻转',
+      LayoutRelation.mirror => '，与「$name」是同一个人的镜像，姿势必须一致、仅左右翻转',
       LayoutRelation.same => '，与「$name」是同一个主体',
       LayoutRelation.inFront => '，挡在「$name」前面',
     };
@@ -496,13 +495,13 @@ class LayoutSpec {
     final h = cx < 334
         ? '左'
         : cx < 667
-            ? ''
-            : '右';
+        ? ''
+        : '右';
     final v = cy < 334
         ? '上'
         : cy < 667
-            ? ''
-            : '下';
+        ? ''
+        : '下';
     if (h.isEmpty && v.isEmpty) return '画面中央';
     if (v.isEmpty) return '画面$h侧';
     if (h.isEmpty) return '画面$v方';
@@ -565,8 +564,9 @@ class LayoutSpec {
     final items = <Map<String, Object>>[];
     for (final r in regions) {
       if (!r.kind.isSerializable) continue;
-      final base =
-          r.caption.trim().isNotEmpty ? r.caption.trim() : r.label.trim();
+      final base = r.caption.trim().isNotEmpty
+          ? r.caption.trim()
+          : r.label.trim();
       // 关系也进 caption：MOSS 只按框读 caption，框外没有别的地方说"这是同一个人"。
       final caption = '$base${_relationClause(r)}';
       final item = <String, Object>{
@@ -626,16 +626,19 @@ class LayoutSpec {
       out.add('有 $tiny 个框小于画面的 1%，这个尺度在散文里表达不出来。');
     }
 
-    final emptyText =
-        regions.where((r) => r.kind == LayoutBoxKind.text && r.text.trim().isEmpty).length;
+    final emptyText = regions
+        .where((r) => r.kind == LayoutBoxKind.text && r.text.trim().isEmpty)
+        .length;
     if (emptyText > 0) {
       out.add('有 $emptyText 个文字框还没填内容。');
     }
 
     final blanks = regions.length - active.length;
     if (blanks > 0) {
-      out.add('有 $blanks 个留白框，它们进不了 MOSS 布局 JSON（那套格式只认有内容的框），'
-          '这些信息只保留在通用提示词里。');
+      out.add(
+        '有 $blanks 个留白框，它们进不了 MOSS 布局 JSON（那套格式只认有内容的框），'
+        '这些信息只保留在通用提示词里。',
+      );
     }
 
     var overlaps = 0;

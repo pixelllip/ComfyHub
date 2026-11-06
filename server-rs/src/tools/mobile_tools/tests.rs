@@ -12,7 +12,10 @@ fn tools_are_sorted_and_mobile_only() {
         n.sort();
         n
     };
-    assert_eq!(names, sorted, "工具必须按 name 升序（顺序进了 kitVersion 签名）");
+    assert_eq!(
+        names, sorted,
+        "工具必须按 name 升序（顺序进了 kitVersion 签名）"
+    );
     names.dedup();
     assert_eq!(names.len(), MOBILE_TOOLS.len(), "工具名不许重复");
     for tool in MOBILE_TOOLS {
@@ -21,7 +24,10 @@ fn tools_are_sorted_and_mobile_only() {
             "{} 的 scope 不是手机可执行档",
             tool.name
         );
-        assert!(!tool.name.starts_with("comfy_submit"), "R11：手机侧不许复用提交工具名");
+        assert!(
+            !tool.name.starts_with("comfy_submit"),
+            "R11：手机侧不许复用提交工具名"
+        );
     }
 }
 
@@ -34,7 +40,9 @@ fn queue_submit_is_declared_and_the_desktop_catalog_does_not_have_it() {
         "comfy_queue_submit 不在手机工具目录里 → 模型看不到它（M5 的端到端会断在这里）"
     );
     assert!(
-        !crate::tools::tools::implemented().iter().any(|t| t.name == "comfy_queue_submit"),
+        !crate::tools::tools::implemented()
+            .iter()
+            .any(|t| t.name == "comfy_queue_submit"),
         "它是**手机专属**（R11）：桌面那份（已实现清单）里不许有这个名字"
     );
 }
@@ -42,8 +50,12 @@ fn queue_submit_is_declared_and_the_desktop_catalog_does_not_have_it() {
 #[test]
 fn every_schema_is_parseable_json() {
     for tool in MOBILE_TOOLS {
-        let value: serde_json::Value =
-            serde_json::from_str(tool.input_schema).unwrap_or_else(|e| panic!("{} 的 schema 不是 JSON: {e}", tool.name));
-        assert_eq!(value["type"], "object", "{} 的 schema 顶层必须是 object", tool.name);
+        let value: serde_json::Value = serde_json::from_str(tool.input_schema)
+            .unwrap_or_else(|e| panic!("{} 的 schema 不是 JSON: {e}", tool.name));
+        assert_eq!(
+            value["type"], "object",
+            "{} 的 schema 顶层必须是 object",
+            tool.name
+        );
     }
 }

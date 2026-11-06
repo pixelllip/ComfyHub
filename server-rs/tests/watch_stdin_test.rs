@@ -90,7 +90,10 @@ fn spawn(watch_stdin: bool, tag: &str) -> (Server, u16) {
             break;
         }
     }
-    assert_ne!(port, 0, "30 秒内没读到监听端口（--watch-stdin={watch_stdin}）");
+    assert_ne!(
+        port, 0,
+        "30 秒内没读到监听端口（--watch-stdin={watch_stdin}）"
+    );
 
     (
         Server {
@@ -106,7 +109,10 @@ fn spawn(watch_stdin: bool, tag: &str) -> (Server, u16) {
 fn stdin关闭后端自己退出() {
     let (mut server, port) = spawn(true, "watch-stdin");
     // 先确认它真的在听（起来的是个活服务，而不是一个马上要死的进程）
-    assert!(std::net::TcpStream::connect(("127.0.0.1", port)).is_ok(), "端口 {port} 没在听");
+    assert!(
+        std::net::TcpStream::connect(("127.0.0.1", port)).is_ok(),
+        "端口 {port} 没在听"
+    );
 
     // ⚠ 这一行就是"App 进程消失"：写端一 drop，管道关，后端的 read 回 0
     drop(server.stdin.take());
@@ -122,7 +128,10 @@ fn stdin关闭后端自己退出() {
             None => std::thread::sleep(std::time::Duration::from_millis(100)),
         }
     }
-    assert!(exited, "stdin 关闭 15 秒后后端还活着 —— watchdog 失效，App 强杀会留孤儿");
+    assert!(
+        exited,
+        "stdin 关闭 15 秒后后端还活着 —— watchdog 失效，App 强杀会留孤儿"
+    );
 }
 
 /// 对照组：**不丢** stdin（App 还活着），后端就**不该**退出。

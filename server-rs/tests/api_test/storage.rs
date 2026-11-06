@@ -47,7 +47,12 @@ async fn storage_usage_lists_every_known_directory() {
             assert!(dir.get(field).is_some(), "{key} 缺了 {field}：{dir}");
         }
     }
-    assert!(find("media").as_object().unwrap()["bytes"].as_u64().unwrap() >= 1024);
+    assert!(
+        find("media").as_object().unwrap()["bytes"]
+            .as_u64()
+            .unwrap()
+            >= 1024
+    );
     assert_eq!(body["events"]["rows"], 0);
 }
 

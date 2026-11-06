@@ -51,7 +51,8 @@ class _Recorder {
   /// 下一次「重新扫描」会登记几个（模拟往投放口里拷了东西）
   int rescanRegistered = 0;
 
-  String? get lastPolicyPut => policyPuts.isEmpty ? null : jsonEncode(policyPuts.last);
+  String? get lastPolicyPut =>
+      policyPuts.isEmpty ? null : jsonEncode(policyPuts.last);
 }
 
 int _entryCount(String content) =>
@@ -62,10 +63,10 @@ String _sse(int seq, String type, String dataJson) =>
     'id: $seq\nevent: $type\ndata: $dataJson\n\n';
 
 http.Response _sseResponse(String body) => http.Response.bytes(
-      utf8.encode(body),
-      200,
-      headers: {'content-type': 'text/event-stream; charset=utf-8'},
-    );
+  utf8.encode(body),
+  200,
+  headers: {'content-type': 'text/event-stream; charset=utf-8'},
+);
 
 Map<String, dynamic> _skill(
   String name, {
@@ -73,28 +74,31 @@ Map<String, dynamic> _skill(
   String source = 'user',
   String? validationError,
   String? conflict,
-}) =>
-    {
-      'name': name,
-      'description': description,
-      'source': source,
-      'enabled': true,
-      'userInvocable': true,
-      'modelInvocable': true,
-      'sizeBytes': 1024,
-      'fileCount': 1,
-      'validationError': ?validationError,
-      'conflict': ?conflict,
-    };
+}) => {
+  'name': name,
+  'description': description,
+  'source': source,
+  'enabled': true,
+  'userInvocable': true,
+  'modelInvocable': true,
+  'sizeBytes': 1024,
+  'fileCount': 1,
+  'validationError': ?validationError,
+  'conflict': ?conflict,
+};
 
-Map<String, dynamic> _tool(String name, {String category = 'files', String access = 'ask'}) => {
-      'name': name,
-      'description': '$name 的说明',
-      'category': category,
-      'mutating': category == 'files',
-      'access': access,
-      'overridden': false,
-    };
+Map<String, dynamic> _tool(
+  String name, {
+  String category = 'files',
+  String access = 'ask',
+}) => {
+  'name': name,
+  'description': '$name 的说明',
+  'category': category,
+  'mutating': category == 'files',
+  'access': access,
+  'overridden': false,
+};
 
 MockClient _backend(
   _Recorder rec, {
@@ -105,8 +109,10 @@ MockClient _backend(
   bool approvalAccepted = true,
   List<Map<String, dynamic>>? tools,
   Map<String, dynamic>? policy,
+
   /// `GET /api/capture/jobs` 的返回值（右侧栏实时进度）
   Map<String, dynamic>? comfyJobs,
+
   /// 让 `POST /runs` 永远不返回：把界面钉在"正在生成中"这个状态（见用例 (i)）
   bool hangRuns = false,
 }) {
@@ -116,7 +122,8 @@ MockClient _backend(
     Object body;
 
     if (path == '/api/capture/jobs') {
-      body = comfyJobs ??
+      body =
+          comfyJobs ??
           {
             'queueRunning': 0,
             'queuePending': 0,
@@ -134,8 +141,12 @@ MockClient _backend(
           'endpointTrust': 'loopback',
           'enabled': true,
           'revision': 1,
-          'credential': {'configured': true, 'source': 'managed', 'writable': true},
-        }
+          'credential': {
+            'configured': true,
+            'source': 'managed',
+            'writable': true,
+          },
+        },
       ];
     } else if (path == '/api/ai/providers/local-gw/models') {
       body = [
@@ -149,7 +160,7 @@ MockClient _backend(
             'reasoning': i.isEven,
             'capabilitySource': 'manual',
             'enabled': true,
-          }
+          },
       ];
     } else if (path == '/api/ai/conversations' && request.method == 'POST') {
       body = {
@@ -197,7 +208,8 @@ MockClient _backend(
       ];
     } else if (path == '/api/ai/skills' && request.method == 'GET') {
       body = rec.skills;
-    } else if (path.startsWith('/api/ai/skills/') && request.method == 'DELETE') {
+    } else if (path.startsWith('/api/ai/skills/') &&
+        request.method == 'DELETE') {
       final name = Uri.decodeComponent(path.split('/').last);
       rec.skills = rec.skills.where((s) => s['name'] != name).toList();
       body = {'deleted': true, 'id': name};
@@ -212,23 +224,46 @@ MockClient _backend(
       // 投放口里新拷进来的东西在这里被自动登记
       body = {
         'registered': rec.rescanRegistered,
-        'names': rec.rescanRegistered > 0 ? const ['dropped-in'] : const <String>[],
+        'names': rec.rescanRegistered > 0
+            ? const ['dropped-in']
+            : const <String>[],
         'errors': const <String>[],
         'skills': rec.skills,
       };
     } else if (path == '/api/ai/memory' && request.method == 'GET') {
-      body = {'content': rec.memory, 'path': r'D:\ComfyHub\storage\ai\memory.md', 'entryCount': _entryCount(rec.memory), 'maxChars': 8000, 'maxEntries': 100};
+      body = {
+        'content': rec.memory,
+        'path': r'D:\ComfyHub\storage\ai\memory.md',
+        'entryCount': _entryCount(rec.memory),
+        'maxChars': 8000,
+        'maxEntries': 100,
+      };
     } else if (path == '/api/ai/memory' && request.method == 'PUT') {
       rec.memory = (jsonDecode(request.body) as Map)['content'].toString();
-      body = {'content': rec.memory, 'path': r'D:\ComfyHub\storage\ai\memory.md', 'entryCount': _entryCount(rec.memory), 'maxChars': 8000, 'maxEntries': 100};
+      body = {
+        'content': rec.memory,
+        'path': r'D:\ComfyHub\storage\ai\memory.md',
+        'entryCount': _entryCount(rec.memory),
+        'maxChars': 8000,
+        'maxEntries': 100,
+      };
     } else if (path == '/api/ai/memory/entries' && request.method == 'POST') {
       final entry = (jsonDecode(request.body) as Map)['content'].toString();
       rec.memoryAdded.add(entry);
       rec.memory = rec.memory.isEmpty ? '- $entry' : '${rec.memory}\n- $entry';
-      body = {'content': rec.memory, 'path': r'D:\ComfyHub\storage\ai\memory.md', 'entryCount': _entryCount(rec.memory), 'maxChars': 8000, 'maxEntries': 100};
+      body = {
+        'content': rec.memory,
+        'path': r'D:\ComfyHub\storage\ai\memory.md',
+        'entryCount': _entryCount(rec.memory),
+        'maxChars': 8000,
+        'maxEntries': 100,
+      };
     } else if (path == '/api/ai/memory/delete' && request.method == 'POST') {
       // 与后端同语义：下标指向"一行一条"的顺序（0 起），越界的忽略
-      final want = ((jsonDecode(request.body) as Map)['indices'] as List).cast<num>().map((e) => e.toInt()).toSet();
+      final want = ((jsonDecode(request.body) as Map)['indices'] as List)
+          .cast<num>()
+          .map((e) => e.toInt())
+          .toSet();
       rec.memoryDeleted.add(want.toList()..sort());
       final kept = <String>[];
       var i = 0;
@@ -238,10 +273,22 @@ MockClient _backend(
         i++;
       }
       rec.memory = kept.join('\n');
-      body = {'content': rec.memory, 'path': r'D:\ComfyHub\storage\ai\memory.md', 'entryCount': _entryCount(rec.memory), 'maxChars': 8000, 'maxEntries': 100};
+      body = {
+        'content': rec.memory,
+        'path': r'D:\ComfyHub\storage\ai\memory.md',
+        'entryCount': _entryCount(rec.memory),
+        'maxChars': 8000,
+        'maxEntries': 100,
+      };
     } else if (path == '/api/ai/memory' && request.method == 'DELETE') {
       rec.memory = '';
-      body = {'content': '', 'path': r'D:\ComfyHub\storage\ai\memory.md', 'entryCount': 0, 'maxChars': 8000, 'maxEntries': 100};
+      body = {
+        'content': '',
+        'path': r'D:\ComfyHub\storage\ai\memory.md',
+        'entryCount': 0,
+        'maxChars': 8000,
+        'maxEntries': 100,
+      };
     } else if (path == '/api/ai/attachments/stats') {
       // 附件缓存卡（2026-11-04）：统计与 GC 规则都由后端给，界面只展示。
       body = {
@@ -265,7 +312,8 @@ MockClient _backend(
         'remainingBytes': 123456,
       };
     } else if (path == '/api/ai/tools') {
-      body = tools ??
+      body =
+          tools ??
           [
             _tool('read_file', category: 'files', access: 'ask'),
             _tool('load_skill', category: 'skill', access: 'allow'),
@@ -319,18 +367,18 @@ MockClient _providerBackend(
   String? refreshMessage,
 }) {
   Map<String, dynamic> status({String? lastMessage}) => {
-        'version': '2026-10-a',
-        'builtinRules': 12,
-        'customEntries': 3,
-        'remoteSource': 'models.dev',
-        'remoteFetchedAt': '2026-10-01T00:00:00Z',
-        'remoteEntries': remoteEntries,
-        'remoteAgeHours': 40,
-        'remoteStale': false,
-        'refreshIntervalDays': 7,
-        'probeEnabled': false,
-        'lastMessage': lastMessage,
-      };
+    'version': '2026-10-a',
+    'builtinRules': 12,
+    'customEntries': 3,
+    'remoteSource': 'models.dev',
+    'remoteFetchedAt': '2026-10-01T00:00:00Z',
+    'remoteEntries': remoteEntries,
+    'remoteAgeHours': 40,
+    'remoteStale': false,
+    'refreshIntervalDays': 7,
+    'probeEnabled': false,
+    'lastMessage': lastMessage,
+  };
 
   return MockClient((request) async {
     final path = request.url.path;
@@ -338,8 +386,11 @@ MockClient _providerBackend(
     if (path == '/api/ai/capabilities/status' && statusError != null) {
       // 真的失败（不是 body 里带个 error 字段）：`AiCapabilityStatus.error` 是**客户端**
       // 在 catch 里填的，后端回 200 带个 error 键它根本不看。
-      return http.Response(jsonEncode({'error': statusError}), 404,
-          headers: {'content-type': 'application/json; charset=utf-8'});
+      return http.Response(
+        jsonEncode({'error': statusError}),
+        404,
+        headers: {'content-type': 'application/json; charset=utf-8'},
+      );
     }
     if (path == '/api/ai/capabilities/status') {
       body = status();
@@ -360,8 +411,12 @@ MockClient _providerBackend(
           'endpointTrust': 'loopback',
           'enabled': true,
           'revision': 1,
-          'credential': {'configured': false, 'source': 'none', 'writable': true},
-        }
+          'credential': {
+            'configured': false,
+            'source': 'none',
+            'writable': true,
+          },
+        },
       ];
     } else {
       body = <Object>[];
@@ -374,16 +429,17 @@ MockClient _providerBackend(
   });
 }
 
-Map<String, dynamic> _defaultPolicy() => {      'writeRoots': [r'D:\myProject\FlutterProject\viewer\comfyui'],
-      'readRoots': [r'D:\myProject\FlutterProject\viewer'],
-      'overrides': <String, String>{},
-      'maxToolSteps': 8,
-      'maxCallsPerRun': 16,
-      // 与后端 ToolPolicyConfig 的出厂值保持一致（2026-09-19 上调成 2MB / 4MB）
-      'maxReadBytes': 2 * 1024 * 1024,
-      'maxWriteBytes': 4 * 1024 * 1024,
-      'defaultWriteRoot': r'D:\myProject\FlutterProject\viewer\comfyui',
-    };
+Map<String, dynamic> _defaultPolicy() => {
+  'writeRoots': [r'D:\myProject\FlutterProject\viewer\comfyui'],
+  'readRoots': [r'D:\myProject\FlutterProject\viewer'],
+  'overrides': <String, String>{},
+  'maxToolSteps': 8,
+  'maxCallsPerRun': 16,
+  // 与后端 ToolPolicyConfig 的出厂值保持一致（2026-09-19 上调成 2MB / 4MB）
+  'maxReadBytes': 2 * 1024 * 1024,
+  'maxWriteBytes': 4 * 1024 * 1024,
+  'defaultWriteRoot': r'D:\myProject\FlutterProject\viewer\comfyui',
+};
 
 Future<AiWorkspaceStore> _store(
   _Recorder rec, {
@@ -393,8 +449,15 @@ Future<AiWorkspaceStore> _store(
 }) async {
   SharedPreferences.setMockInitialValues({});
   final store = AiWorkspaceStore(
-    api: AiApiClient('http://127.0.0.1:8080',
-        client: _backend(rec, modelCount: modelCount, sse: sse, assistantText: assistantText)),
+    api: AiApiClient(
+      'http://127.0.0.1:8080',
+      client: _backend(
+        rec,
+        modelCount: modelCount,
+        sse: sse,
+        assistantText: assistantText,
+      ),
+    ),
   );
   return store;
 }
@@ -438,16 +501,26 @@ void main() {
   // 纯 dart 用例也要用 SharedPreferences 的 mock（草稿 / 上次模型记录）
   TestWidgetsFlutterBinding.ensureInitialized();
 
-  testWidgets('(a) 右侧栏列出后端的 skills：来源徽标 + 删除打到 DELETE /api/ai/skills/{name}', (tester) async {
+  testWidgets('(a) 右侧栏列出后端的 skills：来源徽标 + 删除打到 DELETE /api/ai/skills/{name}', (
+    tester,
+  ) async {
     tester.view.physicalSize = const Size(1600, 1200);
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
 
     final rec = _Recorder()
       ..skills = [
-        _skill('anima-prompt', description: '把需求转成 Anima 优化提示词', source: 'builtin'),
+        _skill(
+          'anima-prompt',
+          description: '把需求转成 Anima 优化提示词',
+          source: 'builtin',
+        ),
         _skill('my-skill', description: '我自己写的', source: 'user'),
-        _skill('broken-skill', description: '格式不对', validationError: 'frontmatter 缺少 description'),
+        _skill(
+          'broken-skill',
+          description: '格式不对',
+          validationError: 'frontmatter 缺少 description',
+        ),
       ];
 
     await tester.pumpWidget(await _homePage(rec));
@@ -491,7 +564,11 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(rec.calls, contains('DELETE /api/ai/skills/broken-skill'));
-    expect(find.text('broken-skill'), findsNothing, reason: '删完要重新拉列表，不能还留在界面上');
+    expect(
+      find.text('broken-skill'),
+      findsNothing,
+      reason: '删完要重新拉列表，不能还留在界面上',
+    );
     expect(find.text('my-skill'), findsOneWidget);
   });
 
@@ -500,7 +577,8 @@ void main() {
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
 
-    final rec = _Recorder()..skills = [_skill('anima-prompt', source: 'builtin')];
+    final rec = _Recorder()
+      ..skills = [_skill('anima-prompt', source: 'builtin')];
     await tester.pumpWidget(await _homePage(rec));
     await tester.pumpAndSettle();
 
@@ -518,7 +596,11 @@ void main() {
     await tester.tap(find.byTooltip('重新扫描投放口（自动登记新拷进来的 skill）'));
     await tester.pumpAndSettle();
     expect(rec.calls, contains('POST /api/ai/skills/rescan'));
-    expect(find.textContaining('自动登记 1 个'), findsWidgets, reason: '要如实说这次自动登记了什么');
+    expect(
+      find.textContaining('自动登记 1 个'),
+      findsWidgets,
+      reason: '要如实说这次自动登记了什么',
+    );
   });
 
   testWidgets('(a3) 长期记忆：面板只显示条数，编辑弹窗能改 / 加一条 / 清空', (tester) async {
@@ -534,14 +616,25 @@ void main() {
     expect(find.text('2 条'), findsOneWidget);
     // 用户建议（2026-09-20）：「右边栏长期记忆，不显示记忆内容的预览」——
     // 右侧栏一直摊在屏幕上，记忆正文（私下的偏好与上下文）不该印在上面
-    expect(find.textContaining('用户偏好 4:3 画幅'), findsNothing,
-        reason: '面板上不许出现记忆正文，要看就点开编辑弹窗');
+    expect(
+      find.textContaining('用户偏好 4:3 画幅'),
+      findsNothing,
+      reason: '面板上不许出现记忆正文，要看就点开编辑弹窗',
+    );
 
     // 打开编辑器 → 列表视图默认可见（2026-09-18 起：搜索 + 单条删除走列表视图）
     await tester.tap(find.byTooltip('查看 / 编辑长期记忆'));
     await tester.pumpAndSettle();
-    expect(find.textContaining('memory.md'), findsWidgets, reason: '要告诉用户真源文件在哪');
-    expect(find.text('2 / 100 条'), findsOneWidget, reason: '要能看出条数占用（用户要求条数可控）');
+    expect(
+      find.textContaining('memory.md'),
+      findsWidgets,
+      reason: '要告诉用户真源文件在哪',
+    );
+    expect(
+      find.text('2 / 100 条'),
+      findsOneWidget,
+      reason: '要能看出条数占用（用户要求条数可控）',
+    );
 
     // 整篇编辑是另一个模式：切过去才能改全文 → 保存 → PUT 出去的正文就是改过的
     await tester.tap(find.text('整篇编辑'));
@@ -560,7 +653,10 @@ void main() {
     // 再加一条：走 POST /memory/entries
     await tester.tap(find.byTooltip('查看 / 编辑长期记忆'));
     await tester.pumpAndSettle();
-    await tester.enterText(find.widgetWithText(TextField, '例如 交付一律 16:9、带字幕'), '交付 16:9');
+    await tester.enterText(
+      find.widgetWithText(TextField, '例如 交付一律 16:9、带字幕'),
+      '交付 16:9',
+    );
     await tester.tap(find.text('添加'));
     await tester.pumpAndSettle();
     expect(rec.memoryAdded, ['交付 16:9']);
@@ -579,14 +675,14 @@ void main() {
     expect(rec.memory, isEmpty);
   });
 
-  testWidgets('(a3b) 长期记忆：能按关键词搜、单条删与批量删（用户要求：条数多了也好查好删）',
-      (tester) async {
+  testWidgets('(a3b) 长期记忆：能按关键词搜、单条删与批量删（用户要求：条数多了也好查好删）', (tester) async {
     tester.view.physicalSize = const Size(1600, 1400);
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
 
     final rec = _Recorder()
-      ..memory = '- [2026-09-10] 画幅一律 4:3\n- [2026-09-11] 出图用 Anima 模型\n- [2026-09-12] 交付带字幕';
+      ..memory =
+          '- [2026-09-10] 画幅一律 4:3\n- [2026-09-11] 出图用 Anima 模型\n- [2026-09-12] 交付带字幕';
     await tester.pumpWidget(await _homePage(rec));
     await tester.pumpAndSettle();
 
@@ -594,17 +690,25 @@ void main() {
     await tester.pumpAndSettle();
 
     // 只看弹窗里的那几行（面板预览也会显示第一条，别把两者混起来数）
-    Finder inDialog(Finder f) => find.descendant(of: find.byType(AlertDialog), matching: f);
+    Finder inDialog(Finder f) =>
+        find.descendant(of: find.byType(AlertDialog), matching: f);
 
     // 日期前缀只是给人看时间用的，列表里剥掉（不然后缀里全是方括号，正文反而看不见）
     expect(inDialog(find.text('画幅一律 4:3')), findsOneWidget);
     expect(inDialog(find.textContaining('[2026-09-10]')), findsNothing);
 
     // 搜索：只剩匹配的那条
-    await tester.enterText(find.widgetWithText(TextField, '搜索记忆（按关键词过滤）'), '字幕');
+    await tester.enterText(
+      find.widgetWithText(TextField, '搜索记忆（按关键词过滤）'),
+      '字幕',
+    );
     await tester.pumpAndSettle();
     expect(inDialog(find.text('交付带字幕')), findsOneWidget);
-    expect(inDialog(find.text('画幅一律 4:3')), findsNothing, reason: '搜索要真的过滤掉不匹配的条目');
+    expect(
+      inDialog(find.text('画幅一律 4:3')),
+      findsNothing,
+      reason: '搜索要真的过滤掉不匹配的条目',
+    );
 
     // 清空搜索 → 三条都在
     await tester.tap(find.byTooltip('清空搜索'));
@@ -615,7 +719,7 @@ void main() {
     await tester.tap(find.byTooltip('删掉这一条').at(1));
     await tester.pumpAndSettle();
     expect(rec.memoryDeleted, [
-      [1]
+      [1],
     ]);
     expect(rec.memory, contains('画幅一律 4:3'));
     expect(rec.memory, isNot(contains('Anima')));
@@ -633,63 +737,71 @@ void main() {
     expect(rec.memory, isEmpty);
   });
 
-  testWidgets('(b) tool.requested / tool.completed 事件生成可见的工具卡（预览默认折叠）', (tester) async {
+  testWidgets('(b) tool.requested / tool.completed 事件生成可见的工具卡（预览默认折叠）', (
+    tester,
+  ) async {
     tester.view.physicalSize = const Size(1200, 1000);
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
 
     final rec = _Recorder();
-    final sse = _sse(1, 'run.started', '{"runId":"r1"}') +
+    final sse =
+        _sse(1, 'run.started', '{"runId":"r1"}') +
         _sse(2, 'message.started', '{"messageId":"a1"}') +
         _sse(3, 'text.delta', '{"messageId":"a1","text":"好的，"}') +
         _sse(
-            4,
-            'tool.requested',
-            '{"runId":"r1","callId":"call-1","name":"read_file",'
-                '"arguments":"{\\"path\\":\\"a.md\\"}","reason":"先读一下 a.md",'
-                '"approval":"not_required"}') +
+          4,
+          'tool.requested',
+          '{"runId":"r1","callId":"call-1","name":"read_file",'
+              '"arguments":"{\\"path\\":\\"a.md\\"}","reason":"先读一下 a.md",'
+              '"approval":"not_required"}',
+        ) +
         _sse(5, 'tool.started', '{"callId":"call-1","name":"read_file"}') +
         _sse(
-            6,
-            'tool.completed',
-            '{"callId":"call-1","name":"read_file","elapsedMs":42,"preview":"# 标题\\n正文"}') +
+          6,
+          'tool.completed',
+          '{"callId":"call-1","name":"read_file","elapsedMs":42,"preview":"# 标题\\n正文"}',
+        ) +
         _sse(
-            7,
-            'message.completed',
-            '{"messageId":"a1","text":"好的，我看一下文件。","steps":1,"parts":['
-                '{"type":"text","text":"好的，我看一下文件。"},'
-                '{"type":"tool_call","toolCallId":"call-1","jsonPayload":{"name":"read_file","arguments":"{\\"path\\":\\"a.md\\"}","reason":"先读一下 a.md"}},'
-                '{"type":"tool_result","toolCallId":"call-1","text":"# 标题\\n正文","jsonPayload":{"name":"read_file","ok":true,"elapsedMs":42,"approval":"approved"}}'
-                ']}') +
+          7,
+          'message.completed',
+          '{"messageId":"a1","text":"好的，我看一下文件。","steps":1,"parts":['
+              '{"type":"text","text":"好的，我看一下文件。"},'
+              '{"type":"tool_call","toolCallId":"call-1","jsonPayload":{"name":"read_file","arguments":"{\\"path\\":\\"a.md\\"}","reason":"先读一下 a.md"}},'
+              '{"type":"tool_result","toolCallId":"call-1","text":"# 标题\\n正文","jsonPayload":{"name":"read_file","ok":true,"elapsedMs":42,"approval":"approved"}}'
+              ']}',
+        ) +
         _sse(8, 'run.completed', '{"runId":"r1"}');
 
-    await tester.pumpWidget(await _homePage(
-      rec,
-      sse: sse,
-      assistantParts: [
-        {'type': 'text', 'text': '好的，我看一下文件。'},
-        {
-          'type': 'tool_call',
-          'toolCallId': 'call-1',
-          'jsonPayload': {
-            'name': 'read_file',
-            'arguments': '{"path":"a.md"}',
-            'reason': '先读一下 a.md',
+    await tester.pumpWidget(
+      await _homePage(
+        rec,
+        sse: sse,
+        assistantParts: [
+          {'type': 'text', 'text': '好的，我看一下文件。'},
+          {
+            'type': 'tool_call',
+            'toolCallId': 'call-1',
+            'jsonPayload': {
+              'name': 'read_file',
+              'arguments': '{"path":"a.md"}',
+              'reason': '先读一下 a.md',
+            },
           },
-        },
-        {
-          'type': 'tool_result',
-          'toolCallId': 'call-1',
-          'text': '# 标题\n正文',
-          'jsonPayload': {
-            'name': 'read_file',
-            'ok': true,
-            'elapsedMs': 42,
-            'approval': 'approved',
+          {
+            'type': 'tool_result',
+            'toolCallId': 'call-1',
+            'text': '# 标题\n正文',
+            'jsonPayload': {
+              'name': 'read_file',
+              'ok': true,
+              'elapsedMs': 42,
+              'approval': 'approved',
+            },
           },
-        },
-      ],
-    ));
+        ],
+      ),
+    );
     await tester.pumpAndSettle();
 
     // 发一条消息把 Run 跑起来，SSE 里才有工具事件
@@ -744,13 +856,15 @@ void main() {
         },
       },
     ];
-    final sse = _sse(1, 'run.started', '{"runId":"r1"}') +
+    final sse =
+        _sse(1, 'run.started', '{"runId":"r1"}') +
         _sse(2, 'message.started', '{"messageId":"a1"}') +
         _sse(
-            3,
-            'message.completed',
-            '{"messageId":"a1","text":"写完了。","steps":1,'
-                '"parts":${jsonEncode(parts)}}') +
+          3,
+          'message.completed',
+          '{"messageId":"a1","text":"写完了。","steps":1,'
+              '"parts":${jsonEncode(parts)}}',
+        ) +
         _sse(4, 'run.completed', '{"runId":"r1"}');
 
     await tester.pumpWidget(await _homePage(rec, sse: sse));
@@ -766,7 +880,11 @@ void main() {
     expect(find.text('调用结果'), findsOneWidget);
     expect(find.text('说明'), findsOneWidget);
     expect(find.textContaining('缺少参数 path'), findsWidgets);
-    expect(find.text('INVALID_ARGUMENT'), findsOneWidget, reason: '错误码要如实放在说明里');
+    expect(
+      find.text('INVALID_ARGUMENT'),
+      findsOneWidget,
+      reason: '错误码要如实放在说明里',
+    );
   });
 
   testWidgets('(e3) 回复末尾贴出「生成的产物」画廊入口卡（用户建议 ⑤）', (tester) async {
@@ -775,21 +893,28 @@ void main() {
     addTearDown(tester.view.reset);
 
     final rec = _Recorder();
-    final sse = _sse(1, 'run.started', '{"runId":"r1"}') +
+    final sse =
+        _sse(1, 'run.started', '{"runId":"r1"}') +
         _sse(2, 'message.started', '{"messageId":"a1"}') +
         _sse(3, 'text.delta', '{"messageId":"a1","text":"跑好了。"}') +
         _sse(
-            4,
-            'tool.requested',
-            '{"callId":"call-s","name":"comfy_submit","arguments":"{\\"promptId\\":7}",'
-                '"approval":"approved"}') +
+          4,
+          'tool.requested',
+          '{"callId":"call-s","name":"comfy_submit","arguments":"{\\"promptId\\":7}",'
+              '"approval":"approved"}',
+        ) +
         _sse(5, 'tool.started', '{"callId":"call-s","name":"comfy_submit"}') +
         _sse(
-            6,
-            'tool.completed',
-            '{"callId":"call-s","name":"comfy_submit","elapsedMs":9000,"preview":"完成",'
-                '"result":{"promptId":7,"status":"success","mediaIds":[31,32],"mediaCount":2}}') +
-        _sse(7, 'message.completed', '{"messageId":"a1","text":"跑好了。","steps":1}') +
+          6,
+          'tool.completed',
+          '{"callId":"call-s","name":"comfy_submit","elapsedMs":9000,"preview":"完成",'
+              '"result":{"promptId":7,"status":"success","mediaIds":[31,32],"mediaCount":2}}',
+        ) +
+        _sse(
+          7,
+          'message.completed',
+          '{"messageId":"a1","text":"跑好了。","steps":1}',
+        ) +
         _sse(8, 'run.completed', '{"runId":"r1"}');
 
     await tester.pumpWidget(await _homePage(rec, sse: sse));
@@ -817,23 +942,30 @@ void main() {
 
     final rec = _Recorder();
     // 记住之前：面板是 "0 条"
-    final sse = _sse(1, 'run.started', '{"runId":"r1"}') +
+    final sse =
+        _sse(1, 'run.started', '{"runId":"r1"}') +
         _sse(2, 'message.started', '{"messageId":"a1"}') +
         _sse(3, 'text.delta', '{"messageId":"a1","text":"好，我记住了。"}') +
         _sse(
-            4,
-            'tool.requested',
-            '{"callId":"call-m","name":"remember","arguments":"{\\"content\\":\\"画幅一律 4:3\\"}",'
-                '"approval":"not_required"}') +
+          4,
+          'tool.requested',
+          '{"callId":"call-m","name":"remember","arguments":"{\\"content\\":\\"画幅一律 4:3\\"}",'
+              '"approval":"not_required"}',
+        ) +
         _sse(5, 'tool.started', '{"callId":"call-m","name":"remember"}') +
         // 真后端在这一刻 memory.md 已经写完了（工具先落盘、后发事件），
         // 所以假后端在事件发出前就把内容改掉 —— 事件本身**不带**记忆正文。
         _sse(
-            6,
-            'tool.completed',
-            '{"callId":"call-m","name":"remember","elapsedMs":3,"preview":"已记住",'
-                '"result":{"entryCount":1,"maxEntries":100}}') +
-        _sse(7, 'message.completed', '{"messageId":"a1","text":"好，我记住了。","steps":1}') +
+          6,
+          'tool.completed',
+          '{"callId":"call-m","name":"remember","elapsedMs":3,"preview":"已记住",'
+              '"result":{"entryCount":1,"maxEntries":100}}',
+        ) +
+        _sse(
+          7,
+          'message.completed',
+          '{"messageId":"a1","text":"好，我记住了。","steps":1}',
+        ) +
         _sse(8, 'run.completed', '{"runId":"r1"}');
 
     await tester.pumpWidget(await _homePage(rec, sse: sse));
@@ -841,7 +973,11 @@ void main() {
 
     expect(find.text('长期记忆'), findsOneWidget);
     expect(find.text('0 条'), findsOneWidget, reason: '记住之前是空的');
-    expect(rec.calls.where((c) => c == 'GET /api/ai/memory').length, 1, reason: '只在进页面时拉过一次');
+    expect(
+      rec.calls.where((c) => c == 'GET /api/ai/memory').length,
+      1,
+      reason: '只在进页面时拉过一次',
+    );
 
     // 模拟"工具已经把 memory.md 写了"（真后端在发 tool.completed 之前就落盘了）
     rec.memory = '- [2026-09-20] 画幅一律 4:3';
@@ -852,10 +988,16 @@ void main() {
 
     // 关键断言：不用切页面、不用手动刷新，条数当场跟上（面板上不印正文，只认条数）
     expect(find.text('1 条'), findsOneWidget, reason: 'AI 记完一条，面板条数必须当场变');
-    expect(find.textContaining('画幅一律 4:3'), findsNothing,
-        reason: '面板上不印记忆正文（用户建议 2026-09-20）');
-    expect(rec.calls.where((c) => c == 'GET /api/ai/memory').length, greaterThan(1),
-        reason: '必须真的重新拉了一次记忆（不是界面自己瞎猜一个条数）');
+    expect(
+      find.textContaining('画幅一律 4:3'),
+      findsNothing,
+      reason: '面板上不印记忆正文（用户建议 2026-09-20）',
+    );
+    expect(
+      rec.calls.where((c) => c == 'GET /api/ai/memory').length,
+      greaterThan(1),
+      reason: '必须真的重新拉了一次记忆（不是界面自己瞎猜一个条数）',
+    );
   });
 
   testWidgets('(e4) 右侧栏显示 ComfyUI 实时进度（用户"其他建议"第 1 条）', (tester) async {
@@ -864,44 +1006,46 @@ void main() {
     addTearDown(tester.view.reset);
 
     final rec = _Recorder();
-    await tester.pumpWidget(await _homePage(
-      rec,
-      comfyJobs: {
-        'queueRunning': 1,
-        'queuePending': 2,
-        'comfyReachable': true,
-        'runningLabel': '雨夜霓虹',
-        'current': {
-          'promptId': 'p-1',
-          'state': 'running',
-          'value': 12,
-          'max': 30,
-          'percent': 40,
-          'nodeId': '9',
-          'nodeName': 'KSampler',
-        },
-        'submissions': [
-          {
+    await tester.pumpWidget(
+      await _homePage(
+        rec,
+        comfyJobs: {
+          'queueRunning': 1,
+          'queuePending': 2,
+          'comfyReachable': true,
+          'runningLabel': '雨夜霓虹',
+          'current': {
             'promptId': 'p-1',
-            'submittedBy': 'ai',
-            'title': '赛博朋克少女',
-            'status': 'running',
-            'elapsedMs': 12000,
-            'mediaIds': <Object>[],
-            // 后端从 ComfyUI 的 WS 帧里拿到的真实进度（value/max 都是 ComfyUI 自己发的）
-            'progress': {
-              'promptId': 'p-1',
-              'state': 'running',
-              'value': 12,
-              'max': 30,
-              'percent': 40,
-              'nodeId': '9',
-              'nodeName': 'KSampler',
-            },
+            'state': 'running',
+            'value': 12,
+            'max': 30,
+            'percent': 40,
+            'nodeId': '9',
+            'nodeName': 'KSampler',
           },
-        ],
-      },
-    ));
+          'submissions': [
+            {
+              'promptId': 'p-1',
+              'submittedBy': 'ai',
+              'title': '赛博朋克少女',
+              'status': 'running',
+              'elapsedMs': 12000,
+              'mediaIds': <Object>[],
+              // 后端从 ComfyUI 的 WS 帧里拿到的真实进度（value/max 都是 ComfyUI 自己发的）
+              'progress': {
+                'promptId': 'p-1',
+                'state': 'running',
+                'value': 12,
+                'max': 30,
+                'percent': 40,
+                'nodeId': '9',
+                'nodeName': 'KSampler',
+              },
+            },
+          ],
+        },
+      ),
+    );
     await tester.pumpAndSettle();
 
     expect(find.text('实时进度'), findsOneWidget);
@@ -910,7 +1054,9 @@ void main() {
     // ★ 用户要的"不只显示进行中"：**当前步骤 + 百分比**都得看得见
     expect(find.textContaining('正在执行 KSampler（12/30）'), findsOneWidget);
     expect(find.textContaining('40%'), findsOneWidget);
-    final bar = tester.widget<LinearProgressIndicator>(find.byType(LinearProgressIndicator).first);
+    final bar = tester.widget<LinearProgressIndicator>(
+      find.byType(LinearProgressIndicator).first,
+    );
     expect(bar.value, closeTo(0.4, 0.001));
     // 进度是真的打到了后端那个接口（不是界面自己编的）
     expect(rec.calls.any((c) => c.contains('/api/capture/jobs')), isTrue);
@@ -922,23 +1068,29 @@ void main() {
     addTearDown(tester.view.reset);
 
     final rec = _Recorder();
-    await tester.pumpWidget(await _homePage(
-      rec,
-      comfyJobs: {
-        'queueRunning': 1,
-        'comfyReachable': true,
-        'submissions': [
-          {
-            'promptId': 'p-2',
-            'title': '没有采样步数的那种',
-            'status': 'running',
-            'mediaIds': <Object>[],
-            // 只有 executing 帧（知道在哪个节点），没有 progress/progress_state 帧
-            'progress': {'promptId': 'p-2', 'state': 'running', 'nodeId': '9'},
-          },
-        ],
-      },
-    ));
+    await tester.pumpWidget(
+      await _homePage(
+        rec,
+        comfyJobs: {
+          'queueRunning': 1,
+          'comfyReachable': true,
+          'submissions': [
+            {
+              'promptId': 'p-2',
+              'title': '没有采样步数的那种',
+              'status': 'running',
+              'mediaIds': <Object>[],
+              // 只有 executing 帧（知道在哪个节点），没有 progress/progress_state 帧
+              'progress': {
+                'promptId': 'p-2',
+                'state': 'running',
+                'nodeId': '9',
+              },
+            },
+          ],
+        },
+      ),
+    );
     // ⚠ 这里**不能** pumpAndSettle：进度未知时界面用的是**不确定态**进度条，
     // 它一直在动 —— pumpAndSettle 会等"再没有帧要画"，于是必然超时。
     // 这不是产品缺陷，是用例得按"有持续动画的页面"来推进。
@@ -949,45 +1101,52 @@ void main() {
     // 节点名没登记过 → 只说节点 id，**不编名字**
     expect(find.textContaining('正在执行 节点 9'), findsOneWidget);
     // 百分比整键缺席 → 不确定态进度条（value == null），绝不当 0%
-    final bar = tester.widget<LinearProgressIndicator>(find.byType(LinearProgressIndicator).first);
+    final bar = tester.widget<LinearProgressIndicator>(
+      find.byType(LinearProgressIndicator).first,
+    );
     expect(bar.value, isNull);
     expect(find.textContaining('0%'), findsNothing);
   });
 
-  testWidgets('(c) approval=pending 时出「批准 / 拒绝」，批准 POST /api/ai/tool-calls/{id}/approve', (tester) async {
-    tester.view.physicalSize = const Size(1200, 1000);
-    tester.view.devicePixelRatio = 1.0;
-    addTearDown(tester.view.reset);
+  testWidgets(
+    '(c) approval=pending 时出「批准 / 拒绝」，批准 POST /api/ai/tool-calls/{id}/approve',
+    (tester) async {
+      tester.view.physicalSize = const Size(1200, 1000);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
 
-    final rec = _Recorder();
-    final sse = _sse(1, 'run.started', '{"runId":"r1"}') +
-        _sse(2, 'message.started', '{"messageId":"a1"}') +
-        _sse(
+      final rec = _Recorder();
+      final sse =
+          _sse(1, 'run.started', '{"runId":"r1"}') +
+          _sse(2, 'message.started', '{"messageId":"a1"}') +
+          _sse(
             3,
             'tool.requested',
             '{"runId":"r1","callId":"call-9","name":"write_file",'
-                '"arguments":"{\\"path\\":\\"x.txt\\"}","approval":"pending"}');
+                '"arguments":"{\\"path\\":\\"x.txt\\"}","approval":"pending"}',
+          );
 
-    await tester.pumpWidget(await _homePage(rec, sse: sse));
-    await tester.pumpAndSettle();
+      await tester.pumpWidget(await _homePage(rec, sse: sse));
+      await tester.pumpAndSettle();
 
-    await tester.enterText(find.byType(TextField).first, '写个文件');
-    await tester.tap(find.text('发送'));
-    await tester.pumpAndSettle();
+      await tester.enterText(find.byType(TextField).first, '写个文件');
+      await tester.tap(find.text('发送'));
+      await tester.pumpAndSettle();
 
-    expect(find.text('write_file'), findsOneWidget);
-    expect(find.text('待批准'), findsOneWidget);
-    expect(find.text('批准'), findsOneWidget);
-    expect(find.text('拒绝'), findsOneWidget);
-    expect(find.textContaining('在等你的批准'), findsOneWidget);
+      expect(find.text('write_file'), findsOneWidget);
+      expect(find.text('待批准'), findsOneWidget);
+      expect(find.text('批准'), findsOneWidget);
+      expect(find.text('拒绝'), findsOneWidget);
+      expect(find.textContaining('在等你的批准'), findsOneWidget);
 
-    await tester.tap(find.text('批准'));
-    // 批准后卡片进入「运行中」（真的在转圈），所以这里不能用 pumpAndSettle
-    await tester.pump(const Duration(milliseconds: 400));
+      await tester.tap(find.text('批准'));
+      // 批准后卡片进入「运行中」（真的在转圈），所以这里不能用 pumpAndSettle
+      await tester.pump(const Duration(milliseconds: 400));
 
-    expect(rec.calls, contains('POST /api/ai/tool-calls/call-9/approve'));
-    expect(find.text('运行中'), findsOneWidget, reason: '批准生效后就该进入运行中');
-  });
+      expect(rec.calls, contains('POST /api/ai/tool-calls/call-9/approve'));
+      expect(find.text('运行中'), findsOneWidget, reason: '批准生效后就该进入运行中');
+    },
+  );
 
   testWidgets('(c2) 点晚了（accepted=false）如实告知，不假装成功', (tester) async {
     tester.view.physicalSize = const Size(1200, 1000);
@@ -995,27 +1154,33 @@ void main() {
     addTearDown(tester.view.reset);
 
     final rec = _Recorder();
-    final sse = _sse(1, 'run.started', '{"runId":"r1"}') +
+    final sse =
+        _sse(1, 'run.started', '{"runId":"r1"}') +
         _sse(2, 'message.started', '{"messageId":"a1"}') +
         _sse(
-            3,
-            'tool.requested',
-            '{"runId":"r1","callId":"call-9","name":"write_file","arguments":"{}","approval":"pending"}');
+          3,
+          'tool.requested',
+          '{"runId":"r1","callId":"call-9","name":"write_file","arguments":"{}","approval":"pending"}',
+        );
 
     SharedPreferences.setMockInitialValues({});
     final settings = SettingsStore();
     await settings.load();
     final store = AiWorkspaceStore(
-      api: AiApiClient(settings.baseUrl,
-          client: _backend(rec, sse: sse, approvalAccepted: false)),
+      api: AiApiClient(
+        settings.baseUrl,
+        client: _backend(rec, sse: sse, approvalAccepted: false),
+      ),
     );
-    await tester.pumpWidget(MultiProvider(
-      providers: [
-        ChangeNotifierProvider<SettingsStore>.value(value: settings),
-        ChangeNotifierProvider<AiWorkspaceStore>.value(value: store),
-      ],
-      child: const MaterialApp(home: AiHomePage()),
-    ));
+    await tester.pumpWidget(
+      MultiProvider(
+        providers: [
+          ChangeNotifierProvider<SettingsStore>.value(value: settings),
+          ChangeNotifierProvider<AiWorkspaceStore>.value(value: store),
+        ],
+        child: const MaterialApp(home: AiHomePage()),
+      ),
+    );
     await tester.pumpAndSettle();
 
     await tester.enterText(find.byType(TextField).first, '写个文件');
@@ -1037,12 +1202,17 @@ void main() {
     final rec = _Recorder();
     // 思考正文写得比折叠摘要（160 字）长：这样才能断言"折叠时只给摘要、展开后才有全文"
     final filler = '先看需求，再定风格。' * 20;
-    final sse = _sse(1, 'run.started', '{"runId":"r1"}') +
+    final sse =
+        _sse(1, 'run.started', '{"runId":"r1"}') +
         _sse(2, 'message.started', '{"messageId":"a1"}') +
         _sse(3, 'reasoning.delta', '{"messageId":"a1","text":"$filler"}') +
         _sse(4, 'reasoning.delta', '{"messageId":"a1","text":"尾巴结论。"}') +
         _sse(5, 'text.delta', '{"messageId":"a1","text":"好的"}') +
-        _sse(6, 'message.completed', '{"messageId":"a1","text":"好的","steps":0}') +
+        _sse(
+          6,
+          'message.completed',
+          '{"messageId":"a1","text":"好的","steps":0}',
+        ) +
         _sse(7, 'run.completed', '{"runId":"r1"}');
     // 后端落库后的有序块：思考/正文按流顺序各一块（与 message.completed 之后库里的一致）
     final parts = [
@@ -1050,7 +1220,9 @@ void main() {
       {'type': 'text', 'text': '好的'},
     ];
 
-    await tester.pumpWidget(await _homePage(rec, sse: sse, assistantParts: parts));
+    await tester.pumpWidget(
+      await _homePage(rec, sse: sse, assistantParts: parts),
+    );
     await tester.pumpAndSettle();
 
     await tester.enterText(find.byType(TextField).first, '帮我想想');
@@ -1074,7 +1246,8 @@ void main() {
     final rec = _Recorder();
     final filler = '先看需求，再定风格。' * 20;
     // 只有思考增量、没有 run.completed：停在"正在生成"这一刻
-    final sse = _sse(1, 'run.started', '{"runId":"r1"}') +
+    final sse =
+        _sse(1, 'run.started', '{"runId":"r1"}') +
         _sse(2, 'message.started', '{"messageId":"a1"}') +
         _sse(3, 'reasoning.delta', '{"messageId":"a1","text":"$filler尾巴结论。"}') +
         _sse(4, 'text.delta', '{"messageId":"a1","text":"好的"}');
@@ -1089,8 +1262,7 @@ void main() {
 
     expect(find.text('思考中…'), findsOneWidget, reason: '流式中要有明确的进行中标记');
     // 用户 2026-10-21：流式生成中摘要显示**当前思考的末尾一行**（不是开头）。
-    expect(find.textContaining('尾巴结论'), findsWidgets,
-        reason: '生成中要看"现在想到哪了"');
+    expect(find.textContaining('尾巴结论'), findsWidgets, reason: '生成中要看"现在想到哪了"');
     // 但仍然只显示摘要、没有自动展开整段（展开后会出现完整正文的分块）。
     expect(find.text('思考过程'), findsOneWidget);
     // 但用户点一下还是能看到全文
@@ -1110,12 +1282,14 @@ void main() {
     // 用户报的现象：气泡宽度跟着折叠摘要那最后一行一抽一抽地变 ——
     // 因为收起时气泡是"按内容收缩"的，思考一行一行写下来，每换一行
     // 气泡右边缘就跳一次。气泡宽度是版面的一部分，不能是"这行字有多长"的函数。
-    final sse = _sse(1, 'run.started', '{"runId":"r1"}') +
+    final sse =
+        _sse(1, 'run.started', '{"runId":"r1"}') +
         _sse(2, 'message.started', '{"messageId":"a1"}') +
         _sse(
-            3,
-            'reasoning.delta',
-            '{"messageId":"a1","text":"先看需求，再定风格。\\n再检查一下手。\\n好。"}');
+          3,
+          'reasoning.delta',
+          '{"messageId":"a1","text":"先看需求，再定风格。\\n再检查一下手。\\n好。"}',
+        );
 
     await tester.pumpWidget(await _homePage(rec, sse: sse));
     await tester.pumpAndSettle();
@@ -1157,7 +1331,9 @@ void main() {
     await tester.pumpWidget(await _homePage(rec, modelCount: 69));
     await tester.pumpAndSettle();
 
-    final store = tester.element(find.byType(AiHomePage)).read<AiWorkspaceStore>();
+    final store = tester
+        .element(find.byType(AiHomePage))
+        .read<AiWorkspaceStore>();
     expect(store.models.length, 69);
 
     // 打开选择器（按钮上就是当前模型名）
@@ -1166,37 +1342,60 @@ void main() {
     expect(find.textContaining('共 69 个模型'), findsOneWidget);
 
     // 懒构建：69 个模型不能一次全建出来（否则每行 6 个徽标，弹出就卡）
-    final built = find.descendant(of: find.byType(Dialog), matching: find.byType(ListTile));
+    final built = find.descendant(
+      of: find.byType(Dialog),
+      matching: find.byType(ListTile),
+    );
     expect(built.evaluate().length, lessThan(69));
 
     // 搜索过滤
     await tester.enterText(
-      find.descendant(of: find.byType(Dialog), matching: find.byType(TextField)),
+      find.descendant(
+        of: find.byType(Dialog),
+        matching: find.byType(TextField),
+      ),
       '模型 42',
     );
     await tester.pumpAndSettle();
     // 只认对话框里的那几行：聊天框和右侧栏也会显示当前模型名
     final inDialog = find.byType(Dialog);
-    expect(find.descendant(of: inDialog, matching: find.widgetWithText(ListTile, '模型 42')),
-        findsOneWidget);
-    expect(find.descendant(of: inDialog, matching: find.text('模型 00')), findsNothing);
+    expect(
+      find.descendant(
+        of: inDialog,
+        matching: find.widgetWithText(ListTile, '模型 42'),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(of: inDialog, matching: find.text('模型 00')),
+      findsNothing,
+    );
 
-    await tester.tap(find.descendant(of: inDialog, matching: find.widgetWithText(ListTile, '模型 42')));
+    await tester.tap(
+      find.descendant(
+        of: inDialog,
+        matching: find.widgetWithText(ListTile, '模型 42'),
+      ),
+    );
     await tester.pumpAndSettle();
     expect(store.selectedModel?.id, 'model-42');
   });
 
-  testWidgets('(e) 工具权限页：默认策略说清楚，逐工具权限改动走 PUT /api/ai/tools/policy', (tester) async {
+  testWidgets('(e) 工具权限页：默认策略说清楚，逐工具权限改动走 PUT /api/ai/tools/policy', (
+    tester,
+  ) async {
     tester.view.physicalSize = const Size(1400, 1600);
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
 
     final rec = _Recorder();
-    await tester.pumpWidget(MaterialApp(
-      home: AiToolsSettingsPage(
-        api: AiApiClient('http://127.0.0.1:8080', client: _backend(rec)),
+    await tester.pumpWidget(
+      MaterialApp(
+        home: AiToolsSettingsPage(
+          api: AiApiClient('http://127.0.0.1:8080', client: _backend(rec)),
+        ),
       ),
-    ));
+    );
     await tester.pumpAndSettle();
 
     // 默认状态要大声、明确
@@ -1246,44 +1445,55 @@ void main() {
       _tool('write_file', category: 'files', access: 'ask'),
     ];
 
-    await tester.pumpWidget(MaterialApp(
-      home: AiToolsSettingsPage(
-        api: AiApiClient(
-          'http://127.0.0.1:8080',
-          client: MockClient((request) async {
-            final path = request.url.path;
-            Object body;
-            if (path == '/api/ai/tools' && request.method == 'GET') {
-              body = tools;
-            } else if (path == '/api/ai/tools/policy' && request.method == 'PUT') {
-              final sent = jsonDecode(request.body) as Map<String, dynamic>;
-              rec.policyPuts.add(sent);
-              final overrides = (sent['overrides'] as Map?)?.cast<String, dynamic>() ?? {};
-              tools = [
-                for (final t in tools)
-                  {...t, 'access': overrides[t['name']] ?? t['access'], 'overridden': overrides.containsKey(t['name'])},
-              ];
-              body = {
-                'writeRoots': const [r'D:\ComfyHub\comfyui'],
-                'readRoots': const [r'D:\ComfyHub\comfyui'],
-                'overrides': overrides,
-                'defaultWriteRoot': r'D:\ComfyHub\comfyui',
-              };
-            } else if (path == '/api/ai/tools/policy') {
-              body = {
-                'writeRoots': const [r'D:\ComfyHub\comfyui'],
-                'readRoots': const [r'D:\ComfyHub\comfyui'],
-                'defaultWriteRoot': r'D:\ComfyHub\comfyui',
-              };
-            } else {
-              body = <Object>[];
-            }
-            return http.Response(jsonEncode(body), 200,
-                headers: {'content-type': 'application/json; charset=utf-8'});
-          }),
+    await tester.pumpWidget(
+      MaterialApp(
+        home: AiToolsSettingsPage(
+          api: AiApiClient(
+            'http://127.0.0.1:8080',
+            client: MockClient((request) async {
+              final path = request.url.path;
+              Object body;
+              if (path == '/api/ai/tools' && request.method == 'GET') {
+                body = tools;
+              } else if (path == '/api/ai/tools/policy' &&
+                  request.method == 'PUT') {
+                final sent = jsonDecode(request.body) as Map<String, dynamic>;
+                rec.policyPuts.add(sent);
+                final overrides =
+                    (sent['overrides'] as Map?)?.cast<String, dynamic>() ?? {};
+                tools = [
+                  for (final t in tools)
+                    {
+                      ...t,
+                      'access': overrides[t['name']] ?? t['access'],
+                      'overridden': overrides.containsKey(t['name']),
+                    },
+                ];
+                body = {
+                  'writeRoots': const [r'D:\ComfyHub\comfyui'],
+                  'readRoots': const [r'D:\ComfyHub\comfyui'],
+                  'overrides': overrides,
+                  'defaultWriteRoot': r'D:\ComfyHub\comfyui',
+                };
+              } else if (path == '/api/ai/tools/policy') {
+                body = {
+                  'writeRoots': const [r'D:\ComfyHub\comfyui'],
+                  'readRoots': const [r'D:\ComfyHub\comfyui'],
+                  'defaultWriteRoot': r'D:\ComfyHub\comfyui',
+                };
+              } else {
+                body = <Object>[];
+              }
+              return http.Response(
+                jsonEncode(body),
+                200,
+                headers: {'content-type': 'application/json; charset=utf-8'},
+              );
+            }),
+          ),
         ),
       ),
-    ));
+    );
     await tester.pumpAndSettle();
 
     // 进「逐工具权限」子页：第一行是 read_file，第二行是 write_file
@@ -1303,7 +1513,10 @@ void main() {
     await tester.tap(find.text('允许').last);
     await tester.pumpAndSettle();
 
-    expect(rec.policyPuts.last['overrides'], containsPair('write_file', 'allow'));
+    expect(
+      rec.policyPuts.last['overrides'],
+      containsPair('write_file', 'allow'),
+    );
     // 关键（用户报的「点了允许，实际还是询问」）：界面上要如实显示生效后的档位
     expect(find.text('允许'), findsWidgets);
     expect(find.text('询问'), findsWidgets, reason: 'read_file 还是询问，别的行不受影响');
@@ -1315,11 +1528,13 @@ void main() {
     addTearDown(tester.view.reset);
 
     final rec = _Recorder();
-    await tester.pumpWidget(MaterialApp(
-      home: AiToolsSettingsPage(
-        api: AiApiClient('http://127.0.0.1:8080', client: _backend(rec)),
+    await tester.pumpWidget(
+      MaterialApp(
+        home: AiToolsSettingsPage(
+          api: AiApiClient('http://127.0.0.1:8080', client: _backend(rec)),
+        ),
       ),
-    ));
+    );
     await tester.pumpAndSettle();
 
     final field = find.widgetWithText(TextField, '要放行的目录（绝对路径）').first;
@@ -1344,11 +1559,16 @@ void main() {
     addTearDown(tester.view.reset);
 
     final rec = _Recorder();
-    await tester.pumpWidget(MaterialApp(
-      home: AiProviderSettingsPage(
-        api: AiApiClient('http://127.0.0.1:8080', client: _providerBackend(rec)),
+    await tester.pumpWidget(
+      MaterialApp(
+        home: AiProviderSettingsPage(
+          api: AiApiClient(
+            'http://127.0.0.1:8080',
+            client: _providerBackend(rec),
+          ),
+        ),
       ),
-    ));
+    );
     await tester.pumpAndSettle();
 
     // 没选中 Provider 时**不许**出现：它是这一条的详情，不是页顶的一张常驻卡
@@ -1383,12 +1603,16 @@ void main() {
     addTearDown(tester.view.reset);
 
     final rec = _Recorder();
-    await tester.pumpWidget(MaterialApp(
-      home: AiProviderSettingsPage(
-        api: AiApiClient('http://127.0.0.1:8080',
-            client: _providerBackend(rec, refreshMessage: '已更新：写入 1240 条。')),
+    await tester.pumpWidget(
+      MaterialApp(
+        home: AiProviderSettingsPage(
+          api: AiApiClient(
+            'http://127.0.0.1:8080',
+            client: _providerBackend(rec, refreshMessage: '已更新：写入 1240 条。'),
+          ),
+        ),
       ),
-    ));
+    );
     await tester.pumpAndSettle();
     await tester.tap(find.text('内置网关'));
     await tester.pumpAndSettle();
@@ -1408,12 +1632,16 @@ void main() {
     addTearDown(tester.view.reset);
 
     final rec = _Recorder();
-    await tester.pumpWidget(MaterialApp(
-      home: AiProviderSettingsPage(
-        api: AiApiClient('http://127.0.0.1:8080',
-            client: _providerBackend(rec, statusError: '在线目录读不出来')),
+    await tester.pumpWidget(
+      MaterialApp(
+        home: AiProviderSettingsPage(
+          api: AiApiClient(
+            'http://127.0.0.1:8080',
+            client: _providerBackend(rec, statusError: '在线目录读不出来'),
+          ),
+        ),
       ),
-    ));
+    );
     await tester.pumpAndSettle();
     await tester.tap(find.text('内置网关'));
     await tester.pumpAndSettle();
@@ -1453,7 +1681,10 @@ void main() {
 
     await tester.tap(find.text('/anima-prompt'));
     await tester.pumpAndSettle();
-    expect(tester.widget<TextField>(find.byType(TextField).first).controller?.text, '/anima-prompt ');
+    expect(
+      tester.widget<TextField>(find.byType(TextField).first).controller?.text,
+      '/anima-prompt ',
+    );
     expect(find.text('/anima-prompt'), findsNothing, reason: '选完菜单要收起来');
   });
 
@@ -1479,7 +1710,11 @@ void main() {
     final field = tester.widget<TextField>(find.byType(TextField).first);
     expect(field.controller?.text, isEmpty, reason: '发送后输入框必须马上清空');
     // Run 真的发出去了（不是"点了没反应"，也不是"清空了却没发"）
-    expect(rec.calls.any((c) => c.contains('/runs')), isTrue, reason: 'Run 真的发出去了');
+    expect(
+      rec.calls.any((c) => c.contains('/runs')),
+      isTrue,
+      reason: 'Run 真的发出去了',
+    );
   });
 
   testWidgets('(i) 正在生成中按回车：不吃掉输入框里的字，也不会再偷偷发一次', (tester) async {
@@ -1505,11 +1740,21 @@ void main() {
     await tester.sendKeyEvent(LogicalKeyboardKey.enter);
     await tester.pump();
 
-    expect(tester.widget<TextField>(find.byType(TextField).first).controller?.text, '生成中打的第二句',
-        reason: '被拒时一个字节都不能动：这是用户刚打的字');
-    expect(find.textContaining('正在生成中'), findsOneWidget, reason: '要如实说明为什么没发出去');
-    expect(rec.calls.where((c) => c.endsWith('/runs')).length, runsAfterFirst,
-        reason: '不能再发一次：重复消息就是这么来的');
+    expect(
+      tester.widget<TextField>(find.byType(TextField).first).controller?.text,
+      '生成中打的第二句',
+      reason: '被拒时一个字节都不能动：这是用户刚打的字',
+    );
+    expect(
+      find.textContaining('正在生成中'),
+      findsOneWidget,
+      reason: '要如实说明为什么没发出去',
+    );
+    expect(
+      rec.calls.where((c) => c.endsWith('/runs')).length,
+      runsAfterFirst,
+      reason: '不能再发一次：重复消息就是这么来的',
+    );
   });
 
   testWidgets('(j) 输入法组字期间（composing）回车不发送、也不清空输入框', (tester) async {
@@ -1523,35 +1768,54 @@ void main() {
 
     // 输入法正在组字：拼音 "nihao" 还没上屏（composing range 非空）
     await tester.enterText(find.byType(TextField).first, '');
-    tester.testTextInput.updateEditingValue(const TextEditingValue(
-      text: 'nihao',
-      selection: TextSelection.collapsed(offset: 5),
-      composing: TextRange(start: 0, end: 5),
-    ));
+    tester.testTextInput.updateEditingValue(
+      const TextEditingValue(
+        text: 'nihao',
+        selection: TextSelection.collapsed(offset: 5),
+        composing: TextRange(start: 0, end: 5),
+      ),
+    );
     await tester.pump();
 
     await tester.sendKeyEvent(LogicalKeyboardKey.enter);
     await tester.pump();
-    expect(rec.calls.any((c) => c.endsWith('/runs')), isFalse,
-        reason: '组字中的回车是"选词/上屏"，不能把半截拼音发出去（AIH-053）');
-    expect(tester.widget<TextField>(find.byType(TextField).first).controller?.text, 'nihao',
-        reason: '组字期间更不能清空输入框');
+    expect(
+      rec.calls.any((c) => c.endsWith('/runs')),
+      isFalse,
+      reason: '组字中的回车是"选词/上屏"，不能把半截拼音发出去（AIH-053）',
+    );
+    expect(
+      tester.widget<TextField>(find.byType(TextField).first).controller?.text,
+      'nihao',
+      reason: '组字期间更不能清空输入框',
+    );
 
     // 上屏之后再回车：这次要真的发出去
-    tester.testTextInput.updateEditingValue(const TextEditingValue(
-      text: '你好',
-      selection: TextSelection.collapsed(offset: 2),
-    ));
+    tester.testTextInput.updateEditingValue(
+      const TextEditingValue(
+        text: '你好',
+        selection: TextSelection.collapsed(offset: 2),
+      ),
+    );
     await tester.pump();
     await tester.sendKeyEvent(LogicalKeyboardKey.enter);
     await tester.pump();
-    expect(rec.calls.any((c) => c.endsWith('/runs')), isTrue, reason: '上屏后回车就该发出去');
+    expect(
+      rec.calls.any((c) => c.endsWith('/runs')),
+      isTrue,
+      reason: '上屏后回车就该发出去',
+    );
   });
 
   test('发出去的那句话：会话草稿必须在第一次界面通知之前就作废', () async {
     final rec = _Recorder();
-    final sse = _sse(1, 'run.started', '{"runId":"r1"}') +
-        _sse(2, 'message.completed', '{"messageId":"a1","text":"收到","steps":0}') +
+    final sse =
+        _sse(1, 'run.started', '{"runId":"r1"}') +
+        _sse(
+          2,
+          'message.completed',
+          '{"messageId":"a1","text":"收到","steps":0}',
+        ) +
         _sse(3, 'run.completed', '{"runId":"r1"}');
     final store = await _store(rec, sse: sse, assistantText: '收到');
     await store.load();
@@ -1569,18 +1833,26 @@ void main() {
 
     await store.send('只发一次的话');
 
-    expect(draftSeenAtFirstNotify, isEmpty,
-        reason: '第一次通知时草稿必须已经作废；否则页面的"取回草稿"会把刚发出去的话塞回输入框');
+    expect(
+      draftSeenAtFirstNotify,
+      isEmpty,
+      reason: '第一次通知时草稿必须已经作废；否则页面的"取回草稿"会把刚发出去的话塞回输入框',
+    );
     expect((await store.loadDraft('c1')).text, isEmpty);
   });
 
   test('逐字回包只替换那一条消息：流式期间不能重建整段历史（O(n) 热点的回归）', () async {
     final rec = _Recorder();
-    final sse = _sse(1, 'run.started', '{"runId":"r1"}') +
+    final sse =
+        _sse(1, 'run.started', '{"runId":"r1"}') +
         _sse(2, 'text.delta', '{"messageId":"a1","text":"你"}') +
         _sse(3, 'text.delta', '{"messageId":"a1","text":"好"}') +
         _sse(4, 'text.delta', '{"messageId":"a1","text":"呀"}') +
-        _sse(5, 'message.completed', '{"messageId":"a1","text":"你好呀","steps":0}') +
+        _sse(
+          5,
+          'message.completed',
+          '{"messageId":"a1","text":"你好呀","steps":0}',
+        ) +
         _sse(6, 'run.completed', '{"runId":"r1"}');
     final store = await _store(rec, sse: sse, assistantText: '你好呀');
 
@@ -1597,8 +1869,11 @@ void main() {
 
     expect(store.messages.length, 2);
     expect(store.messages.last.text, '你好呀');
-    expect(userInstances.length, 1,
-        reason: '逐字回包只该替换变化的那一条，其余 AiMessage 对象必须原样复用');
+    expect(
+      userInstances.length,
+      1,
+      reason: '逐字回包只该替换变化的那一条，其余 AiMessage 对象必须原样复用',
+    );
   });
 
   // --- 用户建议 ⑤ / bug：产物预览 ------------------------------------------
@@ -1609,10 +1884,15 @@ void main() {
     addTearDown(tester.view.reset);
 
     final rec = _Recorder();
-    final sse = _sse(1, 'run.started', '{"runId":"r1"}') +
+    final sse =
+        _sse(1, 'run.started', '{"runId":"r1"}') +
         _sse(2, 'message.started', '{"messageId":"a1"}') +
         _sse(3, 'text.delta', '{"messageId":"a1","text":"跑好了。"}') +
-        _sse(4, 'message.completed', '{"messageId":"a1","text":"跑好了。","steps":0}') +
+        _sse(
+          4,
+          'message.completed',
+          '{"messageId":"a1","text":"跑好了。","steps":0}',
+        ) +
         _sse(5, 'run.completed', '{"runId":"r1"}');
 
     await tester.pumpWidget(await _homePage(rec, sse: sse));
@@ -1631,8 +1911,7 @@ void main() {
     expect(find.textContaining('2 条消息'), findsOneWidget);
   });
 
-  testWidgets('一条回复只有一个选择域：正文用 Text，跨段拖选才拉得下去（用户 bug：仅能选 3 行）',
-      (tester) async {
+  testWidgets('一条回复只有一个选择域：正文用 Text，跨段拖选才拉得下去（用户 bug：仅能选 3 行）', (tester) async {
     tester.view.physicalSize = const Size(1200, 1000);
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
@@ -1642,12 +1921,19 @@ void main() {
     const reply = '第一段说明。\\n\\n## 小标题\\n\\n最后一段里带 **粗体**。';
 
     final rec = _Recorder();
-    final sse = _sse(1, 'run.started', '{"runId":"r1"}') +
+    final sse =
+        _sse(1, 'run.started', '{"runId":"r1"}') +
         _sse(2, 'message.started', '{"messageId":"a1"}') +
-        _sse(3, 'message.completed', '{"messageId":"a1","text":"$reply","steps":0}') +
+        _sse(
+          3,
+          'message.completed',
+          '{"messageId":"a1","text":"$reply","steps":0}',
+        ) +
         _sse(4, 'run.completed', '{"runId":"r1"}');
 
-    await tester.pumpWidget(await _homePage(rec, sse: sse, assistantText: reply));
+    await tester.pumpWidget(
+      await _homePage(rec, sse: sse, assistantText: reply),
+    );
     await tester.pumpAndSettle();
     await tester.enterText(find.byType(TextField).first, '写一段');
     await tester.tap(find.text('发送'));
@@ -1659,8 +1945,7 @@ void main() {
       of: find.byType(SelectionArea),
       matching: find.byType(SelectableText),
     );
-    expect(inBubble, findsNothing,
-        reason: '气泡里不能再有嵌套的选择域：那会让拖选只能停在当前这一段');
+    expect(inBubble, findsNothing, reason: '气泡里不能再有嵌套的选择域：那会让拖选只能停在当前这一段');
 
     // 三个块都真的渲染出来了（不是"没选中所以没文本"）。
     // 正文是 Text.rich，所以要 findRichText: true 才匹配得到。
@@ -1675,15 +1960,21 @@ void main() {
     addTearDown(tester.view.reset);
 
     final rec = _Recorder();
-    final sse = _sse(1, 'run.started', '{"runId":"r1"}') +
+    final sse =
+        _sse(1, 'run.started', '{"runId":"r1"}') +
         _sse(2, 'message.started', '{"messageId":"a1"}') +
         _sse(3, 'text.delta', '{"messageId":"a1","text":"跑好了。"}') +
         _sse(
-            4,
-            'tool.completed',
-            '{"callId":"call-s","name":"comfy_submit","elapsedMs":900,"preview":"完成",'
-                '"result":{"promptId":7,"status":"success","mediaIds":[31],"mediaCount":1}}') +
-        _sse(5, 'message.completed', '{"messageId":"a1","text":"跑好了。","steps":1}') +
+          4,
+          'tool.completed',
+          '{"callId":"call-s","name":"comfy_submit","elapsedMs":900,"preview":"完成",'
+              '"result":{"promptId":7,"status":"success","mediaIds":[31],"mediaCount":1}}',
+        ) +
+        _sse(
+          5,
+          'message.completed',
+          '{"messageId":"a1","text":"跑好了。","steps":1}',
+        ) +
         _sse(6, 'run.completed', '{"runId":"r1"}');
 
     await tester.pumpWidget(await _homePage(rec, sse: sse));
@@ -1701,10 +1992,16 @@ void main() {
         .whereType<NetworkImage>()
         .map((p) => p.url)
         .toList();
-    expect(urls.any((u) => u.contains('/api/media/31/thumb')), isTrue,
-        reason: '产物缩略图必须走画廊接口，实际：$urls');
-    expect(urls.any((u) => u.contains('/api/ai/attachments/')), isFalse,
-        reason: '不能把媒体 id 当附件 id 用，实际：$urls');
+    expect(
+      urls.any((u) => u.contains('/api/media/31/thumb')),
+      isTrue,
+      reason: '产物缩略图必须走画廊接口，实际：$urls',
+    );
+    expect(
+      urls.any((u) => u.contains('/api/ai/attachments/')),
+      isFalse,
+      reason: '不能把媒体 id 当附件 id 用，实际：$urls',
+    );
   });
 
   testWidgets('「生成的产物」里也含生成它的那份工作流：卡上能直接打开（用户建议 ①）', (tester) async {
@@ -1713,18 +2010,26 @@ void main() {
     addTearDown(tester.view.reset);
 
     final rec = _Recorder();
-    final sse = _sse(1, 'run.started', '{"runId":"r1"}') +
+    final sse =
+        _sse(1, 'run.started', '{"runId":"r1"}') +
         _sse(2, 'message.started', '{"messageId":"a1"}') +
         _sse(
-            3,
-            'tool.completed',
-            '{"callId":"call-s","name":"comfy_submit","elapsedMs":900,"preview":"完成",'
-                // capturedPromptId = 捕获真正入库的那份提示词（= 改过参数之后跑的节点图）
-                '"result":{"promptId":7,"capturedPromptId":42,"status":"success","mediaIds":[31],"mediaCount":1}}') +
-        _sse(4, 'message.completed', '{"messageId":"a1","text":"跑好了。","steps":1}') +
+          3,
+          'tool.completed',
+          '{"callId":"call-s","name":"comfy_submit","elapsedMs":900,"preview":"完成",'
+              // capturedPromptId = 捕获真正入库的那份提示词（= 改过参数之后跑的节点图）
+              '"result":{"promptId":7,"capturedPromptId":42,"status":"success","mediaIds":[31],"mediaCount":1}}',
+        ) +
+        _sse(
+          4,
+          'message.completed',
+          '{"messageId":"a1","text":"跑好了。","steps":1}',
+        ) +
         _sse(5, 'run.completed', '{"runId":"r1"}');
 
-    await tester.pumpWidget(await _homePage(rec, sse: sse, assistantText: '跑好了。'));
+    await tester.pumpWidget(
+      await _homePage(rec, sse: sse, assistantText: '跑好了。'),
+    );
     await tester.pumpAndSettle();
     await tester.enterText(find.byType(TextField).first, '帮我跑一张');
     await tester.tap(find.text('发送'));
@@ -1735,12 +2040,17 @@ void main() {
 
     await tester.tap(find.text('查看工作流'));
     await tester.pumpAndSettle();
-    expect(rec.calls.any((c) => c.contains('/api/prompts/42/workflow')), isTrue,
-        reason: '必须打开**本次入库**的那份工作流（capturedPromptId），实际：${rec.calls}');
+    expect(
+      rec.calls.any((c) => c.contains('/api/prompts/42/workflow')),
+      isTrue,
+      reason: '必须打开**本次入库**的那份工作流（capturedPromptId），实际：${rec.calls}',
+    );
     expect(find.textContaining('本次生成的工作流'), findsOneWidget);
   });
 
-  testWidgets('权限档可在输入区切换，切到「自动允许（无需批准）」会写回后端（PUT permissionMode）', (tester) async {
+  testWidgets('权限档可在输入区切换，切到「自动允许（无需批准）」会写回后端（PUT permissionMode）', (
+    tester,
+  ) async {
     tester.view.physicalSize = const Size(1200, 1000);
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
@@ -1770,8 +2080,9 @@ void main() {
     // 切档后的说明文字在 tooltip 里（点开菜单/悬停能看到）
     expect(
       find.byTooltip(
-          '当前是${AiToolPolicy.modeFullLabel}，AI 调用工具不会等你批准。'
-          '可读 / 可写目录范围不变，越界仍会被拒。点一下改回「${AiToolPolicy.modeAskLabel}」。'),
+        '当前是${AiToolPolicy.modeFullLabel}，AI 调用工具不会等你批准。'
+        '可读 / 可写目录范围不变，越界仍会被拒。点一下改回「${AiToolPolicy.modeAskLabel}」。',
+      ),
       findsWidgets,
       reason: '档位说明与"目录范围没放宽"那句必须还能查到',
     );
@@ -1801,14 +2112,16 @@ void main() {
       },
       {'type': 'text', 'text': '后半句正文'},
     ];
-    final sse = _sse(1, 'run.started', '{"runId":"r1"}') +
+    final sse =
+        _sse(1, 'run.started', '{"runId":"r1"}') +
         _sse(2, 'message.started', '{"messageId":"a1"}') +
         _sse(3, 'text.delta', '{"messageId":"a1","text":"前半句正文"}') +
         _sse(
-            4,
-            'message.completed',
-            '{"messageId":"a1","text":"前半句正文后半句正文","steps":1,'
-                '"parts":${jsonEncode(parts)}}') +
+          4,
+          'message.completed',
+          '{"messageId":"a1","text":"前半句正文后半句正文","steps":1,'
+              '"parts":${jsonEncode(parts)}}',
+        ) +
         _sse(5, 'run.completed', '{"runId":"r1"}');
 
     await tester.pumpWidget(await _homePage(rec, sse: sse));
@@ -1833,10 +2146,15 @@ void main() {
     final rec = _Recorder();
     // 一条足够长的回复：列表一定会超出视口，才谈得上"滚动位置"
     final long = List.generate(120, (i) => '第 $i 行内容，用来把列表撑长。').join('\n\n');
-    final sse = _sse(1, 'run.started', '{"runId":"r1"}') +
+    final sse =
+        _sse(1, 'run.started', '{"runId":"r1"}') +
         _sse(2, 'message.started', '{"messageId":"a1"}') +
         _sse(3, 'text.delta', '{"messageId":"a1","text":${jsonEncode(long)}}') +
-        _sse(4, 'message.completed', '{"messageId":"a1","text":${jsonEncode(long)},"steps":0}') +
+        _sse(
+          4,
+          'message.completed',
+          '{"messageId":"a1","text":${jsonEncode(long)},"steps":0}',
+        ) +
         _sse(5, 'run.completed', '{"runId":"r1"}');
 
     await tester.pumpWidget(await _homePage(rec, sse: sse));
@@ -1852,16 +2170,33 @@ void main() {
     // 拖动对象要点名消息区那一个（侧栏的会话列表也是可滚动的，而且是先建出来的）——
     // 消息区现在用 `SingleChildScrollView + Column`（精确总长），
     // 但那条纪律不变：**滚动跟的是"消息区"，不是"某个 ListView 类型"**。
-    await tester.drag(find.byKey(const Key('ai-message-list')), const Offset(0, 900));
+    await tester.drag(
+      find.byKey(const Key('ai-message-list')),
+      const Offset(0, 900),
+    );
     await tester.pumpAndSettle();
     expect(find.byTooltip('回到最新消息'), findsOneWidget);
 
-    final scrollable = find.descendant(
-      of: find.byKey(const Key('ai-message-list')),
-      matching: find.byType(Scrollable),
-    ).first;
-    final offsetAfterDrag = tester.widget<Scrollable>(scrollable).controller!.offset;
-    expect(offsetAfterDrag, lessThan(tester.widget<Scrollable>(scrollable).controller!.position.maxScrollExtent));
+    final scrollable = find
+        .descendant(
+          of: find.byKey(const Key('ai-message-list')),
+          matching: find.byType(Scrollable),
+        )
+        .first;
+    final offsetAfterDrag = tester
+        .widget<Scrollable>(scrollable)
+        .controller!
+        .offset;
+    expect(
+      offsetAfterDrag,
+      lessThan(
+        tester
+            .widget<Scrollable>(scrollable)
+            .controller!
+            .position
+            .maxScrollExtent,
+      ),
+    );
 
     // 点一下回到最新消息：按钮消失，并且真的到了底部
     await tester.tap(find.byTooltip('回到最新消息'));
@@ -1889,7 +2224,10 @@ void main() {
       {
         'type': 'tool_call',
         'toolCallId': 'c1',
-        'jsonPayload': {'name': 'search_prompts', 'arguments': '{"query":"shinku"}'},
+        'jsonPayload': {
+          'name': 'search_prompts',
+          'arguments': '{"query":"shinku"}',
+        },
       },
       {
         'type': 'tool_result',
@@ -1900,7 +2238,10 @@ void main() {
       {
         'type': 'tool_call',
         'toolCallId': 'c2',
-        'jsonPayload': {'name': 'danbooru_lookup', 'arguments': '{"query":"shinku"}'},
+        'jsonPayload': {
+          'name': 'danbooru_lookup',
+          'arguments': '{"query":"shinku"}',
+        },
       },
       {
         'type': 'tool_result',
@@ -1910,15 +2251,24 @@ void main() {
       },
       {'type': 'text', 'text': '查到了。'},
     ];
-    final sse = _sse(1, 'run.started', '{"runId":"r1"}') +
+    final sse =
+        _sse(1, 'run.started', '{"runId":"r1"}') +
         _sse(2, 'message.started', '{"messageId":"a1"}') +
         _sse(
-            3,
-            'message.completed',
-            jsonEncode({'messageId': 'a1', 'text': '查到了。', 'steps': 1, 'parts': parts})) +
+          3,
+          'message.completed',
+          jsonEncode({
+            'messageId': 'a1',
+            'text': '查到了。',
+            'steps': 1,
+            'parts': parts,
+          }),
+        ) +
         _sse(4, 'run.completed', '{"runId":"r1"}');
 
-    await tester.pumpWidget(await _homePage(rec, sse: sse, assistantParts: parts));
+    await tester.pumpWidget(
+      await _homePage(rec, sse: sse, assistantParts: parts),
+    );
     await tester.pumpAndSettle();
     await tester.enterText(find.byType(TextField).first, '查一下真红');
     await tester.tap(find.text('发送'));
@@ -1963,7 +2313,10 @@ void main() {
       {
         'type': 'tool_call',
         'toolCallId': 'c2',
-        'jsonPayload': {'name': 'comfy_submit', 'arguments': '{"promptId":1,"overrides":{}}'},
+        'jsonPayload': {
+          'name': 'comfy_submit',
+          'arguments': '{"promptId":1,"overrides":{}}',
+        },
       },
       {
         'type': 'tool_result',
@@ -1972,20 +2325,24 @@ void main() {
         'jsonPayload': {'name': 'comfy_submit', 'ok': true, 'elapsedMs': 3200},
       },
     ];
-    final sse = _sse(1, 'run.started', '{"runId":"r1"}') +
+    final sse =
+        _sse(1, 'run.started', '{"runId":"r1"}') +
         _sse(2, 'message.started', '{"messageId":"a1"}') +
         _sse(
-            3,
-            'message.completed',
-            jsonEncode({
-              'messageId': 'a1',
-              'text': '第一张出来了。',
-              'steps': 2,
-              'parts': parts,
-            })) +
+          3,
+          'message.completed',
+          jsonEncode({
+            'messageId': 'a1',
+            'text': '第一张出来了。',
+            'steps': 2,
+            'parts': parts,
+          }),
+        ) +
         _sse(4, 'run.completed', '{"runId":"r1"}');
 
-    await tester.pumpWidget(await _homePage(rec, sse: sse, assistantParts: parts));
+    await tester.pumpWidget(
+      await _homePage(rec, sse: sse, assistantParts: parts),
+    );
     await tester.pumpAndSettle();
     await tester.enterText(find.byType(TextField).first, '出一张');
     await tester.tap(find.text('发送'));
@@ -2008,13 +2365,15 @@ void main() {
 
     final rec = _Recorder();
     // 只有环节头 + 一个等批准的调用，**没有** run.completed：停在"等你点批准"这一刻
-    final sse = _sse(1, 'run.started', '{"runId":"r1"}') +
+    final sse =
+        _sse(1, 'run.started', '{"runId":"r1"}') +
         _sse(2, 'message.started', '{"messageId":"a1"}') +
         _sse(3, 'step.started', '{"messageId":"a1","phase":"正在写文件"}') +
         _sse(
-            4,
-            'tool.requested',
-            '{"messageId":"a1","callId":"c1","name":"write_file","arguments":"{\\"path\\":\\"a.txt\\"}","approval":"pending"}');
+          4,
+          'tool.requested',
+          '{"messageId":"a1","callId":"c1","name":"write_file","arguments":"{\\"path\\":\\"a.txt\\"}","approval":"pending"}',
+        );
 
     await tester.pumpWidget(await _homePage(rec, sse: sse));
     await tester.pumpAndSettle();

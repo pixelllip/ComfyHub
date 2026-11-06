@@ -21,26 +21,26 @@ import 'package:viewer/pages/pairing_section.dart';
 import 'package:viewer/widgets/pairing_qr.dart';
 
 http.Response _json(Object? body) => http.Response(
-      jsonEncode(body),
-      200,
-      headers: const {'content-type': 'application/json; charset=utf-8'},
-    );
+  jsonEncode(body),
+  200,
+  headers: const {'content-type': 'application/json; charset=utf-8'},
+);
 
 Widget _host({required MockClient client}) => MaterialApp(
-      home: Scaffold(
-        body: SingleChildScrollView(
-          child: PairingSection(
-            baseUrl: 'http://127.0.0.1:8081',
-            apiFactory: (base) => InboundAuthApi(base, client: client),
-          ),
-        ),
+  home: Scaffold(
+    body: SingleChildScrollView(
+      child: PairingSection(
+        baseUrl: 'http://127.0.0.1:8081',
+        apiFactory: (base) => InboundAuthApi(base, client: client),
       ),
-    );
+    ),
+  ),
+);
 
 Finder _masterSwitch() => find.ancestor(
-      of: find.text('允许移动端连接'),
-      matching: find.byType(SwitchListTile),
-    );
+  of: find.text('允许移动端连接'),
+  matching: find.byType(SwitchListTile),
+);
 
 void main() {
   // 「允许移动端连接」与「本地服务」那张卡里的「允许手机 / 局域网设备连接」
@@ -50,25 +50,29 @@ void main() {
   //   · 这个 = **配对闸门**：局域网请求要不要带令牌。
   // 关掉这个不是"不许连"，而是"局域网内任何设备都能连、不用令牌"（更松）。
   // 两边都必须把顺序写出来，否则用户分不清"我明明开了，手机还是连不上"卡在哪一道。
-  testWidgets('闸门这一项要写明它与「本地服务」那个开关的关系（防"看着像重复"）',
-      (tester) async {
+  testWidgets('闸门这一项要写明它与「本地服务」那个开关的关系（防"看着像重复"）', (tester) async {
     tester.view.physicalSize = const Size(900, 1600);
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
 
-    final client = MockClient((request) async => _json({
-          'enabled': true,
-          'hasToken': true,
-          'devices': <Object>[],
-          'pending': <Object>[],
-        }));
+    final client = MockClient(
+      (request) async => _json({
+        'enabled': true,
+        'hasToken': true,
+        'devices': <Object>[],
+        'pending': <Object>[],
+      }),
+    );
 
     await tester.pumpWidget(_host(client: client));
     await tester.pumpAndSettle();
 
     expect(find.textContaining('② 已开启'), findsOneWidget);
-    expect(find.textContaining('「本地服务」'), findsOneWidget,
-        reason: '必须指出另一道闸在哪，否则两个开关看着就是重复的');
+    expect(
+      find.textContaining('「本地服务」'),
+      findsOneWidget,
+      reason: '必须指出另一道闸在哪，否则两个开关看着就是重复的',
+    );
   });
 
   testWidgets('桌面：后端没接受开关时，开关仍是"关"，并且如实说为什么', (tester) async {
@@ -122,7 +126,10 @@ void main() {
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
 
-    final expire = DateTime.now().toUtc().add(const Duration(minutes: 3)).toIso8601String();
+    final expire = DateTime.now()
+        .toUtc()
+        .add(const Duration(minutes: 3))
+        .toIso8601String();
     final pending = {
       'requestId': 'req-1',
       'code': '428193',
@@ -142,7 +149,9 @@ void main() {
 
     final client = MockClient((request) async {
       if (request.url.path == '/api/auth/pair/pending') {
-        return _json({'pending': [pending]});
+        return _json({
+          'pending': [pending],
+        });
       }
       return _json({
         'enabled': true,
@@ -171,7 +180,11 @@ void main() {
       of: find.text('允许把密钥发给这台设备'),
       matching: find.byType(SwitchListTile),
     );
-    expect(tester.widget<SwitchListTile>(allow).value, isFalse, reason: '默认不允许下行密钥');
+    expect(
+      tester.widget<SwitchListTile>(allow).value,
+      isFalse,
+      reason: '默认不允许下行密钥',
+    );
     expect(find.textContaining('手机拿不到桌面上的 API Key'), findsOneWidget);
     expect(find.text('吊销'), findsOneWidget);
 
@@ -197,7 +210,9 @@ void main() {
         bodies.add(request.body);
         final sent = jsonDecode(request.body) as Map<String, dynamic>;
         allow = sent['allow'] as bool? ?? allow;
-        if (sent.containsKey('allowUpload')) allowUpload = sent['allowUpload'] as bool;
+        if (sent.containsKey('allowUpload')) {
+          allowUpload = sent['allowUpload'] as bool;
+        }
         return _json({
           'id': 'phone-1',
           'name': 'OnePlus 8T',
@@ -205,7 +220,9 @@ void main() {
           if (!oldBackend) 'allowCredentialsUpload': allowUpload,
         });
       }
-      if (request.url.path == '/api/auth/pair/pending') return _json({'pending': <Object>[]});
+      if (request.url.path == '/api/auth/pair/pending') {
+        return _json({'pending': <Object>[]});
+      }
       return _json({
         'enabled': true,
         'hasToken': true,
@@ -216,7 +233,7 @@ void main() {
             'pairedAt': '2026-09-24T08:00:00Z',
             'allowCredentials': allow,
             if (!oldBackend) 'allowCredentialsUpload': allowUpload,
-          }
+          },
         ],
         'pending': <Object>[],
       });
@@ -226,9 +243,9 @@ void main() {
     await tester.pump();
 
     Finder switchOf(String title) => find.ancestor(
-          of: find.text(title),
-          matching: find.byType(SwitchListTile),
-        );
+      of: find.text(title),
+      matching: find.byType(SwitchListTile),
+    );
 
     final down = switchOf('允许把密钥发给这台设备');
     final up = switchOf('允许这台设备改桌面上的密钥');
@@ -241,7 +258,11 @@ void main() {
     expect(bodies.single, contains('"allowUpload":true'));
     expect(bodies.single, contains('"allow":true'));
     // ★ 本地重建设备行时**不许把下行那个开关擦掉**（漏了就是"点上行、下行被悄悄关掉"）
-    expect(tester.widget<SwitchListTile>(down).value, isTrue, reason: '勾上行不该动到下行');
+    expect(
+      tester.widget<SwitchListTile>(down).value,
+      isTrue,
+      reason: '勾上行不该动到下行',
+    );
     expect(tester.widget<SwitchListTile>(up).value, isTrue);
 
     // 收尾：销毁 State（连同 2 秒轮询的定时器）
@@ -259,9 +280,15 @@ void main() {
     // 把开关画回"关"并说清是后端版本问题（而不是显示成开、让用户白等）。
     final client = MockClient((request) async {
       if (request.url.path == '/api/auth/devices/phone-1/credentials') {
-        return _json({'id': 'phone-1', 'name': 'OnePlus 8T', 'allowCredentials': false});
+        return _json({
+          'id': 'phone-1',
+          'name': 'OnePlus 8T',
+          'allowCredentials': false,
+        });
       }
-      if (request.url.path == '/api/auth/pair/pending') return _json({'pending': <Object>[]});
+      if (request.url.path == '/api/auth/pair/pending') {
+        return _json({'pending': <Object>[]});
+      }
       return _json({
         'enabled': true,
         'hasToken': true,
@@ -271,7 +298,7 @@ void main() {
             'name': 'OnePlus 8T',
             'pairedAt': '2026-09-24T08:00:00Z',
             'allowCredentials': false,
-          }
+          },
         ],
         'pending': <Object>[],
       });
@@ -289,7 +316,11 @@ void main() {
     await tester.tap(up);
     await tester.pumpAndSettle();
 
-    expect(tester.widget<SwitchListTile>(up).value, isFalse, reason: '回读为 false 就不许显示成开');
+    expect(
+      tester.widget<SwitchListTile>(up).value,
+      isFalse,
+      reason: '回读为 false 就不许显示成开',
+    );
     expect(find.textContaining('这台后端还不支持'), findsOneWidget);
 
     await tester.pumpWidget(const SizedBox());
@@ -301,7 +332,10 @@ void main() {
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
 
-    var expand = DateTime.now().toUtc().add(const Duration(minutes: 2)).toIso8601String();
+    var expand = DateTime.now()
+        .toUtc()
+        .add(const Duration(minutes: 2))
+        .toIso8601String();
     final client = MockClient((request) async {
       if (request.url.path == '/api/auth/pair/start') {
         return _json({
@@ -312,8 +346,15 @@ void main() {
           'urls': ['http://192.168.1.23:51837', 'http://100.101.102.103:51837'],
         });
       }
-      if (request.url.path == '/api/auth/pair/pending') return _json({'pending': <Object>[]});
-      return _json({'enabled': true, 'hasToken': true, 'devices': <Object>[], 'pending': <Object>[]});
+      if (request.url.path == '/api/auth/pair/pending') {
+        return _json({'pending': <Object>[]});
+      }
+      return _json({
+        'enabled': true,
+        'hasToken': true,
+        'devices': <Object>[],
+        'pending': <Object>[],
+      });
     });
 
     await tester.pumpWidget(_host(client: client));
@@ -333,7 +374,10 @@ void main() {
     final parsed = PairingPayload.parse(qr.payload.encode());
     expect(parsed.ok, isTrue, reason: parsed.error);
     expect(parsed.payload!.ticket, 'tk-42');
-    expect(parsed.payload!.urls, ['http://192.168.1.23:51837', 'http://100.101.102.103:51837']);
+    expect(parsed.payload!.urls, [
+      'http://192.168.1.23:51837',
+      'http://100.101.102.103:51837',
+    ]);
     // 长期令牌不许出现在二维码里
     expect(qr.payload.encode().contains('X-ComfyHub-Token'), isFalse);
 
@@ -361,8 +405,15 @@ void main() {
           headers: const {'content-type': 'application/json; charset=utf-8'},
         );
       }
-      if (request.url.path == '/api/auth/pair/pending') return _json({'pending': <Object>[]});
-      return _json({'enabled': true, 'hasToken': true, 'devices': <Object>[], 'pending': <Object>[]});
+      if (request.url.path == '/api/auth/pair/pending') {
+        return _json({'pending': <Object>[]});
+      }
+      return _json({
+        'enabled': true,
+        'hasToken': true,
+        'devices': <Object>[],
+        'pending': <Object>[],
+      });
     });
 
     await tester.pumpWidget(_host(client: client));

@@ -173,7 +173,11 @@ struct Private {
 "#;
     let found = option_fields_without_skip(bad);
     let names: Vec<String> = found.iter().map(|(_, n)| n.clone()).collect();
-    assert_eq!(names, vec!["missing", "also_missing"], "扫描器漏了或误报了：{found:?}");
+    assert_eq!(
+        names,
+        vec!["missing", "also_missing"],
+        "扫描器漏了或误报了：{found:?}"
+    );
 
     // 空行分隔的属性块照样认得出 Serialize
     let ok = "#[derive(Serialize)]\n\npub struct Spaced {\n    pub a: Option<String>,\n}\n";

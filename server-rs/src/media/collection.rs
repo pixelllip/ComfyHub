@@ -72,7 +72,11 @@ pub struct Endpoint {
 }
 
 impl Endpoint {
-    pub fn new(kind: &str, positive: impl Into<String>, negative: Option<impl Into<String>>) -> Self {
+    pub fn new(
+        kind: &str,
+        positive: impl Into<String>,
+        negative: Option<impl Into<String>>,
+    ) -> Self {
         Self {
             kind: kind.trim().to_uppercase(),
             positive: positive.into(),
@@ -83,7 +87,11 @@ impl Endpoint {
 
 impl From<&PromptDto> for Endpoint {
     fn from(p: &PromptDto) -> Self {
-        Self::new(&p.kind, p.positive_prompt.clone(), p.negative_prompt.clone())
+        Self::new(
+            &p.kind,
+            p.positive_prompt.clone(),
+            p.negative_prompt.clone(),
+        )
     }
 }
 
@@ -93,7 +101,11 @@ impl From<&MediaDto> for Endpoint {
         // `prompt_positive` 为 None 时不能套用 `Endpoint::new` 的 `Option<impl Into<String>>`
         // （类型推断不出来），所以直接把负提示词也算好再构造。
         let negative = m.prompt_negative.clone().filter(|s| !s.trim().is_empty());
-        let mut ep = Self::new(&m.kind, m.prompt_positive.clone().unwrap_or_default(), negative);
+        let mut ep = Self::new(
+            &m.kind,
+            m.prompt_positive.clone().unwrap_or_default(),
+            negative,
+        );
         ep.kind = m.kind.trim().to_uppercase();
         ep
     }
@@ -1004,7 +1016,11 @@ pub fn media_of_preset(conn: &Connection, prompt_id: i64) -> Result<Vec<i64>, Wr
     let mut out = Vec::new();
     for row in rows {
         let (id, positive, negative) = row?;
-        let other = Endpoint::new(&want.kind, positive, negative.filter(|s| !s.trim().is_empty()));
+        let other = Endpoint::new(
+            &want.kind,
+            positive,
+            negative.filter(|s| !s.trim().is_empty()),
+        );
         if same_group(&want, &other) {
             out.push(id);
         }
@@ -1086,7 +1102,8 @@ pub fn prompt_ids_with_media(conn: &Connection) -> Result<Vec<i64>, WriteError> 
                 Endpoint::new(
                     &row.get::<_, String>(1)?,
                     row.get::<_, String>(2)?,
-                    row.get::<_, Option<String>>(3)?.filter(|s| !s.trim().is_empty()),
+                    row.get::<_, Option<String>>(3)?
+                        .filter(|s| !s.trim().is_empty()),
                 ),
             ))
         })?
@@ -1105,7 +1122,8 @@ pub fn prompt_ids_with_media(conn: &Connection) -> Result<Vec<i64>, WriteError> 
                 Endpoint::new(
                     &row.get::<_, String>(1)?,
                     row.get::<_, String>(2)?,
-                    row.get::<_, Option<String>>(3)?.filter(|s| !s.trim().is_empty()),
+                    row.get::<_, Option<String>>(3)?
+                        .filter(|s| !s.trim().is_empty()),
                 ),
             ))
         })?
@@ -1113,10 +1131,7 @@ pub fn prompt_ids_with_media(conn: &Connection) -> Result<Vec<i64>, WriteError> 
 
     let mut out = Vec::new();
     for (id, want) in &prompts {
-        if referenced
-            .iter()
-            .any(|(_, got)| same_group(want, got))
-        {
+        if referenced.iter().any(|(_, got)| same_group(want, got)) {
             out.push(*id);
         }
     }

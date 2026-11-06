@@ -48,7 +48,11 @@ pub(crate) fn build_tags(query: &str, allow_nsfw: bool) -> String {
     if !allow_nsfw {
         terms.push("rating:general".to_string());
     }
-    terms.iter().map(|t| encode(t)).collect::<Vec<_>>().join("+")
+    terms
+        .iter()
+        .map(|t| encode(t))
+        .collect::<Vec<_>>()
+        .join("+")
 }
 
 /// 与 [`danbooru::encode`] 同口径（那个是私有的；这里只编一个 tag，两种实现等价）。
@@ -96,7 +100,12 @@ pub async fn tool_search(state: &AppState, arguments: &Value) -> Result<ToolOutc
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|q| !q.is_empty())
-        .ok_or_else(|| ToolFailure::new("INVALID_ARGUMENT", "缺少参数 query（Danbooru tag，例如 blunt_bangs）"))?;
+        .ok_or_else(|| {
+            ToolFailure::new(
+                "INVALID_ARGUMENT",
+                "缺少参数 query（Danbooru tag，例如 blunt_bangs）",
+            )
+        })?;
     let limit = int_arg(arguments, "limit")
         .unwrap_or(DEFAULT_LIMIT)
         .clamp(1, MAX_REFERENCE_IMAGES);
@@ -106,7 +115,9 @@ pub async fn tool_search(state: &AppState, arguments: &Value) -> Result<ToolOutc
     let client = DanbooruClient::from_env()?;
 
     // 先按"分数够高"要一轮；没有结果再放开分数（冷门 tag 也总得给用户一张能看的图）。
-    let mut posts = client.fetch_posts(&format!("{tags}+score:%3E10"), limit).await?;
+    let mut posts = client
+        .fetch_posts(&format!("{tags}+score:%3E10"), limit)
+        .await?;
     if posts.is_empty() {
         posts = client.fetch_posts(&tags, limit).await?;
     }
@@ -176,9 +187,18 @@ pub async fn tool_search(state: &AppState, arguments: &Value) -> Result<ToolOutc
         images.len()
     ));
     for (index, image) in images.iter().enumerate() {
-        let id = image.get("attachmentId").and_then(Value::as_str).unwrap_or_default();
-        let tags = image.get("tags").and_then(Value::as_str).unwrap_or_default();
-        let rating = image.get("rating").and_then(Value::as_str).unwrap_or_default();
+        let id = image
+            .get("attachmentId")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let tags = image
+            .get("tags")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let rating = image
+            .get("rating")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
         text.push_str(&format!(
             "{}. attachmentId=`{id}`（rating {rating}，score {}）{tags}\n",
             index + 1,
@@ -192,7 +212,10 @@ pub async fn tool_search(state: &AppState, arguments: &Value) -> Result<ToolOutc
          也不要把图里的全部元素当成用户已经确认的设定。\n",
     );
     if !skipped.is_empty() {
-        text.push_str(&format!("（另有 {} 条因下载失败 / 缺图被跳过，已如实记在结果里）\n", skipped.len()));
+        text.push_str(&format!(
+            "（另有 {} 条因下载失败 / 缺图被跳过，已如实记在结果里）\n",
+            skipped.len()
+        ));
     }
     Ok(ToolOutcome::new(text, Value::Object(payload)))
 }

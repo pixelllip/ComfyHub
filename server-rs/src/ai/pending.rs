@@ -86,17 +86,32 @@ fn list_pending_approvals(conn: &Connection) -> rusqlite::Result<Vec<Value>> {
             let mut out = Map::new();
             out.insert(
                 "callId".into(),
-                Value::String(row.get::<_, Option<String>>("provider_call_id")?.unwrap_or_default()),
+                Value::String(
+                    row.get::<_, Option<String>>("provider_call_id")?
+                        .unwrap_or_default(),
+                ),
             );
-            out.insert("runId".into(), Value::String(row.get::<_, Option<String>>("run_id")?.unwrap_or_default()));
+            out.insert(
+                "runId".into(),
+                Value::String(row.get::<_, Option<String>>("run_id")?.unwrap_or_default()),
+            );
             out.insert(
                 "conversationId".into(),
-                Value::String(row.get::<_, Option<String>>("conversation_id")?.unwrap_or_default()),
+                Value::String(
+                    row.get::<_, Option<String>>("conversation_id")?
+                        .unwrap_or_default(),
+                ),
             );
-            out.insert("name".into(), Value::String(row.get::<_, Option<String>>("name")?.unwrap_or_default()));
+            out.insert(
+                "name".into(),
+                Value::String(row.get::<_, Option<String>>("name")?.unwrap_or_default()),
+            );
             out.insert(
                 "argumentsJson".into(),
-                Value::String(row.get::<_, Option<String>>("arguments_json")?.unwrap_or_default()),
+                Value::String(
+                    row.get::<_, Option<String>>("arguments_json")?
+                        .unwrap_or_default(),
+                ),
             );
             // ⚠ 这一份是 **ISO 文本**（提问那份是毫秒数），照 Kotlin `rs.isoTime` 的规则
             out.insert(

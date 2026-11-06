@@ -38,18 +38,32 @@ fn ingest_result_json_omits_only_nulls() {
         message: None,
     };
     let value = result.to_json();
-    let keys: Vec<&str> = value.as_object().unwrap().keys().map(String::as_str).collect();
+    let keys: Vec<&str> = value
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
     assert_eq!(
         keys,
         vec![
-            "runKey", "promptId", "created", "mediaIds", "imported", "duplicates", "failed",
+            "runKey",
+            "promptId",
+            "created",
+            "mediaIds",
+            "imported",
+            "duplicates",
+            "failed",
             "alreadyCaptured"
         ],
         "除 promptId / message 外所有键都在（Kotlin encodeDefaults=true）"
     );
     assert!(value.get("message").is_none());
     // 默认值也要**在**（不是"省略零值"）
-    let bare = IngestResult { run_key: "r".into(), ..Default::default() };
+    let bare = IngestResult {
+        run_key: "r".into(),
+        ..Default::default()
+    };
     let bare_value = bare.to_json();
     assert_eq!(bare_value["imported"], 0);
     assert_eq!(bare_value["created"], false);
@@ -93,10 +107,38 @@ fn only_output_type_files_survive_and_duplicates_collapse() {
         prompt: Some(json!({"1":{"class_type":"SaveImage","inputs":{}}})),
         workflow: None,
         outputs: vec![
-            IngestOutput { filename: "a.png".into(), subfolder: None, type_field: Some("output".into()), kind: None, node_id: None, node_type: None },
-            IngestOutput { filename: "a.png".into(), subfolder: None, type_field: Some("output".into()), kind: None, node_id: None, node_type: None },
-            IngestOutput { filename: "tmp.png".into(), subfolder: None, type_field: Some("temp".into()), kind: None, node_id: None, node_type: None },
-            IngestOutput { filename: "  ".into(), subfolder: None, type_field: Some("output".into()), kind: None, node_id: None, node_type: None },
+            IngestOutput {
+                filename: "a.png".into(),
+                subfolder: None,
+                type_field: Some("output".into()),
+                kind: None,
+                node_id: None,
+                node_type: None,
+            },
+            IngestOutput {
+                filename: "a.png".into(),
+                subfolder: None,
+                type_field: Some("output".into()),
+                kind: None,
+                node_id: None,
+                node_type: None,
+            },
+            IngestOutput {
+                filename: "tmp.png".into(),
+                subfolder: None,
+                type_field: Some("temp".into()),
+                kind: None,
+                node_id: None,
+                node_type: None,
+            },
+            IngestOutput {
+                filename: "  ".into(),
+                subfolder: None,
+                type_field: Some("output".into()),
+                kind: None,
+                node_id: None,
+                node_type: None,
+            },
         ],
         nsfw: false,
         title: None,
@@ -117,13 +159,21 @@ fn only_output_type_files_survive_and_duplicates_collapse() {
         let key = (
             item.filename.clone(),
             item.subfolder.clone().unwrap_or_default(),
-            if type_field.trim().is_empty() { "output".to_string() } else { type_field },
+            if type_field.trim().is_empty() {
+                "output".to_string()
+            } else {
+                type_field
+            },
         );
         if !kept.contains(&key) {
             kept.push(key);
         }
     }
-    assert_eq!(kept.len(), 1, "重复条目要折叠、temp 与非文件名要丢掉：{kept:?}");
+    assert_eq!(
+        kept.len(),
+        1,
+        "重复条目要折叠、temp 与非文件名要丢掉：{kept:?}"
+    );
 }
 
 #[test]
@@ -147,7 +197,11 @@ fn kind_for_prefers_the_declared_kind_then_the_node_type() {
 
 #[test]
 fn percent_encoding_matches_urlencoder() {
-    assert_eq!(url_encode("a b.png"), "a%20b.png", "空格必须是 %20 而不是 +");
+    assert_eq!(
+        url_encode("a b.png"),
+        "a%20b.png",
+        "空格必须是 %20 而不是 +"
+    );
     assert_eq!(url_encode("中文.png"), "%E4%B8%AD%E6%96%87.png");
     assert_eq!(url_encode("a/b-c_d.png"), "a%2Fb-c_d.png");
 }
@@ -158,7 +212,8 @@ fn percent_encoding_matches_urlencoder() {
 
 fn memory_db() -> rusqlite::Connection {
     let conn = crate::infra::db::open_memory().unwrap();
-    conn.execute_batch(crate::infra::db::SCHEMA_SQL).expect("建 schema");
+    conn.execute_batch(crate::infra::db::SCHEMA_SQL)
+        .expect("建 schema");
     crate::infra::db::assert_ready(&conn).unwrap();
     conn
 }
@@ -211,7 +266,10 @@ fn stack_graph(with_lora: bool) -> Value {
 }
 
 fn loras_of(conn: &rusqlite::Connection, id: i64) -> String {
-    conn.query_row("SELECT loras FROM prompts WHERE id = ?1", [id], |row| row.get(0)).unwrap()
+    conn.query_row("SELECT loras FROM prompts WHERE id = ?1", [id], |row| {
+        row.get(0)
+    })
+    .unwrap()
 }
 
 /// 只追加缺的 LoRA；用户编辑过的、解析为空的、本来就没有 LoRA 的都不动。
@@ -246,9 +304,15 @@ fn lora_backfill_appends_missing_and_never_rewrites_user_edits() {
     assert_eq!(backfill_loras(&conn, true).unwrap(), 2, "只改 ①② 两条");
 
     let partial_loras = loras_of(&conn, partial);
-    assert!(partial_loras.contains("depth-control-lora.safetensors"), "{partial_loras}");
+    assert!(
+        partial_loras.contains("depth-control-lora.safetensors"),
+        "{partial_loras}"
+    );
     assert!(partial_loras.contains("KNP.safetensors"), "{partial_loras}");
-    assert!(partial_loras.contains("hiten.safetensors"), "{partial_loras}");
+    assert!(
+        partial_loras.contains("hiten.safetensors"),
+        "{partial_loras}"
+    );
     // 原有的那一条不被覆盖（名字在前、权重原样）
     assert!(partial_loras.starts_with(r#"[{"name":"depth-control-lora.safetensors","weight":1.0}"#));
 
@@ -292,9 +356,18 @@ fn lora_backfill_version_upgrade_appends_to_already_touched_rows() {
     .unwrap();
     assert_eq!(backfill_loras(&conn, false).unwrap(), 1, "升级那趟要补回来");
     let upgraded = loras_of(&conn, id);
-    assert!(upgraded.contains(r#""name":"depth-control-lora.safetensors","weight":0.9"#), "已有权重不许改：{upgraded}");
-    assert!(upgraded.contains("user-pick.safetensors"), "用户自己加的不许删：{upgraded}");
-    assert!(upgraded.contains("hiten.safetensors"), "新版多认出来的要补上：{upgraded}");
+    assert!(
+        upgraded.contains(r#""name":"depth-control-lora.safetensors","weight":0.9"#),
+        "已有权重不许改：{upgraded}"
+    );
+    assert!(
+        upgraded.contains("user-pick.safetensors"),
+        "用户自己加的不许删：{upgraded}"
+    );
+    assert!(
+        upgraded.contains("hiten.safetensors"),
+        "新版多认出来的要补上：{upgraded}"
+    );
 }
 
 /// 回填标记：第一次要跑，写完不再跑；版本被写低（或将来 bump）时要再跑一遍。
@@ -317,8 +390,12 @@ fn lora_backfill_marker_tracks_the_version() {
 // ---------------------------------------------------------------------------
 
 fn positive_of(conn: &rusqlite::Connection, id: i64) -> String {
-    conn.query_row("SELECT positive_prompt FROM prompts WHERE id = ?1", [id], |row| row.get(0))
-        .unwrap()
+    conn.query_row(
+        "SELECT positive_prompt FROM prompts WHERE id = ?1",
+        [id],
+        |row| row.get(0),
+    )
+    .unwrap()
 }
 
 /// 真机形状（`test_00901_.png`）：`TextGenerate → ComfySwitchNode → PreviewAny → CLIPTextEncode`。
@@ -351,7 +428,11 @@ fn prompt_backfill_fills_only_empty_positive_prompts() {
 
     insert_empty_prompt(&conn);
     let empty = conn.last_insert_rowid();
-    attach_capture(&conn, empty, runtime_prompt_raw("最终提示词：绿发少女站在雨夜街头"));
+    attach_capture(
+        &conn,
+        empty,
+        runtime_prompt_raw("最终提示词：绿发少女站在雨夜街头"),
+    );
 
     insert_empty_prompt(&conn);
     let hand_written = conn.last_insert_rowid();
@@ -362,9 +443,20 @@ fn prompt_backfill_fills_only_empty_positive_prompts() {
     .unwrap();
     attach_capture(&conn, hand_written, runtime_prompt_raw("运行时生成的"));
 
-    assert_eq!(backfill_runtime_prompts(&conn).unwrap(), 1, "只补空的那一条");
-    assert_eq!(positive_of(&conn, empty), "最终提示词：绿发少女站在雨夜街头");
-    assert_eq!(positive_of(&conn, hand_written), "我自己写的", "手写的正向不许被覆盖");
+    assert_eq!(
+        backfill_runtime_prompts(&conn).unwrap(),
+        1,
+        "只补空的那一条"
+    );
+    assert_eq!(
+        positive_of(&conn, empty),
+        "最终提示词：绿发少女站在雨夜街头"
+    );
+    assert_eq!(
+        positive_of(&conn, hand_written),
+        "我自己写的",
+        "手写的正向不许被覆盖"
+    );
 
     // 回填过的行已被顶过 `updated_at`，但判据是"正向空不空"，所以直接再跑也不会重复改
     assert_eq!(backfill_runtime_prompts(&conn).unwrap(), 0);
@@ -417,7 +509,10 @@ fn prompt_backfill_marker_tracks_the_version() {
     let conn = memory_db();
     assert!(prompt_backfill_needed(&conn).unwrap(), "没有标记时必须跑");
     mark_prompt_backfill_done(&conn).unwrap();
-    assert!(!prompt_backfill_needed(&conn).unwrap(), "同一版本不再重复扫");
+    assert!(
+        !prompt_backfill_needed(&conn).unwrap(),
+        "同一版本不再重复扫"
+    );
     conn.execute(
         "UPDATE app_settings SET v = '0' WHERE k = ?1",
         [PROMPT_BACKFILL_KEY],

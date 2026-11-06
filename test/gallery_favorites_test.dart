@@ -35,119 +35,117 @@ Map<String, dynamic> _media({
   int? collectionId,
   int collectionSize = 1,
   List<int> preview = const [],
-}) =>
-    {
-      'id': id,
-      'kind': 'IMAGE',
-      'title': 'shot-$id.png',
-      'originalName': 'shot-$id.png',
-      'storedName': 's$id.png',
-      'mimeType': 'image/png',
-      'sizeBytes': 1024,
-      'favorite': favorite,
-      'source': 'ComfyUI',
-      'createdAt': '2026-10-18T01:00:00.000Z',
-      'fileUrl': '/api/media/$id/file',
-      'thumbUrl': '/api/media/$id/thumb',
-      'collectionId': collectionId,
-      'collectionSize': collectionSize,
-      'collectionPreview': preview,
-    };
+}) => {
+  'id': id,
+  'kind': 'IMAGE',
+  'title': 'shot-$id.png',
+  'originalName': 'shot-$id.png',
+  'storedName': 's$id.png',
+  'mimeType': 'image/png',
+  'sizeBytes': 1024,
+  'favorite': favorite,
+  'source': 'ComfyUI',
+  'createdAt': '2026-10-18T01:00:00.000Z',
+  'fileUrl': '/api/media/$id/file',
+  'thumbUrl': '/api/media/$id/thumb',
+  'collectionId': collectionId,
+  'collectionSize': collectionSize,
+  'collectionPreview': preview,
+};
 
 /// 记下每一次 `GET /api/media`（断言 collapse / favorite 参数用）。
 final List<Uri> mediaRequests = [];
 
 http.Client _client() => MockClient((request) async {
-      final path = request.url.path;
-      Object? body;
-      var status = 200;
-      if (path == '/api/media') {
-        mediaRequests.add(request.url);
-        final params = request.url.queryParameters;
-        if (params['collectionId'] == '9') {
-          // 展开集合：成员 2/3/4，**只有 3 被收藏**
-          body = {
-            'items': [
-              _media(id: 2),
-              _media(id: 3, favorite: true),
-              _media(id: 4),
-            ],
-            'total': 3,
-            'page': 1,
-            'size': 500,
-            'pages': 1,
-          };
-        } else if (params['favorite'] == '1') {
-          // 仅收藏（collapse 已关）：收藏过的单张，哪怕它在集合里
-          body = {
-            'items': [
-              _media(
-                id: 3,
-                favorite: true,
-                collectionId: 9,
-                collectionSize: 3,
-                preview: [2, 3, 4],
-              ),
-              _media(id: 5, favorite: true),
-            ],
-            'total': 2,
-            'page': 1,
-            'size': 24,
-            'pages': 1,
-          };
-        } else {
-          body = {
-            'items': [
-              _media(id: 1),
-              _media(id: 2, collectionId: 9, collectionSize: 3, preview: [2, 3, 4]),
-            ],
-            'total': 2,
-            'page': 1,
-            'size': 24,
-            'pages': 1,
-          };
-        }
-      } else if (path == '/api/tags' || path == '/api/tags/categories') {
-        body = <Object>[];
-      } else if (path == '/api/stats') {
-        body = {
-          'prompts': 0,
-          'media': 5,
-          'tags': 0,
-          'favoritePrompts': 0,
-          'favoriteMedia': 2,
-          'byKind': <String, int>{},
-          'byMediaKind': <String, int>{},
-        };
-      } else if (path == '/api/prompts') {
-        body = {'items': <Object>[], 'total': 0, 'page': 1, 'size': 24, 'pages': 0};
-      } else {
-        status = 404;
-        body = {'error': 'not found: $path'};
-      }
-      return http.Response(
-        jsonEncode(body),
-        status,
-        headers: {'content-type': 'application/json; charset=utf-8'},
-      );
-    });
+  final path = request.url.path;
+  Object? body;
+  var status = 200;
+  if (path == '/api/media') {
+    mediaRequests.add(request.url);
+    final params = request.url.queryParameters;
+    if (params['collectionId'] == '9') {
+      // 展开集合：成员 2/3/4，**只有 3 被收藏**
+      body = {
+        'items': [_media(id: 2), _media(id: 3, favorite: true), _media(id: 4)],
+        'total': 3,
+        'page': 1,
+        'size': 500,
+        'pages': 1,
+      };
+    } else if (params['favorite'] == '1') {
+      // 仅收藏（collapse 已关）：收藏过的单张，哪怕它在集合里
+      body = {
+        'items': [
+          _media(
+            id: 3,
+            favorite: true,
+            collectionId: 9,
+            collectionSize: 3,
+            preview: [2, 3, 4],
+          ),
+          _media(id: 5, favorite: true),
+        ],
+        'total': 2,
+        'page': 1,
+        'size': 24,
+        'pages': 1,
+      };
+    } else {
+      body = {
+        'items': [
+          _media(id: 1),
+          _media(id: 2, collectionId: 9, collectionSize: 3, preview: [2, 3, 4]),
+        ],
+        'total': 2,
+        'page': 1,
+        'size': 24,
+        'pages': 1,
+      };
+    }
+  } else if (path == '/api/tags' || path == '/api/tags/categories') {
+    body = <Object>[];
+  } else if (path == '/api/stats') {
+    body = {
+      'prompts': 0,
+      'media': 5,
+      'tags': 0,
+      'favoritePrompts': 0,
+      'favoriteMedia': 2,
+      'byKind': <String, int>{},
+      'byMediaKind': <String, int>{},
+    };
+  } else if (path == '/api/prompts') {
+    body = {'items': <Object>[], 'total': 0, 'page': 1, 'size': 24, 'pages': 0};
+  } else {
+    status = 404;
+    body = {'error': 'not found: $path'};
+  }
+  return http.Response(
+    jsonEncode(body),
+    status,
+    headers: {'content-type': 'application/json; charset=utf-8'},
+  );
+});
 
 Future<(LibraryStore, SettingsStore)> _seed() async {
   SharedPreferences.setMockInitialValues({});
   final settings = SettingsStore();
   await settings.load();
-  final store = LibraryStore(settings, api: ApiClient(settings.baseUrl, client: _client()));
+  final store = LibraryStore(
+    settings,
+    api: ApiClient(settings.baseUrl, client: _client()),
+  );
   await store.refreshMedia();
   return (store, settings);
 }
 
 Widget _app(LibraryStore store, SettingsStore settings) => MultiProvider(
-      providers: [
-        ChangeNotifierProvider<LibraryStore>.value(value: store),
-        ChangeNotifierProvider<SettingsStore>.value(value: settings),
-      ],
-      child: const MaterialApp(home: GalleryPage()),
-    );
+  providers: [
+    ChangeNotifierProvider<LibraryStore>.value(value: store),
+    ChangeNotifierProvider<SettingsStore>.value(value: settings),
+  ],
+  child: const MaterialApp(home: GalleryPage()),
+);
 
 void main() {
   setUp(() => mediaRequests.clear());
@@ -163,7 +161,11 @@ void main() {
       '1',
       reason: '默认画廊必须折叠集合（同一批微调显示成一个格子）',
     );
-    expect(find.byType(CollectionThumb), findsOneWidget, reason: '前提：集合折叠成一个格子');
+    expect(
+      find.byType(CollectionThumb),
+      findsOneWidget,
+      reason: '前提：集合折叠成一个格子',
+    );
     expect(find.byType(MediaThumb), findsOneWidget);
   });
 

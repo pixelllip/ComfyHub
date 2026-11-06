@@ -158,8 +158,10 @@ class _ComfyCaptureSettingsPageState extends State<ComfyCaptureSettingsPage> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               if (loc.outputDir != null) ...[
-                Text('找到 ComfyUI，位置在 ${loc.home ?? '-'}',
-                    style: theme.textTheme.bodySmall),
+                Text(
+                  '找到 ComfyUI，位置在 ${loc.home ?? '-'}',
+                  style: theme.textTheme.bodySmall,
+                ),
                 const SizedBox(height: 2),
                 Text(
                   '输出目录是 ${loc.outputDir}'
@@ -197,14 +199,16 @@ class _ComfyCaptureSettingsPageState extends State<ComfyCaptureSettingsPage> {
     });
     try {
       final base = _capture ?? const CaptureConfig();
-      final saved = await store.api.updateCaptureConfig(base.copyWith(
-        enabled: _captureEnabled,
-        comfyUrl: _comfyUrlController.text.trim(),
-        outputDir: _comfyOutputController.text.trim(),
-        clearOutputDir: _comfyOutputController.text.trim().isEmpty,
-        pollSeconds: _pollSeconds,
-        autoTag: _autoTagController.text.trim(),
-      ));
+      final saved = await store.api.updateCaptureConfig(
+        base.copyWith(
+          enabled: _captureEnabled,
+          comfyUrl: _comfyUrlController.text.trim(),
+          outputDir: _comfyOutputController.text.trim(),
+          clearOutputDir: _comfyOutputController.text.trim().isEmpty,
+          pollSeconds: _pollSeconds,
+          autoTag: _autoTagController.text.trim(),
+        ),
+      );
       if (!mounted) return;
       setState(() {
         _capture = saved;
@@ -290,7 +294,9 @@ class _ComfyCaptureSettingsPageState extends State<ComfyCaptureSettingsPage> {
   }
 
   Future<void> _pickComfyOutputDir() async {
-    final dir = await FilePicker.getDirectoryPath(dialogTitle: '选择 ComfyUI 的输出目录');
+    final dir = await FilePicker.getDirectoryPath(
+      dialogTitle: '选择 ComfyUI 的输出目录',
+    );
     if (dir == null || dir.isEmpty) return;
     setState(() => _comfyOutputController.text = dir);
   }
@@ -311,71 +317,75 @@ class _ComfyCaptureSettingsPageState extends State<ComfyCaptureSettingsPage> {
           // （2026-11-05 用户指着这一页说视觉重心不对）。
           estimatedHeight: 400,
           child: Card(
-          child: Padding(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Icon(
-                      reachable ? Icons.link : Icons.link_off,
-                      size: 18,
-                      color: reachable ? colors.success : theme.colorScheme.error,
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        status == null
-                            ? '尚未读到状态'
-                            : reachable
-                                ? '已连上 ComfyUI ${status.comfyUrl}'
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Icon(
+                        reachable ? Icons.link : Icons.link_off,
+                        size: 18,
+                        color: reachable
+                            ? colors.success
+                            : theme.colorScheme.error,
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          status == null
+                              ? '尚未读到状态'
+                              : reachable
+                              ? '已连上 ComfyUI ${status.comfyUrl}'
                                     '（队列 运行中 ${status.queueRunning} / 等待 ${status.queuePending}）'
-                                : '连不上 ComfyUI ${status.comfyUrl}',
-                        style: theme.textTheme.bodySmall,
+                              : '连不上 ComfyUI ${status.comfyUrl}',
+                          style: theme.textTheme.bodySmall,
+                        ),
+                      ),
+                      if (_loadingCapture)
+                        const SizedBox(
+                          width: 14,
+                          height: 14,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      else
+                        IconButton(
+                          tooltip: '刷新状态',
+                          onPressed: _captureBusy ? null : _loadCapture,
+                          icon: const Icon(Icons.refresh),
+                        ),
+                    ],
+                  ),
+                  if (status?.lastError != null) ...[
+                    const SizedBox(height: 4),
+                    Text(
+                      '最近一次错误是 ${status!.lastError}',
+                      style: theme.textTheme.labelSmall?.copyWith(
+                        color: theme.colorScheme.error,
                       ),
                     ),
-                    if (_loadingCapture)
-                      const SizedBox(
-                        width: 14,
-                        height: 14,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    else
-                      IconButton(
-                        tooltip: '刷新状态',
-                        onPressed: _captureBusy ? null : _loadCapture,
-                        icon: const Icon(Icons.refresh),
-                      ),
                   ],
-                ),
-                if (status?.lastError != null) ...[
-                  const SizedBox(height: 4),
+                  const SizedBox(height: 8),
                   Text(
-                    '最近一次错误是 ${status!.lastError}',
-                    style: theme.textTheme.labelSmall
-                        ?.copyWith(color: theme.colorScheme.error),
+                    '后端每隔几秒，就把「提示词 + 全部参数 + 工作流 + 生成的图片/视频/音频」整条收进库里并互相关联。ComfyUI 开着就行，不需要改动你的工作流。',
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  SettingsSwitchRow(
+                    value: _captureEnabled,
+                    onChanged: _capture == null
+                        ? null
+                        : (v) => setState(() => _captureEnabled = v),
+                    title: '开启自动捕获',
+                    subtitle: '关闭后只保留手动「立即同步」和目录导入',
                   ),
                 ],
-                const SizedBox(height: 8),
-                Text(
-                  '后端每隔几秒，就把「提示词 + 全部参数 + 工作流 + 生成的图片/视频/音频」整条收进库里并互相关联。ComfyUI 开着就行，不需要改动你的工作流。',
-                  style: theme.textTheme.bodySmall
-                      ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
-                ),
-                const SizedBox(height: 12),
-                SettingsSwitchRow(
-                  value: _captureEnabled,
-                  onChanged: _capture == null
-                      ? null
-                      : (v) => setState(() => _captureEnabled = v),
-                  title: '开启自动捕获',
-                  subtitle: '关闭后只保留手动「立即同步」和目录导入',
-                ),
-              ],
+              ),
             ),
           ),
-        ),
         ),
         SettingsSection(
           title: '地址与目录',
@@ -388,46 +398,46 @@ class _ComfyCaptureSettingsPageState extends State<ComfyCaptureSettingsPage> {
                 children: [
                   TextField(
                     controller: _comfyUrlController,
-                  decoration: const InputDecoration(
-                    labelText: 'ComfyUI 地址',
-                    hintText: 'http://127.0.0.1:8188',
+                    decoration: const InputDecoration(
+                      labelText: 'ComfyUI 地址',
+                      hintText: 'http://127.0.0.1:8188',
+                    ),
                   ),
-                ),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: _comfyOutputController,
-                  decoration: const InputDecoration(
-                    labelText: 'ComfyUI 输出目录（可选）',
-                    hintText: r'例如 D:\Comfy-Desktop\ComfyUI-Shared\output',
-                    helperText: '填了就直接读本地文件，快且不占带宽。留空则通过 HTTP 下载。',
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: _comfyOutputController,
+                    decoration: const InputDecoration(
+                      labelText: 'ComfyUI 输出目录（可选）',
+                      hintText: r'例如 D:\Comfy-Desktop\ComfyUI-Shared\output',
+                      helperText: '填了就直接读本地文件，快且不占带宽。留空则通过 HTTP 下载。',
+                    ),
                   ),
-                ),
-                const SizedBox(height: 4),
-                Align(
-                  alignment: Alignment.centerLeft,
-                  child: Wrap(
-                    spacing: 8,
-                    children: [
-                      TextButton.icon(
-                        onPressed: _pickComfyOutputDir,
-                        icon: const Icon(Icons.folder_open, size: 18),
-                        label: const Text('选择目录…'),
-                      ),
-                      // 发布包是便携式的，ComfyUI 装在哪不能靠猜；探测只读，
-                      // 点「使用这个目录」才写进配置（绝不偷偷改用户设置）。
-                      TextButton.icon(
-                        onPressed: _captureBusy ? null : _locateComfy,
-                        icon: const Icon(Icons.travel_explore, size: 18),
-                        label: const Text('自动查找 ComfyUI'),
-                      ),
-                    ],
+                  const SizedBox(height: 4),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: Wrap(
+                      spacing: 8,
+                      children: [
+                        TextButton.icon(
+                          onPressed: _pickComfyOutputDir,
+                          icon: const Icon(Icons.folder_open, size: 18),
+                          label: const Text('选择目录…'),
+                        ),
+                        // 发布包是便携式的，ComfyUI 装在哪不能靠猜；探测只读，
+                        // 点「使用这个目录」才写进配置（绝不偷偷改用户设置）。
+                        TextButton.icon(
+                          onPressed: _captureBusy ? null : _locateComfy,
+                          icon: const Icon(Icons.travel_explore, size: 18),
+                          label: const Text('自动查找 ComfyUI'),
+                        ),
+                      ],
+                    ),
                   ),
-                ),
-                if (_comfyLocation != null) _comfyLocationPanel(theme),
-              ],
+                  if (_comfyLocation != null) _comfyLocationPanel(theme),
+                ],
+              ),
             ),
           ),
-        ),
         ),
         SettingsSection(
           title: '轮询与操作',
@@ -443,139 +453,150 @@ class _ComfyCaptureSettingsPageState extends State<ComfyCaptureSettingsPage> {
                     children: [
                       SizedBox(
                         width: 96,
-                        child: Text('轮询间隔',
-                            style: theme.textTheme.bodyMedium),
+                        child: Text('轮询间隔', style: theme.textTheme.bodyMedium),
                       ),
-                    Expanded(
-                      child: Slider(
-                        value: _pollSeconds.toDouble(),
-                        min: 1,
-                        max: 30,
-                        divisions: 29,
-                        label: '$_pollSeconds 秒',
-                        onChanged: _capture == null
+                      Expanded(
+                        child: Slider(
+                          value: _pollSeconds.toDouble(),
+                          min: 1,
+                          max: 30,
+                          divisions: 29,
+                          label: '$_pollSeconds 秒',
+                          onChanged: _capture == null
+                              ? null
+                              : (v) => setState(() => _pollSeconds = v.round()),
+                        ),
+                      ),
+                      SizedBox(
+                        width: 64,
+                        child: Text(
+                          '$_pollSeconds 秒',
+                          style: theme.textTheme.labelMedium,
+                        ),
+                      ),
+                    ],
+                  ),
+                  TextField(
+                    controller: _autoTagController,
+                    decoration: const InputDecoration(
+                      labelText: '自动标签',
+                      helperText: '捕获进来的提示词会自动打上这个标签，方便在画廊里筛「ComfyUI 生成的」',
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                  Wrap(
+                    spacing: 10,
+                    runSpacing: 8,
+                    children: [
+                      FilledButton.icon(
+                        onPressed: (_captureBusy || _capture == null)
                             ? null
-                            : (v) =>
-                                setState(() => _pollSeconds = v.round()),
+                            : _saveCapture,
+                        icon: const Icon(Icons.save_outlined),
+                        label: const Text('保存配置'),
                       ),
-                    ),
-                    SizedBox(
-                      width: 64,
-                      child: Text('$_pollSeconds 秒',
-                          style: theme.textTheme.labelMedium),
-                    ),
-                  ],
-                ),
-                TextField(
-                  controller: _autoTagController,
-                  decoration: const InputDecoration(
-                    labelText: '自动标签',
-                    helperText: '捕获进来的提示词会自动打上这个标签，方便在画廊里筛「ComfyUI 生成的」',
-                  ),
-                ),
-                const SizedBox(height: 14),
-                Wrap(
-                  spacing: 10,
-                  runSpacing: 8,
-                  children: [
-                    FilledButton.icon(
-                      onPressed:
-                          (_captureBusy || _capture == null) ? null : _saveCapture,
-                      icon: const Icon(Icons.save_outlined),
-                      label: const Text('保存配置'),
-                    ),
-                    OutlinedButton.icon(
-                      onPressed: _captureBusy ? null : _syncNow,
-                      icon: const Icon(Icons.sync),
-                      label: const Text('立即同步'),
-                    ),
-                    OutlinedButton.icon(
-                      onPressed: _captureBusy ? null : _importFolder,
-                      icon: const Icon(Icons.download_for_offline_outlined),
-                      label: const Text('导入已有产物…'),
-                    ),
-                    OutlinedButton.icon(
-                      onPressed: _captureBusy ? null : _importWorkflows,
-                      icon: const Icon(Icons.account_tree_outlined),
-                      label: const Text('导入本机工作流'),
-                    ),
-                  ],
-                ),
-                if (_captureError != null) ...[
-                  const SizedBox(height: 10),
-                  Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Icon(Icons.error_outline,
-                          size: 18, color: theme.colorScheme.error),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: SelectableText(_captureError!,
-                            style: theme.textTheme.bodySmall),
+                      OutlinedButton.icon(
+                        onPressed: _captureBusy ? null : _syncNow,
+                        icon: const Icon(Icons.sync),
+                        label: const Text('立即同步'),
+                      ),
+                      OutlinedButton.icon(
+                        onPressed: _captureBusy ? null : _importFolder,
+                        icon: const Icon(Icons.download_for_offline_outlined),
+                        label: const Text('导入已有产物…'),
+                      ),
+                      OutlinedButton.icon(
+                        onPressed: _captureBusy ? null : _importWorkflows,
+                        icon: const Icon(Icons.account_tree_outlined),
+                        label: const Text('导入本机工作流'),
                       ),
                     ],
                   ),
-                ],
-                if (_captureMessage != null) ...[
-                  const SizedBox(height: 10),
-                  Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Icon(Icons.check_circle_outline,
-                          size: 18, color: colors.success),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: SelectableText(_captureMessage!,
-                            style: theme.textTheme.bodySmall),
-                      ),
-                    ],
-                  ),
-                ],
-                if (status != null && status.recent.isNotEmpty) ...[
-                  const Divider(height: 24),
-                  Text('最近捕获', style: theme.textTheme.labelLarge),
-                  const SizedBox(height: 4),
-                  for (final run in status.recent.take(8))
-                    Padding(
-                      padding: const EdgeInsets.symmetric(vertical: 3),
-                      child: Row(
-                        children: [
-                          Icon(
-                            run.status == 'success'
-                                ? Icons.check_circle_outline
-                                : (run.status == 'error'
-                                    ? Icons.error_outline
-                                    : Icons.remove_circle_outline),
-                            size: 15,
-                            color: run.status == 'success'
-                                ? colors.success
-                                : theme.colorScheme.onSurfaceVariant,
+                  if (_captureError != null) ...[
+                    const SizedBox(height: 10),
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Icon(
+                          Icons.error_outline,
+                          size: 18,
+                          color: theme.colorScheme.error,
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: SelectableText(
+                            _captureError!,
+                            style: theme.textTheme.bodySmall,
                           ),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: Text(
-                              run.title?.isNotEmpty == true
-                                  ? run.title!
-                                  : run.runKey,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: theme.textTheme.bodySmall,
-                            ),
-                          ),
-                          Text(
-                            '${run.mediaCount} 个产物 · ${relativeTime(run.capturedAt)}',
-                            style: theme.textTheme.labelSmall?.copyWith(
-                              color: theme.colorScheme.onSurfaceVariant,
-                            ),
-                          ),
-                        ],
-                      ),
+                        ),
+                      ],
                     ),
+                  ],
+                  if (_captureMessage != null) ...[
+                    const SizedBox(height: 10),
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Icon(
+                          Icons.check_circle_outline,
+                          size: 18,
+                          color: colors.success,
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: SelectableText(
+                            _captureMessage!,
+                            style: theme.textTheme.bodySmall,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                  if (status != null && status.recent.isNotEmpty) ...[
+                    const Divider(height: 24),
+                    Text('最近捕获', style: theme.textTheme.labelLarge),
+                    const SizedBox(height: 4),
+                    for (final run in status.recent.take(8))
+                      Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 3),
+                        child: Row(
+                          children: [
+                            Icon(
+                              run.status == 'success'
+                                  ? Icons.check_circle_outline
+                                  : (run.status == 'error'
+                                        ? Icons.error_outline
+                                        : Icons.remove_circle_outline),
+                              size: 15,
+                              color: run.status == 'success'
+                                  ? colors.success
+                                  : theme.colorScheme.onSurfaceVariant,
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                run.title?.isNotEmpty == true
+                                    ? run.title!
+                                    : run.runKey,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: theme.textTheme.bodySmall,
+                              ),
+                            ),
+                            Text(
+                              '${run.mediaCount} 个产物 · ${relativeTime(run.capturedAt)}',
+                              style: theme.textTheme.labelSmall?.copyWith(
+                                color: theme.colorScheme.onSurfaceVariant,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                  ],
                 ],
-              ],
+              ),
             ),
           ),
-        ),
         ),
       ],
     );

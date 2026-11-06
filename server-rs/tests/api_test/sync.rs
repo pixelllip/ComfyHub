@@ -4,7 +4,6 @@
 
 use super::common::*;
 
-
 /// `GET /api/sync/manifest` —— 手机连上来的第一件事（🔒 契约 §1）。
 ///
 /// 最要紧的一条：**带凭据/令牌的表绝不能出现在 `synced: true` 里**。
@@ -19,7 +18,13 @@ async fn sync_manifest_lists_scope_and_never_offers_credentials() {
     // 形状：契约 §1 的五个键一个都不能少/改名
     assert_eq!(
         keys(&body),
-        vec!["cursor", "kitVersion", "schemaVersion", "serverTime", "tables"],
+        vec![
+            "cursor",
+            "kitVersion",
+            "schemaVersion",
+            "serverTime",
+            "tables"
+        ],
         "manifest 的键集合就是契约",
     );
     assert_eq!(
@@ -50,8 +55,14 @@ async fn sync_manifest_lists_scope_and_never_offers_credentials() {
     for dangerous in ["app_settings", "ai_providers", "ai_models", "ai_run_events"] {
         let entry = &body["tables"][dangerous];
         assert_eq!(entry["synced"], false, "{dangerous} 绝不能被当成可同步的表");
-        assert!(entry["reason"].as_str().is_some_and(|r| !r.is_empty()), "{dangerous} 要给理由");
-        assert!(entry["rowCount"].is_null(), "{dangerous} 连行数都不该外发（行数本身也是信息）");
+        assert!(
+            entry["reason"].as_str().is_some_and(|r| !r.is_empty()),
+            "{dangerous} 要给理由"
+        );
+        assert!(
+            entry["rowCount"].is_null(),
+            "{dangerous} 连行数都不该外发（行数本身也是信息）"
+        );
     }
 
     // kitVersion：Kotlin 侧没写过就是 null —— **不编一个**
@@ -92,7 +103,10 @@ async fn sync_manifest_cursor_follows_the_sync_log() {
 
     let (_, body) = get_json(router_for(state.clone()), "/api/sync/manifest").await;
     let cursor = body["cursor"].as_i64().unwrap();
-    assert!(cursor > before, "写过之后游标必须往前走：{before} -> {cursor}");
+    assert!(
+        cursor > before,
+        "写过之后游标必须往前走：{before} -> {cursor}"
+    );
 
     // 与账本里的最大值**同源**（不能是"自己数的行数"）
     let max_seq: i64 = state
@@ -128,7 +142,11 @@ async fn sync_changes_returns_full_rows_and_scalar_or_array_keys() {
         })
         .unwrap();
 
-    let (status, body) = get_json(router_for(state.clone()), &format!("/api/sync/changes?since={since}")).await;
+    let (status, body) = get_json(
+        router_for(state.clone()),
+        &format!("/api/sync/changes?since={since}"),
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(
         keys(&body),
@@ -161,17 +179,28 @@ async fn sync_changes_groups_deletes_separately_with_array_keys() {
     // 删一条单列主键的 + 一条复合主键的
     state
         .with(|conn| {
-            conn.execute("DELETE FROM tags WHERE id = 2", []).map(|_| ())?;
-            conn.execute("DELETE FROM prompt_tags WHERE prompt_id = 10 AND tag_id = 1", [])
-                .map(|_| ())
+            conn.execute("DELETE FROM tags WHERE id = 2", [])
+                .map(|_| ())?;
+            conn.execute(
+                "DELETE FROM prompt_tags WHERE prompt_id = 10 AND tag_id = 1",
+                [],
+            )
+            .map(|_| ())
         })
         .unwrap();
 
-    let (_, body) = get_json(router_for(state.clone()), &format!("/api/sync/changes?since={since}")).await;
+    let (_, body) = get_json(
+        router_for(state.clone()),
+        &format!("/api/sync/changes?since={since}"),
+    )
+    .await;
 
     // 单列 → 标量数字；绝不能混进 upserts
     assert_eq!(body["deletes"]["tags"][0], 2, "单列主键发标量");
-    assert!(body["upserts"]["tags"].is_null(), "删掉的行不该出现在 upserts 里");
+    assert!(
+        body["upserts"]["tags"].is_null(),
+        "删掉的行不该出现在 upserts 里"
+    );
     // 复合 → 数组（不是 '10:1' 字符串）
     //
     // ⚠ 这里**不断言顺序**：删 tag 2 会经外键级联掉 prompt_tags(11,2)，
@@ -249,14 +278,27 @@ async fn sync_changes_never_leaks_settings_or_providers() {
         })
         .unwrap();
 
-    let (status, body) = get_json(router_for(state.clone()), &format!("/api/sync/changes?since={since}")).await;
+    let (status, body) = get_json(
+        router_for(state.clone()),
+        &format!("/api/sync/changes?since={since}"),
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
 
     // ★ 一条都不能漏出去（响应体里连那个令牌字符串都不该出现）
     let raw = body.to_string();
-    assert!(!raw.contains("SECRET-TOKEN"), "配对令牌明文绝不能出现在同步响应里：{raw}");
-    assert!(body["upserts"]["app_settings"].is_null(), "app_settings 不同步");
-    assert!(body["upserts"]["ai_providers"].is_null(), "ai_providers 不同步");
+    assert!(
+        !raw.contains("SECRET-TOKEN"),
+        "配对令牌明文绝不能出现在同步响应里：{raw}"
+    );
+    assert!(
+        body["upserts"]["app_settings"].is_null(),
+        "app_settings 不同步"
+    );
+    assert!(
+        body["upserts"]["ai_providers"].is_null(),
+        "ai_providers 不同步"
+    );
     assert!(body["deletes"]["app_settings"].is_null());
     assert!(body["deletes"]["ai_providers"].is_null());
 
@@ -291,7 +333,11 @@ async fn sync_changes_returns_410_when_the_cursor_fell_out_of_the_window() {
 
     // 老游标（1）早于窗口 → 410
     let (status, body) = get_json(router_for(state.clone()), "/api/sync/changes?since=1").await;
-    assert_eq!(status, StatusCode::GONE, "窗口外的游标必须 410，实际 {status} {body}");
+    assert_eq!(
+        status,
+        StatusCode::GONE,
+        "窗口外的游标必须 410，实际 {status} {body}"
+    );
     // 410 的信封与别处一致：`error` 是**人话**（手机判 410 认的是状态码，不是 `error` 的值）
     assert_eq!(keys(&body), vec!["error"]);
     assert!(
@@ -303,11 +349,21 @@ async fn sync_changes_returns_410_when_the_cursor_fell_out_of_the_window() {
     let min: i64 = state
         .with(|conn| conn.query_row("SELECT MIN(seq) FROM _sync_log", [], |r| r.get(0)))
         .unwrap();
-    let (status, _) = get_json(router_for(state.clone()), &format!("/api/sync/changes?since={}", min - 1)).await;
-    assert_eq!(status, StatusCode::OK, "刚好贴着左沿应当正常返回（不多报一次全量）");
+    let (status, _) = get_json(
+        router_for(state.clone()),
+        &format!("/api/sync/changes?since={}", min - 1),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "刚好贴着左沿应当正常返回（不多报一次全量）"
+    );
 
     // 空账本不该 410（新手机本来就没有游标）
-    state.with(|conn| conn.execute("DELETE FROM _sync_log", []).map(|_| ())).unwrap();
+    state
+        .with(|conn| conn.execute("DELETE FROM _sync_log", []).map(|_| ()))
+        .unwrap();
     let (status, body) = get_json(router_for(state.clone()), "/api/sync/changes?since=99999").await;
     assert_eq!(status, StatusCode::OK, "空账本不 410：{body}");
     assert_eq!(body["hasMore"], false);
@@ -334,28 +390,49 @@ async fn sync_changes_paginates_and_advances_the_cursor() {
     }
 
     // limit=2：第一页应当 hasMore=true，且游标**没有**跳到账本末尾
-    let (_, page1) = get_json(router_for(state.clone()), &format!("/api/sync/changes?since={cursor}&limit=2")).await;
+    let (_, page1) = get_json(
+        router_for(state.clone()),
+        &format!("/api/sync/changes?since={cursor}&limit=2"),
+    )
+    .await;
     assert_eq!(page1["hasMore"], true, "还有下一页");
     let c1 = page1["cursor"].as_i64().unwrap();
     assert!(c1 > cursor, "游标要往前走");
     let max_seq: i64 = state
         .with(|conn| conn.query_row("SELECT MAX(seq) FROM _sync_log", [], |r| r.get(0)))
         .unwrap();
-    assert!(c1 < max_seq, "没扫完就不能跳到末尾（否则中间那几条永远丢）：c1={c1} max={max_seq}");
-    assert_eq!(page1["upserts"]["tags"].as_array().unwrap().len(), 2, "一页就是 limit 条");
+    assert!(
+        c1 < max_seq,
+        "没扫完就不能跳到末尾（否则中间那几条永远丢）：c1={c1} max={max_seq}"
+    );
+    assert_eq!(
+        page1["upserts"]["tags"].as_array().unwrap().len(),
+        2,
+        "一页就是 limit 条"
+    );
 
     // 接着拉，最后把所有标签都收全（一页都不许漏）
     cursor = c1;
     let mut seen = page1["upserts"]["tags"].as_array().unwrap().len();
     for _ in 0..10 {
-        let (_, page) = get_json(router_for(state.clone()), &format!("/api/sync/changes?since={cursor}&limit=2")).await;
-        seen += page["upserts"]["tags"].as_array().map(|a| a.len()).unwrap_or(0);
+        let (_, page) = get_json(
+            router_for(state.clone()),
+            &format!("/api/sync/changes?since={cursor}&limit=2"),
+        )
+        .await;
+        seen += page["upserts"]["tags"]
+            .as_array()
+            .map(|a| a.len())
+            .unwrap_or(0);
         cursor = page["cursor"].as_i64().unwrap();
         if page["hasMore"] == false {
             break;
         }
     }
-    assert_eq!(seen, 5, "翻完所有页要正好收到 5 条（多一条/少一条都是 bug）");
+    assert_eq!(
+        seen, 5,
+        "翻完所有页要正好收到 5 条（多一条/少一条都是 bug）"
+    );
 }
 
 /// ★ **M4 的 DoD：手机产生的会话在桌面可见；重复推送不产生重复行。**
@@ -383,13 +460,23 @@ async fn sync_push_applies_and_is_idempotent() {
         .iter()
         .filter_map(|r| r["title"].as_str())
         .collect();
-    assert!(titles.contains(&"手机上起的会话"), "上行之后的会话应当在同步流里：{titles:?}");
+    assert!(
+        titles.contains(&"手机上起的会话"),
+        "上行之后的会话应当在同步流里：{titles:?}"
+    );
 
     // ★ 第二次推**同一条**：不许产生重复行
     let (status, body) = push(&state, vec![item.clone()]).await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(body["applied"], serde_json::json!([]), "第二次不该再 applied");
-    assert_eq!(body["rejected"][0]["code"], "STALE_IGNORED", "LWW：同一条再推→服务端赢");
+    assert_eq!(
+        body["applied"],
+        serde_json::json!([]),
+        "第二次不该再 applied"
+    );
+    assert_eq!(
+        body["rejected"][0]["code"], "STALE_IGNORED",
+        "LWW：同一条再推→服务端赢"
+    );
     assert_eq!(body["rejected"][0]["refId"], "conv-phone-1");
 
     let n: i64 = state
@@ -398,12 +485,18 @@ async fn sync_push_applies_and_is_idempotent() {
                 "SELECT COUNT(*) FROM ai_conversations WHERE id = 'conv-phone-1'",
                 [],
                 |r| r.get(0),
-            )})
+            )
+        })
         .unwrap();
     assert_eq!(n, 1, "重复推送**只能有一行**（就地更新，绝不新增）");
     let title: String = state
         .with(|conn| {
-            conn.query_row("SELECT title FROM ai_conversations WHERE id='conv-phone-1'", [], |r| r.get(0))})
+            conn.query_row(
+                "SELECT title FROM ai_conversations WHERE id='conv-phone-1'",
+                [],
+                |r| r.get(0),
+            )
+        })
         .unwrap();
     assert_eq!(title, "手机上起的会话", "被拒的那次不该改动内容");
 }
@@ -438,7 +531,12 @@ async fn sync_push_keeps_the_desktop_value_when_the_push_is_older() {
     assert_eq!(body["rejected"][0]["code"], "STALE_IGNORED");
     let title: String = state
         .with(|conn| {
-            conn.query_row("SELECT title FROM ai_conversations WHERE id='conv-lww'", [], |r| r.get(0))})
+            conn.query_row(
+                "SELECT title FROM ai_conversations WHERE id='conv-lww'",
+                [],
+                |r| r.get(0),
+            )
+        })
         .unwrap();
     assert_eq!(title, "桌面改过的名字", "旧的推送不许把桌面的行回退");
 
@@ -455,7 +553,12 @@ async fn sync_push_keeps_the_desktop_value_when_the_push_is_older() {
     assert_eq!(body["applied"], serde_json::json!(["conv-lww"]));
     let title: String = state
         .with(|conn| {
-            conn.query_row("SELECT title FROM ai_conversations WHERE id='conv-lww'", [], |r| r.get(0))})
+            conn.query_row(
+                "SELECT title FROM ai_conversations WHERE id='conv-lww'",
+                [],
+                |r| r.get(0),
+            )
+        })
         .unwrap();
     assert_eq!(title, "手机上的新名字");
 }
@@ -545,11 +648,19 @@ async fn sync_changes_covers_every_synced_table_without_error() {
     // 共享夹具里塞一行会把那条用例弄红。所以**在这条用例里**补，`since=0` 照样能扫到它。
     state
         .with(|conn| {
-            conn.execute("INSERT INTO media_tags (media_id, tag_id) VALUES (100, 1)", []).map(|_| ())
+            conn.execute(
+                "INSERT INTO media_tags (media_id, tag_id) VALUES (100, 1)",
+                [],
+            )
+            .map(|_| ())
         })
         .unwrap();
 
-    let (status, body) = get_json(router_for(state.clone()), "/api/sync/changes?since=0&limit=500").await;
+    let (status, body) = get_json(
+        router_for(state.clone()),
+        "/api/sync/changes?since=0&limit=500",
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "扫过所有同步表不该出错：{body}");
 
     let all: Vec<&str> = [
@@ -593,14 +704,22 @@ async fn sync_changes_deletes_use_each_tables_own_pk_encoding() {
     state
         .with(|conn| {
             // 删一条消息块（复合主键，`#` 分隔，第一段是 UUID）
-            conn.execute("DELETE FROM ai_message_parts WHERE message_id='msg-0' AND ordinal=0", [])
-                .map(|_| ())?;
+            conn.execute(
+                "DELETE FROM ai_message_parts WHERE message_id='msg-0' AND ordinal=0",
+                [],
+            )
+            .map(|_| ())?;
             // 删一条附件（单列 UUID 主键）
-            conn.execute("DELETE FROM ai_attachments WHERE id='att-0'", []).map(|_| ())
+            conn.execute("DELETE FROM ai_attachments WHERE id='att-0'", [])
+                .map(|_| ())
         })
         .unwrap();
 
-    let (status, body) = get_json(router_for(state.clone()), &format!("/api/sync/changes?since={since}")).await;
+    let (status, body) = get_json(
+        router_for(state.clone()),
+        &format!("/api/sync/changes?since={since}"),
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(
         body["deletes"]["ai_message_parts"][0],
@@ -638,7 +757,11 @@ async fn sync_push_accepts_composite_key_tables_without_an_id_column() {
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(body["applied"], serde_json::json!(["msg-0#1"]), "被拒了：{body}");
+    assert_eq!(
+        body["applied"],
+        serde_json::json!(["msg-0#1"]),
+        "被拒了：{body}"
+    );
 
     let text: String = state
         .with(|conn| {
@@ -646,7 +769,8 @@ async fn sync_push_accepts_composite_key_tables_without_an_id_column() {
                 "SELECT text FROM ai_message_parts WHERE message_id='msg-0' AND ordinal=1",
                 [],
                 |r| r.get(0),
-            )})
+            )
+        })
         .unwrap();
     assert_eq!(text, "手机推上来的块");
 
@@ -681,7 +805,8 @@ async fn sync_push_accepts_composite_key_tables_without_an_id_column() {
                 "SELECT COUNT(*) FROM ai_message_parts WHERE message_id='msg-0' AND ordinal=1",
                 [],
                 |r| r.get(0),
-            )})
+            )
+        })
         .unwrap();
     assert_eq!(n, 1, "幂等：同一块推两次**只有一行**");
 }
@@ -691,7 +816,13 @@ async fn sync_push_accepts_composite_key_tables_without_an_id_column() {
 async fn sync_push_rejects_oversized_batches() {
     let state = state();
     let batch: Vec<serde_json::Value> = (0..501)
-        .map(|i| push_item("ai_conversation", &format!("c{i}"), serde_json::json!({"id": format!("c{i}")})))
+        .map(|i| {
+            push_item(
+                "ai_conversation",
+                &format!("c{i}"),
+                serde_json::json!({"id": format!("c{i}")}),
+            )
+        })
         .collect();
     let (status, body) = push(&state, batch).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
@@ -801,7 +932,11 @@ async fn sync_bootstrap_pages_without_gaps_or_duplicates() {
     }
     ids.sort_unstable();
     ids.dedup();
-    assert_eq!(ids.len(), 5, "翻完所有页要正好 5 条（重复/漏掉都是 bug）：{ids:?}");
+    assert_eq!(
+        ids.len(),
+        5,
+        "翻完所有页要正好 5 条（重复/漏掉都是 bug）：{ids:?}"
+    );
 }
 
 /// **绝不发 `.db` 文件**：`app_settings` 里有配对令牌明文，bootstrap 一张表都不许多发。
@@ -825,10 +960,17 @@ async fn sync_bootstrap_refuses_tables_outside_the_scope() {
             &format!("/api/sync/bootstrap?table={forbidden}&page=1"),
         )
         .await;
-        assert_eq!(status, StatusCode::BAD_REQUEST, "{forbidden} 不该能全量导出");
+        assert_eq!(
+            status,
+            StatusCode::BAD_REQUEST,
+            "{forbidden} 不该能全量导出"
+        );
         let msg = body["error"].as_str().unwrap();
         assert!(msg.contains("prompts"), "错误信息要列出合法表名：{msg}");
-        assert!(!body.to_string().contains("SECRET-TOKEN"), "令牌绝不能出现：{body}");
+        assert!(
+            !body.to_string().contains("SECRET-TOKEN"),
+            "令牌绝不能出现：{body}"
+        );
     }
 
     // 缺 table 也是 400（必填，理由见 sync::bootstrap 的注释）
@@ -850,7 +992,11 @@ async fn net_urls_is_empty_when_we_are_not_listening() {
     let (status, body) = get_json(app, "/api/net/urls").await;
     assert_eq!(status, 200);
     assert_eq!(body["port"], 0, "没绑端口就报 0：{body}");
-    assert_eq!(body["urls"].as_array().unwrap().len(), 0, "宁可空，也不许编：{body}");
+    assert_eq!(
+        body["urls"].as_array().unwrap().len(),
+        0,
+        "宁可空，也不许编：{body}"
+    );
 }
 
 /// 真的在听的时候：回环那条一定在（不依赖这台机器有几张网卡），
@@ -874,7 +1020,10 @@ async fn net_urls_lists_the_port_we_actually_listen_on() {
             ["loopback", "lan", "tailscale", "other"].contains(&kind),
             "kind 只有这四种：{kind}"
         );
-        assert!(url.starts_with("http://"), "候选地址必须是 http:// 开头：{url}");
+        assert!(
+            url.starts_with("http://"),
+            "候选地址必须是 http:// 开头：{url}"
+        );
         assert!(url.ends_with(":18081"), "端口必须是我们实际听的那个：{url}");
         if kind == "loopback" {
             saw_loopback = true;
@@ -912,7 +1061,8 @@ async fn credential_upload_refuses_a_stale_rev_without_writing() {
     let st = state();
     seed_auth_device(&st, false, true);
     put_setting(&st, comfyhub_server_rs::provider::credentials::REV_KEY, "7");
-    let store_before = std::fs::read_to_string(comfyhub_server_rs::provider::credentials::store_path(&st)).ok();
+    let store_before =
+        std::fs::read_to_string(comfyhub_server_rs::provider::credentials::store_path(&st)).ok();
     let app = router_for(st.clone());
 
     let (status, body) = send_json_token(
@@ -932,8 +1082,12 @@ async fn credential_upload_refuses_a_stale_rev_without_writing() {
     assert_eq!(body["rev"], 7, "回执要带上桌面**当前**的版本号：{body}");
 
     // 库里那条版本号没动，凭据文件也没被碰过
-    assert_eq!(read_setting(&st, comfyhub_server_rs::provider::credentials::REV_KEY).unwrap(), serde_json::json!(7));
-    let store_after = std::fs::read_to_string(comfyhub_server_rs::provider::credentials::store_path(&st)).ok();
+    assert_eq!(
+        read_setting(&st, comfyhub_server_rs::provider::credentials::REV_KEY).unwrap(),
+        serde_json::json!(7)
+    );
+    let store_after =
+        std::fs::read_to_string(comfyhub_server_rs::provider::credentials::store_path(&st)).ok();
     assert_eq!(store_before, store_after, "STALE 分支不许落任何东西");
 }
 
@@ -977,7 +1131,11 @@ async fn credential_upload_rejects_per_ref_and_never_conflates_them() {
         env_one["message"].as_str().unwrap().contains("环境变量"),
         "要说清为什么拒：{env_one}"
     );
-    assert_eq!(body["applied"].as_array().unwrap().len(), 0, "三条都该被拒：{body}");
+    assert_eq!(
+        body["applied"].as_array().unwrap().len(),
+        0,
+        "三条都该被拒：{body}"
+    );
 }
 
 /// 真的写进去：应用成功、版本号加一、值能从托管库里解出来（Windows 才有 DPAPI）。
@@ -1001,12 +1159,19 @@ async fn credential_upload_applies_bumps_rev_and_the_key_really_works() {
     assert_eq!(body["rev"], 1, "写入成功要 bump：{body}");
 
     // 值**真的能用**（不是只回了个 200）：走与上游调用同一条解析路径
-    let resolved = comfyhub_server_rs::mobile::auth::resolve_credential(&st, "PHONE_PUSHED_KEY").unwrap();
+    let resolved =
+        comfyhub_server_rs::mobile::auth::resolve_credential(&st, "PHONE_PUSHED_KEY").unwrap();
     assert_eq!(resolved, "sk-from-phone");
-    assert_eq!(read_setting(&st, comfyhub_server_rs::provider::credentials::REV_KEY).unwrap(), serde_json::json!(1));
+    assert_eq!(
+        read_setting(&st, comfyhub_server_rs::provider::credentials::REV_KEY).unwrap(),
+        serde_json::json!(1)
+    );
 
     // 值**不回显**：状态接口只给 configured/source/writable
-    let described = comfyhub_server_rs::provider::credentials::describe_now(&st, "PHONE_PUSHED_KEY");
+    let described =
+        comfyhub_server_rs::provider::credentials::describe_now(&st, "PHONE_PUSHED_KEY");
     assert!(described.configured);
-    assert!(!serde_json::to_string(&described).unwrap().contains("sk-from-phone"));
+    assert!(!serde_json::to_string(&described)
+        .unwrap()
+        .contains("sk-from-phone"));
 }

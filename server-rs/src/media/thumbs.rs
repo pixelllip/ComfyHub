@@ -63,7 +63,9 @@ pub fn write_thumbnail(source: &Path, dest: &Path) -> std::io::Result<bool> {
         h,
         image::Rgba([BACKDROP[0], BACKDROP[1], BACKDROP[2], 255]),
     );
-    let resized = decoded.resize_exact(w, h, image::imageops::FilterType::Triangle).to_rgba8();
+    let resized = decoded
+        .resize_exact(w, h, image::imageops::FilterType::Triangle)
+        .to_rgba8();
     image::imageops::overlay(&mut canvas, &resized, 0, 0);
     let canvas = DynamicImage::ImageRgba8(canvas).to_rgb8();
 

@@ -61,7 +61,8 @@ Future<bool> installPortablePaths() async {
     // 一次性导入：先把"上一版落点"（`<根>\storage\app-support`）里的那份拷过来，
     // 再兜底 `%APPDATA%` 的老文件（没有就跳过）。目标已存在时两个都不动。
     _migratePrefsFile('$root${sep}storage${sep}app-support', workspaceDir);
-    final String? legacyDir = await PathProviderWindows().getApplicationSupportPath();
+    final String? legacyDir = await PathProviderWindows()
+        .getApplicationSupportPath();
     _migrateLegacyPrefsFile(legacyDir, workspaceDir);
     final store = SharedPreferencesStorePlatform.instance;
     if (store is SharedPreferencesWindows) {
@@ -70,8 +71,10 @@ Future<bool> installPortablePaths() async {
       // 改落盘位置）。这里是刻意使用，不是测试代码漏进生产。
       // ignore: invalid_use_of_visible_for_testing_member
       store.pathProvider = WorkspacePathProvider(workspaceDir);
-      debugPrint('偏好落盘位置：$workspaceDir'
-          '（内容一律存在自身文件夹内；旧位置 $legacyDir 的那份已一次性导入）');
+      debugPrint(
+        '偏好落盘位置：$workspaceDir'
+        '（内容一律存在自身文件夹内；旧位置 $legacyDir 的那份已一次性导入）',
+      );
       return true;
     }
     return false;

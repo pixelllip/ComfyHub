@@ -1174,7 +1174,8 @@ class AiWorkspaceStore extends ChangeNotifier {
     final out = <LayoutCandidate>[];
     for (final call in toolCallsFor(message)) {
       for (final candidate in call.layoutCandidates) {
-        final key = '${candidate.title}|${candidate.spec.regions.length}|'
+        final key =
+            '${candidate.title}|${candidate.spec.regions.length}|'
             '${candidate.spec.toJson()}';
         if (seen.add(key)) out.add(candidate);
       }
@@ -2237,12 +2238,11 @@ class AiWorkspaceStore extends ChangeNotifier {
   ///
   /// 与 [attachFiles] 是**同一条上传链路、同一套准入**：类型识别、缩略图、
   /// 预检都在后端做；这里只多了一个"字节从哪来"的差别。
-  Future<void> attachImageBytes(
-    Uint8List bytes, {
-    required String name,
-  }) async {
+  Future<void> attachImageBytes(Uint8List bytes, {required String name}) async {
     if (bytes.isEmpty) return;
-    await _runUpload(() => _api.uploadAttachmentBytes(name: name, bytes: bytes));
+    await _runUpload(
+      () => _api.uploadAttachmentBytes(name: name, bytes: bytes),
+    );
   }
 
   /// 上传的共同尾巴：置忙 → 收结果（逐条失败也要如实说）→ 存草稿 → 重跑预检。

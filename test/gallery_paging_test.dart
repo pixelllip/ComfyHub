@@ -52,48 +52,54 @@ class _FakeLibrary {
   }
 
   MockClient client() => MockClient((request) async {
-        final path = request.url.path;
-        final page = int.tryParse(request.url.queryParameters['page'] ?? '1') ?? 1;
-        requests.add('${request.method} $path?page=$page');
+    final path = request.url.path;
+    final page = int.tryParse(request.url.queryParameters['page'] ?? '1') ?? 1;
+    requests.add('${request.method} $path?page=$page');
 
-        Object? body;
-        var status = 200;
-        if (path == '/api/media') {
-          body = {
-            'items': _items(page),
-            'total': total,
-            'page': page,
-            'size': size,
-            'pages': pages,
-          };
-        } else if (RegExp(r'^/api/media/\d+$').hasMatch(path)) {
-          total -= 1; // 后端真的删掉了
-          body = {'deleted': true, 'id': int.parse(path.split('/').last)};
-        } else if (path == '/api/tags' || path == '/api/tags/categories') {
-          body = <Object>[];
-        } else if (path == '/api/stats') {
-          body = {
-            'prompts': 0,
-            'media': total,
-            'tags': 0,
-            'favoritePrompts': 0,
-            'favoriteMedia': 0,
-            'byKind': <String, int>{},
-            'byMediaKind': <String, int>{},
-          };
-        } else if (path == '/api/prompts') {
-          body = {'items': <Object>[], 'total': 0, 'page': 1, 'size': 24, 'pages': 0};
-        } else {
-          status = 404;
-          body = {'error': 'not found: $path'};
-        }
+    Object? body;
+    var status = 200;
+    if (path == '/api/media') {
+      body = {
+        'items': _items(page),
+        'total': total,
+        'page': page,
+        'size': size,
+        'pages': pages,
+      };
+    } else if (RegExp(r'^/api/media/\d+$').hasMatch(path)) {
+      total -= 1; // 后端真的删掉了
+      body = {'deleted': true, 'id': int.parse(path.split('/').last)};
+    } else if (path == '/api/tags' || path == '/api/tags/categories') {
+      body = <Object>[];
+    } else if (path == '/api/stats') {
+      body = {
+        'prompts': 0,
+        'media': total,
+        'tags': 0,
+        'favoritePrompts': 0,
+        'favoriteMedia': 0,
+        'byKind': <String, int>{},
+        'byMediaKind': <String, int>{},
+      };
+    } else if (path == '/api/prompts') {
+      body = {
+        'items': <Object>[],
+        'total': 0,
+        'page': 1,
+        'size': 24,
+        'pages': 0,
+      };
+    } else {
+      status = 404;
+      body = {'error': 'not found: $path'};
+    }
 
-        return http.Response(
-          jsonEncode(body),
-          status,
-          headers: {'content-type': 'application/json; charset=utf-8'},
-        );
-      });
+    return http.Response(
+      jsonEncode(body),
+      status,
+      headers: {'content-type': 'application/json; charset=utf-8'},
+    );
+  });
 }
 
 Future<(LibraryStore, _FakeLibrary)> _makeStore(int total) async {
@@ -101,7 +107,10 @@ Future<(LibraryStore, _FakeLibrary)> _makeStore(int total) async {
   final settings = SettingsStore();
   await settings.load();
   final fake = _FakeLibrary(total: total);
-  final store = LibraryStore(settings, api: ApiClient(settings.baseUrl, client: fake.client()));
+  final store = LibraryStore(
+    settings,
+    api: ApiClient(settings.baseUrl, client: fake.client()),
+  );
   return (store, fake);
 }
 
@@ -123,8 +132,11 @@ void main() {
     expect(store.media.items, isNotEmpty, reason: '库里还有 3 条，不能显示成空画廊');
     expect(store.media.total, 3);
     expect(store.media.items.length, 3);
-    expect(fake.requests.where((r) => r.contains('page=2')).length, greaterThanOrEqualTo(2),
-        reason: '越界时应该重发一次（第一次发现越界，第二次取回正确的一页）');
+    expect(
+      fake.requests.where((r) => r.contains('page=2')).length,
+      greaterThanOrEqualTo(2),
+      reason: '越界时应该重发一次（第一次发现越界，第二次取回正确的一页）',
+    );
   });
 
   test('删除后确实一条都不剩时，才允许显示空画廊', () async {

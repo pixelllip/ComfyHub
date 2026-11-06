@@ -35,8 +35,9 @@ Widget _page({ScrollController? controller, void Function(String)? onTapItem}) {
                     onSelected: (_) {},
                     options: const [MenuOption(value: 'a', label: '菜单项 A')],
                     button: (context, menuController, isOpen) => TextButton(
-                      onPressed: () =>
-                          menuController.isOpen ? menuController.close() : menuController.open(),
+                      onPressed: () => menuController.isOpen
+                          ? menuController.close()
+                          : menuController.open(),
                       child: const Text('打开菜单'),
                     ),
                   ),
@@ -98,8 +99,12 @@ void main() {
     await tester.tap(find.text('item 2'));
     await tester.pumpAndSettle();
 
-    expect(tapped, ['item 2'],
-        reason: 'MenuItemButton 的 TapRegion 只关菜单，不该把点击吞掉（consumeOutsideTap=false）');
+    expect(
+      tapped,
+      ['item 2'],
+      reason:
+          'MenuItemButton 的 TapRegion 只关菜单，不该把点击吞掉（consumeOutsideTap=false）',
+    );
     expect(find.text('菜单项 A'), findsNothing);
   });
 
@@ -134,7 +139,10 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    await tester.tapAt(tester.getCenter(find.text('item 1')), buttons: kSecondaryMouseButton);
+    await tester.tapAt(
+      tester.getCenter(find.text('item 1')),
+      buttons: kSecondaryMouseButton,
+    );
     await tester.pumpAndSettle();
     expect(find.text('复制'), findsOneWidget);
 
@@ -144,7 +152,10 @@ void main() {
 
     // 滚动会把菜单收起（MenuAnchor 的既有行为）；没收起也不影响下面这条
     if (find.text('复制').evaluate().isEmpty) {
-      await tester.tapAt(tester.getCenter(find.text('item 2')), buttons: kSecondaryMouseButton);
+      await tester.tapAt(
+        tester.getCenter(find.text('item 2')),
+        buttons: kSecondaryMouseButton,
+      );
       await tester.pumpAndSettle();
       expect(find.text('复制'), findsOneWidget);
     }

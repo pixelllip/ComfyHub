@@ -32,7 +32,10 @@ fn api_格式提示要点出哪个顶层键不像节点() {
     assert!(!is_node_graph(&polluted), "有一个非节点键就不算 API 图");
     let hint = api_format_hint(&polluted);
     assert!(hint.contains("_comment"), "要点出是哪个键：{hint}");
-    assert!(hint.contains("class_type"), "要说清合法节点长什么样：{hint}");
+    assert!(
+        hint.contains("class_type"),
+        "要说清合法节点长什么样：{hint}"
+    );
 
     // 纯净的 API 图：不需要提示（正常情况下也走不到这条错误上）
     let clean: Map<String, Value> =
@@ -44,7 +47,10 @@ fn api_格式提示要点出哪个顶层键不像节点() {
         r#"{"1":{"_meta":{"title":"采样"},"class_type":"KSampler","inputs":{}}}"#,
     )
     .unwrap();
-    assert!(is_node_graph(&with_meta), "节点内的 _meta 不该被判死（自带工作流都这么写）");
+    assert!(
+        is_node_graph(&with_meta),
+        "节点内的 _meta 不该被判死（自带工作流都这么写）"
+    );
 }
 
 #[test]

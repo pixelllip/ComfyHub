@@ -22,7 +22,10 @@ fn status_codes_map_to_stable_codes() {
     for status in [400u16, 401, 402, 404, 408, 429, 500, 504] {
         let code = classify_status(status);
         assert!(!explain(code, status).is_empty());
-        assert!(explain(code, status).contains(&status.to_string()), "人话里要有状态码");
+        assert!(
+            explain(code, status).contains(&status.to_string()),
+            "人话里要有状态码"
+        );
     }
 }
 
@@ -62,7 +65,10 @@ fn auth_headers_per_protocol() {
     );
     let anthropic = auth_header(Api::AnthropicMessages, Some("k"));
     assert_eq!(anthropic[0], ("x-api-key", "k".to_string()));
-    assert_eq!(anthropic[1], ("anthropic-version", "2023-06-01".to_string()));
+    assert_eq!(
+        anthropic[1],
+        ("anthropic-version", "2023-06-01".to_string())
+    );
     // 没凭据 → 一个头都不加（有的本机网关不需要 key）
     assert!(auth_header(Api::OpenAiCompletions, None).is_empty());
     assert!(auth_header(Api::OpenAiCompletions, Some("   ")).is_empty());
@@ -78,14 +84,20 @@ fn reasoning_passback_error_is_recognised() {
     let real = r#"{"error":{"message":"The `reasoning_text` in the thinking mode must be passed back to the API. (request_id: abc)","type":"invalid_request_error"}}"#;
     assert!(is_reasoning_passback_error(real));
     // 网关把措辞换成 thinking + pass back 也要认
-    assert!(is_reasoning_passback_error("thinking mode: reasoning must be passed back"));
+    assert!(is_reasoning_passback_error(
+        "thinking mode: reasoning must be passed back"
+    ));
     // "不允许空的思考内容"也是同一件事的变体（我们给没思考的工具轮补的是空 content 项）
     assert!(is_reasoning_passback_error(
         r#"{"error":{"message":"reasoning content must not be empty"}}"#
     ));
     // 只提到 reasoning、或只提到回传 —— 都不认
-    assert!(!is_reasoning_passback_error("this model does not support reasoning"));
-    assert!(!is_reasoning_passback_error("tool result must be passed back"));
+    assert!(!is_reasoning_passback_error(
+        "this model does not support reasoning"
+    ));
+    assert!(!is_reasoning_passback_error(
+        "tool result must be passed back"
+    ));
 }
 
 /// usage 累加：多家形状归一，多轮相加（AIH-057）。
@@ -103,17 +115,26 @@ fn usage_accumulates_across_rounds() {
     assert_eq!(merged.to_json()["outputTokens"], 4);
 
     // 第二轮累加
-    let merged = merge_usage(Some(merged), &serde_json::json!({"prompt_tokens": 5, "completion_tokens": 1}));
+    let merged = merge_usage(
+        Some(merged),
+        &serde_json::json!({"prompt_tokens": 5, "completion_tokens": 1}),
+    );
     assert_eq!(merged.input, 15);
     assert_eq!(merged.output, 5);
 
     // Anthropic 的键名也要认
-    let merged = merge_usage(None, &serde_json::json!({"input_tokens": 7, "output_tokens": 2}));
+    let merged = merge_usage(
+        None,
+        &serde_json::json!({"input_tokens": 7, "output_tokens": 2}),
+    );
     assert_eq!(merged.input, 7);
     assert_eq!(merged.output, 2);
 
     // 缺键按 0（不 panic）
-    assert_eq!(merge_usage(None, &serde_json::json!({})), TokenUsage::default());
+    assert_eq!(
+        merge_usage(None, &serde_json::json!({})),
+        TokenUsage::default()
+    );
 }
 
 /// **缓存命中与思考 token 不许丢** —— 这两条是"前缀缓存到底有没有生效"的唯一度量。
@@ -132,7 +153,10 @@ fn cache_and_reasoning_tokens_survive_normalization() {
             "completion_tokens_details": { "reasoning_tokens": 30 },
         }),
     );
-    assert_eq!(usage.input, 1000, "OpenAI 的 prompt_tokens 本来就含命中，别再叠加一次");
+    assert_eq!(
+        usage.input, 1000,
+        "OpenAI 的 prompt_tokens 本来就含命中，别再叠加一次"
+    );
     assert_eq!(usage.cached, 896);
     assert_eq!(usage.reasoning, 30);
 
@@ -146,8 +170,14 @@ fn cache_and_reasoning_tokens_survive_normalization() {
             "cache_creation_input_tokens": 100,
         }),
     );
-    assert_eq!(anthropic.input, 1000, "4 + 896(读) + 100(写)：输入要含命中与写缓存");
-    assert_eq!(anthropic.cached, 896, "命中只算**读**；cache_creation 是写（1.25×），不算命中");
+    assert_eq!(
+        anthropic.input, 1000,
+        "4 + 896(读) + 100(写)：输入要含命中与写缓存"
+    );
+    assert_eq!(
+        anthropic.cached, 896,
+        "命中只算**读**；cache_creation 是写（1.25×），不算命中"
+    );
     assert_eq!(anthropic.output, 9);
 
     // 只给 total_tokens 的网关：口径退化，全记在输入上（§5.4 记着这条）
@@ -160,8 +190,21 @@ fn cache_and_reasoning_tokens_survive_normalization() {
 
     // 送到界面的键**一个不多一个不少**（契约 §2 就是这四个）
     let json = anthropic.to_json();
-    let keys: Vec<&str> = json.as_object().unwrap().keys().map(String::as_str).collect();
-    assert_eq!(keys, vec!["inputTokens", "outputTokens", "cachedTokens", "reasoningTokens"]);
+    let keys: Vec<&str> = json
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    assert_eq!(
+        keys,
+        vec![
+            "inputTokens",
+            "outputTokens",
+            "cachedTokens",
+            "reasoningTokens"
+        ]
+    );
     assert_eq!(json["cachedTokens"], 896);
 }
 

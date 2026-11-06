@@ -4,7 +4,6 @@
 
 use super::common::*;
 
-
 // ===========================================================================
 //  AI 端点第一批（P4 第 16 步）：GET /api/ai/providers
 // ===========================================================================
@@ -47,8 +46,17 @@ async fn ai_providers_shape_and_never_leaks_a_secret_value() {
     assert_eq!(
         shape,
         vec![
-            "api", "baseURL", "createdAt", "credential", "credentialRef", "displayName", "enabled",
-            "endpointTrust", "id", "revision", "updatedAt",
+            "api",
+            "baseURL",
+            "createdAt",
+            "credential",
+            "credentialRef",
+            "displayName",
+            "enabled",
+            "endpointTrust",
+            "id",
+            "revision",
+            "updatedAt",
         ],
         "`credential` 与两个时间戳最容易漏（Kotlin 那边 encodeDefaults = true，一定会序列化）"
     );
@@ -57,7 +65,10 @@ async fn ai_providers_shape_and_never_leaks_a_secret_value() {
     assert_eq!(list[0]["revision"], 3);
 
     // 凭据状态：三个键、**没有值**；托管文件里有 → managed 且可写
-    assert_eq!(keys(&list[0]["credential"]), vec!["configured", "source", "writable"]);
+    assert_eq!(
+        keys(&list[0]["credential"]),
+        vec!["configured", "source", "writable"]
+    );
     assert_eq!(list[0]["credential"]["configured"], true);
     assert_eq!(list[0]["credential"]["source"], "managed");
     assert_eq!(list[0]["credential"]["writable"], true);
@@ -68,7 +79,10 @@ async fn ai_providers_shape_and_never_leaks_a_secret_value() {
 
     // ★ 红线（AIH-012）：响应里**不许出现那把密钥的值**
     let raw = serde_json::to_string(&body).unwrap();
-    assert!(!raw.contains("DPAPI-SEALED-SECRET-VALUE"), "凭据值绝不能出库/出网：{raw}");
+    assert!(
+        !raw.contains("DPAPI-SEALED-SECRET-VALUE"),
+        "凭据值绝不能出库/出网：{raw}"
+    );
 }
 
 // ===========================================================================
@@ -121,13 +135,19 @@ async fn ai_models_distinguish_missing_provider_from_an_empty_catalog() {
         })
         .unwrap();
 
-    let (status, body) = get_json(router_for(state.clone()), "/api/ai/providers/p-models/models").await;
+    let (status, body) = get_json(
+        router_for(state.clone()),
+        "/api/ai/providers/p-models/models",
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "body={body}");
     let list = body.as_array().unwrap();
     // 顺序照抄 Kotlin 的 `ORDER BY display_name, model_id`（**默认 BINARY 排序**）：
     // 大写 ASCII 在前、小写在后 → A 模型 / B 模型 / m-b
     assert_eq!(
-        list.iter().map(|m| m["id"].as_str().unwrap()).collect::<Vec<_>>(),
+        list.iter()
+            .map(|m| m["id"].as_str().unwrap())
+            .collect::<Vec<_>>(),
         vec!["m-a", "m-c", "m-b"],
         "顺序换了在界面上就是「列表位置变了」：{body}"
     );
@@ -136,17 +156,34 @@ async fn ai_models_distinguish_missing_provider_from_an_empty_catalog() {
     assert_eq!(
         keys(&list[0]),
         vec![
-            "attachmentTransports", "capabilitySource", "capabilityVerifiedAt", "contextWindow",
-            "displayName", "enabled", "id", "inputModalities", "maxAttachmentBytes",
-            "maxAttachmentCount", "maxOutputTokens", "mimeAllowlist", "parallelTools", "providerId",
-            "reasoning", "thinkingEfforts", "thinkingFormat", "tools",
+            "attachmentTransports",
+            "capabilitySource",
+            "capabilityVerifiedAt",
+            "contextWindow",
+            "displayName",
+            "enabled",
+            "id",
+            "inputModalities",
+            "maxAttachmentBytes",
+            "maxAttachmentCount",
+            "maxOutputTokens",
+            "mimeAllowlist",
+            "parallelTools",
+            "providerId",
+            "reasoning",
+            "thinkingEfforts",
+            "thinkingFormat",
+            "tools",
         ],
         "少一个键 = 界面上少一块内容（附件准入与思考强度选择器全靠它们）"
     );
     assert_eq!(list[0]["providerId"], "p-models");
     assert_eq!(list[0]["id"], "m-a");
     assert_eq!(list[0]["displayName"], "A 模型");
-    assert_eq!(list[0]["inputModalities"], serde_json::json!(["text", "image"]));
+    assert_eq!(
+        list[0]["inputModalities"],
+        serde_json::json!(["text", "image"])
+    );
     assert_eq!(
         list[0]["attachmentTransports"],
         serde_json::json!({"image": ["inline_base64"]}),
@@ -172,16 +209,29 @@ async fn ai_models_distinguish_missing_provider_from_an_empty_catalog() {
     assert_eq!(
         keys(&list[2]),
         vec![
-            "attachmentTransports", "capabilitySource", "displayName", "enabled", "id",
-            "inputModalities", "mimeAllowlist", "parallelTools", "providerId", "reasoning",
-            "thinkingEfforts", "tools",
+            "attachmentTransports",
+            "capabilitySource",
+            "displayName",
+            "enabled",
+            "id",
+            "inputModalities",
+            "mimeAllowlist",
+            "parallelTools",
+            "providerId",
+            "reasoning",
+            "thinkingEfforts",
+            "tools",
         ],
         "可空列为 NULL 时 Kotlin 连键都不发（explicitNulls = false）"
     );
     assert_eq!(list[2]["displayName"], "m-b");
     assert_eq!(list[2]["capabilitySource"], "manual");
     assert_eq!(list[2]["inputModalities"], serde_json::json!([]));
-    assert_eq!(list[2]["attachmentTransports"], serde_json::json!({}), "空表不是 null");
+    assert_eq!(
+        list[2]["attachmentTransports"],
+        serde_json::json!({}),
+        "空表不是 null"
+    );
     assert_eq!(list[2]["thinkingEfforts"], serde_json::json!({}));
     assert_eq!(list[2]["enabled"], false);
 
@@ -195,11 +245,18 @@ async fn ai_models_distinguish_missing_provider_from_an_empty_catalog() {
         "JSON null 的值要丢掉（Kotlin contentOrNull 也是这个口径）"
     );
     let m_c = list[1].as_object().unwrap();
-    assert!(!m_c.contains_key("thinkingFormat"), "空白串 = 没声明：{body}");
+    assert!(
+        !m_c.contains_key("thinkingFormat"),
+        "空白串 = 没声明：{body}"
+    );
     assert!(!m_c.contains_key("contextWindow"));
 
     // ★ 三种"没有模型"必须分清：provider 存在但目录为空 → 200 `[]`
-    let (status, empty) = get_json(router_for(state.clone()), "/api/ai/providers/p-empty/models").await;
+    let (status, empty) = get_json(
+        router_for(state.clone()),
+        "/api/ai/providers/p-empty/models",
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(empty, serde_json::json!([]));
 
@@ -242,8 +299,17 @@ async fn provider_crud_round_trip_with_revision_and_validation() {
     assert_eq!(
         keys(&body),
         vec![
-            "api", "baseURL", "createdAt", "credential", "credentialRef", "displayName", "enabled",
-            "endpointTrust", "id", "revision", "updatedAt"
+            "api",
+            "baseURL",
+            "createdAt",
+            "credential",
+            "credentialRef",
+            "displayName",
+            "enabled",
+            "endpointTrust",
+            "id",
+            "revision",
+            "updatedAt"
         ]
     );
     assert_eq!(body["revision"], 1);
@@ -256,7 +322,10 @@ async fn provider_crud_round_trip_with_revision_and_validation() {
         body["endpointTrust"], "loopback",
         "没传 endpointTrust → 按主机**推断**（否则回环地址会撞上 public 档）"
     );
-    assert_eq!(body["credential"], serde_json::json!({"configured": false, "source": "none", "writable": true}));
+    assert_eq!(
+        body["credential"],
+        serde_json::json!({"configured": false, "source": "none", "writable": true})
+    );
 
     // 重名：CONFIG_ERROR + 明确说"ID 创建后不可修改"
     let (status, body) = send_json(
@@ -268,7 +337,10 @@ async fn provider_crud_round_trip_with_revision_and_validation() {
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_eq!(body["error"], "CONFIG_ERROR");
-    assert_eq!(body["detail"], "Provider ID 已存在: my-gateway（ID 创建后不可修改）");
+    assert_eq!(
+        body["detail"],
+        "Provider ID 已存在: my-gateway（ID 创建后不可修改）"
+    );
 
     // 三条校验：ID 形态 / 协议 / 凭据引用名 —— 文案都是给人看的
     let (_, body) = send_json(
@@ -278,7 +350,10 @@ async fn provider_crud_round_trip_with_revision_and_validation() {
         serde_json::json!({ "id": "Bad_ID", "displayName": "x", "api": "openai-completions", "baseURL": "https://api.example.com" }),
     )
     .await;
-    assert_eq!(body["detail"], "Provider ID 只能是小写 kebab-case（如 my-gateway），且创建后不可修改");
+    assert_eq!(
+        body["detail"],
+        "Provider ID 只能是小写 kebab-case（如 my-gateway），且创建后不可修改"
+    );
     let (_, body) = send_json(
         router_for(state.clone()),
         "POST",
@@ -297,7 +372,10 @@ async fn provider_crud_round_trip_with_revision_and_validation() {
         serde_json::json!({ "id": "p1", "displayName": "x", "api": "openai-completions", "baseURL": "https://api.example.com", "credentialRef": "lower_case" }),
     )
     .await;
-    assert_eq!(body["detail"], "凭据引用名只能是大写字母、数字和下划线，且以字母开头");
+    assert_eq!(
+        body["detail"],
+        "凭据引用名只能是大写字母、数字和下划线，且以字母开头"
+    );
 
     // URL 与信任档：公网必须 https；public 档不许指向回环
     let (_, body) = send_json(
@@ -360,7 +438,11 @@ async fn provider_crud_round_trip_with_revision_and_validation() {
     assert_eq!(body["displayName"], "我的网关（改）");
     assert_eq!(body["api"], "openai-responses");
     assert_eq!(body["enabled"], false);
-    assert_eq!(body["credentialRef"], serde_json::Value::Null, "没传就是清掉（Kotlin 同）");
+    assert_eq!(
+        body["credentialRef"],
+        serde_json::Value::Null,
+        "没传就是清掉（Kotlin 同）"
+    );
 
     // ID 不许改（body 里带一个不一样的）
     let (_, body) = send_json(
@@ -390,14 +472,36 @@ async fn provider_crud_round_trip_with_revision_and_validation() {
             Ok(())
         })
         .expect("插模型");
-    let (status, body) = send_empty(router_for(state.clone()), "DELETE", "/api/ai/providers/my-gateway").await;
+    let (status, body) = send_empty(
+        router_for(state.clone()),
+        "DELETE",
+        "/api/ai/providers/my-gateway",
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(body, serde_json::json!({ "deleted": true, "id": "my-gateway" }));
+    assert_eq!(
+        body,
+        serde_json::json!({ "deleted": true, "id": "my-gateway" })
+    );
     let left: i64 = state
-        .with(|conn| conn.query_row("SELECT COUNT(*) FROM ai_models WHERE provider_id='my-gateway'", [], |r| r.get(0)))
+        .with(|conn| {
+            conn.query_row(
+                "SELECT COUNT(*) FROM ai_models WHERE provider_id='my-gateway'",
+                [],
+                |r| r.get(0),
+            )
+        })
         .unwrap();
-    assert_eq!(left, 0, "删 provider 要连模型一起删（外键 ON DELETE CASCADE）");
-    let (status, body) = send_empty(router_for(state.clone()), "DELETE", "/api/ai/providers/my-gateway").await;
+    assert_eq!(
+        left, 0,
+        "删 provider 要连模型一起删（外键 ON DELETE CASCADE）"
+    );
+    let (status, body) = send_empty(
+        router_for(state.clone()),
+        "DELETE",
+        "/api/ai/providers/my-gateway",
+    )
+    .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_eq!(body["detail"], "Provider 不存在: my-gateway");
 }
@@ -436,12 +540,24 @@ async fn provider_models_put_replaces_the_catalog_and_validates_every_field() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body.as_array().unwrap().len(), 1);
     let saved = &body[0];
-    assert_eq!(saved["inputModalities"], serde_json::json!(["text", "image"]));
-    assert_eq!(saved["attachmentTransports"], serde_json::json!({ "image": ["inline_base64"] }));
-    assert_eq!(saved["thinkingEfforts"], serde_json::json!({ "low": "low", "max": "32768" }));
+    assert_eq!(
+        saved["inputModalities"],
+        serde_json::json!(["text", "image"])
+    );
+    assert_eq!(
+        saved["attachmentTransports"],
+        serde_json::json!({ "image": ["inline_base64"] })
+    );
+    assert_eq!(
+        saved["thinkingEfforts"],
+        serde_json::json!({ "low": "low", "max": "32768" })
+    );
     assert_eq!(saved["thinkingFormat"], "deepseek");
     assert_eq!(saved["contextWindow"], 128000);
-    assert!(!saved.as_object().unwrap().contains_key("maxOutputTokens"), "没给的可空键不许冒出来");
+    assert!(
+        !saved.as_object().unwrap().contains_key("maxOutputTokens"),
+        "没给的可空键不许冒出来"
+    );
 
     // 全量替换：旧的没了、新的在（同一个事务里）
     let (status, body) = send_json(
@@ -511,8 +627,15 @@ async fn provider_models_put_replaces_the_catalog_and_validates_every_field() {
         assert_eq!(body["error"], "CONFIG_ERROR", "{expected}");
         assert_eq!(body["detail"], expected);
         // 校验失败**不许动**已有目录（先校验、再删旧插新）
-        let (_, body) = get_json(router_for(state.clone()), "/api/ai/providers/p-models/models").await;
-        assert_eq!(body[0]["id"], "vendor/model-2", "校验失败时旧目录必须原地不动");
+        let (_, body) = get_json(
+            router_for(state.clone()),
+            "/api/ai/providers/p-models/models",
+        )
+        .await;
+        assert_eq!(
+            body[0]["id"], "vendor/model-2",
+            "校验失败时旧目录必须原地不动"
+        );
     }
 
     // provider 不存在 → 400 CONFIG_ERROR（不是 404）
@@ -545,8 +668,15 @@ async fn builtin_status_previews_and_sync_is_idempotent_and_never_touches_user_e
     assert_eq!(
         keys(&preview),
         vec![
-            "added", "divergent", "kept", "mode", "modelCount", "providerCreated", "providerId",
-            "updated", "version"
+            "added",
+            "divergent",
+            "kept",
+            "mode",
+            "modelCount",
+            "providerCreated",
+            "providerId",
+            "updated",
+            "version"
         ],
         "`providerId` **在**（它是目录里那个 provider 的 id），`error` 不在（成功时是 null）"
     );
@@ -562,13 +692,21 @@ async fn builtin_status_previews_and_sync_is_idempotent_and_never_touches_user_e
 
     // ② 预览**不写库**：一个 provider / 模型都不该多出来
     let providers = state
-        .with(|conn| conn.query_row("SELECT COUNT(*) FROM ai_providers", [], |r| r.get::<_, i64>(0)))
+        .with(|conn| {
+            conn.query_row("SELECT COUNT(*) FROM ai_providers", [], |r| {
+                r.get::<_, i64>(0)
+            })
+        })
         .unwrap();
     assert_eq!(providers, 0, "只读预览绝不许写库");
     let seeded_version: Option<String> = state
         .with(|conn| {
             Ok(conn
-                .query_row("SELECT v FROM app_settings WHERE k = 'ai.builtin.seed.version'", [], |r| r.get(0))
+                .query_row(
+                    "SELECT v FROM app_settings WHERE k = 'ai.builtin.seed.version'",
+                    [],
+                    |r| r.get(0),
+                )
                 .ok())
         })
         .unwrap();
@@ -589,7 +727,13 @@ async fn builtin_status_previews_and_sync_is_idempotent_and_never_touches_user_e
     assert_eq!(sync["modelCount"], total);
     // 版本号记进 app_settings（下次启动/同步据此判断目录有没有变）
     let stored: String = state
-        .with(|conn| conn.query_row("SELECT v FROM app_settings WHERE k='ai.builtin.seed.version'", [], |r| r.get(0)))
+        .with(|conn| {
+            conn.query_row(
+                "SELECT v FROM app_settings WHERE k='ai.builtin.seed.version'",
+                [],
+                |r| r.get(0),
+            )
+        })
         .unwrap();
     assert_eq!(stored, version);
 
@@ -598,7 +742,10 @@ async fn builtin_status_previews_and_sync_is_idempotent_and_never_touches_user_e
     assert_eq!(preview["added"], 0);
     assert_eq!(preview["providerCreated"], false);
     assert_eq!(preview["modelCount"], total);
-    assert_eq!(preview["kept"].as_i64().unwrap() + preview["divergent"].as_array().unwrap().len() as i64, total);
+    assert_eq!(
+        preview["kept"].as_i64().unwrap() + preview["divergent"].as_array().unwrap().len() as i64,
+        total
+    );
 
     // ⑤ 再同步一次：**幂等**（added=0、模型总数不变）
     let (_, again) = send_json(
@@ -614,7 +761,8 @@ async fn builtin_status_previews_and_sync_is_idempotent_and_never_touches_user_e
     // ⑥ 用户改过的行：显示名 / 启用 / 附件上限 —— 同步**一个字节都不许动**
     let (provider_id, model_id) = state
         .with(|conn| {
-            let p: String = conn.query_row("SELECT id FROM ai_providers LIMIT 1", [], |r| r.get(0))?;
+            let p: String =
+                conn.query_row("SELECT id FROM ai_providers LIMIT 1", [], |r| r.get(0))?;
             let m: String = conn.query_row(
                 "SELECT model_id FROM ai_models WHERE provider_id=?1 ORDER BY model_id LIMIT 1",
                 [&p],
@@ -698,7 +846,10 @@ async fn builtin_status_previews_and_sync_is_idempotent_and_never_touches_user_e
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_eq!(body["error"], "CONFIG_ERROR");
-    assert_eq!(body["detail"], "未知的同步模式：whatever（可选 add-missing / refresh-capabilities）");
+    assert_eq!(
+        body["detail"],
+        "未知的同步模式：whatever（可选 add-missing / refresh-capabilities）"
+    );
 }
 
 /// `GET /api/ai/builtin/status` 在"provider 已在"时**要带 `providerId`**（键出现与否是形状的一部分）。
@@ -731,11 +882,20 @@ async fn capabilities_status_reports_the_three_layers_and_toggles_probe() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(
         keys(&body),
-        vec!["builtinRules", "probeEnabled", "refreshIntervalDays", "remoteStale", "version"],
+        vec![
+            "builtinRules",
+            "probeEnabled",
+            "refreshIntervalDays",
+            "remoteStale",
+            "version"
+        ],
         "没拉过在线目录时 remote 那几项**整个键不出现**（写成 0 小时会让界面显示『刚刚更新过』）"
     );
     assert_eq!(body["version"], "2026-09b");
-    assert_eq!(body["builtinRules"], 119, "生成表 118 条 + 手工补的 deepseek-flash");
+    assert_eq!(
+        body["builtinRules"], 119,
+        "生成表 118 条 + 手工补的 deepseek-flash"
+    );
     assert_eq!(body["refreshIntervalDays"], 7);
     assert_eq!(body["remoteStale"], true, "没拉过就算过期");
     assert_eq!(body["probeEnabled"], false, "实测校准默认关（会花钱）");
@@ -752,9 +912,18 @@ async fn capabilities_status_reports_the_three_layers_and_toggles_probe() {
     assert_eq!(body["probeEnabled"], true);
     assert_eq!(body["lastMessage"], "已允许实测校准");
     let stored: String = state
-        .with(|conn| conn.query_row("SELECT v FROM app_settings WHERE k='ai.capabilities.probe'", [], |r| r.get(0)))
+        .with(|conn| {
+            conn.query_row(
+                "SELECT v FROM app_settings WHERE k='ai.capabilities.probe'",
+                [],
+                |r| r.get(0),
+            )
+        })
         .unwrap();
-    assert_eq!(stored, "1", "线上值就是 \"1\" / \"0\"（ThinkingProbe 认的就是这个）");
+    assert_eq!(
+        stored, "1",
+        "线上值就是 \"1\" / \"0\"（ThinkingProbe 认的就是这个）"
+    );
 
     let (_, off) = send_json(
         router_for(state.clone()),
@@ -766,7 +935,13 @@ async fn capabilities_status_reports_the_three_layers_and_toggles_probe() {
     assert_eq!(off["probeEnabled"], false);
     assert_eq!(off["lastMessage"], "已关闭实测校准");
     let stored: String = state
-        .with(|conn| conn.query_row("SELECT v FROM app_settings WHERE k='ai.capabilities.probe'", [], |r| r.get(0)))
+        .with(|conn| {
+            conn.query_row(
+                "SELECT v FROM app_settings WHERE k='ai.capabilities.probe'",
+                [],
+                |r| r.get(0),
+            )
+        })
         .unwrap();
     assert_eq!(stored, "0");
 
@@ -784,7 +959,12 @@ async fn capabilities_status_reports_the_three_layers_and_toggles_probe() {
     assert_eq!(body["probeEnabled"], false, "只有 \"1\" 算开");
 
     // ③ 两层覆盖层都在时：三层概况 + remote 的年龄与新鲜度
-    let dir = state.media_dir().parent().unwrap().join("ai").join("capabilities");
+    let dir = state
+        .media_dir()
+        .parent()
+        .unwrap()
+        .join("ai")
+        .join("capabilities");
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(
         dir.join("custom.json"),
@@ -829,8 +1009,13 @@ async fn capability_refresh_is_implemented_and_probe_is_honest_when_disabled() {
     // ⚠ 只在这个用例里设一下、用完立刻撤（`std::env` 是进程级的，别的用例并行跑着）
     std::env::set_var("COMFYHUB_NO_DOWNLOAD", "1");
     let state = state();
-    let (status, body) =
-        send_json(router_for(state.clone()), "POST", "/api/ai/capabilities/refresh", serde_json::json!({})).await;
+    let (status, body) = send_json(
+        router_for(state.clone()),
+        "POST",
+        "/api/ai/capabilities/refresh",
+        serde_json::json!({}),
+    )
+    .await;
     std::env::remove_var("COMFYHUB_NO_DOWNLOAD");
     assert_eq!(status, StatusCode::OK, "refresh 已经是实现：{body}");
     let message = body["lastMessage"].as_str().unwrap_or("");
@@ -844,18 +1029,34 @@ async fn capability_refresh_is_implemented_and_probe_is_honest_when_disabled() {
     );
 
     // ① 开关**默认关**：如实拒绝（200 + ok=false + 一句说清"会花钱"的话），不是 501
-    let (status, body) =
-        send_json(router_for(state.clone()), "POST", "/api/ai/capabilities/probe", serde_json::json!({})).await;
+    let (status, body) = send_json(
+        router_for(state.clone()),
+        "POST",
+        "/api/ai/capabilities/probe",
+        serde_json::json!({}),
+    )
+    .await;
     assert_eq!(
         status,
         StatusCode::OK,
         "这是「一次正常执行、结果是没做」，不是服务器出错（501 会让界面的错误分支先跳出来）：{body}"
     );
-    assert_eq!(keys(&body), vec!["message", "ok", "outcomes"], "键集合就是三个：{body}");
+    assert_eq!(
+        keys(&body),
+        vec!["message", "ok", "outcomes"],
+        "键集合就是三个：{body}"
+    );
     assert_eq!(body["ok"], false, "没校准成功就不许说成功：{body}");
-    assert_eq!(body["outcomes"].as_array().unwrap().len(), 0, "一个模型都没试：{body}");
+    assert_eq!(
+        body["outcomes"].as_array().unwrap().len(),
+        0,
+        "一个模型都没试：{body}"
+    );
     let message = body["message"].as_str().unwrap();
-    assert!(message.contains("真实请求"), "要说清它会对每个模型发真请求：{message}");
+    assert!(
+        message.contains("真实请求"),
+        "要说清它会对每个模型发真请求：{message}"
+    );
     assert!(message.contains("费用"), "还必须说清会产生费用：{message}");
 
     // ② 库里有推理模型、开关也打开了 —— 只要**没有凭据又没有本机网关**，
@@ -890,7 +1091,11 @@ async fn capability_refresh_is_implemented_and_probe_is_honest_when_disabled() {
         serde_json::json!({ "providerId": "p-probe", "modelId": "dead-model" }),
     )
     .await;
-    assert_eq!(status, StatusCode::OK, "连不上是**如实回报**，不是 500：{body}");
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "连不上是**如实回报**，不是 500：{body}"
+    );
     let outcomes = body["outcomes"].as_array().unwrap();
     assert_eq!(outcomes.len(), 1, "{body}");
     assert_eq!(outcomes[0]["modelId"], "dead-model");
@@ -916,7 +1121,11 @@ async fn capability_refresh_is_implemented_and_probe_is_honest_when_disabled() {
         .join("ai")
         .join("capabilities")
         .join("custom.json");
-    assert!(!custom.exists(), "写不成 / 没试成都不许凭空造一份手工目录：{}", custom.display());
+    assert!(
+        !custom.exists(),
+        "写不成 / 没试成都不许凭空造一份手工目录：{}",
+        custom.display()
+    );
 }
 
 /// 凭据端点（`/api/ai/providers/{id}/credentials`）的完整一轮：状态 → 校验 → 写入 → 删除。
@@ -934,7 +1143,11 @@ async fn provider_credentials_round_trip_without_ever_returning_the_value() {
     add_provider(&state, "p-cred", Some(&reference));
 
     // ① 初始：没有值 + 可写（`none` 档，界面能写一把新的）
-    let (status, body) = get_json(router_for(state.clone()), "/api/ai/providers/p-cred/credentials").await;
+    let (status, body) = get_json(
+        router_for(state.clone()),
+        "/api/ai/providers/p-cred/credentials",
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(keys(&body), vec!["configured", "source", "writable"]);
     assert_eq!(body["configured"], false);
@@ -967,7 +1180,12 @@ async fn provider_credentials_round_trip_without_ever_returning_the_value() {
     .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["configured"], false);
-    let store_file = state.media_dir().parent().unwrap().join("ai").join("credentials.dpapi.json");
+    let store_file = state
+        .media_dir()
+        .parent()
+        .unwrap()
+        .join("ai")
+        .join("credentials.dpapi.json");
     assert!(
         comfyhub_server_rs::provider::credentials::read_store(&store_file).is_empty(),
         "留空必须**一个字节都不写**（AIH-012）"
@@ -989,7 +1207,10 @@ async fn provider_credentials_round_trip_without_ever_returning_the_value() {
     assert!(!body.to_string().contains(sentinel), "响应里不许出现明文");
 
     let raw_file = std::fs::read_to_string(&store_file).expect("凭据文件应当已经落盘");
-    assert!(!raw_file.contains(sentinel), "文件里不许出现明文（AIH-015）");
+    assert!(
+        !raw_file.contains(sentinel),
+        "文件里不许出现明文（AIH-015）"
+    );
     let store = comfyhub_server_rs::provider::credentials::read_store(&store_file);
     let sealed_text = store.get(&reference).expect("这个 ref 应当已入库").clone();
     // 字母表绊线：Kotlin 用的是 `Base64.getEncoder()`（标准 `+/`），写成 url-safe 的话
@@ -998,10 +1219,17 @@ async fn provider_credentials_round_trip_without_ever_returning_the_value() {
         !sealed_text.contains('-') && !sealed_text.contains('_'),
         "必须是**标准** base64（`+/`），不能是 url-safe：{sealed_text}"
     );
-    assert_eq!(sealed_text.len() % 4, 0, "标准 base64 的长度一定是 4 的倍数（带填充）");
+    assert_eq!(
+        sealed_text.len() % 4,
+        0,
+        "标准 base64 的长度一定是 4 的倍数（带填充）"
+    );
     // 编码路径只有一处：`base64_std` 出来的东西必须就是库里那份（改字母表/去掉填充都会红）
     let decoded = comfyhub_server_rs::mobile::auth::base64_decode(&sealed_text).expect("base64");
-    assert_eq!(comfyhub_server_rs::mobile::auth::base64_std(&decoded), sealed_text);
+    assert_eq!(
+        comfyhub_server_rs::mobile::auth::base64_std(&decoded),
+        sealed_text
+    );
 
     // 自己反解一次：证明写出去的确实是"本机 DPAPI 能解开的密文"
     #[cfg(windows)]
@@ -1012,7 +1240,11 @@ async fn provider_credentials_round_trip_without_ever_returning_the_value() {
     }
 
     // ⑤ 再读一次：状态是"现场算的"（不是把上一次的响应缓存下来）
-    let (status, body) = get_json(router_for(state.clone()), "/api/ai/providers/p-cred/credentials").await;
+    let (status, body) = get_json(
+        router_for(state.clone()),
+        "/api/ai/providers/p-cred/credentials",
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["configured"], true);
     assert_eq!(body["source"], "managed");
@@ -1027,7 +1259,10 @@ async fn provider_credentials_round_trip_without_ever_returning_the_value() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["configured"], false);
     assert_eq!(body["source"], "none");
-    assert!(!comfyhub_server_rs::provider::credentials::read_store(&store_file).contains_key(&reference));
+    assert!(
+        !comfyhub_server_rs::provider::credentials::read_store(&store_file)
+            .contains_key(&reference)
+    );
 }
 
 /// 删 provider 时**托管密钥跟着走**（2026-09-28 用户 bug「删除 provider 时，密钥被设置成
@@ -1040,7 +1275,12 @@ async fn provider_credentials_round_trip_without_ever_returning_the_value() {
 async fn deleting_a_provider_takes_its_orphan_credential_with_it() {
     let state = state();
     let reference = format!("FIXTURE_ORPHAN_KEY_{}", std::process::id());
-    let store_file = state.media_dir().parent().unwrap().join("ai").join("credentials.dpapi.json");
+    let store_file = state
+        .media_dir()
+        .parent()
+        .unwrap()
+        .join("ai")
+        .join("credentials.dpapi.json");
 
     // ① 无人引用：删 provider → key 一起没了
     add_provider(&state, "p-orphan", Some(&reference));
@@ -1052,12 +1292,20 @@ async fn deleting_a_provider_takes_its_orphan_credential_with_it() {
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    assert!(comfyhub_server_rs::provider::credentials::read_store(&store_file).contains_key(&reference));
+    assert!(
+        comfyhub_server_rs::provider::credentials::read_store(&store_file).contains_key(&reference)
+    );
 
-    let (status, _) = send_empty(router_for(state.clone()), "DELETE", "/api/ai/providers/p-orphan").await;
+    let (status, _) = send_empty(
+        router_for(state.clone()),
+        "DELETE",
+        "/api/ai/providers/p-orphan",
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
     assert!(
-        !comfyhub_server_rs::provider::credentials::read_store(&store_file).contains_key(&reference),
+        !comfyhub_server_rs::provider::credentials::read_store(&store_file)
+            .contains_key(&reference),
         "provider 删掉后它那把无人引用的 key 应当一并清掉"
     );
 
@@ -1072,16 +1320,27 @@ async fn deleting_a_provider_takes_its_orphan_credential_with_it() {
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    let (status, _) = send_empty(router_for(state.clone()), "DELETE", "/api/ai/providers/p-share-a").await;
+    let (status, _) = send_empty(
+        router_for(state.clone()),
+        "DELETE",
+        "/api/ai/providers/p-share-a",
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
     assert!(
         comfyhub_server_rs::provider::credentials::read_store(&store_file).contains_key(&reference),
         "ref 还有别的 provider 在用，key 必须留着"
     );
-    let (status, _) = send_empty(router_for(state.clone()), "DELETE", "/api/ai/providers/p-share-b").await;
+    let (status, _) = send_empty(
+        router_for(state.clone()),
+        "DELETE",
+        "/api/ai/providers/p-share-b",
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
     assert!(
-        !comfyhub_server_rs::provider::credentials::read_store(&store_file).contains_key(&reference),
+        !comfyhub_server_rs::provider::credentials::read_store(&store_file)
+            .contains_key(&reference),
         "最后一个引用也删掉后，key 才跟着走"
     );
 }
@@ -1094,7 +1353,11 @@ async fn credential_endpoints_report_config_errors_as_ai_errors() {
     let state = state();
     add_provider(&state, "p-no-ref", None);
 
-    let (status, body) = get_json(router_for(state.clone()), "/api/ai/providers/nope/credentials").await;
+    let (status, body) = get_json(
+        router_for(state.clone()),
+        "/api/ai/providers/nope/credentials",
+    )
+    .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_eq!(body["error"], "CONFIG_ERROR");
     assert_eq!(body["detail"], "Provider 不存在: nope");
@@ -1109,7 +1372,12 @@ async fn credential_endpoints_report_config_errors_as_ai_errors() {
             )
             .await
         } else {
-            send_empty(router_for(state.clone()), "DELETE", "/api/ai/providers/p-no-ref/credentials").await
+            send_empty(
+                router_for(state.clone()),
+                "DELETE",
+                "/api/ai/providers/p-no-ref/credentials",
+            )
+            .await
         };
         assert_eq!(status, StatusCode::BAD_REQUEST, "{method}");
         assert_eq!(body["error"], "CONFIG_ERROR", "{method}");
@@ -1127,8 +1395,10 @@ async fn credential_endpoints_report_config_errors_as_ai_errors() {
 #[tokio::test]
 async fn web_search_credential_is_write_only_and_read_only_when_env_provides_it() {
     let state = state();
-    let from_env = comfyhub_server_rs::provider::credentials::env_source(comfyhub_server_rs::provider::credentials::KEENABLE_REF)
-        .is_some();
+    let from_env = comfyhub_server_rs::provider::credentials::env_source(
+        comfyhub_server_rs::provider::credentials::KEENABLE_REF,
+    )
+    .is_some();
 
     let (status, body) = get_json(router_for(state.clone()), "/api/ai/web-search/credential").await;
     assert_eq!(status, StatusCode::OK);
@@ -1150,9 +1420,17 @@ async fn web_search_credential_is_write_only_and_read_only_when_env_provides_it(
             put.1["detail"],
             "密钥 keenable 由环境变量（COMFYHUB_CRED_keenable）提供，是只读的；请先移除环境变量再在应用内填写"
         );
-        let del = send_empty(router_for(state.clone()), "DELETE", "/api/ai/web-search/credential").await;
+        let del = send_empty(
+            router_for(state.clone()),
+            "DELETE",
+            "/api/ai/web-search/credential",
+        )
+        .await;
         assert_eq!(del.0, StatusCode::BAD_REQUEST);
-        assert_eq!(del.1["detail"], "密钥 keenable 由环境变量提供，无法在应用内移除");
+        assert_eq!(
+            del.1["detail"],
+            "密钥 keenable 由环境变量提供，无法在应用内移除"
+        );
         return;
     }
 
@@ -1161,7 +1439,12 @@ async fn web_search_credential_is_write_only_and_read_only_when_env_provides_it(
     assert_eq!(put.1["source"], "managed");
     assert!(!put.1.to_string().contains("k-sentinel-abc"));
 
-    let del = send_empty(router_for(state.clone()), "DELETE", "/api/ai/web-search/credential").await;
+    let del = send_empty(
+        router_for(state.clone()),
+        "DELETE",
+        "/api/ai/web-search/credential",
+    )
+    .await;
     assert_eq!(del.0, StatusCode::OK);
     assert_eq!(del.1["configured"], false);
     assert_eq!(del.1["source"], "none");

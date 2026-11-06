@@ -20,11 +20,17 @@ void main() {
       'http://127.0.0.1:8240',
       client: MockClient((request) async {
         if (request.url.path == '/api/train/status') {
-          return http.Response(jsonEncode(status), code,
-              headers: {'content-type': 'application/json; charset=utf-8'});
+          return http.Response(
+            jsonEncode(status),
+            code,
+            headers: {'content-type': 'application/json; charset=utf-8'},
+          );
         }
-        return http.Response(jsonEncode({'error': 'not found'}), 404,
-            headers: {'content-type': 'application/json'});
+        return http.Response(
+          jsonEncode({'error': 'not found'}),
+          404,
+          headers: {'content-type': 'application/json'},
+        );
       }),
     );
   }
@@ -70,7 +76,12 @@ void main() {
 
   test('状态 JSON 的端口 / 在线标志按后端原样解析', () {
     final status = TrainEngineStatus.fromJson(
-      statusJson(installed: true, daemonUp: true, webuiUp: true, webuiPort: '2746'),
+      statusJson(
+        installed: true,
+        daemonUp: true,
+        webuiUp: true,
+        webuiPort: '2746',
+      ),
     );
     expect(status.installed, isTrue);
     expect(status.daemon.up, isTrue);
@@ -83,12 +94,14 @@ void main() {
   testWidgets('手机宽度：没装引擎时显示说明，不溢出', (tester) async {
     await pump(
       tester,
-      statusClient(statusJson(
-        installed: false,
-        daemonUp: false,
-        webuiUp: false,
-        problems: ['没有找到 anima-lora-next 引擎'],
-      )),
+      statusClient(
+        statusJson(
+          installed: false,
+          daemonUp: false,
+          webuiUp: false,
+          problems: ['没有找到 anima-lora-next 引擎'],
+        ),
+      ),
       const Size(384, 853),
     );
     expect(find.text('还没装训练引擎'), findsOneWidget);
@@ -99,16 +112,15 @@ void main() {
   testWidgets('桌面宽度：装了但 WebUI 没起时给启动按钮', (tester) async {
     await pump(
       tester,
-      statusClient(statusJson(
-        installed: true,
-        daemonUp: true,
-        webuiUp: false,
-      )),
+      statusClient(statusJson(installed: true, daemonUp: true, webuiUp: false)),
       const Size(1280, 800),
     );
     expect(find.text('训练引擎已安装，WebUI 没起'), findsOneWidget);
     expect(find.text('启动训练台'), findsOneWidget);
-    expect(find.textContaining(r'D:\myProject\anima-lora-next'), findsOneWidget);
+    expect(
+      find.textContaining(r'D:\myProject\anima-lora-next'),
+      findsOneWidget,
+    );
   });
 
   testWidgets('后端连不上时如实报错并可重试', (tester) async {

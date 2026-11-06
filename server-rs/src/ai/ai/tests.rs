@@ -19,7 +19,12 @@ fn no_env(_: &str) -> Option<String> {
 /// 混档的话用户会在一个没错的地方反复改。
 #[test]
 fn base_url_的三档错误与_kotlin_逐条一致() {
-    let err = |url: &str, trust: &str| normalize_base_url(Some(url), trust).unwrap_err().human().to_string();
+    let err = |url: &str, trust: &str| {
+        normalize_base_url(Some(url), trust)
+            .unwrap_err()
+            .human()
+            .to_string()
+    };
 
     // ① 语法不过关 → "不是合法 URL"
     for bad in [
@@ -50,26 +55,56 @@ fn base_url_的三档错误与_kotlin_逐条一致() {
         "https://api.example.com:-1/x",
         "https://:9/x",
     ] {
-        assert_eq!(err(missing, "unsafe-any"), "Base URL 缺少主机名", "{missing}");
+        assert_eq!(
+            err(missing, "unsafe-any"),
+            "Base URL 缺少主机名",
+            "{missing}"
+        );
     }
 
     // ③ 没有 scheme / 不是 http(s) → "只支持 http/https"
-    for scheme in ["//api.example.com", "api.example.com", "ftp://api.example.com"] {
-        assert_eq!(err(scheme, "unsafe-any"), "Base URL 只支持 http/https", "{scheme}");
+    for scheme in [
+        "//api.example.com",
+        "api.example.com",
+        "ftp://api.example.com",
+    ] {
+        assert_eq!(
+            err(scheme, "unsafe-any"),
+            "Base URL 只支持 http/https",
+            "{scheme}"
+        );
     }
 
     // ④ 其它四档
-    assert_eq!(err("https://api.example.com?a=1", "unsafe-any"), "Base URL 不能带查询参数");
-    assert_eq!(err("https://api.example.com?", "unsafe-any"), "Base URL 不能带查询参数");
-    assert_eq!(err("https://api.example.com#x", "unsafe-any"), "Base URL 不能带 fragment");
-    assert_eq!(err("https://api.example.com#", "unsafe-any"), "Base URL 不能带 fragment");
+    assert_eq!(
+        err("https://api.example.com?a=1", "unsafe-any"),
+        "Base URL 不能带查询参数"
+    );
+    assert_eq!(
+        err("https://api.example.com?", "unsafe-any"),
+        "Base URL 不能带查询参数"
+    );
+    assert_eq!(
+        err("https://api.example.com#x", "unsafe-any"),
+        "Base URL 不能带 fragment"
+    );
+    assert_eq!(
+        err("https://api.example.com#", "unsafe-any"),
+        "Base URL 不能带 fragment"
+    );
     assert_eq!(
         err("https://u:p@api.example.com", "unsafe-any"),
         "Base URL 不能包含用户名密码，请使用凭据配置"
     );
-    assert_eq!(err("http://api.example.com", "public"), "公网端点必须使用 https");
+    assert_eq!(
+        err("http://api.example.com", "public"),
+        "公网端点必须使用 https"
+    );
     assert_eq!(err("", "unsafe-any"), "Base URL 不能为空");
-    assert_eq!(err("https://0.0.0.0", "unsafe-any"), "该地址属于云元数据/保留地址，已拒绝");
+    assert_eq!(
+        err("https://0.0.0.0", "unsafe-any"),
+        "该地址属于云元数据/保留地址，已拒绝"
+    );
 }
 
 /// 通过的那些：**返回值只去掉末尾的 `/`**，路径一个字都不许改（Java 也不改）。
@@ -81,45 +116,113 @@ fn base_url_通过时只去掉末尾斜杠() {
     let ok = |url: &str| normalize_base_url(Some(url), "unsafe-any").unwrap();
     assert_eq!(ok("https://api.example.com"), "https://api.example.com");
     assert_eq!(ok("https://api.example.com/"), "https://api.example.com");
-    assert_eq!(ok("https://api.example.com/v1/"), "https://api.example.com/v1");
-    assert_eq!(ok("https://api.example.com//v1//"), "https://api.example.com//v1");
+    assert_eq!(
+        ok("https://api.example.com/v1/"),
+        "https://api.example.com/v1"
+    );
+    assert_eq!(
+        ok("https://api.example.com//v1//"),
+        "https://api.example.com//v1"
+    );
     // 大小写 / 非 ASCII 路径 / 合法转义：**原样保留**
-    assert_eq!(ok("HTTPS://API.EXAMPLE.COM/V1"), "HTTPS://API.EXAMPLE.COM/V1");
-    assert_eq!(ok("https://API.example.com/v1"), "https://API.example.com/v1");
-    assert_eq!(ok("https://api.example.com/路径"), "https://api.example.com/路径");
-    assert_eq!(ok("https://api.example.com/%E8%B7%AF"), "https://api.example.com/%E8%B7%AF");
+    assert_eq!(
+        ok("HTTPS://API.EXAMPLE.COM/V1"),
+        "HTTPS://API.EXAMPLE.COM/V1"
+    );
+    assert_eq!(
+        ok("https://API.example.com/v1"),
+        "https://API.example.com/v1"
+    );
+    assert_eq!(
+        ok("https://api.example.com/路径"),
+        "https://api.example.com/路径"
+    );
+    assert_eq!(
+        ok("https://api.example.com/%E8%B7%AF"),
+        "https://api.example.com/%E8%B7%AF"
+    );
     // 端口**不校验范围**（Java 也不校验）
-    assert_eq!(ok("https://api.example.com:99999/x"), "https://api.example.com:99999/x");
+    assert_eq!(
+        ok("https://api.example.com:99999/x"),
+        "https://api.example.com:99999/x"
+    );
     assert_eq!(ok("https://[::1]:9"), "https://[::1]:9");
     assert_eq!(ok("http://localhost:1"), "http://localhost:1");
     // 两端空白先 trim（界面粘贴常带）
-    assert_eq!(ok("  https://api.example.com/v1  "), "https://api.example.com/v1");
+    assert_eq!(
+        ok("  https://api.example.com/v1  "),
+        "https://api.example.com/v1"
+    );
 }
 
 #[test]
-fn 凭据状态的三个分支一条都不能错() {        // ① ref 为空：不配置、不可写（连"能不能写"都是 false：没地方写）
+fn 凭据状态的三个分支一条都不能错() {
+    // ① ref 为空：不配置、不可写（连"能不能写"都是 false：没地方写）
     let s = describe_credential(None, no_env, |_| true);
-    assert_eq!(s, CredentialStatus { configured: false, source: "none".into(), writable: false });
+    assert_eq!(
+        s,
+        CredentialStatus {
+            configured: false,
+            source: "none".into(),
+            writable: false
+        }
+    );
     let s = describe_credential(Some("   "), no_env, |_| true);
     assert_eq!(s.source, "none", "空白 ref 与没有 ref 同义");
 
     // ② 环境变量命中 → source=env 且 **writable=false**（AIH-013：界面不许改环境变量给的 key）
-    let s = describe_credential(Some("OPENAI_KEY"), |n| (n == "OPENAI_KEY").then(|| "sk-x".into()), |_| false);
-    assert_eq!(s, CredentialStatus { configured: true, source: "env".into(), writable: false });
+    let s = describe_credential(
+        Some("OPENAI_KEY"),
+        |n| (n == "OPENAI_KEY").then(|| "sk-x".into()),
+        |_| false,
+    );
+    assert_eq!(
+        s,
+        CredentialStatus {
+            configured: true,
+            source: "env".into(),
+            writable: false
+        }
+    );
     // 空串的环境变量 = 配了但没值
     let s = describe_credential(Some("OPENAI_KEY"), |_| Some(String::new()), |_| false);
-    assert_eq!(s, CredentialStatus { configured: false, source: "env".into(), writable: false });
+    assert_eq!(
+        s,
+        CredentialStatus {
+            configured: false,
+            source: "env".into(),
+            writable: false
+        }
+    );
 
     // ③ 前缀那个名字也要认（`COMFYHUB_CRED_<ref>`）——认错了就等于"永远读不到那把 key"
-    let s = describe_credential(Some("OPENAI_KEY"), |n| (n == "COMFYHUB_CRED_OPENAI_KEY").then(|| "sk-y".into()), |_| false);
+    let s = describe_credential(
+        Some("OPENAI_KEY"),
+        |n| (n == "COMFYHUB_CRED_OPENAI_KEY").then(|| "sk-y".into()),
+        |_| false,
+    );
     assert_eq!(s.source, "env");
     assert!(s.configured);
 
     // ④ 托管文件里有没有 → managed / none；**两种都可写**（界面要能改、也要能清一把配错的）
     let s = describe_credential(Some("OPENAI_KEY"), no_env, |_| true);
-    assert_eq!(s, CredentialStatus { configured: true, source: "managed".into(), writable: true });
+    assert_eq!(
+        s,
+        CredentialStatus {
+            configured: true,
+            source: "managed".into(),
+            writable: true
+        }
+    );
     let s = describe_credential(Some("OPENAI_KEY"), no_env, |_| false);
-    assert_eq!(s, CredentialStatus { configured: false, source: "none".into(), writable: true });
+    assert_eq!(
+        s,
+        CredentialStatus {
+            configured: false,
+            source: "none".into(),
+            writable: true
+        }
+    );
 
     // ⑤ 环境变量优先于托管文件（与 Kotlin 的判定顺序一致）
     let s = describe_credential(Some("K"), |_| Some("v".into()), |_| true);
@@ -133,9 +236,19 @@ fn 凭据状态的三个分支一条都不能错() {        // ① ref 为空：
 #[test]
 fn 模型目录的_json_列解析不炸也不悄悄改口径() {
     // 正常值
-    assert_eq!(parse_string_array(Some(r#"["text","image"]"#)), vec!["text", "image"]);
+    assert_eq!(
+        parse_string_array(Some(r#"["text","image"]"#)),
+        vec!["text", "image"]
+    );
     // 空 / 缺 / 坏 JSON / 类型不对 → 一律空表（Kotlin 那边是 runCatching + getOrDefault）
-    for bad in [None, Some(""), Some("   "), Some("not json"), Some("{}"), Some("null")] {
+    for bad in [
+        None,
+        Some(""),
+        Some("   "),
+        Some("not json"),
+        Some("{}"),
+        Some("null"),
+    ] {
         assert!(parse_string_array(bad).is_empty(), "{bad:?} 应当解析成空表");
     }
     // 数字 / 布尔按**字面文本**取（Kotlin `contentOrNull` 就是这么给的）
@@ -145,7 +258,10 @@ fn 模型目录的_json_列解析不炸也不悄悄改口径() {
 
     // 传输方式表：键是模态、值是数组；值不是数组 → 空数组（**不是**丢掉整个键）
     let map = parse_string_list_map(Some(r#"{"image":["inline_base64"],"audio":"x"}"#));
-    assert_eq!(map.get("image").unwrap(), &vec!["inline_base64".to_string()]);
+    assert_eq!(
+        map.get("image").unwrap(),
+        &vec!["inline_base64".to_string()]
+    );
     assert_eq!(map.get("audio").unwrap(), &Vec::<String>::new());
     assert!(parse_string_list_map(Some("[1,2]")).is_empty());
 
@@ -153,7 +269,10 @@ fn 模型目录的_json_列解析不炸也不悄悄改口径() {
     let efforts = parse_string_map(Some(r#"{"max":4096,"low":"low","off":null}"#));
     assert_eq!(efforts.get("max").unwrap(), "4096");
     assert_eq!(efforts.get("low").unwrap(), "low");
-    assert!(!efforts.contains_key("off"), "JSON null 不该留下一个空值的等级");
+    assert!(
+        !efforts.contains_key("off"),
+        "JSON null 不该留下一个空值的等级"
+    );
 }
 
 /// `display_name` / `capability_source` 为 NULL 时的回落 —— 直接对着**计算出的行**测，
@@ -184,14 +303,28 @@ fn 可空的显示名与能力来源都有回落值() {
     assert!(!model.tools && !model.enabled);
     // 序列化出来的形状：可空键一个都不出现
     let value = serde_json::to_value(&model).unwrap();
-    let mut got: Vec<&str> = value.as_object().unwrap().keys().map(|k| k.as_str()).collect();
+    let mut got: Vec<&str> = value
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(|k| k.as_str())
+        .collect();
     got.sort();
     assert_eq!(
         got,
         vec![
-            "attachmentTransports", "capabilitySource", "displayName", "enabled", "id",
-            "inputModalities", "mimeAllowlist", "parallelTools", "providerId", "reasoning",
-            "thinkingEfforts", "tools",
+            "attachmentTransports",
+            "capabilitySource",
+            "displayName",
+            "enabled",
+            "id",
+            "inputModalities",
+            "mimeAllowlist",
+            "parallelTools",
+            "providerId",
+            "reasoning",
+            "thinkingEfforts",
+            "tools",
         ]
     );
 }

@@ -96,12 +96,12 @@ MockClient _buildMockClient() {
     );
 
     Map<String, dynamic> page(List<Map<String, dynamic>> items) => {
-          'items': items,
-          'total': items.length,
-          'page': 1,
-          'size': 24,
-          'pages': 1,
-        };
+      'items': items,
+      'total': items.length,
+      'page': 1,
+      'size': 24,
+      'pages': 1,
+    };
 
     Object? body;
     var status = 200;
@@ -163,13 +163,13 @@ Future<LibraryStore> _makeStore() async {
 }
 
 Widget _wrap(LibraryStore store) => MultiProvider(
-      providers: [
-        ChangeNotifierProvider<LibraryStore>.value(value: store),
-        // 画廊筛选栏要读 `SettingsStore`（折叠状态记在它里面）
-        ChangeNotifierProvider<SettingsStore>.value(value: store.settings),
-      ],
-      child: const MaterialApp(home: GalleryPage()),
-    );
+  providers: [
+    ChangeNotifierProvider<LibraryStore>.value(value: store),
+    // 画廊筛选栏要读 `SettingsStore`（折叠状态记在它里面）
+    ChangeNotifierProvider<SettingsStore>.value(value: store.settings),
+  ],
+  child: const MaterialApp(home: GalleryPage()),
+);
 
 /// 把测试画布调大，让详情页走"宽屏分栏"布局（和真实桌面端一致），
 /// 同时避免目标控件落在可视区域之外导致 tap 打空。
@@ -204,13 +204,19 @@ void main() {
     expect(_called('GET /api/media'), isTrue);
 
     // 左上角类型徽标压在图片上，必须是"实心"的（以前 alpha 0.14 基本看不清）
-    final badge = find.descendant(
-      of: find.byType(KindBadge).first,
-      matching: find.byType(Container),
-    ).first;
-    final decoration = tester.widget<Container>(badge).decoration! as BoxDecoration;
-    expect(decoration.color!.a, greaterThan(0.9),
-        reason: '缩略图上的类型徽标要够不透明才读得出来');
+    final badge = find
+        .descendant(
+          of: find.byType(KindBadge).first,
+          matching: find.byType(Container),
+        )
+        .first;
+    final decoration =
+        tester.widget<Container>(badge).decoration! as BoxDecoration;
+    expect(
+      decoration.color!.a,
+      greaterThan(0.9),
+      reason: '缩略图上的类型徽标要够不透明才读得出来',
+    );
   });
 
   testWidgets('点开产物详情能看到关联提示词全文', (tester) async {
@@ -244,28 +250,47 @@ void main() {
 
     // 参数有自己的一张卡
     expect(find.text('生成参数'), findsOneWidget);
-    final paramsCard = find.ancestor(of: find.text('生成参数'), matching: find.byType(Card)).first;
+    final paramsCard = find
+        .ancestor(of: find.text('生成参数'), matching: find.byType(Card))
+        .first;
     expect(
-      find.descendant(of: paramsCard, matching: find.textContaining('sd_xl_base_1.0.safetensors')),
+      find.descendant(
+        of: paramsCard,
+        matching: find.textContaining('sd_xl_base_1.0.safetensors'),
+      ),
       findsOneWidget,
       reason: '模型应该落在「生成参数」卡片里',
     );
     expect(
-      find.descendant(of: paramsCard, matching: find.textContaining('884213771')),
+      find.descendant(
+        of: paramsCard,
+        matching: find.textContaining('884213771'),
+      ),
       findsOneWidget,
       reason: 'Seed 也应该落在「生成参数」卡片里',
     );
 
     // 「关联的提示词」卡片里只剩提示词本身
-    final promptCard = find.ancestor(of: find.text('关联的提示词'), matching: find.byType(Card)).first;
-    expect(find.descendant(of: promptCard, matching: find.text(_positive)), findsOneWidget);
+    final promptCard = find
+        .ancestor(of: find.text('关联的提示词'), matching: find.byType(Card))
+        .first;
     expect(
-      find.descendant(of: promptCard, matching: find.textContaining('sd_xl_base_1.0.safetensors')),
+      find.descendant(of: promptCard, matching: find.text(_positive)),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(
+        of: promptCard,
+        matching: find.textContaining('sd_xl_base_1.0.safetensors'),
+      ),
       findsNothing,
       reason: '模型不该再出现在提示词卡片里',
     );
     expect(
-      find.descendant(of: promptCard, matching: find.textContaining('884213771')),
+      find.descendant(
+        of: promptCard,
+        matching: find.textContaining('884213771'),
+      ),
       findsNothing,
       reason: 'Seed 不该再出现在提示词卡片里',
     );
@@ -284,9 +309,17 @@ void main() {
     expect(find.text('detail-tweaker'), findsOneWidget);
     expect(find.text('anima-lineart-v2.safetensors'), findsOneWidget);
 
-    final paramsCard = find.ancestor(of: find.text('生成参数'), matching: find.byType(Card)).first;
-    expect(find.descendant(of: paramsCard, matching: find.text('0.8')), findsOneWidget);
-    expect(find.descendant(of: paramsCard, matching: find.text('1')), findsOneWidget);
+    final paramsCard = find
+        .ancestor(of: find.text('生成参数'), matching: find.byType(Card))
+        .first;
+    expect(
+      find.descendant(of: paramsCard, matching: find.text('0.8')),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(of: paramsCard, matching: find.text('1')),
+      findsOneWidget,
+    );
 
     // 点 LoRA 胶囊 → 复制提示词标签写法（拦下 Clipboard 通道看真实写入的内容）
     final copied = <String>[];
@@ -300,8 +333,10 @@ void main() {
       },
     );
     addTearDown(
-      () => tester.binding.defaultBinaryMessenger
-          .setMockMethodCallHandler(SystemChannels.platform, null),
+      () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        SystemChannels.platform,
+        null,
+      ),
     );
 
     await _tapVisible(tester, find.text('detail-tweaker'));
@@ -347,8 +382,11 @@ void main() {
     await _tapVisible(tester, find.text('neon-street.png'));
     await _tapVisible(tester, find.text('赛博朋克').first);
 
-    expect(_log.any((e) => e.contains('tags=')), isTrue,
-        reason: '按标签检索时应该带上 tags 参数');
+    expect(
+      _log.any((e) => e.contains('tags=')),
+      isTrue,
+      reason: '按标签检索时应该带上 tags 参数',
+    );
   });
 
   testWidgets('产物详情：大图用可缩放查看器，文件信息铺满整栏', (tester) async {
@@ -364,7 +402,9 @@ void main() {
     expect(find.byType(ZoomableImageView), findsOneWidget);
 
     // 「文件信息」卡片要占满右侧整栏（右边缘贴着面板的内边距，而不是缩在左半边）
-    final card = find.ancestor(of: find.text('文件名'), matching: find.byType(Card)).first;
+    final card = find
+        .ancestor(of: find.text('文件名'), matching: find.byType(Card))
+        .first;
     final cardRect = tester.getRect(card);
     expect(cardRect.width, greaterThan(500));
     expect(cardRect.right, greaterThan(tester.view.physicalSize.width - 40));

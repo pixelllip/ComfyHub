@@ -25,10 +25,10 @@ const StandardMethodCodec _codec = StandardMethodCodec();
 Future<ByteData?> _push(Object? arguments, {String method = 'droppedFiles'}) {
   return TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
       .handlePlatformMessage(
-    'comfyhub/file_drop',
-    _codec.encodeMethodCall(MethodCall(method, arguments)),
-    null,
-  );
+        'comfyhub/file_drop',
+        _codec.encodeMethodCall(MethodCall(method, arguments)),
+        null,
+      );
 }
 
 /// 回复必须是**成功信封**（首字节 0）。
@@ -76,7 +76,11 @@ void main() {
     addTearDown(FileDrop.stream.listen(first.add).cancel);
     addTearDown(FileDrop.stream.listen(second.add).cancel);
 
-    _expectSuccessReply(await _push(<String, Object?>{'paths': [r'C:\one.png']}));
+    _expectSuccessReply(
+      await _push(<String, Object?>{
+        'paths': [r'C:\one.png'],
+      }),
+    );
     await pumpEventQueue();
 
     expect(first, [
@@ -125,15 +129,21 @@ void main() {
       <Object?>[r'D:\a.png'], // 是 list 但不是 map
       <String, Object?>{'paths': 'D:\\a.png'}, // paths 不是 list
       <String, Object?>{'paths': 7},
-      <String, Object?>{'path': <String>[r'D:\a.png']}, // 键名写错
-      <String, Object?>{'paths': <Object?>[1, true, null]}, // 元素全不是字符串
+      <String, Object?>{
+        'path': <String>[r'D:\a.png'],
+      }, // 键名写错
+      <String, Object?>{
+        'paths': <Object?>[1, true, null],
+      }, // 元素全不是字符串
     ];
     for (final arguments in malformed) {
       _expectSuccessReply(await _push(arguments));
     }
     // 方法名不认识（通道只认 droppedFiles）——同样不炸、不推
     _expectSuccessReply(
-      await _push(<String, Object?>{'paths': [r'D:\a.png']}, method: 'other'),
+      await _push(<String, Object?>{
+        'paths': [r'D:\a.png'],
+      }, method: 'other'),
     );
     await pumpEventQueue();
 
@@ -151,7 +161,9 @@ void main() {
     // 这一条**与用例顺序无关**：如果本用例先跑，接收者压根没装（回复为 null）；
     // 如果别的用例先跑过、接收者已经装上了，`supported` 在每一批里还会再判一次。
     // 两种情况都必须是"什么都不出"，所以这里不去断言回复的形状。
-    await _push(<String, Object?>{'paths': [r'D:\a.png']});
+    await _push(<String, Object?>{
+      'paths': [r'D:\a.png'],
+    });
     await pumpEventQueue();
 
     expect(received, isEmpty);

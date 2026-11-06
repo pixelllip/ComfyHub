@@ -84,9 +84,11 @@ const KEY_CAPTURE: &str = "capture.config";
 pub fn capture_config(state: &AppState) -> Result<CaptureConfig, ApiError> {
     let raw: Option<String> = state.with(|conn| {
         Ok(conn
-            .query_row("SELECT v FROM app_settings WHERE k = ?1", params![KEY_CAPTURE], |row| {
-                row.get::<_, Option<String>>(0)
-            })
+            .query_row(
+                "SELECT v FROM app_settings WHERE k = ?1",
+                params![KEY_CAPTURE],
+                |row| row.get::<_, Option<String>>(0),
+            )
             .optional()?
             .flatten())
     })?;
@@ -126,7 +128,10 @@ fn comfy_output_env() -> Option<String> {
 }
 
 /// 存配置：**先归一化再落库**，返回归一化后的那份（前端拿它刷新界面）。
-pub fn save_capture_config(state: &AppState, config: CaptureConfig) -> Result<CaptureConfig, ApiError> {
+pub fn save_capture_config(
+    state: &AppState,
+    config: CaptureConfig,
+) -> Result<CaptureConfig, ApiError> {
     let normalized = normalize(config);
     let text = serde_json::to_string(&normalized)
         .map_err(|e| ApiError::internal(format!("序列化捕获配置失败：{e}")))?;
@@ -181,31 +186,36 @@ pub fn workflow_text(
     not_found: &str,
 ) -> Result<Option<String>, ApiError> {
     // 表名与列名都是**编译期常量**（下面只有两个调用点），所以这里的 format! 不是注入面
-    state.with(|conn| {
-        let exists: Option<i64> = conn
-            .query_row(&format!("SELECT id FROM {table} WHERE id = ?1"), params![id], |row| row.get(0))
-            .optional()?;
-        if exists.is_none() {
-            return Ok(WorkflowLookup::Missing);
-        }
-        let text: Option<String> = conn
-            .query_row(
-                &format!("SELECT workflow_json FROM {table} WHERE id = ?1"),
-                params![id],
-                |row| row.get::<_, Option<String>>(0),
-            )
-            .optional()?
-            .flatten();
-        Ok(match text {
-            Some(t) if !t.trim().is_empty() => WorkflowLookup::Found(t),
-            _ => WorkflowLookup::Empty,
+    state
+        .with(|conn| {
+            let exists: Option<i64> = conn
+                .query_row(
+                    &format!("SELECT id FROM {table} WHERE id = ?1"),
+                    params![id],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            if exists.is_none() {
+                return Ok(WorkflowLookup::Missing);
+            }
+            let text: Option<String> = conn
+                .query_row(
+                    &format!("SELECT workflow_json FROM {table} WHERE id = ?1"),
+                    params![id],
+                    |row| row.get::<_, Option<String>>(0),
+                )
+                .optional()?
+                .flatten();
+            Ok(match text {
+                Some(t) if !t.trim().is_empty() => WorkflowLookup::Found(t),
+                _ => WorkflowLookup::Empty,
+            })
         })
-    })
-    .and_then(|lookup| match lookup {
-        WorkflowLookup::Missing => Err(ApiError::not_found(not_found.to_string())),
-        WorkflowLookup::Empty => Ok(None),
-        WorkflowLookup::Found(text) => Ok(Some(text)),
-    })
+        .and_then(|lookup| match lookup {
+            WorkflowLookup::Missing => Err(ApiError::not_found(not_found.to_string())),
+            WorkflowLookup::Empty => Ok(None),
+            WorkflowLookup::Found(text) => Ok(Some(text)),
+        })
 }
 
 enum WorkflowLookup {
@@ -321,7 +331,9 @@ fn row_to_run_info(row: &rusqlite::Row<'_>) -> rusqlite::Result<CaptureRunInfo> 
         run_key: row.get::<_, Option<String>>(0)?.unwrap_or_default(),
         prompt_id: row.get(1)?,
         // 老库里 status 可能是 NULL：Kotlin 的 `strOr("status", "success")` 回落到 success
-        status: row.get::<_, Option<String>>(2)?.unwrap_or_else(|| "success".to_string()),
+        status: row
+            .get::<_, Option<String>>(2)?
+            .unwrap_or_else(|| "success".to_string()),
         media_count: row.get::<_, Option<i64>>(3)?.unwrap_or(0),
         title: row.get(4)?,
         error: row.get(5)?,
@@ -351,7 +363,8 @@ pub fn recent_runs(state: &AppState, limit: i64) -> Result<Vec<CaptureRunInfo>, 
 /// 捕获统计 `(运行数, 产物数)`（Kotlin `CaptureRepo.stats`）。
 pub fn stats(state: &AppState) -> Result<(i64, i64), ApiError> {
     state.with(|conn| {
-        let runs: i64 = conn.query_row("SELECT COUNT(*) FROM capture_runs", [], |row| row.get(0))?;
+        let runs: i64 =
+            conn.query_row("SELECT COUNT(*) FROM capture_runs", [], |row| row.get(0))?;
         let media: i64 = conn.query_row(
             "SELECT COALESCE(SUM(media_count), 0) FROM capture_runs",
             [],
@@ -370,8 +383,14 @@ pub fn stats(state: &AppState) -> Result<(i64, i64), ApiError> {
 /// 不可达时快照是**零值**（不是错误）—— 与 Kotlin `status()` 一样：连不上就如实说
 /// `comfyReachable=false`，而不是让整个状态查询 500。
 pub async fn probe_queue(state: &AppState) -> (bool, crate::comfy::comfy_client::QueueSnapshot) {
-    let empty = crate::comfy::comfy_client::QueueSnapshot { running: 0, pending: 0, running_label: None };
-    let Ok(config) = capture_config(state) else { return (false, empty) };
+    let empty = crate::comfy::comfy_client::QueueSnapshot {
+        running: 0,
+        pending: 0,
+        running_label: None,
+    };
+    let Ok(config) = capture_config(state) else {
+        return (false, empty);
+    };
     match crate::comfy::comfy_client::queue(&config.comfy_url).await {
         Ok(snapshot) => (true, snapshot),
         Err(_) => (false, empty),
@@ -411,7 +430,10 @@ pub async fn status_json(state: &AppState) -> Result<Value, ApiError> {
     }
     out.insert("capturedRuns".into(), json!(runs));
     out.insert("capturedMedia".into(), json!(media));
-    out.insert("recent".into(), Value::Array(recent.iter().map(|r| r.to_json()).collect()));
+    out.insert(
+        "recent".into(),
+        Value::Array(recent.iter().map(|r| r.to_json()).collect()),
+    );
     // 正在跑的那一条（P4 第 72 步）——**没有正在跑的就整键不出现**
     // （与旁边 `lastPollAt` / `outputDir` 那些可空键同一条规则）。
     if let Some(current) = state.comfy_progress.current() {
@@ -452,7 +474,10 @@ pub async fn jobs_json(state: &AppState) -> Result<Value, ApiError> {
     if let Some(label) = snapshot.running_label {
         out.insert("runningLabel".into(), json!(label));
     }
-    out.insert("submissions".into(), Value::Array(submissions_json(state, 10)));
+    out.insert(
+        "submissions".into(),
+        Value::Array(submissions_json(state, 10)),
+    );
     // 正在跑的那一条提到**顶层**：界面右侧栏靠它置顶/高亮，不必自己挑
     // （列表里也能找到，但"谁在跑"是服务端知道得更准的事实）
     if let Some(current) = state.comfy_progress.current() {
@@ -486,9 +511,11 @@ pub async fn jobs_json(state: &AppState) -> Result<Value, ApiError> {
 pub fn prompt_api_graph(state: &AppState, id: i64) -> Result<Option<serde_json::Value>, ApiError> {
     let lookup = state.with(|conn| {
         let prompt: Option<Option<String>> = conn
-            .query_row("SELECT source_ref FROM prompts WHERE id = ?1", params![id], |row| {
-                row.get::<_, Option<String>>(0)
-            })
+            .query_row(
+                "SELECT source_ref FROM prompts WHERE id = ?1",
+                params![id],
+                |row| row.get::<_, Option<String>>(0),
+            )
             .optional()?;
         let Some(source_ref) = prompt else {
             return Ok(GraphLookup::Missing);
@@ -498,9 +525,11 @@ pub fn prompt_api_graph(state: &AppState, id: i64) -> Result<Option<serde_json::
             return Ok(GraphLookup::NoRun);
         };
         let raw: Option<String> = conn
-            .query_row("SELECT raw FROM capture_runs WHERE run_key = ?1", params![run_key], |row| {
-                row.get::<_, Option<String>>(0)
-            })
+            .query_row(
+                "SELECT raw FROM capture_runs WHERE run_key = ?1",
+                params![run_key],
+                |row| row.get::<_, Option<String>>(0),
+            )
             .optional()?
             .flatten();
         Ok(match raw.filter(|t| !t.trim().is_empty()) {
@@ -604,7 +633,9 @@ pub mod history {
     }
 
     fn looks_like_extra_data(obj: &Map<String, Value>) -> bool {
-        obj.contains_key("extra_pnginfo") || obj.contains_key("client_id") || obj.contains_key("create_time")
+        obj.contains_key("extra_pnginfo")
+            || obj.contains_key("client_id")
+            || obj.contains_key("create_time")
     }
 
     /// 界面格式工作流藏在 `extra_data.extra_pnginfo.workflow` 里

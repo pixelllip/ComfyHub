@@ -124,7 +124,9 @@ impl StepStripper {
 
 /// 缓冲末尾那段"可能还没收全的标记"从哪个下标开始（`[` / `[步` / `[/步` 的前缀）。
 fn partial_marker_start(buffer: &str) -> usize {
-    let Some(bracket) = buffer.rfind('[') else { return buffer.len() };
+    let Some(bracket) = buffer.rfind('[') else {
+        return buffer.len();
+    };
     let tail = &buffer[bracket..];
     let count = tail.chars().count();
     let is_partial = (count < OPEN.chars().count() && OPEN.starts_with(tail))
@@ -139,7 +141,10 @@ fn partial_marker_start(buffer: &str) -> usize {
 /// 标记里的那一串是不是**固定枚举**里的一员（压掉空白后逐字比）。
 pub fn normalize_phase(raw: &str) -> Option<String> {
     let collapsed: String = raw.split_whitespace().collect::<Vec<_>>().join("");
-    PHASES.iter().find(|p| **p == collapsed).map(|p| (*p).to_string())
+    PHASES
+        .iter()
+        .find(|p| **p == collapsed)
+        .map(|p| (*p).to_string())
 }
 
 // ---------------------------------------------------------------------------

@@ -85,7 +85,9 @@ class FileClipboard {
   static Future<List<String>> readFiles() async {
     if (!supported) return const [];
     final raw = await _invoke<List<Object?>>('readFiles');
-    return (raw ?? const <Object?>[]).whereType<String>().toList(growable: false);
+    return (raw ?? const <Object?>[]).whereType<String>().toList(
+      growable: false,
+    );
   }
 
   /// 剪贴板里**有没有位图**（截图 / 浏览器复制的图）。

@@ -8,7 +8,10 @@ use super::*;
 fn test_state() -> AppState {
     let conn = crate::infra::db::open_memory().unwrap();
     let schema = std::fs::read_to_string(
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("db").join("schema.sqlite.sql"),
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("db")
+            .join("schema.sqlite.sql"),
     )
     .unwrap();
     conn.execute_batch(&schema).unwrap();
@@ -30,7 +33,10 @@ fn model_with(reasoning: bool, efforts: &[(&str, &str)]) -> ModelRow {
         endpoint_trust: "public".into(),
         tools: true,
         reasoning,
-        thinking_efforts: efforts.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
+        thinking_efforts: efforts
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect(),
         thinking_format: None,
         max_output_tokens: None,
         input_modalities: Vec::new(),
@@ -43,7 +49,10 @@ fn thinking_effort_branches() {
     let plain = model_with(false, &[]);
     // 没传 / 空 / off → (off, None)：落库记 off，上游一个参数都不发
     for requested in [None, Some(""), Some("  "), Some("off")] {
-        assert_eq!(thinking_effort(&plain, requested).unwrap(), ("off".into(), None));
+        assert_eq!(
+            thinking_effort(&plain, requested).unwrap(),
+            ("off".into(), None)
+        );
     }
     // 认不出的值：**400**，不是当 off
     let err = thinking_effort(&plain, Some("turbo")).unwrap_err();
@@ -84,7 +93,10 @@ fn thinking_effort_branches() {
 
     // 极低 / 极高两档**必须在允许列表里**：目录里声明了它们的模型
     // （claude / gpt-5.x 那一批）一选这两档就被判"未知的思考强度"，而界面上明明是可选。
-    let wide = model_with(true, &[("minimal", "minimal"), ("xhigh", "xhigh"), ("max", "max")]);
+    let wide = model_with(
+        true,
+        &[("minimal", "minimal"), ("xhigh", "xhigh"), ("max", "max")],
+    );
     for level in ["minimal", "xhigh"] {
         assert_eq!(
             thinking_effort(&wide, Some(level)).unwrap(),
@@ -139,7 +151,10 @@ fn sse_sees_events_without_waiting_for_a_full_batch() {
         "前提：这时候库里确实还没有（还压在批里）"
     );
 
-    let rt = tokio::runtime::Builder::new_current_thread().enable_time().build().unwrap();
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_time()
+        .build()
+        .unwrap();
     rt.block_on(async {
         use futures_util::StreamExt;
         let mut stream = Box::pin(SseStream {
@@ -156,7 +171,10 @@ fn sse_sees_events_without_waiting_for_a_full_batch() {
             Err(_) => panic!("1 秒内一个字都没读到 —— 事件还压在批里没落库"),
         };
         let text = String::from_utf8(bytes.to_vec()).unwrap();
-        assert!(text.contains("event: reasoning.delta"), "读到的帧是：{text}");
+        assert!(
+            text.contains("event: reasoning.delta"),
+            "读到的帧是：{text}"
+        );
         assert!(text.contains("先想一想"), "思考正文要在帧里：{text}");
     });
 }

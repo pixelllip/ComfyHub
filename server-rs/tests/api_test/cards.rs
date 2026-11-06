@@ -22,7 +22,15 @@ async fn style_card_has_one_prompt_and_examples_round_trip() {
     assert_eq!(status, StatusCode::CREATED, "{card}");
     assert_eq!(
         keys(&card),
-        vec!["createdAt", "examples", "id", "name", "negative", "prompt", "updatedAt"],
+        vec![
+            "createdAt",
+            "examples",
+            "id",
+            "name",
+            "negative",
+            "prompt",
+            "updatedAt"
+        ],
         "卡片只剩一版自然语言正文：不再有 tagPrompt 键"
     );
     assert!(card["prompt"].as_str().unwrap().contains("semi-thick"));

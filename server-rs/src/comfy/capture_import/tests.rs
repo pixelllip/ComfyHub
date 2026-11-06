@@ -37,7 +37,11 @@ fn 推送体的键名映射一条都不能错() {
     assert_eq!(request.outputs[0].filename, "a.png");
     assert_eq!(request.outputs[0].subfolder.as_deref(), Some("sub"));
     assert_eq!(request.outputs[0].type_field.as_deref(), Some("output"));
-    assert_eq!(request.outputs[0].node_id.as_deref(), Some("9"), "数字 id 也要读出来");
+    assert_eq!(
+        request.outputs[0].node_id.as_deref(),
+        Some("9"),
+        "数字 id 也要读出来"
+    );
     assert_eq!(request.outputs[0].node_type.as_deref(), Some("SaveImage"));
     assert!(request.nsfw, "`extra.nsfw` 必须映射到 nsfw");
     assert_eq!(request.title.as_deref(), Some("推来的"));
@@ -51,9 +55,17 @@ fn 推送体的键名映射一条都不能错() {
 #[test]
 fn 顶层_nsfw_也认且默认关闭() {
     let body = json!({ "runKey": "push-2", "nsfw": true });
-    assert!(request_from_body(&body, "push-2", "ComfyUI", &config()).unwrap().nsfw);
+    assert!(
+        request_from_body(&body, "push-2", "ComfyUI", &config())
+            .unwrap()
+            .nsfw
+    );
     let body = json!({ "runKey": "push-3" });
-    assert!(!request_from_body(&body, "push-3", "ComfyUI", &config()).unwrap().nsfw);
+    assert!(
+        !request_from_body(&body, "push-3", "ComfyUI", &config())
+            .unwrap()
+            .nsfw
+    );
 }
 
 #[tokio::test]
@@ -63,7 +75,9 @@ async fn 推送_缺_run_key_要报人话() {
         ":memory:",
         crate::infra::testpaths::scratch("media"),
     );
-    let error = ingest_json(&state, &json!({ "outputs": [] })).await.expect_err("缺 runKey");
+    let error = ingest_json(&state, &json!({ "outputs": [] }))
+        .await
+        .expect_err("缺 runKey");
     assert_eq!(error.status, axum::http::StatusCode::BAD_REQUEST);
     assert_eq!(error.human(), "runKey 不能为空");
 }

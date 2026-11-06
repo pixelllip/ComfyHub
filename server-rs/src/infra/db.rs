@@ -350,19 +350,98 @@ pub(crate) fn tags_to_natural_language(raw: &str) -> String {
         "solo",
     ];
     const APPEARANCE: &[&str] = &[
-        "hair", "eyes", "eye", "skin", "ear", "ears", "horn", "horns", "tail", "wings",
-        "freckles", "mole", "scar", "tattoo", "breasts", "stomach", "legs", "arms", "face",
-        "teeth", "eyelashes", "eyebrows", "nose", "lips", "navel", "penis", "vagina",
-        "nipples", "areolae", "pubic", "thighs", "fingers", "neck", "height",
+        "hair",
+        "eyes",
+        "eye",
+        "skin",
+        "ear",
+        "ears",
+        "horn",
+        "horns",
+        "tail",
+        "wings",
+        "freckles",
+        "mole",
+        "scar",
+        "tattoo",
+        "breasts",
+        "stomach",
+        "legs",
+        "arms",
+        "face",
+        "teeth",
+        "eyelashes",
+        "eyebrows",
+        "nose",
+        "lips",
+        "navel",
+        "penis",
+        "vagina",
+        "nipples",
+        "areolae",
+        "pubic",
+        "thighs",
+        "fingers",
+        "neck",
+        "height",
     ];
     const CLOTHING: &[&str] = &[
-        "dress", "skirt", "shirt", "blouse", "sweater", "hoodie", "jacket", "coat",
-        "uniform", "kimono", "yukata", "bikini", "swimsuit", "bra", "panties", "underwear",
-        "shorts", "pants", "jeans", "trousers", "socks", "stockings", "thighhighs",
-        "pantyhose", "gloves", "hat", "cap", "beret", "helmet", "ribbon", "bow", "necktie",
-        "tie", "scarf", "boots", "shoes", "sandals", "slippers", "apron", "cape", "cloak",
-        "armor", "leotard", "bodysuit", "choker", "necklace", "earrings", "earring",
-        "glasses", "mask", "goggles", "bracelet", "ring", "belt", "suspenders", "collar",
+        "dress",
+        "skirt",
+        "shirt",
+        "blouse",
+        "sweater",
+        "hoodie",
+        "jacket",
+        "coat",
+        "uniform",
+        "kimono",
+        "yukata",
+        "bikini",
+        "swimsuit",
+        "bra",
+        "panties",
+        "underwear",
+        "shorts",
+        "pants",
+        "jeans",
+        "trousers",
+        "socks",
+        "stockings",
+        "thighhighs",
+        "pantyhose",
+        "gloves",
+        "hat",
+        "cap",
+        "beret",
+        "helmet",
+        "ribbon",
+        "bow",
+        "necktie",
+        "tie",
+        "scarf",
+        "boots",
+        "shoes",
+        "sandals",
+        "slippers",
+        "apron",
+        "cape",
+        "cloak",
+        "armor",
+        "leotard",
+        "bodysuit",
+        "choker",
+        "necklace",
+        "earrings",
+        "earring",
+        "glasses",
+        "mask",
+        "goggles",
+        "bracelet",
+        "ring",
+        "belt",
+        "suspenders",
+        "collar",
     ];
 
     let subject_of = |lower: &str| -> Option<&'static str> {
@@ -474,7 +553,10 @@ pub fn open_or_create(path: impl AsRef<Path>) -> Result<Connection, String> {
     // 顺序不能反：活着的连接上换文件，SQLite 会把两个库的页混着读 —— 那种损坏不报错。
     // 它在没有标记时只是一次 `exists()`，所以每条测试 / 每次冷启动都可以放心调。
     crate::infra::backup::apply_pending(path);
-    let fresh = !path.exists() || std::fs::metadata(path).map(|m| m.len() == 0).unwrap_or(true);
+    let fresh = !path.exists()
+        || std::fs::metadata(path)
+            .map(|m| m.len() == 0)
+            .unwrap_or(true);
     if fresh {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)
@@ -517,8 +599,8 @@ pub fn open_or_create(path: impl AsRef<Path>) -> Result<Connection, String> {
     // `tag_prompt` **转成自然语言**灌进 `prompt`（只填空卡；已有正文的一个字节都不动）。
     // ⚠ 只在 `version < 11` 时跑：老列留在原地，每次开库都跑会把用户清空的提示词复活。
     if version < 11 {
-        let migrated = migrate_card_tags_to_prompt(&conn)
-            .map_err(|e| format!("迁移卡片 tag 版失败：{e}"))?;
+        let migrated =
+            migrate_card_tags_to_prompt(&conn).map_err(|e| format!("迁移卡片 tag 版失败：{e}"))?;
         if migrated > 0 {
             eprintln!(
                 "[db] 卡片：把 {migrated} 张只有 tag 版的卡转成了自然语言（已有正文的卡没动）。"
@@ -566,16 +648,24 @@ pub fn open_or_create(path: impl AsRef<Path>) -> Result<Connection, String> {
             //   于是**该写的那次没写**，库被静默降级到 5。用例
             //   `healing_a_missing_table_never_downgrades_a_newer_version` 钉住这条）。
             let target = version.max(SCHEMA_VERSION);
-            let after_ddl = schema_version(&conn).map_err(|e| format!("读 user_version 失败：{e}"))?;
+            let after_ddl =
+                schema_version(&conn).map_err(|e| format!("读 user_version 失败：{e}"))?;
             if after_ddl != target {
                 conn.execute_batch(&format!("PRAGMA user_version = {target};"))
                     .map_err(|e| format!("写 user_version 失败：{e}"))?;
             }
-            conn.execute_batch("COMMIT;").map_err(|e| format!("提交失败：{e}"))?;
+            conn.execute_batch("COMMIT;")
+                .map_err(|e| format!("提交失败：{e}"))?;
             if fresh {
-                eprintln!("[db] 已建库并建表：{}（schemaVersion={SCHEMA_VERSION}）", path.display());
+                eprintln!(
+                    "[db] 已建库并建表：{}（schemaVersion={SCHEMA_VERSION}）",
+                    path.display()
+                );
             } else if missing.is_empty() {
-                eprintln!("[db] 已把老库收敛到 schemaVersion={SCHEMA_VERSION}：{}", path.display());
+                eprintln!(
+                    "[db] 已把老库收敛到 schemaVersion={SCHEMA_VERSION}：{}",
+                    path.display()
+                );
             } else {
                 eprintln!(
                     "[db] 已补上 {} 张缺的表（{}）：{}",
@@ -610,7 +700,10 @@ pub fn declared_tables() -> Vec<&'static str> {
     let mut rest = SCHEMA_SQL;
     while let Some(at) = rest.find(MARK) {
         let tail = &rest[at + MARK.len()..];
-        let name = tail.split(|c: char| c.is_whitespace() || c == '(').next().unwrap_or("");
+        let name = tail
+            .split(|c: char| c.is_whitespace() || c == '(')
+            .next()
+            .unwrap_or("");
         if !name.is_empty() && !out.contains(&name) {
             out.push(name);
         }

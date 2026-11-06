@@ -33,8 +33,8 @@ use std::path::{Component, Path, PathBuf};
 
 use serde::Deserialize;
 
-use crate::web::routes::{ApiError, AppState};
 use crate::tools::tools::ToolFailure;
+use crate::web::routes::{ApiError, AppState};
 
 /// `app_settings` 里策略 JSON 的键（Kotlin `ToolPolicyConfig.KEY`）。
 pub const KEY: &str = "ai.tools.policy";
@@ -244,7 +244,14 @@ impl ToolPolicy {
             PERMISSION_FULL => PERMISSION_FULL.to_string(),
             _ => PERMISSION_ASK.to_string(),
         };
-        Self { project_root, config, write_roots, read_roots, auto_read_roots: Vec::new(), permission_mode }
+        Self {
+            project_root,
+            config,
+            write_roots,
+            read_roots,
+            auto_read_roots: Vec::new(),
+            permission_mode,
+        }
     }
 
     /// 挂上"自动发现的只读目录"（Kotlin 构造参数 `autoReadRoots`）。
@@ -255,7 +262,8 @@ impl ToolPolicy {
 
     /// 实际生效的读白名单 = 用户配的 + 自动发现的（**去重、保持顺序**，Kotlin `distinct()`）。
     pub fn effective_read_roots(&self) -> Vec<PathBuf> {
-        let mut out: Vec<PathBuf> = Vec::with_capacity(self.read_roots.len() + self.auto_read_roots.len());
+        let mut out: Vec<PathBuf> =
+            Vec::with_capacity(self.read_roots.len() + self.auto_read_roots.len());
         for root in self.read_roots.iter().chain(self.auto_read_roots.iter()) {
             if !out.contains(root) {
                 out.push(root.clone());
@@ -324,7 +332,9 @@ impl ToolPolicy {
         }
         let project_root = state.project_root();
         // 探测失败 / 配置里没有输出目录 → 空表，**不是错误**（读白名单照常只有用户配的那些）
-        let configured_output = crate::ai::ai_settings::configured_output_dir(state).ok().flatten();
+        let configured_output = crate::ai::ai_settings::configured_output_dir(state)
+            .ok()
+            .flatten();
         let auto_read =
             crate::comfy::comfy_dirs::auto_read_roots(&project_root, configured_output.as_deref());
         Ok(Self::new(project_root, config).with_auto_read_roots(auto_read))
@@ -364,19 +374,23 @@ impl ToolPolicy {
 
         self.reject_forbidden(&candidate, verb)?;
 
-        let real = self
-            .real_path(&candidate)
-            .ok_or_else(|| ToolFailure::new("PATH_DENIED", format!("{verb} 路径不可解析：{text}")))?;
+        let real = self.real_path(&candidate).ok_or_else(|| {
+            ToolFailure::new("PATH_DENIED", format!("{verb} 路径不可解析：{text}"))
+        })?;
 
-        let hit = roots.iter().find(|root| real.starts_with(root)).ok_or_else(|| {
-            ToolFailure::new(
-                "PATH_DENIED",
-                format!(
+        let hit =
+            roots
+                .iter()
+                .find(|root| real.starts_with(root))
+                .ok_or_else(|| {
+                    ToolFailure::new(
+                        "PATH_DENIED",
+                        format!(
                     "拒绝{verb} {text}：只允许在 {} 之内（可在「设置 → AI 工具权限」里调整）",
                     roots.iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join("、")
                 ),
-            )
-        })?;
+                    )
+                })?;
 
         // Java 侧同一条：把**目录根本身**当写入目标会让下一次 list_dir / 覆盖语义变得毫无
         // 意义（实测踩过：一次 write_file 的 path 传成白名单目录，结果"写成功了"）
@@ -394,14 +408,21 @@ impl ToolPolicy {
         // Java 的 `Paths.get` 在 Windows 上会为 `<>:"|?*` 与控制字符抛 `InvalidPathException`。
         // Rust 的 `PathBuf` 什么都收，所以这一层要自己挡 —— 不挡的话这些路径会一路走到
         // `create_dir_all` 才报一个看不懂的 IO 错误（而 Kotlin 那边回的是 `PATH_DENIED`）。
-        let invalid = text.chars().any(|c| {
-            c.is_control() || matches!(c, '<' | '>' | '"' | '|' | '?' | '*')
-        });
+        let invalid = text
+            .chars()
+            .any(|c| c.is_control() || matches!(c, '<' | '>' | '"' | '|' | '?' | '*'));
         if invalid {
-            return Err(ToolFailure::new("PATH_DENIED", format!("路径无法解析：{text}")));
+            return Err(ToolFailure::new(
+                "PATH_DENIED",
+                format!("路径无法解析：{text}"),
+            ));
         }
         let path = Path::new(text);
-        let joined = if path.is_absolute() { path.to_path_buf() } else { self.project_root.join(path) };
+        let joined = if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            self.project_root.join(path)
+        };
         Ok(normalize_lexical(&joined))
     }
 
@@ -410,7 +431,9 @@ impl ToolPolicy {
     /// 路径不在项目根之内时 Kotlin 的 `relativize` 会给出 `..` 开头的相对路径 ——
     /// 那里面不可能命中禁段，所以这里 `strip_prefix` 失败就直接放行到白名单判定。
     fn reject_forbidden(&self, path: &Path, verb: &str) -> Result<(), ToolFailure> {
-        let Ok(relative) = path.strip_prefix(&self.project_root) else { return Ok(()) };
+        let Ok(relative) = path.strip_prefix(&self.project_root) else {
+            return Ok(());
+        };
         let hit = relative
             .components()
             .filter_map(|c| match c {
@@ -426,7 +449,9 @@ impl ToolPolicy {
             format!(
                 "拒绝{verb} {}：{hit} 是本项目的运行期数据 / 依赖目录，\
                  任何工具都不许读也不许写（与用户白名单无关）",
-                path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default()
+                path.file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_default()
             ),
         ))
     }
@@ -442,14 +467,18 @@ impl ToolPolicy {
             // `toRealPath()` 返回 `D:\…` —— 这个前缀会原样出现在工具结果里（还会被模型
             // 贴进下一次调用），是"同一个目录、两种写法"那类最难查的不一致（P4 第 14 步
             // 的实测）。统一过 `plain_path`。
-            return std::fs::canonicalize(path).ok().map(crate::comfy::comfy_dirs::plain_path);
+            return std::fs::canonicalize(path)
+                .ok()
+                .map(crate::comfy::comfy_dirs::plain_path);
         }
         let mut tail: Vec<String> = Vec::new();
         let mut cursor = Some(path);
         let mut base: Option<PathBuf> = None;
         while let Some(current) = cursor {
             if current.exists() {
-                base = std::fs::canonicalize(current).ok().map(crate::comfy::comfy_dirs::plain_path);
+                base = std::fs::canonicalize(current)
+                    .ok()
+                    .map(crate::comfy::comfy_dirs::plain_path);
                 break;
             }
             let name = current.file_name()?.to_string_lossy().to_string();
@@ -475,7 +504,11 @@ fn expand(entries: &[String], project_root: &Path) -> Vec<PathBuf> {
         .map(|raw| {
             let text = raw.trim();
             let path = Path::new(text);
-            let joined = if path.is_absolute() { path.to_path_buf() } else { project_root.join(path) };
+            let joined = if path.is_absolute() {
+                path.to_path_buf()
+            } else {
+                project_root.join(path)
+            };
             normalize_lexical(&joined)
         })
         .collect()

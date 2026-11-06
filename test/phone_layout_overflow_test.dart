@@ -39,42 +39,59 @@ void main() {
   /// 这正好复现真机上的状态 —— 后端对 `/api/ai/capabilities/status` 就是回这个
   /// （页面会把"读取失败"画在卡上，而**那行文字正是把高度顶爆的那部分**）。
   MockClient emptyBackend() => MockClient((request) async {
-        final body = jsonEncode({'error': '接口不存在: ${request.url.path}'});
-        return http.Response(body, 404, headers: {'content-type': 'application/json'});
-      });
+    final body = jsonEncode({'error': '接口不存在: ${request.url.path}'});
+    return http.Response(
+      body,
+      404,
+      headers: {'content-type': 'application/json'},
+    );
+  });
 
   /// 有**一条** Provider 的后端：用来验"手机上点一条 = 进子界面"。
   MockClient oneProviderBackend() => MockClient((request) async {
-        Object body;
-        if (request.url.path == '/api/ai/providers') {
-          body = [
-            {
-              'id': 'command-code-goat',
-              'displayName': 'Command Code Goat',
-              'api': 'openai-completions',
-              'baseURL': 'https://api.commandcode.ai/provider/v1',
-              'credentialRef': 'COMMAND_CODE_GOAT',
-              'endpointTrust': 'public',
-              'enabled': true,
-              'revision': 1,
-              'credential': {'configured': true, 'source': 'keystore', 'writable': true},
-            }
-          ];
-        } else {
-          body = {'error': '接口不存在: ${request.url.path}'};
-          return http.Response(jsonEncode(body), 404,
-              headers: {'content-type': 'application/json'});
-        }
-        return http.Response(jsonEncode(body), 200,
-            headers: {'content-type': 'application/json'});
-      });
+    Object body;
+    if (request.url.path == '/api/ai/providers') {
+      body = [
+        {
+          'id': 'command-code-goat',
+          'displayName': 'Command Code Goat',
+          'api': 'openai-completions',
+          'baseURL': 'https://api.commandcode.ai/provider/v1',
+          'credentialRef': 'COMMAND_CODE_GOAT',
+          'endpointTrust': 'public',
+          'enabled': true,
+          'revision': 1,
+          'credential': {
+            'configured': true,
+            'source': 'keystore',
+            'writable': true,
+          },
+        },
+      ];
+    } else {
+      body = {'error': '接口不存在: ${request.url.path}'};
+      return http.Response(
+        jsonEncode(body),
+        404,
+        headers: {'content-type': 'application/json'},
+      );
+    }
+    return http.Response(
+      jsonEncode(body),
+      200,
+      headers: {'content-type': 'application/json'},
+    );
+  });
 
   Future<void> pumpProviderPage(
     WidgetTester tester, {
     required Size logical,
     MockClient? backend,
   }) async {
-    tester.view.physicalSize = Size(logical.width * 2.8125, logical.height * 2.8125);
+    tester.view.physicalSize = Size(
+      logical.width * 2.8125,
+      logical.height * 2.8125,
+    );
     tester.view.devicePixelRatio = 2.8125;
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
@@ -82,10 +99,15 @@ void main() {
     final settings = SettingsStore();
     await tester.pumpWidget(
       MultiProvider(
-        providers: [ChangeNotifierProvider<SettingsStore>.value(value: settings)],
+        providers: [
+          ChangeNotifierProvider<SettingsStore>.value(value: settings),
+        ],
         child: MaterialApp(
           home: AiProviderSettingsPage(
-            api: AiApiClient('http://127.0.0.1:8081', client: backend ?? emptyBackend()),
+            api: AiApiClient(
+              'http://127.0.0.1:8081',
+              client: backend ?? emptyBackend(),
+            ),
           ),
         ),
       ),
@@ -96,14 +118,21 @@ void main() {
 
   testWidgets('手机尺寸下「AI 模型与凭据」页不溢出、也不抛异常（两道斜纹的防线）', (tester) async {
     await pumpProviderPage(
-        tester, logical: const Size(384, 853), backend: oneProviderBackend());
+      tester,
+      logical: const Size(384, 853),
+      backend: oneProviderBackend(),
+    );
 
     // 手机上是**两级面板**（用户原话："上下分屏难受，而且有些东西在手机上应该表现为子界面"）：
     // 一级 = Provider 列表。目录卡已经不在这一页的页顶了（2026-10：能力目录改成嵌在
     // **某一条 Provider 的详情里**，内置目录卡整块删掉），主屏只剩列表。
     expect(find.text('AI 模型与凭据'), findsOneWidget);
     expect(find.text('新建 Provider'), findsOneWidget);
-    expect(find.text('模型能力目录'), findsNothing, reason: '能力目录只在某一条 Provider 的详情里');
+    expect(
+      find.text('模型能力目录'),
+      findsNothing,
+      reason: '能力目录只在某一条 Provider 的详情里',
+    );
 
     // 点一条进去 → 详情子界面：那里面才挂着折叠着的「模型能力目录」。
     // 两道斜纹的防线在**这一屏**（展开后是"开关 + 说明 + 两个按钮"那一行）。
@@ -146,7 +175,11 @@ void main() {
     //   （用户实测报的就是这个：划一下手势直接回到设置首页了）。
     await tester.binding.handlePopRoute();
     await tester.pumpAndSettle();
-    expect(find.text('新建 Provider'), findsOneWidget, reason: '系统返回只该退一层，不该退出整个页面');
+    expect(
+      find.text('新建 Provider'),
+      findsOneWidget,
+      reason: '系统返回只该退一层，不该退出整个页面',
+    );
     // 回到列表后还剩**页面级**返回键（退到设置首页）；详情那一层已经没了。
     expect(find.byType(BackButton), findsOneWidget);
     expect(find.text('Command Code Goat'), findsWidgets);
@@ -154,7 +187,10 @@ void main() {
 
   testWidgets('更窄的屏幕（320dp）同样不溢出', (tester) async {
     await pumpProviderPage(
-        tester, logical: const Size(320, 640), backend: oneProviderBackend());
+      tester,
+      logical: const Size(320, 640),
+      backend: oneProviderBackend(),
+    );
     expect(find.text('新建 Provider'), findsOneWidget);
     await tester.tap(find.text('Command Code Goat'));
     await tester.pumpAndSettle();

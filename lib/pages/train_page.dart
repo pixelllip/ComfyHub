@@ -145,9 +145,8 @@ class _TrainPageState extends State<TrainPage> {
     final uri = Uri.parse(url);
     if (!await launchUrl(uri, mode: LaunchMode.externalApplication)) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('打不开浏览器，$url')),
-        );
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('打不开浏览器，$url')));
       }
     }
   }
@@ -178,7 +177,10 @@ class _TrainPageState extends State<TrainPage> {
               if (value == 'stop') _stop();
             },
             itemBuilder: (_) => [
-              const PopupMenuItem(value: 'start', child: Text('启动训练引擎（守护进程 + WebUI）')),
+              const PopupMenuItem(
+                value: 'start',
+                child: Text('启动训练引擎（守护进程 + WebUI）'),
+              ),
               const PopupMenuItem(value: 'stop', child: Text('停止（不打断正在跑的训练）')),
             ],
           ),
@@ -216,7 +218,11 @@ class _TrainPageState extends State<TrainPage> {
         _StatusStrip(status: status),
         if (_error != null)
           MaterialBanner(
-            content: Text(_error!, maxLines: 3, overflow: TextOverflow.ellipsis),
+            content: Text(
+              _error!,
+              maxLines: 3,
+              overflow: TextOverflow.ellipsis,
+            ),
             actions: [
               TextButton(
                 onPressed: () => setState(() => _error = null),
@@ -374,37 +380,47 @@ class _StatusStrip extends StatelessWidget {
     final theme = Theme.of(context);
     final colors = AppColors.of(context);
     Widget pill(String label, bool ok, String detail) => Container(
-          padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
-          decoration: BoxDecoration(
-            // 状态底色走 surface 角色 + 语义色描边（不再用 green@0.5 这种叠色）
-            color: theme.colorScheme.surfaceContainer,
-            borderRadius: const BorderRadius.all(Radius.circular(999)),
-            border: Border.all(
-              color: ok ? colors.success : theme.colorScheme.outlineVariant,
-            ),
-          ),
-          child: Text(
-            '$label · $detail',
-            style: theme.textTheme.labelSmall?.copyWith(
-              color: ok ? colors.success : theme.colorScheme.onSurfaceVariant,
-            ),
-          ),
-        );
+      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+      decoration: BoxDecoration(
+        // 状态底色走 surface 角色 + 语义色描边（不再用 green@0.5 这种叠色）
+        color: theme.colorScheme.surfaceContainer,
+        borderRadius: const BorderRadius.all(Radius.circular(999)),
+        border: Border.all(
+          color: ok ? colors.success : theme.colorScheme.outlineVariant,
+        ),
+      ),
+      child: Text(
+        '$label · $detail',
+        style: theme.textTheme.labelSmall?.copyWith(
+          color: ok ? colors.success : theme.colorScheme.onSurfaceVariant,
+        ),
+      ),
+    );
 
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
       decoration: BoxDecoration(
         color: theme.colorScheme.surfaceContainerLow,
-        border: Border(bottom: BorderSide(color: theme.colorScheme.outlineVariant)),
+        border: Border(
+          bottom: BorderSide(color: theme.colorScheme.outlineVariant),
+        ),
       ),
       child: Wrap(
         spacing: 8,
         runSpacing: 6,
         crossAxisAlignment: WrapCrossAlignment.center,
         children: [
-          pill('守护进程', status.daemon.up, status.daemon.up ? '在线 :${status.daemon.port}' : '离线'),
-          pill('WebUI', status.webui.up, status.webui.up ? '在线 :${status.webui.port}' : '离线'),
+          pill(
+            '守护进程',
+            status.daemon.up,
+            status.daemon.up ? '在线 :${status.daemon.port}' : '离线',
+          ),
+          pill(
+            'WebUI',
+            status.webui.up,
+            status.webui.up ? '在线 :${status.webui.port}' : '离线',
+          ),
           pill('项目', true, '${status.projects} 个'),
           if (status.problems.isNotEmpty)
             Tooltip(
@@ -444,7 +460,10 @@ class _NotInstalledCard extends StatelessWidget {
               children: [
                 Row(
                   children: [
-                    Icon(Icons.school_outlined, color: theme.colorScheme.primary),
+                    Icon(
+                      Icons.school_outlined,
+                      color: theme.colorScheme.primary,
+                    ),
                     const SizedBox(width: 10),
                     Text('还没装训练引擎', style: theme.textTheme.titleMedium),
                   ],
@@ -460,7 +479,9 @@ class _NotInstalledCard extends StatelessWidget {
                 const SizedBox(height: 10),
                 SelectableText(
                   status.engineDir ?? '（没有找到引擎目录）',
-                  style: theme.textTheme.bodySmall?.copyWith(fontFamily: 'monospace'),
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    fontFamily: 'monospace',
+                  ),
                 ),
                 if (status.problems.isNotEmpty) ...[
                   const SizedBox(height: 10),
@@ -530,15 +551,23 @@ class _StartCard extends StatelessWidget {
               children: [
                 Row(
                   children: [
-                    Icon(Icons.play_circle_outline, color: theme.colorScheme.primary),
+                    Icon(
+                      Icons.play_circle_outline,
+                      color: theme.colorScheme.primary,
+                    ),
                     const SizedBox(width: 10),
-                    Text('训练引擎已安装，WebUI 没起', style: theme.textTheme.titleMedium),
+                    Text(
+                      '训练引擎已安装，WebUI 没起',
+                      style: theme.textTheme.titleMedium,
+                    ),
                   ],
                 ),
                 const SizedBox(height: 8),
                 SelectableText(
                   status.engineDir ?? '',
-                  style: theme.textTheme.bodySmall?.copyWith(fontFamily: 'monospace'),
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    fontFamily: 'monospace',
+                  ),
                 ),
                 const SizedBox(height: 8),
                 Text(
@@ -548,7 +577,10 @@ class _StartCard extends StatelessWidget {
                 ),
                 if (error != null) ...[
                   const SizedBox(height: 10),
-                  Text(error!, style: TextStyle(color: theme.colorScheme.error)),
+                  Text(
+                    error!,
+                    style: TextStyle(color: theme.colorScheme.error),
+                  ),
                 ],
                 const SizedBox(height: 14),
                 Row(

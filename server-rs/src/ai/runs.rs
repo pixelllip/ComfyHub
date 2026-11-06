@@ -204,7 +204,10 @@ pub fn finish(
     usage: Option<&Value>,
 ) -> Result<(), ApiError> {
     if !TERMINAL.contains(&status) {
-        return Err(ApiError::ai("CONFIG_ERROR", format!("非法的 Run 终态: {status}")));
+        return Err(ApiError::ai(
+            "CONFIG_ERROR",
+            format!("非法的 Run 终态: {status}"),
+        ));
     }
     let usage_json = usage.map(|v| v.to_string());
     state.write(|tx| {
@@ -263,7 +266,13 @@ impl StoredEvent {
 }
 
 /// 单条落库（`INSERT OR IGNORE`：同一个 `(run_id, seq)` 重放是幂等的）。
-pub fn append_event(state: &AppState, run_id: &str, seq: i64, event_type: &str, payload: &Value) -> Result<(), ApiError> {
+pub fn append_event(
+    state: &AppState,
+    run_id: &str,
+    seq: i64,
+    event_type: &str,
+    payload: &Value,
+) -> Result<(), ApiError> {
     state.write(|tx| {
         tx.execute(
             "INSERT OR IGNORE INTO ai_run_events (run_id, seq, event_type, payload_json)
@@ -302,7 +311,8 @@ impl<'a> EventBatcher<'a> {
 
     /// 攒一条；满一批就写下去。
     pub fn add(&mut self, seq: i64, event_type: &str, payload: &Value) -> Result<(), ApiError> {
-        self.pending.push((seq, event_type.to_string(), payload.clone()));
+        self.pending
+            .push((seq, event_type.to_string(), payload.clone()));
         if self.pending.len() >= self.batch_size {
             self.flush()?;
         }
@@ -346,7 +356,9 @@ pub fn events(state: &AppState, run_id: &str, after: i64) -> Result<Vec<StoredEv
                 Ok(StoredEvent {
                     seq: row.get("seq")?,
                     r#type: row.get("event_type")?,
-                    payload: parse_payload(row.get::<_, Option<String>>("payload_json")?.as_deref()),
+                    payload: parse_payload(
+                        row.get::<_, Option<String>>("payload_json")?.as_deref(),
+                    ),
                 })
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -413,7 +425,10 @@ pub fn reset_assistant_for_retry(
     model_id: &str,
 ) -> Result<(), ApiError> {
     state.write(|tx| {
-        tx.execute("DELETE FROM ai_message_parts WHERE message_id = ?1", rusqlite::params![message_id])?;
+        tx.execute(
+            "DELETE FROM ai_message_parts WHERE message_id = ?1",
+            rusqlite::params![message_id],
+        )?;
         tx.execute(
             "UPDATE ai_messages
                 SET status = 'streaming', text = '', provider_id = ?1, model_id = ?2,
@@ -596,9 +611,8 @@ pub fn expire_stale_pending_tool_calls(state: &AppState) -> Result<usize, ApiErr
 /// 某个 Run 用过的工具（界面回放 / 排查用）。
 pub fn list_tool_calls(state: &AppState, run_id: &str) -> Result<Vec<Value>, ApiError> {
     state.with(|conn| {
-        let mut stmt = conn.prepare(
-            "SELECT * FROM ai_tool_calls WHERE run_id = ?1 ORDER BY started_at, id",
-        )?;
+        let mut stmt =
+            conn.prepare("SELECT * FROM ai_tool_calls WHERE run_id = ?1 ORDER BY started_at, id")?;
         let rows = stmt
             .query_map(rusqlite::params![run_id], |row| {
                 Ok(json!({
@@ -647,14 +661,19 @@ pub fn approval_state(state: &AppState, call_id: &str) -> Result<Option<Approval
               ORDER BY started_at DESC, id DESC LIMIT 1",
         )?;
         let mut rows = stmt.query_map(rusqlite::params![call_id], |row| {
-            Ok((row.get::<_, Option<String>>(0)?.unwrap_or_default(), row.get::<_, Option<String>>(1)?.unwrap_or_default()))
+            Ok((
+                row.get::<_, Option<String>>(0)?.unwrap_or_default(),
+                row.get::<_, Option<String>>(1)?.unwrap_or_default(),
+            ))
         })?;
         match rows.next() {
             Some(row) => Ok(Some(row?)),
             None => Ok(None),
         }
     })?;
-    let Some((approval, status)) = row else { return Ok(None) };
+    let Some((approval, status)) = row else {
+        return Ok(None);
+    };
     Ok(Some(match approval.as_str() {
         "approved" => ApprovalState::Approved,
         // `not_required` 的行不该出现在闸门里；真出现了按批准处理（**不是**按拒绝 ——
@@ -908,7 +927,8 @@ pub fn archive_events(
         )?;
         tx.execute("DELETE FROM _archive_keys", [])?;
         {
-            let mut ins = tx.prepare("INSERT OR IGNORE INTO _archive_keys (run_id, seq) VALUES (?1, ?2)")?;
+            let mut ins =
+                tx.prepare("INSERT OR IGNORE INTO _archive_keys (run_id, seq) VALUES (?1, ?2)")?;
             for row in &rows {
                 ins.execute(rusqlite::params![row.run_id, row.seq])?;
             }

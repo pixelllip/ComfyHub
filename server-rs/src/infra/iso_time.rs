@@ -75,7 +75,11 @@ pub fn parse(raw: &str) -> Option<(i64, u32)> {
     let hour = num(11, 13)?;
     let minute = num(14, 16)?;
     let second = num(17, 19)?;
-    if !(1..=12).contains(&month) || !(1..=31).contains(&day) || hour > 23 || minute > 59 || second > 60
+    if !(1..=12).contains(&month)
+        || !(1..=31).contains(&day)
+        || hour > 23
+        || minute > 59
+        || second > 60
     {
         return None;
     }
@@ -84,7 +88,10 @@ pub fn parse(raw: &str) -> Option<(i64, u32)> {
     let mut rest = &t[19..];
     let mut nanos: u32 = 0;
     if let Some(after_dot) = rest.strip_prefix('.') {
-        let digits: String = after_dot.chars().take_while(|c| c.is_ascii_digit()).collect();
+        let digits: String = after_dot
+            .chars()
+            .take_while(|c| c.is_ascii_digit())
+            .collect();
         if digits.is_empty() {
             return None;
         }
@@ -118,8 +125,11 @@ pub fn parse(raw: &str) -> Option<(i64, u32)> {
         }
     };
 
-    let secs =
-        days_from_civil(year, month as u32, day as u32) * 86_400 + hour * 3600 + minute * 60 + second - offset;
+    let secs = days_from_civil(year, month as u32, day as u32) * 86_400
+        + hour * 3600
+        + minute * 60
+        + second
+        - offset;
     Some((secs, nanos))
 }
 

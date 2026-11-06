@@ -63,8 +63,14 @@ pub fn list_tools(state: &AppState) -> Result<Value, ApiError> {
         .map(|tool| {
             let mut out = Map::new();
             out.insert("name".into(), Value::String(tool.name.to_string()));
-            out.insert("description".into(), Value::String(tool.description.to_string()));
-            out.insert("category".into(), Value::String(category_of(tool.name).to_string()));
+            out.insert(
+                "description".into(),
+                Value::String(tool.description.to_string()),
+            );
+            out.insert(
+                "category".into(),
+                Value::String(category_of(tool.name).to_string()),
+            );
             out.insert("mutating".into(), Value::Bool(tool.mutating));
             out.insert(
                 "access".into(),
@@ -181,7 +187,8 @@ pub fn policy_json(state: &AppState) -> Result<Value, ApiError> {
     let policy = ToolPolicy::load(state)?;
     let project_root = state.project_root();
     let configured_output = configured_output_dir(state)?;
-    let auto_read = crate::comfy::comfy_dirs::auto_read_roots(&project_root, configured_output.as_deref());
+    let auto_read =
+        crate::comfy::comfy_dirs::auto_read_roots(&project_root, configured_output.as_deref());
     Ok(policy_dto(&policy, &auto_read))
 }
 
@@ -202,8 +209,14 @@ fn policy_dto(policy: &ToolPolicy, auto_read: &[PathBuf]) -> Value {
                 .collect(),
         ),
     );
-    out.insert("maxToolSteps".into(), Value::from(policy.config.max_tool_steps));
-    out.insert("maxCallsPerRun".into(), Value::from(policy.config.max_calls_per_run));
+    out.insert(
+        "maxToolSteps".into(),
+        Value::from(policy.config.max_tool_steps),
+    );
+    out.insert(
+        "maxCallsPerRun".into(),
+        Value::from(policy.config.max_calls_per_run),
+    );
     out.insert(
         "maxComfyQueriesPerRun".into(),
         Value::from(crate::tools::policy::MAX_COMFY_QUERIES_PER_RUN),
@@ -212,15 +225,27 @@ fn policy_dto(policy: &ToolPolicy, auto_read: &[PathBuf]) -> Value {
     out.insert("maxWriteBytes".into(), Value::from(DEFAULT_MAX_WRITE_BYTES));
     out.insert(
         "defaultWriteRoot".into(),
-        Value::String(policy.project_root.join(crate::tools::policy::DEFAULT_WRITE_DIR).to_string_lossy().to_string()),
+        Value::String(
+            policy
+                .project_root
+                .join(crate::tools::policy::DEFAULT_WRITE_DIR)
+                .to_string_lossy()
+                .to_string(),
+        ),
     );
-    out.insert("permissionMode".into(), Value::String(policy.permission_mode.clone()));
+    out.insert(
+        "permissionMode".into(),
+        Value::String(policy.permission_mode.clone()),
+    );
     Value::Object(out)
 }
 
 fn paths_json(paths: &[PathBuf]) -> Value {
     Value::Array(
-        paths.iter().map(|p| Value::String(p.to_string_lossy().to_string())).collect(),
+        paths
+            .iter()
+            .map(|p| Value::String(p.to_string_lossy().to_string()))
+            .collect(),
     )
 }
 
@@ -239,11 +264,18 @@ pub struct PolicyUpdate {
 /// `PUT /api/ai/tools/policy`：只改传了的字段，其余照旧；返回**回读**的生效值。
 pub fn save_policy(state: &AppState, body: PolicyUpdate) -> Result<Value, ApiError> {
     // 权限档：非法值**直接拒绝**（回落成 ask 会把用户的意图静默改成另一种行为）
-    let mode = match body.permission_mode.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+    let mode = match body
+        .permission_mode
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
         None => None,
         Some(raw) => {
             let lower = raw.to_lowercase();
-            if lower != crate::tools::policy::PERMISSION_ASK && lower != crate::tools::policy::PERMISSION_FULL {
+            if lower != crate::tools::policy::PERMISSION_ASK
+                && lower != crate::tools::policy::PERMISSION_FULL
+            {
                 return Err(ApiError::ai(
                     "CONFIG_ERROR",
                     format!("未知的权限档：{raw}（可选 ask / full）"),
@@ -255,9 +287,15 @@ pub fn save_policy(state: &AppState, body: PolicyUpdate) -> Result<Value, ApiErr
 
     let current = ToolPolicy::load(state)?;
     let next = ToolPolicyConfig {
-        write_roots: body.write_roots.unwrap_or_else(|| current.config.write_roots.clone()),
-        read_roots: body.read_roots.unwrap_or_else(|| current.config.read_roots.clone()),
-        overrides: body.overrides.unwrap_or_else(|| current.config.overrides.clone()),
+        write_roots: body
+            .write_roots
+            .unwrap_or_else(|| current.config.write_roots.clone()),
+        read_roots: body
+            .read_roots
+            .unwrap_or_else(|| current.config.read_roots.clone()),
+        overrides: body
+            .overrides
+            .unwrap_or_else(|| current.config.overrides.clone()),
         permission_mode: mode.unwrap_or_else(|| current.config.permission_mode.clone()),
         // 夹在 1..`MAX_TOOL_STEPS_LIMIT` / 1..100 ——
         // 0 会让"一轮都不许调工具"，正整数上限之外是明摆着写错了。
@@ -306,9 +344,18 @@ fn save_config(state: &AppState, next: &ToolPolicyConfig) -> Result<(), ApiError
     map.insert("writeRoots".into(), serde_json::json!(next.write_roots));
     map.insert("readRoots".into(), serde_json::json!(next.read_roots));
     map.insert("overrides".into(), serde_json::json!(next.overrides));
-    map.insert("permissionMode".into(), serde_json::json!(next.permission_mode));
-    map.insert("maxToolSteps".into(), serde_json::json!(next.max_tool_steps));
-    map.insert("maxCallsPerRun".into(), serde_json::json!(next.max_calls_per_run));
+    map.insert(
+        "permissionMode".into(),
+        serde_json::json!(next.permission_mode),
+    );
+    map.insert(
+        "maxToolSteps".into(),
+        serde_json::json!(next.max_tool_steps),
+    );
+    map.insert(
+        "maxCallsPerRun".into(),
+        serde_json::json!(next.max_calls_per_run),
+    );
     let text = Value::Object(map).to_string();
     state.write(move |tx| {
         tx.execute(
@@ -371,7 +418,8 @@ pub fn save_nsfw(state: &AppState, body: NsfwUpdate) -> Result<Value, ApiError> 
 }
 
 /// 读 `ai.nsfw` 里那两个开关（读坏 / 没有 → 都关，与 Kotlin `NsfwConfig.load` 同口径）。
-fn nsfw_config(state: &AppState) -> Result<(bool, bool), ApiError> {    let raw: Option<String> = state.with(|conn| {
+fn nsfw_config(state: &AppState) -> Result<(bool, bool), ApiError> {
+    let raw: Option<String> = state.with(|conn| {
         Ok(conn
             .query_row(
                 "SELECT v FROM app_settings WHERE k = ?1",
@@ -401,7 +449,9 @@ fn nsfw_config(state: &AppState) -> Result<(bool, bool), ApiError> {    let raw:
 /// 给"会往用户眼前塞外部图片"的工具用：关着时参考图搜索必须加 `rating:general`，
 /// 不许因为模型传了 `allowNsfw=true` 就把成人图带进来。
 pub fn nsfw_enabled(state: &AppState) -> bool {
-    nsfw_config(state).map(|(enabled, _)| enabled).unwrap_or(false)
+    nsfw_config(state)
+        .map(|(enabled, _)| enabled)
+        .unwrap_or(false)
 }
 
 // ---------------------------------------------------------------------------
@@ -467,8 +517,9 @@ pub fn capability_status(
     state: &AppState,
     last_message: Option<String>,
 ) -> Result<Value, ApiError> {
-    let dir =
-        crate::provider::capability_catalog::dir_of(state.media_dir().parent().unwrap_or(state.media_dir()));
+    let dir = crate::provider::capability_catalog::dir_of(
+        state.media_dir().parent().unwrap_or(state.media_dir()),
+    );
     let status = crate::provider::capability_catalog::status(&dir);
     let now = state.with(|conn| {
         conn.query_row("SELECT CAST(strftime('%s','now') AS INTEGER)", [], |row| {

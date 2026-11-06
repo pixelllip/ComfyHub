@@ -50,8 +50,8 @@ class TagChip extends StatelessWidget {
     // 不再无条件用白色（浅色标签 + 白字 = 看不见）。
     final selectedFg =
         ThemeData.estimateBrightnessForColor(accent) == Brightness.dark
-            ? Colors.white
-            : Colors.black87;
+        ? Colors.white
+        : Colors.black87;
     final fg = selected ? selectedFg : scheme.onSurfaceVariant;
 
     return Padding(
@@ -213,7 +213,9 @@ class FilterGroup extends StatelessWidget {
         children: [
           Text(
             title,
-            style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+            style: theme.textTheme.labelSmall?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
           ),
           ...children,
         ],
@@ -259,14 +261,19 @@ class KindBadge extends StatelessWidget {
   /// 所以压在图上时改用不透明底色 + 白字 + 投影。
   final bool onImage;
 
-  const KindBadge({super.key, required this.kind, this.compact = false, this.onImage = false});
+  const KindBadge({
+    super.key,
+    required this.kind,
+    this.compact = false,
+    this.onImage = false,
+  });
 
   static IconData iconOfKind(PromptKind k) => switch (k) {
-        PromptKind.image => Icons.image_outlined,
-        PromptKind.video => Icons.movie_outlined,
-        PromptKind.audio => Icons.music_note_outlined,
-        PromptKind.mixed => Icons.auto_awesome_mosaic_outlined,
-      };
+    PromptKind.image => Icons.image_outlined,
+    PromptKind.video => Icons.movie_outlined,
+    PromptKind.audio => Icons.music_note_outlined,
+    PromptKind.mixed => Icons.auto_awesome_mosaic_outlined,
+  };
 
   /// 该类型在当前配色里的"强调色"。
   ///
@@ -274,32 +281,32 @@ class KindBadge extends StatelessWidget {
   /// 它们在浅色主题下偏亮、在动态取色下与主色打架。现在改用 M3 的角色 ——
   /// 图片走 primary、视频走 tertiary、音频走 secondary，"混合"走中性色。
   static Color colorOfKind(ColorScheme scheme, PromptKind k) => switch (k) {
-        PromptKind.image => scheme.primary,
-        PromptKind.video => scheme.tertiary,
-        PromptKind.audio => scheme.secondary,
-        PromptKind.mixed => scheme.onSurfaceVariant,
-      };
+    PromptKind.image => scheme.primary,
+    PromptKind.video => scheme.tertiary,
+    PromptKind.audio => scheme.secondary,
+    PromptKind.mixed => scheme.onSurfaceVariant,
+  };
 
   static Color _containerOf(ColorScheme scheme, PromptKind k) => switch (k) {
-        PromptKind.image => scheme.primaryContainer,
-        PromptKind.video => scheme.tertiaryContainer,
-        PromptKind.audio => scheme.secondaryContainer,
-        PromptKind.mixed => scheme.surfaceContainerHighest,
-      };
+    PromptKind.image => scheme.primaryContainer,
+    PromptKind.video => scheme.tertiaryContainer,
+    PromptKind.audio => scheme.secondaryContainer,
+    PromptKind.mixed => scheme.surfaceContainerHighest,
+  };
 
   static Color _onContainerOf(ColorScheme scheme, PromptKind k) => switch (k) {
-        PromptKind.image => scheme.onPrimaryContainer,
-        PromptKind.video => scheme.onTertiaryContainer,
-        PromptKind.audio => scheme.onSecondaryContainer,
-        PromptKind.mixed => scheme.onSurfaceVariant,
-      };
+    PromptKind.image => scheme.onPrimaryContainer,
+    PromptKind.video => scheme.onTertiaryContainer,
+    PromptKind.audio => scheme.onSecondaryContainer,
+    PromptKind.mixed => scheme.onSurfaceVariant,
+  };
 
   static Color _onColorOf(ColorScheme scheme, PromptKind k) => switch (k) {
-        PromptKind.image => scheme.onPrimary,
-        PromptKind.video => scheme.onTertiary,
-        PromptKind.audio => scheme.onSecondary,
-        PromptKind.mixed => scheme.surface,
-      };
+    PromptKind.image => scheme.onPrimary,
+    PromptKind.video => scheme.onTertiary,
+    PromptKind.audio => scheme.onSecondary,
+    PromptKind.mixed => scheme.surface,
+  };
 
   @override
   Widget build(BuildContext context) {
@@ -308,16 +315,27 @@ class KindBadge extends StatelessWidget {
     // 压在图片 / 视频上时用实心角色色 + on 色（不再叠 alpha：0.95 的白字
     // 底色在浅色主题下会变成"浅底白字"）。
     final bg = onImage ? color : _containerOf(scheme, kind);
-    final fg = onImage ? _onColorOf(scheme, kind) : _onContainerOf(scheme, kind);
+    final fg = onImage
+        ? _onColorOf(scheme, kind)
+        : _onContainerOf(scheme, kind);
     return Container(
-      padding: EdgeInsets.symmetric(horizontal: compact ? 6 : 8, vertical: compact ? 2 : 3),
+      padding: EdgeInsets.symmetric(
+        horizontal: compact ? 6 : 8,
+        vertical: compact ? 2 : 3,
+      ),
       decoration: BoxDecoration(
         color: bg,
         borderRadius: BorderRadius.circular(AppShapes.standard.small),
         // 缩略图底色深浅不定，实心角标需要一点投影把边缘拉开
         // （这是"压在图片上"的局部阴影，不是列表项那种每帧 N 份的 elevation）。
         boxShadow: onImage
-            ? const [BoxShadow(color: Colors.black26, blurRadius: 4, offset: Offset(0, 1))]
+            ? const [
+                BoxShadow(
+                  color: Colors.black26,
+                  blurRadius: 4,
+                  offset: Offset(0, 1),
+                ),
+              ]
             : null,
       ),
       child: Row(
@@ -388,7 +406,9 @@ class EmptyState extends StatelessWidget {
               Text(
                 subtitle!,
                 textAlign: TextAlign.center,
-                style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
               ),
             ],
             if (action != null) ...[const SizedBox(height: 18), action!],
@@ -415,7 +435,11 @@ class ErrorState extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(Icons.cloud_off_outlined, size: 52, color: theme.colorScheme.error),
+            Icon(
+              Icons.cloud_off_outlined,
+              size: 52,
+              color: theme.colorScheme.error,
+            ),
             const SizedBox(height: 14),
             Text('加载失败', style: theme.textTheme.titleMedium),
             const SizedBox(height: 8),
@@ -462,7 +486,9 @@ class CopyableText extends StatelessWidget {
     if (value.isEmpty) {
       return Text(
         '$label 为空',
-        style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+        style: theme.textTheme.bodySmall?.copyWith(
+          color: theme.colorScheme.onSurfaceVariant,
+        ),
       );
     }
     return Column(
@@ -535,12 +561,16 @@ class MetaChip extends StatelessWidget {
           ],
           Text(
             label,
-            style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+            style: theme.textTheme.labelSmall?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
           ),
           const SizedBox(width: 6),
           Text(
             value!,
-            style: theme.textTheme.labelMedium?.copyWith(fontWeight: FontWeight.w600),
+            style: theme.textTheme.labelMedium?.copyWith(
+              fontWeight: FontWeight.w600,
+            ),
           ),
         ],
       ),
@@ -548,7 +578,11 @@ class MetaChip extends StatelessWidget {
   }
 }
 
-Future<void> copyToClipboard(BuildContext context, String text, {String label = '内容'}) async {
+Future<void> copyToClipboard(
+  BuildContext context,
+  String text, {
+  String label = '内容',
+}) async {
   await Clipboard.setData(ClipboardData(text: text));
   if (!context.mounted) return;
   ScaffoldMessenger.of(context).showSnackBar(

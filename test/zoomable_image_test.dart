@@ -47,7 +47,9 @@ Future<void> _pumpViewer(WidgetTester tester) async {
 
 /// 取组件内部用的变换矩阵（InteractiveViewer 收到哪个 controller 就用哪个）
 Matrix4 _transform(WidgetTester tester) {
-  final viewer = tester.widget<InteractiveViewer>(find.byType(InteractiveViewer));
+  final viewer = tester.widget<InteractiveViewer>(
+    find.byType(InteractiveViewer),
+  );
   return viewer.transformationController!.value;
 }
 
@@ -62,11 +64,15 @@ void main() {
   group('几何换算', () {
     test('contain 之后图片居中', () {
       // 800x600 的图放进 400x300：正好等比铺满
-      expect(fittedImageRect(const Size(800, 600), const Size(400, 300)),
-          const Rect.fromLTWH(0, 0, 400, 300));
+      expect(
+        fittedImageRect(const Size(800, 600), const Size(400, 300)),
+        const Rect.fromLTWH(0, 0, 400, 300),
+      );
       // 正方形图放进宽视口：左右留白，居中
-      expect(fittedImageRect(const Size(400, 400), const Size(400, 300)),
-          const Rect.fromLTWH(50, 0, 300, 300));
+      expect(
+        fittedImageRect(const Size(400, 400), const Size(400, 300)),
+        const Rect.fromLTWH(50, 0, 300, 300),
+      );
     });
 
     test('放大 2 倍时，视野只占整张图的一半', () {
@@ -134,12 +140,18 @@ void main() {
       for (var i = 0; i < 12; i++) {
         await _scrollWheel(tester, center, -200);
       }
-      expect(_transform(tester).getMaxScaleOnAxis(), lessThanOrEqualTo(8.0 + 1e-6));
+      expect(
+        _transform(tester).getMaxScaleOnAxis(),
+        lessThanOrEqualTo(8.0 + 1e-6),
+      );
 
       for (var i = 0; i < 40; i++) {
         await _scrollWheel(tester, center, 200);
       }
-      expect(_transform(tester).getMaxScaleOnAxis(), greaterThanOrEqualTo(1.0 - 1e-6));
+      expect(
+        _transform(tester).getMaxScaleOnAxis(),
+        greaterThanOrEqualTo(1.0 - 1e-6),
+      );
     });
 
     testWidgets('「适应窗口」按钮把画面复位', (tester) async {
@@ -186,7 +198,9 @@ void main() {
               child: ZoomableImageView(
                 url: 'http://localhost/broken.png',
                 imageSize: _image,
-                imageProvider: MemoryImage(Uint8List.fromList(const [1, 2, 3, 4])),
+                imageProvider: MemoryImage(
+                  Uint8List.fromList(const [1, 2, 3, 4]),
+                ),
               ),
             ),
           ),

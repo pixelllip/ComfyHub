@@ -47,7 +47,9 @@ use crate::workflow::workflow_audit::{is_broadcast, is_display};
 // ⚠ 这几个都从 `workflow_convert` 借（Kotlin 那边 `FrontendNodes.kt` 自己抄了一份
 //   `WIDGET_TYPES` / `refOf`；搬过来时**刻意只留一份** —— 两份判据分叉不会报错，
 //   只会让"两边对同一份图给出不同结果"）。
-use crate::workflow::workflow_convert::{as_int, is_widget_input, node_id, primitive_text, ref_of, ui_class, LinkTable};
+use crate::workflow::workflow_convert::{
+    as_int, is_widget_input, node_id, primitive_text, ref_of, ui_class, LinkTable,
+};
 
 /// 一次改写的总结（进工具结果，给模型和用户看"到底动了哪几根线"）。
 ///
@@ -111,10 +113,14 @@ pub fn emulate(
             }
         }
     };
-    let broadcasters: Vec<&Map<String, Value>> =
-        raw_nodes.iter().filter(|node| is_virtual(node, is_broadcast)).collect();
-    let displays: Vec<&Map<String, Value>> =
-        raw_nodes.iter().filter(|node| is_virtual(node, is_display)).collect();
+    let broadcasters: Vec<&Map<String, Value>> = raw_nodes
+        .iter()
+        .filter(|node| is_virtual(node, is_broadcast))
+        .collect();
+    let displays: Vec<&Map<String, Value>> = raw_nodes
+        .iter()
+        .filter(|node| is_virtual(node, is_display))
+        .collect();
 
     // 空输入只算一次；每灌一条线就记进 filled，后面的广播不会再重复灌同一个位置
     let all_open = open_inputs(object_info, &out);
@@ -128,7 +134,9 @@ pub fn emulate(
         let routes = broadcast_routes(node, links, &spec, &out);
         if routes.is_empty() {
             // 它自己都没接上游：没有任何东西可广播（前端这时候也不会灌值）
-            report.unsupported.push(format!("{id} {class}（没有接上游，没有东西可以广播）"));
+            report
+                .unsupported
+                .push(format!("{id} {class}（没有接上游，没有东西可以广播）"));
             continue;
         }
         let mut filled_here = 0usize;
@@ -150,28 +158,39 @@ pub fn emulate(
                 let Some(node_body) = out.get(&target.node_id).and_then(Value::as_object) else {
                     continue;
                 };
-                let mut inputs: Map<String, Value> =
-                    node_body.get("inputs").and_then(Value::as_object).cloned().unwrap_or_default();
-                inputs.insert(target.name.clone(), json!([ref_of(&route.source.0), route.source.1]));
+                let mut inputs: Map<String, Value> = node_body
+                    .get("inputs")
+                    .and_then(Value::as_object)
+                    .cloned()
+                    .unwrap_or_default();
+                inputs.insert(
+                    target.name.clone(),
+                    json!([ref_of(&route.source.0), route.source.1]),
+                );
                 let mut rebuilt = node_body.clone();
                 rebuilt.insert("inputs".into(), Value::Object(inputs));
                 out.insert(target.node_id.clone(), Value::Object(rebuilt));
                 filled.insert((target.node_id.clone(), target.name.clone()));
                 filled_here += 1;
-                report
-                    .broadcast
-                    .push(format!("{}.{} ← 节点 {id}（{class}）", target.node_id, target.name));
+                report.broadcast.push(format!(
+                    "{}.{} ← 节点 {id}（{class}）",
+                    target.node_id, target.name
+                ));
             }
         }
         if filled_here > 0 {
-            report.rewritten.push(format!("{id} {class}（广播 {filled_here} 处）"));
+            report
+                .rewritten
+                .push(format!("{id} {class}（广播 {filled_here} 处）"));
         }
     }
 
     // --- ② 显示节点：丢掉（官方前端也不把这类写进提示词）---
     for node in &displays {
         let Some(id) = node_id(node) else { continue };
-        report.rewritten.push(format!("{id} {}（显示节点，已忽略）", ui_class(node)));
+        report
+            .rewritten
+            .push(format!("{id} {}（显示节点，已忽略）", ui_class(node)));
     }
 
     // --- ③ 一个输出节点都没有：前端会自动挂 SaveImage，这里照做 ---
@@ -195,7 +214,9 @@ pub fn emulate(
             node.insert("class_type".into(), json!("SaveImage"));
             node.insert("inputs".into(), Value::Object(inputs));
             out.insert(new_id.clone(), Value::Object(node));
-            report.injected.push(format!("{new_id} SaveImage（原本没有输出节点，照前端的做法补一个）"));
+            report.injected.push(format!(
+                "{new_id} SaveImage（原本没有输出节点，照前端的做法补一个）"
+            ));
         }
     }
 
@@ -216,7 +237,14 @@ pub fn emulate(
 pub fn open_inputs_of(object_info: &Map<String, Value>, graph: &Map<String, Value>) -> Vec<String> {
     open_inputs(object_info, graph)
         .into_iter()
-        .map(|target| format!("{}.{} ({})", target.node_id, target.name, target.types.join("/")))
+        .map(|target| {
+            format!(
+                "{}.{} ({})",
+                target.node_id,
+                target.name,
+                target.types.join("/")
+            )
+        })
         .collect()
 }
 
@@ -233,7 +261,14 @@ pub fn required_open_inputs_of(
     open_inputs(object_info, graph)
         .into_iter()
         .filter(|target| target.required)
-        .map(|target| format!("{}.{} ({})", target.node_id, target.name, target.types.join("/")))
+        .map(|target| {
+            format!(
+                "{}.{} ({})",
+                target.node_id,
+                target.name,
+                target.types.join("/")
+            )
+        })
         .collect()
 }
 
@@ -292,16 +327,29 @@ fn broadcast_routes(
     if spec.type_name.is_some() || spec.name_filter.is_some() {
         return broadcast_source(node, links)
             .and_then(|source| resolve_for(graph, source))
-            .map(|source| vec![BroadcastRoute { source, type_name: None }])
+            .map(|source| {
+                vec![BroadcastRoute {
+                    source,
+                    type_name: None,
+                }]
+            })
             .unwrap_or_default();
     }
     // 新版本：逐个插口
     let mut out: Vec<BroadcastRoute> = Vec::new();
-    let Some(entries) = node.get("inputs").and_then(Value::as_array) else { return out };
+    let Some(entries) = node.get("inputs").and_then(Value::as_array) else {
+        return out;
+    };
     for entry in entries.iter().filter_map(Value::as_object) {
-        let Some(link_id) = as_int(entry.get("link")) else { continue };
-        let Some(source) = links.get(&link_id).cloned() else { continue };
-        let Some(source) = resolve_for(graph, source) else { continue };
+        let Some(link_id) = as_int(entry.get("link")) else {
+            continue;
+        };
+        let Some(source) = links.get(&link_id).cloned() else {
+            continue;
+        };
+        let Some(source) = resolve_for(graph, source) else {
+            continue;
+        };
         let type_name = entry
             .get("type")
             .and_then(primitive_text)
@@ -320,7 +368,9 @@ fn broadcast_spec(node: &Map<String, Value>) -> BroadcastSpec {
     let props = node.get("properties").and_then(Value::as_object);
     let prop = |keys: &[&str]| -> Option<String> {
         for key in keys {
-            let Some(value) = props.and_then(|map| map.get(*key)) else { continue };
+            let Some(value) = props.and_then(|map| map.get(*key)) else {
+                continue;
+            };
             if value.is_null() {
                 continue;
             }
@@ -335,8 +385,8 @@ fn broadcast_spec(node: &Map<String, Value>) -> BroadcastSpec {
     };
     let raw_type = prop(&["Input Type", "inputType", "Type", "type"]);
     // 前端把"不限类型"写成 `*` / `*?` / `anything`
-    let type_name =
-        raw_type.filter(|text| text != "*" && text != "*?" && !text.eq_ignore_ascii_case("anything"));
+    let type_name = raw_type
+        .filter(|text| text != "*" && text != "*?" && !text.eq_ignore_ascii_case("anything"));
     BroadcastSpec {
         type_name,
         name_filter: prop(&["Input Name", "inputName", "Prefix", "Filter", "filter"]),
@@ -356,9 +406,18 @@ fn matches(spec: &BroadcastSpec, target: &OpenInput, route_type: Option<&str>) -
         // 非 ASCII 的过滤词只在个别字符（如 `İ`）上比 Kotlin 宽一点，不会漏灌。
         return target.name.to_lowercase().contains(&filter.to_lowercase());
     }
-    let wanted = spec.type_name.as_deref().or(route_type).filter(|text| !text.is_empty() && *text != "*");
-    let Some(type_name) = wanted else { return false };
-    target.types.iter().any(|accepted| accepted.eq_ignore_ascii_case(type_name))
+    let wanted = spec
+        .type_name
+        .as_deref()
+        .or(route_type)
+        .filter(|text| !text.is_empty() && *text != "*");
+    let Some(type_name) = wanted else {
+        return false;
+    };
+    target
+        .types
+        .iter()
+        .any(|accepted| accepted.eq_ignore_ascii_case(type_name))
 }
 
 /// 广播节点的上游：它自己的那个连线型输入接的是谁（Kotlin `broadcastSource`）。
@@ -366,10 +425,14 @@ fn matches(spec: &BroadcastSpec, target: &OpenInput, route_type: Option<&str>) -
 /// 有的版本写成 `widgets_values` 里的上游名字 —— **认不出来就不广播**（不猜）。
 fn broadcast_source(node: &Map<String, Value>, links: &LinkTable) -> Option<(String, i64)> {
     for entry in node.get("inputs").and_then(Value::as_array)? {
-        let Some(entry) = entry.as_object() else { continue };
+        let Some(entry) = entry.as_object() else {
+            continue;
+        };
         // Kotlin `linkIdOf` 用的是严格 `toLongOrNull()`；这里复用 `as_int`
         // （它多认 `"1.0"` 这种写法）—— 真实存档里 link 都是整数，两者等价。
-        let Some(link_id) = as_int(entry.get("link")) else { continue };
+        let Some(link_id) = as_int(entry.get("link")) else {
+            continue;
+        };
         if let Some(source) = links.get(&link_id) {
             return Some(source.clone());
         }
@@ -405,14 +468,27 @@ struct OpenInput {
 fn open_inputs(object_info: &Map<String, Value>, graph: &Map<String, Value>) -> Vec<OpenInput> {
     let mut out: Vec<OpenInput> = Vec::new();
     for (node_id, value) in graph {
-        let Some(node) = value.as_object() else { continue };
-        let Some(class) = node.get("class_type").and_then(primitive_text) else { continue };
-        let Some(info) = object_info.get(&class).and_then(Value::as_object) else { continue };
-        let Some(input) = info.get("input").and_then(Value::as_object) else { continue };
-        let present: HashSet<&String> =
-            node.get("inputs").and_then(Value::as_object).map(|map| map.keys().collect()).unwrap_or_default();
+        let Some(node) = value.as_object() else {
+            continue;
+        };
+        let Some(class) = node.get("class_type").and_then(primitive_text) else {
+            continue;
+        };
+        let Some(info) = object_info.get(&class).and_then(Value::as_object) else {
+            continue;
+        };
+        let Some(input) = info.get("input").and_then(Value::as_object) else {
+            continue;
+        };
+        let present: HashSet<&String> = node
+            .get("inputs")
+            .and_then(Value::as_object)
+            .map(|map| map.keys().collect())
+            .unwrap_or_default();
         for group in ["required", "optional"] {
-            let Some(map) = input.get(group).and_then(Value::as_object) else { continue };
+            let Some(map) = input.get(group).and_then(Value::as_object) else {
+                continue;
+            };
             for (name, raw) in map {
                 if present.contains(name) {
                     continue;
@@ -440,12 +516,16 @@ fn open_inputs(object_info: &Map<String, Value>, graph: &Map<String, Value>) -> 
 
 /// `/object_info` 里一个输入声明的可接受类型（`["MODEL"]` / `[[…]]` / `["INT",{…}]`）。
 fn accepted_types(spec: &[Value]) -> Vec<String> {
-    let Some(head) = spec.first() else { return Vec::new() };
+    let Some(head) = spec.first() else {
+        return Vec::new();
+    };
     // COMBO 之类的枚举 = 控件型，上面已经挡掉
     if head.is_array() {
         return Vec::new();
     }
-    let Some(text) = primitive_text(head) else { return Vec::new() };
+    let Some(text) = primitive_text(head) else {
+        return Vec::new();
+    };
     let text = text.trim();
     // 以 `*` 结尾的老写法（`"MODEL,CLIP"` / `"*"`）在 /object_info 里很少见，认不出来就不猜
     if text.is_empty() || text.starts_with('*') {
@@ -462,7 +542,9 @@ fn accepted_types(spec: &[Value]) -> Vec<String> {
 ///  2. 没有 `output` 声明时，退回"类名像解码 / 合成图"的那几个（`VAEDecode` / `SaveImage` …）；
 ///  3. 都认不出来 = 不认（宁可少补一个输出节点，也不能把错的线接上去）。
 fn produces(object_info: &Map<String, Value>, node: &Map<String, Value>, type_name: &str) -> bool {
-    let Some(class) = node.get("class_type").and_then(primitive_text) else { return false };
+    let Some(class) = node.get("class_type").and_then(primitive_text) else {
+        return false;
+    };
     let declared = object_info
         .get(&class)
         .and_then(Value::as_object)
@@ -470,7 +552,9 @@ fn produces(object_info: &Map<String, Value>, node: &Map<String, Value>, type_na
         .and_then(Value::as_array);
     if let Some(declared) = declared {
         return declared.iter().any(|item| {
-            primitive_text(item).map(|text| text.eq_ignore_ascii_case(type_name)).unwrap_or(false)
+            primitive_text(item)
+                .map(|text| text.eq_ignore_ascii_case(type_name))
+                .unwrap_or(false)
         });
     }
     if type_name == "IMAGE" {
@@ -484,8 +568,10 @@ const IMAGE_MAKERS: [&str; 4] = ["VAEDecode", "ImageScale", "ImageBlend", "Image
 
 /// 这个节点算不算"已经会存 / 会显示图"的（Kotlin `isSaveLikeNode`）。
 fn is_save_like_node(value: &Value) -> bool {
-    let Some(class) =
-        value.as_object().and_then(|node| node.get("class_type")).and_then(primitive_text)
+    let Some(class) = value
+        .as_object()
+        .and_then(|node| node.get("class_type"))
+        .and_then(primitive_text)
     else {
         return false;
     };
@@ -495,7 +581,12 @@ fn is_save_like_node(value: &Value) -> bool {
 /// 没人用过的新节点号（Kotlin `freshNodeId`）。
 fn fresh_node_id<'a>(existing: impl Iterator<Item = &'a String>) -> String {
     let used: HashSet<&String> = existing.collect();
-    let mut next = used.iter().filter_map(|id| id.parse::<i64>().ok()).max().unwrap_or(0) + 1;
+    let mut next = used
+        .iter()
+        .filter_map(|id| id.parse::<i64>().ok())
+        .max()
+        .unwrap_or(0)
+        + 1;
     while used.contains(&next.to_string()) {
         next += 1;
     }

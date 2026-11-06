@@ -50,10 +50,9 @@ fn run_export(f: &Fixture, out: &Path, req: ExportRequest) -> Result<ExportRepor
 }
 
 fn read_json(path: &Path) -> Value {
-    let text = std::fs::read_to_string(path)
-        .unwrap_or_else(|e| panic!("读不到 {}：{e}", path.display()));
-    serde_json::from_str(&text)
-        .unwrap_or_else(|e| panic!("{} 不是合法 JSON：{e}", path.display()))
+    let text =
+        std::fs::read_to_string(path).unwrap_or_else(|e| panic!("读不到 {}：{e}", path.display()));
+    serde_json::from_str(&text).unwrap_or_else(|e| panic!("{} 不是合法 JSON：{e}", path.display()))
 }
 
 fn subdir(f: &Fixture, name: &str) -> PathBuf {
@@ -119,27 +118,40 @@ fn 按类型分目录_集合单独成夹_工作流去重并带上元信息() {
     write_media_file(&f, "clip.mp4", b"vid");
     write_media_file(&f, "track.mp3", b"aud");
 
-    let report = run_export(&f, &f.out, ExportRequest {
-        dir: String::new(),
-        media_ids: None,
-        collection_id: None,
-        favorites: false,
-        include_workflow: true,
-        include_api_workflow: true,
-    })
+    let report = run_export(
+        &f,
+        &f.out,
+        ExportRequest {
+            dir: String::new(),
+            media_ids: None,
+            collection_id: None,
+            favorites: false,
+            include_workflow: true,
+            include_api_workflow: true,
+        },
+    )
     .expect("导出");
 
     assert_eq!(report.exported, 5, "3 张图 + 1 视频 + 1 音频");
     assert_eq!(report.collections, 1, "只有 7 号集合");
-    assert_eq!(report.workflows, 3, "两份 UI 工作流 + 一份 API 图（同内容去重）");
+    assert_eq!(
+        report.workflows, 3,
+        "两份 UI 工作流 + 一份 API 图（同内容去重）"
+    );
     assert_eq!(report.failed.len(), 0, "不该有失败：{report:?}");
     assert_eq!(report.by_kind.get("IMAGE"), Some(&3));
     assert_eq!(report.by_kind.get("VIDEO"), Some(&1));
     assert_eq!(report.by_kind.get("AUDIO"), Some(&1));
 
     // 布局
-    assert!(f.out.join("图片/solo.png").is_file(), "散图直接放在类型目录下");
-    assert!(f.out.join("图片/夜景三连/a.png").is_file(), "集合成员进集合文件夹");
+    assert!(
+        f.out.join("图片/solo.png").is_file(),
+        "散图直接放在类型目录下"
+    );
+    assert!(
+        f.out.join("图片/夜景三连/a.png").is_file(),
+        "集合成员进集合文件夹"
+    );
     assert!(f.out.join("图片/夜景三连/b.png").is_file());
     assert!(f.out.join("视频/clip.mp4").is_file());
     assert!(f.out.join("音频/track.mp3").is_file());
@@ -163,12 +175,18 @@ fn 按类型分目录_集合单独成夹_工作流去重并带上元信息() {
     assert_eq!(member_meta["collection"]["id"], 7);
     assert_eq!(member_meta["collection"]["title"], "夜景三连");
     assert_eq!(member_meta["workflow"]["source"], "media");
-    assert!(member_meta["apiWorkflow"]["file"].as_str().is_some(), "有捕获记录就该带 API 图");
+    assert!(
+        member_meta["apiWorkflow"]["file"].as_str().is_some(),
+        "有捕获记录就该带 API 图"
+    );
     let collection = read_json(&f.out.join("图片/夜景三连/collection.json"));
     assert_eq!(collection["id"], 7);
     assert_eq!(collection["title"], "夜景三连");
     assert_eq!(collection["members"].as_array().unwrap().len(), 2);
-    assert_eq!(collection["members"][0]["mediaId"], 101, "成员顺序按 created_at / id");
+    assert_eq!(
+        collection["members"][0]["mediaId"], 101,
+        "成员顺序按 created_at / id"
+    );
     assert_eq!(collection["members"][1]["mediaId"], 102);
 
     // 工作流目录：UI 两份 + API 一份
@@ -213,14 +231,18 @@ fn 原始文件名里的非法字符与重名一律净化且不出目标目录()
         write_media_file(&f, stored, b"img");
     }
 
-    let report = run_export(&f, &f.out, ExportRequest {
-        dir: String::new(),
-        media_ids: None,
-        collection_id: None,
-        favorites: false,
-        include_workflow: true,
-        include_api_workflow: false,
-    })
+    let report = run_export(
+        &f,
+        &f.out,
+        ExportRequest {
+            dir: String::new(),
+            media_ids: None,
+            collection_id: None,
+            favorites: false,
+            include_workflow: true,
+            include_api_workflow: false,
+        },
+    )
     .expect("导出");
     assert_eq!(report.exported, 4);
 
@@ -231,12 +253,20 @@ fn 原始文件名里的非法字符与重名一律净化且不出目标目录()
         .collect();
     assert_eq!(names.len(), 8, "4 份原件 + 4 份侧车：{names:?}");
     assert!(
-        names.iter().all(|n| !n.contains('/') && !n.contains('\\') && !n.starts_with("..")),
+        names
+            .iter()
+            .all(|n| !n.contains('/') && !n.contains('\\') && !n.starts_with("..")),
         "净化后的文件名不许带路径分隔符、也不许以 `..` 开头：{names:?}"
     );
     assert!(names.iter().any(|n| n == "_evil_name_.png"), "{names:?}");
-    assert!(names.iter().any(|n| n.starts_with("same_")), "重名必须加后缀：{names:?}");
-    assert!(names.iter().any(|n| n == "_CON.png"), "Windows 保留名要被避开：{names:?}");
+    assert!(
+        names.iter().any(|n| n.starts_with("same_")),
+        "重名必须加后缀：{names:?}"
+    );
+    assert!(
+        names.iter().any(|n| n == "_CON.png"),
+        "Windows 保留名要被避开：{names:?}"
+    );
 
     // 真正的验收：目标目录之外一个文件都没多出来。
     assert!(!f.root.join("evil_name_.png").exists());
@@ -289,19 +319,26 @@ fn 文件缺失只报那一条_其余照常导出() {
     );
     write_media_file(&f, "ok.png", b"img");
 
-    let report = run_export(&f, &f.out, ExportRequest {
-        dir: String::new(),
-        media_ids: None,
-        collection_id: None,
-        favorites: false,
-        include_workflow: false,
-        include_api_workflow: false,
-    })
+    let report = run_export(
+        &f,
+        &f.out,
+        ExportRequest {
+            dir: String::new(),
+            media_ids: None,
+            collection_id: None,
+            favorites: false,
+            include_workflow: false,
+            include_api_workflow: false,
+        },
+    )
     .expect("导出");
     assert_eq!(report.exported, 1);
     assert_eq!(report.failed.len(), 1);
     assert_eq!(report.failed[0].media_id, Some(2));
-    assert!(report.failed[0].reason.contains("文件不在盘上"), "{report:?}");
+    assert!(
+        report.failed[0].reason.contains("文件不在盘上"),
+        "{report:?}"
+    );
     assert!(f.out.join("图片/ok.png").is_file());
 
     let manifest = read_json(&f.out.join("导出清单.json"));
@@ -329,77 +366,108 @@ fn 范围_收藏_选中_集合与空选中() {
         write_media_file(&f, &format!("m{id}.png"), b"img");
     }
 
-    let by_favorite = run_export(&f, &subdir(&f, "favorite"), ExportRequest {
-        dir: String::new(),
-        media_ids: None,
-        collection_id: None,
-        favorites: true,
-        include_workflow: false,
-        include_api_workflow: false,
-    })
+    let by_favorite = run_export(
+        &f,
+        &subdir(&f, "favorite"),
+        ExportRequest {
+            dir: String::new(),
+            media_ids: None,
+            collection_id: None,
+            favorites: true,
+            include_workflow: false,
+            include_api_workflow: false,
+        },
+    )
     .expect("仅收藏");
     assert_eq!(by_favorite.exported, 1);
 
-    let by_ids = run_export(&f, &subdir(&f, "ids"), ExportRequest {
-        dir: String::new(),
-        media_ids: Some(vec![2]),
-        collection_id: None,
-        favorites: false,
-        include_workflow: false,
-        include_api_workflow: false,
-    })
+    let by_ids = run_export(
+        &f,
+        &subdir(&f, "ids"),
+        ExportRequest {
+            dir: String::new(),
+            media_ids: Some(vec![2]),
+            collection_id: None,
+            favorites: false,
+            include_workflow: false,
+            include_api_workflow: false,
+        },
+    )
     .expect("选中");
     assert_eq!(by_ids.exported, 1);
 
-    let by_collection = run_export(&f, &subdir(&f, "collection"), ExportRequest {
-        dir: String::new(),
-        media_ids: None,
-        collection_id: Some(7),
-        favorites: false,
-        include_workflow: false,
-        include_api_workflow: false,
-    })
+    let by_collection = run_export(
+        &f,
+        &subdir(&f, "collection"),
+        ExportRequest {
+            dir: String::new(),
+            media_ids: None,
+            collection_id: Some(7),
+            favorites: false,
+            include_workflow: false,
+            include_api_workflow: false,
+        },
+    )
     .expect("集合");
     assert_eq!(by_collection.exported, 2);
     assert_eq!(by_collection.collections, 1);
 
     // `Some([])` = 用户确实选了 0 条，**不许**退化成"全部"
-    let empty = run_export(&f, &subdir(&f, "empty"), ExportRequest {
-        dir: String::new(),
-        media_ids: Some(Vec::new()),
-        collection_id: None,
-        favorites: false,
-        include_workflow: false,
-        include_api_workflow: false,
-    })
+    let empty = run_export(
+        &f,
+        &subdir(&f, "empty"),
+        ExportRequest {
+            dir: String::new(),
+            media_ids: Some(Vec::new()),
+            collection_id: None,
+            favorites: false,
+            include_workflow: false,
+            include_api_workflow: false,
+        },
+    )
     .expect("空选中");
     assert_eq!(empty.exported, 0);
-    assert!(f.out.join("empty/导出清单.json").is_file(), "空导出也要有清单");
+    assert!(
+        f.out.join("empty/导出清单.json").is_file(),
+        "空导出也要有清单"
+    );
 }
 
 #[test]
 fn 不许导出到自己的存储目录() {
     let f = fixture("guard");
-    let err = run_export(&f, f.state.media_dir(), ExportRequest {
-        dir: String::new(),
-        media_ids: None,
-        collection_id: None,
-        favorites: false,
-        include_workflow: false,
-        include_api_workflow: false,
-    })
+    let err = run_export(
+        &f,
+        f.state.media_dir(),
+        ExportRequest {
+            dir: String::new(),
+            media_ids: None,
+            collection_id: None,
+            favorites: false,
+            include_workflow: false,
+            include_api_workflow: false,
+        },
+    )
     .expect_err("必须拒绝");
     assert!(err.human().contains("存储目录"), "{}", err.human());
 
     let missing = f.root.join("does-not-exist");
-    let err = run_export(&f, &missing, ExportRequest {
-        dir: String::new(),
-        media_ids: None,
-        collection_id: None,
-        favorites: false,
-        include_workflow: false,
-        include_api_workflow: false,
-    })
+    let err = run_export(
+        &f,
+        &missing,
+        ExportRequest {
+            dir: String::new(),
+            media_ids: None,
+            collection_id: None,
+            favorites: false,
+            include_workflow: false,
+            include_api_workflow: false,
+        },
+    )
     .expect_err("目标不存在必须拒绝");
-    assert!(err.human().contains("不存在") || err.human().contains("不可用"), "{}", err.human());
+    assert!(
+        err.human().contains("不存在") || err.human().contains("不可用"),
+        "{}",
+        err.human()
+    );
 }

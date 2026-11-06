@@ -11,7 +11,10 @@ fn feed(stripper: &mut TitleStripper, chunks: &[&str]) -> String {
 #[test]
 fn 标记被摘掉_标题写出来_正文一个字不少() {
     let mut stripper = TitleStripper::new(true);
-    let text = feed(&mut stripper, &["[标题]Krea2 画风迁移[/标题]\n\n你好，我可以帮你。"]);
+    let text = feed(
+        &mut stripper,
+        &["[标题]Krea2 画风迁移[/标题]\n\n你好，我可以帮你。"],
+    );
     assert_eq!(text, "你好，我可以帮你。", "标记与它后面的空行都不该出现");
     assert_eq!(stripper.title(), Some("Krea2 画风迁移"));
     assert!(stripper.finished());
@@ -20,7 +23,10 @@ fn 标记被摘掉_标题写出来_正文一个字不少() {
 #[test]
 fn 标记被切成好几片也不漏半个() {
     let mut stripper = TitleStripper::new(true);
-    let text = feed(&mut stripper, &["[标", "题]海", "报设计[/标", "题]", "开始吧"]);
+    let text = feed(
+        &mut stripper,
+        &["[标", "题]海", "报设计[/标", "题]", "开始吧"],
+    );
     assert_eq!(text, "开始吧");
     assert_eq!(stripper.title(), Some("海报设计"));
 }
@@ -31,7 +37,11 @@ fn 不按格式来时一个字都不吞() {
     // 压过 MAX_START_LOOKAHEAD 才放行（说明模型根本不打算给标题）
     let long = "啰".repeat(MAX_START_LOOKAHEAD + 5);
     let text = stripper.push(&long);
-    assert_eq!(text.chars().count(), long.chars().count(), "压久了必须全放出来");
+    assert_eq!(
+        text.chars().count(),
+        long.chars().count(),
+        "压久了必须全放出来"
+    );
     assert!(!stripper.finished(), "还没确认没有标记");
     // 标题一直不闭合：长度超限后当正文放行
     let mut stripper = TitleStripper::new(true);
@@ -42,7 +52,10 @@ fn 不按格式来时一个字都不吞() {
     let partial = stripper.push("[标题]只有一半");
     assert_eq!(partial, "", "还没到认输的长度，先压着");
     let flushed = stripper.flush();
-    assert!(flushed.contains("只有一半"), "流结束时必须放出来：{flushed}");
+    assert!(
+        flushed.contains("只有一半"),
+        "流结束时必须放出来：{flushed}"
+    );
 }
 
 #[test]
@@ -59,15 +72,24 @@ fn 回声只摘标记_不改已定的标题() {
 
 #[test]
 fn 标题的清洗去掉前缀与包裹() {
-    assert_eq!(clean_title("标题：Krea2 出图").as_deref(), Some("Krea2 出图"));
+    assert_eq!(
+        clean_title("标题：Krea2 出图").as_deref(),
+        Some("Krea2 出图")
+    );
     assert_eq!(clean_title("《初音未来》").as_deref(), Some("初音未来"));
     assert_eq!(clean_title("多余   空白").as_deref(), Some("多余 空白"));
     // ⚠ 与 Kotlin **逐字一致**的一处"怪"：去掉引号之后**不再 trim 空白**
     //   （Kotlin 的两次 `trim(…)` 里都没有空格）—— 所以引号内的空白会留着。
     //   照抄比"顺手改好"更安全：改了就是两端标题不一样。
-    assert_eq!(clean_title("\"  多余 空白  \"").as_deref(), Some(" 多余 空白 "));
+    assert_eq!(
+        clean_title("\"  多余 空白  \"").as_deref(),
+        Some(" 多余 空白 ")
+    );
     assert_eq!(clean_title("   "), None);
-    assert_eq!(clean_title(&"长".repeat(100)).unwrap().chars().count(), MAX_TITLE_CHARS);
+    assert_eq!(
+        clean_title(&"长".repeat(100)).unwrap().chars().count(),
+        MAX_TITLE_CHARS
+    );
 }
 
 #[test]

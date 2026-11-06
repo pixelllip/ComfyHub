@@ -58,7 +58,13 @@ MockClient _mockClient() {
         'byMediaKind': <String, int>{},
       };
     } else if (path == '/api/prompts' || path == '/api/media') {
-      body = {'items': <Object>[], 'total': 0, 'page': 1, 'size': 24, 'pages': 0};
+      body = {
+        'items': <Object>[],
+        'total': 0,
+        'page': 1,
+        'size': 24,
+        'pages': 0,
+      };
     } else {
       status = 404;
       body = {'error': 'not found: $path'};
@@ -81,7 +87,10 @@ void main() {
     SharedPreferences.setMockInitialValues({});
     final settings = SettingsStore();
     await settings.load();
-    final store = LibraryStore(settings, api: ApiClient(settings.baseUrl, client: _mockClient()));
+    final store = LibraryStore(
+      settings,
+      api: ApiClient(settings.baseUrl, client: _mockClient()),
+    );
     addTearDown(store.dispose);
     await store.refreshAll();
 
@@ -106,8 +115,11 @@ void main() {
     final r3 = tester.getRect(cards.at(3));
 
     // 1600 - 左右各 16 的 padding = 1568 → 1568/328 = 4 列（上限也是 4）
-    expect(r0.width, greaterThanOrEqualTo(kTagCardMinWidth),
-        reason: '宽窗口的每一列都不能比 360 窗口下那张卡更窄');
+    expect(
+      r0.width,
+      greaterThanOrEqualTo(kTagCardMinWidth),
+      reason: '宽窗口的每一列都不能比 360 窗口下那张卡更窄',
+    );
     expect(r1.top, closeTo(r0.top, 0.5), reason: '前两张在同一行');
     expect(r1.left, greaterThan(r0.right - 1), reason: '第二张在第一张右边');
     expect(r2.top, closeTo(r0.top, 0.5), reason: '四列正好放四张，第三张也在同一行');
@@ -126,8 +138,11 @@ void main() {
     final r1 = tester.getRect(cards.at(1));
 
     // 360 - 左右各 16 的 padding = 328 —— 这就是 [kTagCardMinWidth]
-    expect(r0.width, closeTo(kTagCardMinWidth, 1),
-        reason: '最小窗口下一列满宽，且等于标签卡的最小宽度');
+    expect(
+      r0.width,
+      closeTo(kTagCardMinWidth, 1),
+      reason: '最小窗口下一列满宽，且等于标签卡的最小宽度',
+    );
     expect(r1.top, greaterThan(r0.bottom + 1), reason: '一张一行');
     expect(find.textContaining(_longDescription), findsOneWidget);
 

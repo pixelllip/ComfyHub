@@ -14,7 +14,12 @@ void main() {
         height: 1024,
         regions: [LayoutRegion(id: 'a', rect: LayoutRect(0, 0, 1000, 1000))],
       );
-      expect(spec.mossBbox(const LayoutRect(0, 0, 1000, 1000)), [-512, -512, 512, 512]);
+      expect(spec.mossBbox(const LayoutRect(0, 0, 1000, 1000)), [
+        -512,
+        -512,
+        512,
+        512,
+      ]);
     });
 
     test('起点 floor、终点 ceil，且换成以中心为原点的像素', () {
@@ -23,10 +28,12 @@ void main() {
       //   x0 = 250*768//1000 - 384 = 192-384 = -192
       //   x1 = ceil(750*768/1000) - 384 = 576-384 = 192
       //   y0 = 0-512 = -512 ; y1 = ceil(250*1024/1000)-512 = 256-512 = -256
-      expect(
-        spec.mossBbox(const LayoutRect(250, 0, 500, 250)),
-        [-512, -192, -256, 192],
-      );
+      expect(spec.mossBbox(const LayoutRect(250, 0, 500, 250)), [
+        -512,
+        -192,
+        -256,
+        192,
+      ]);
     });
 
     test('整段 JSON 与节点输出同构（golden）', () {
@@ -35,7 +42,11 @@ void main() {
         height: 1024,
         brief: '雾夜',
         regions: [
-          LayoutRegion(id: 'a', rect: LayoutRect(250, 500, 250, 250), label: '旅人'),
+          LayoutRegion(
+            id: 'a',
+            rect: LayoutRect(250, 500, 250, 250),
+            label: '旅人',
+          ),
         ],
       );
       // ComfyUI 那边是 json.dumps(..., separators=(",", ":"))，即紧凑无空格、键序如下。
@@ -110,8 +121,16 @@ void main() {
         width: 1024,
         height: 1024,
         regions: [
-          LayoutRegion(id: 'a', rect: LayoutRect(80, 190, 180, 130), label: '镜子'),
-          LayoutRegion(id: 'b', rect: LayoutRect(0, 256, 340, 104), label: '桌子'),
+          LayoutRegion(
+            id: 'a',
+            rect: LayoutRect(80, 190, 180, 130),
+            label: '镜子',
+          ),
+          LayoutRegion(
+            id: 'b',
+            rect: LayoutRect(0, 256, 340, 104),
+            label: '桌子',
+          ),
         ],
       );
       final prose = spec.translate().prose;
@@ -127,7 +146,11 @@ void main() {
         width: 1024,
         height: 1024,
         regions: [
-          LayoutRegion(id: 'b', rect: LayoutRect(0, 0, 1000, 250), kind: LayoutBoxKind.blank),
+          LayoutRegion(
+            id: 'b',
+            rect: LayoutRect(0, 0, 1000, 250),
+            kind: LayoutBoxKind.blank,
+          ),
         ],
       );
       expect(spec.translate().prose, contains('留白'));
@@ -141,7 +164,11 @@ void main() {
         brief: '测试',
         regions: [
           LayoutRegion(id: 'a', rect: LayoutRect(10, 20, 300, 400), label: '甲'),
-          LayoutRegion(id: 'b', rect: LayoutRect(500, 500, 200, 200), label: '乙'),
+          LayoutRegion(
+            id: 'b',
+            rect: LayoutRect(500, 500, 200, 200),
+            label: '乙',
+          ),
         ],
       );
       final first = spec.translate();
@@ -156,7 +183,11 @@ void main() {
         height: 1024,
         regions: [
           for (var i = 0; i < 7; i++)
-            LayoutRegion(id: 'r$i', rect: const LayoutRect(0, 0, 100, 100), label: 'x'),
+            LayoutRegion(
+              id: 'r$i',
+              rect: const LayoutRect(0, 0, 100, 100),
+              label: 'x',
+            ),
         ],
       );
       final t = spec.translate();
@@ -205,9 +236,9 @@ void main() {
       );
       final t = spec.translate();
       expect(t.prose, contains('与「女生」是同一个人的镜像'));
-      final mirror = spec
-          .mossItems()
-          .firstWhere((i) => '${i['caption']}'.contains('镜像'));
+      final mirror = spec.mossItems().firstWhere(
+        (i) => '${i['caption']}'.contains('镜像'),
+      );
       expect(mirror['caption'], contains('姿势必须一致'));
     });
 
@@ -270,13 +301,17 @@ void main() {
       final o = canvas.localToGlobal(Offset.zero);
       final s = canvas.size;
 
-      await tester.dragFrom(o + Offset(s.width * 0.05, s.height * 0.05),
-          Offset(s.width * 0.2, s.height * 0.2));
+      await tester.dragFrom(
+        o + Offset(s.width * 0.05, s.height * 0.05),
+        Offset(s.width * 0.2, s.height * 0.2),
+      );
       await tester.pumpAndSettle();
       expect(find.text('与其他框的关系'), findsNothing);
 
-      await tester.dragFrom(o + Offset(s.width * 0.5, s.height * 0.5),
-          Offset(s.width * 0.2, s.height * 0.2));
+      await tester.dragFrom(
+        o + Offset(s.width * 0.5, s.height * 0.5),
+        Offset(s.width * 0.2, s.height * 0.2),
+      );
       await tester.pumpAndSettle();
       expect(find.text('与其他框的关系'), findsOneWidget);
       // 选中"镜像"后要能挑目标框
@@ -315,7 +350,8 @@ void main() {
           .firstWhere((t) => t.contains('bbox_coord_space'));
       final decoded = jsonDecode(json) as Map<String, dynamic>;
       final items = decoded['items'] as List<dynamic>;
-      final bbox = (items.first as Map<String, dynamic>)['bbox'] as List<dynamic>;
+      final bbox =
+          (items.first as Map<String, dynamic>)['bbox'] as List<dynamic>;
 
       // 1024x1024：起点 floor、终点 ceil，再各减半幅。
       // 这条用例盯的是"onPanStart 的位置已经吃掉 20px slop"那个 bug ——

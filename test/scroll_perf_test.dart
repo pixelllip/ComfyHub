@@ -46,7 +46,13 @@ MockClient _emptyClient({List<Map<String, dynamic>> media = const []}) {
         'pages': 1,
       };
     } else if (path == '/api/prompts') {
-      body = {'items': <Object>[], 'total': 0, 'page': 1, 'size': 24, 'pages': 0};
+      body = {
+        'items': <Object>[],
+        'total': 0,
+        'page': 1,
+        'size': 24,
+        'pages': 0,
+      };
     } else if (path == '/api/tags' || path == '/api/tags/categories') {
       body = <Object>[];
     } else if (path == '/api/stats') {
@@ -71,41 +77,46 @@ MockClient _emptyClient({List<Map<String, dynamic>> media = const []}) {
   });
 }
 
-Future<LibraryStore> _store({List<Map<String, dynamic>> media = const []}) async {
+Future<LibraryStore> _store({
+  List<Map<String, dynamic>> media = const [],
+}) async {
   SharedPreferences.setMockInitialValues({});
   final settings = SettingsStore();
   await settings.load();
-  return LibraryStore(settings, api: ApiClient(settings.baseUrl, client: _emptyClient(media: media)));
+  return LibraryStore(
+    settings,
+    api: ApiClient(settings.baseUrl, client: _emptyClient(media: media)),
+  );
 }
 
 Map<String, dynamic> _mediaJson(int id) => {
-      'id': id,
-      'kind': 'IMAGE',
-      'title': 'shot-$id.png',
-      'originalName': 'shot-$id.png',
-      'storedName': 's$id.png',
-      'mimeType': 'image/png',
-      'sizeBytes': 1024,
-      'width': 4096,
-      'height': 4096,
-      'favorite': false,
-      'source': 'ComfyUI',
-      'createdAt': '2026-09-16T01:00:00.000Z',
-      'fileUrl': '/api/media/$id/file',
-      'thumbUrl': '/api/media/$id/thumb',
-    };
+  'id': id,
+  'kind': 'IMAGE',
+  'title': 'shot-$id.png',
+  'originalName': 'shot-$id.png',
+  'storedName': 's$id.png',
+  'mimeType': 'image/png',
+  'sizeBytes': 1024,
+  'width': 4096,
+  'height': 4096,
+  'favorite': false,
+  'source': 'ComfyUI',
+  'createdAt': '2026-09-16T01:00:00.000Z',
+  'fileUrl': '/api/media/$id/file',
+  'thumbUrl': '/api/media/$id/thumb',
+};
 
 MediaAsset _asset({int? width, int? height}) => MediaAsset(
-      id: 1,
-      kind: MediaKind.image,
-      title: 'shot.png',
-      originalName: 'shot.png',
-      storedName: 's.png',
-      width: width,
-      height: height,
-      fileUrl: '/api/media/1/file',
-      thumbUrl: '/api/media/1/thumb',
-    );
+  id: 1,
+  kind: MediaKind.image,
+  title: 'shot.png',
+  originalName: 'shot.png',
+  storedName: 's.png',
+  width: width,
+  height: height,
+  fileUrl: '/api/media/1/file',
+  thumbUrl: '/api/media/1/thumb',
+);
 
 /// 把 MediaThumb 放进一个**固定尺寸**的盒子里，模拟网格格子。
 Future<void> _pumpThumb(
@@ -116,7 +127,10 @@ Future<void> _pumpThumb(
   double dpr = 1.0,
 }) async {
   tester.view.devicePixelRatio = dpr;
-  tester.view.physicalSize = Size(cell.width * dpr + 400, cell.height * dpr + 400);
+  tester.view.physicalSize = Size(
+    cell.width * dpr + 400,
+    cell.height * dpr + 400,
+  );
   addTearDown(tester.view.reset);
 
   await tester.pumpWidget(
@@ -139,8 +153,11 @@ Future<void> _pumpThumb(
 
 ResizeImage _thumbProvider(WidgetTester tester) {
   final image = tester.widget<Image>(find.byType(Image));
-  expect(image.image, isA<ResizeImage>(),
-      reason: '缩略图必须带 cacheWidth，否则会按原图分辨率解码');
+  expect(
+    image.image,
+    isA<ResizeImage>(),
+    reason: '缩略图必须带 cacheWidth，否则会按原图分辨率解码',
+  );
   return image.image as ResizeImage;
 }
 
@@ -158,10 +175,14 @@ class _IntrinsicProbe extends SingleChildRenderObjectWidget {
   final _IntrinsicCounter counter;
 
   @override
-  _ProbeRender createRenderObject(BuildContext context) => _ProbeRender(counter);
+  _ProbeRender createRenderObject(BuildContext context) =>
+      _ProbeRender(counter);
 
   @override
-  void updateRenderObject(BuildContext context, covariant _ProbeRender renderObject) {
+  void updateRenderObject(
+    BuildContext context,
+    covariant _ProbeRender renderObject,
+  ) {
     renderObject.counter = counter;
   }
 }
@@ -190,8 +211,13 @@ void main() {
       final store = await _store();
       addTearDown(store.dispose);
 
-      await _pumpThumb(tester, store, _asset(width: 4096, height: 4096),
-          cell: const Size(100, 100), dpr: 2.0);
+      await _pumpThumb(
+        tester,
+        store,
+        _asset(width: 4096, height: 4096),
+        cell: const Size(100, 100),
+        dpr: 2.0,
+      );
       expect(_thumbProvider(tester).width, 200);
     });
 
@@ -200,13 +226,21 @@ void main() {
       addTearDown(store.dispose);
 
       // 竖图（832×1216）盖满 100×100：宽度就是瓶颈 → 100
-      await _pumpThumb(tester, store, _asset(width: 832, height: 1216),
-          cell: const Size(100, 100));
+      await _pumpThumb(
+        tester,
+        store,
+        _asset(width: 832, height: 1216),
+        cell: const Size(100, 100),
+      );
       expect(_thumbProvider(tester).width, 100);
 
       // 横图（4096×1024）盖满 100×100：高度是瓶颈 → 需要 400 宽才够（< 512 上限）
-      await _pumpThumb(tester, store, _asset(width: 4096, height: 1024),
-          cell: const Size(100, 100));
+      await _pumpThumb(
+        tester,
+        store,
+        _asset(width: 4096, height: 1024),
+        cell: const Size(100, 100),
+      );
       expect(_thumbProvider(tester).width, 400);
     });
 
@@ -214,8 +248,13 @@ void main() {
       final store = await _store();
       addTearDown(store.dispose);
 
-      await _pumpThumb(tester, store, _asset(width: 4096, height: 4096),
-          cell: const Size(2000, 2000), dpr: 2.0);
+      await _pumpThumb(
+        tester,
+        store,
+        _asset(width: 4096, height: 4096),
+        cell: const Size(2000, 2000),
+        dpr: 2.0,
+      );
       expect(_thumbProvider(tester).width, kThumbMaxDecodeEdge);
     });
 
@@ -223,7 +262,13 @@ void main() {
       final store = await _store();
       addTearDown(store.dispose);
 
-      await _pumpThumb(tester, store, _asset(), cell: const Size(120, 90), dpr: 3.0);
+      await _pumpThumb(
+        tester,
+        store,
+        _asset(),
+        cell: const Size(120, 90),
+        dpr: 3.0,
+      );
       expect(_thumbProvider(tester).width, 360);
     });
 
@@ -231,9 +276,17 @@ void main() {
       final store = await _store();
       addTearDown(store.dispose);
 
-      await _pumpThumb(tester, store, _asset(width: 4096, height: 4096),
-          cell: const Size(200, 200), dpr: 1.0);
-      expect(tester.widget<Image>(find.byType(Image)).filterQuality, FilterQuality.low);
+      await _pumpThumb(
+        tester,
+        store,
+        _asset(width: 4096, height: 4096),
+        cell: const Size(200, 200),
+        dpr: 1.0,
+      );
+      expect(
+        tester.widget<Image>(find.byType(Image)).filterQuality,
+        FilterQuality.low,
+      );
     });
   });
 
@@ -251,7 +304,11 @@ void main() {
               itemCount: 500,
               itemBuilder: (context, i) {
                 built.add(i);
-                return Container(key: ValueKey('item$i'), height: 60, color: Colors.red);
+                return Container(
+                  key: ValueKey('item$i'),
+                  height: 60,
+                  color: Colors.red,
+                );
               },
             ),
           ),
@@ -260,8 +317,11 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(built, isNotEmpty);
-      expect(built.length, lessThan(60),
-          reason: '800 高的窗口 + 250px cacheExtent 只该建几十个，不能把 500 条全建出来');
+      expect(
+        built.length,
+        lessThan(60),
+        reason: '800 高的窗口 + 250px cacheExtent 只该建几十个，不能把 500 条全建出来',
+      );
       expect(built.length, lessThan(500));
     });
 
@@ -279,15 +339,22 @@ void main() {
               itemCount: 6,
               itemBuilder: (context, i) => _IntrinsicProbe(
                 counter: single,
-                child: Container(key: ValueKey('s$i'), height: 40, color: Colors.blue),
+                child: Container(
+                  key: ValueKey('s$i'),
+                  height: 40,
+                  color: Colors.blue,
+                ),
               ),
             ),
           ),
         ),
       );
       await tester.pumpAndSettle();
-      expect(single.calls, 0,
-          reason: '只有一个条目时没有"等高"可言，不该付 IntrinsicHeight 的那次查询');
+      expect(
+        single.calls,
+        0,
+        reason: '只有一个条目时没有"等高"可言，不该付 IntrinsicHeight 的那次查询',
+      );
 
       // ---- 宽窗口：列数 = 2，仍然等高 ----
       tester.view.physicalSize = const Size(1200, 800);
@@ -326,7 +393,9 @@ void main() {
       tester.view.devicePixelRatio = 1.0;
       addTearDown(tester.view.reset);
 
-      final store = await _store(media: [for (var i = 1; i <= 120; i++) _mediaJson(i)]);
+      final store = await _store(
+        media: [for (var i = 1; i <= 120; i++) _mediaJson(i)],
+      );
       addTearDown(store.dispose);
       await store.refreshAll();
 
@@ -344,8 +413,11 @@ void main() {
 
       final thumbs = find.byType(MediaThumb);
       expect(thumbs, findsWidgets);
-      expect(tester.widgetList(thumbs).length, lessThan(80),
-          reason: '120 条里只有可见的（+ cacheExtent 内一行的）该被建出来');
+      expect(
+        tester.widgetList(thumbs).length,
+        lessThan(80),
+        reason: '120 条里只有可见的（+ cacheExtent 内一行的）该被建出来',
+      );
 
       // 网格自己不包 RepaintBoundary：SliverChildBuilderDelegate 会自动加一个
       expect(
@@ -358,7 +430,9 @@ void main() {
       expect(find.byType(AutomaticKeepAlive), findsNothing);
     });
 
-    testWidgets('视频格子请求的是 /poster 封面帧，不是回 204 的 /thumb（用户 bug ③）', (tester) async {
+    testWidgets('视频格子请求的是 /poster 封面帧，不是回 204 的 /thumb（用户 bug ③）', (
+      tester,
+    ) async {
       tester.view.physicalSize = const Size(800, 800);
       tester.view.devicePixelRatio = 1.0;
       addTearDown(tester.view.reset);
@@ -384,13 +458,19 @@ void main() {
 
       final image = tester.widget<Image>(find.byType(Image));
       final provider = image.image;
-      expect(provider, isA<ResizeImage>(),
-          reason: '封面帧同样要按绘制像素解码，别整帧进 ImageCache');
+      expect(
+        provider,
+        isA<ResizeImage>(),
+        reason: '封面帧同样要按绘制像素解码，别整帧进 ImageCache',
+      );
       final inner = (provider as ResizeImage).imageProvider;
       expect(inner, isA<NetworkImage>());
       final url = (inner as NetworkImage).url;
-      expect(url, endsWith('/api/media/7/poster'),
-          reason: '视频要走抽帧接口；/thumb 对视频回 204，用它就永远没有预览图');
+      expect(
+        url,
+        endsWith('/api/media/7/poster'),
+        reason: '视频要走抽帧接口；/thumb 对视频回 204，用它就永远没有预览图',
+      );
       // 播放角标仍然要在封面之上
       expect(find.byIcon(Icons.play_arrow_rounded), findsOneWidget);
     });

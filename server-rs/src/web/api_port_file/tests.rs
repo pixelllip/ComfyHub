@@ -23,10 +23,23 @@ fn state(port: u16, pid: u32) -> ApiPortState {
 #[test]
 fn 形状与_kotlin_逐键一致() {
     let json = state(51000, 4242).to_json();
-    let keys: Vec<&str> = json.as_object().unwrap().keys().map(|k| k.as_str()).collect();
+    let keys: Vec<&str> = json
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(|k| k.as_str())
+        .collect();
     assert_eq!(
         keys,
-        vec!["port", "pid", "host", "url", "startedAt", "requestedPort", "fellBack"],
+        vec![
+            "port",
+            "pid",
+            "host",
+            "url",
+            "startedAt",
+            "requestedPort",
+            "fellBack"
+        ],
         "键集合与 Kotlin `ApiPortState` 必须逐字一致（脚本与前端按名字读）"
     );
     assert_eq!(json["url"], serde_json::json!("http://127.0.0.1:51000"));
@@ -95,7 +108,13 @@ fn 回落端口也要如实标出来() {
     state.fell_back = true;
     write(&root, &state).unwrap();
     let read_back = read(&root).unwrap();
-    assert_eq!(read_back.requested_port, 8280, "要能看出用户原本要的是哪个端口");
-    assert!(read_back.fell_back, "`doctor` 靠它说清\"你给的端口被占了，换成了 X\"");
+    assert_eq!(
+        read_back.requested_port, 8280,
+        "要能看出用户原本要的是哪个端口"
+    );
+    assert!(
+        read_back.fell_back,
+        "`doctor` 靠它说清\"你给的端口被占了，换成了 X\""
+    );
     let _ = std::fs::remove_dir_all(root);
 }

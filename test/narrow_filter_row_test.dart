@@ -69,50 +69,58 @@ final _promptJson = {
 const _categories = ['风格与画质调校', '角色与服装设定', '负面与排除词'];
 
 MockClient _mockClient() => MockClient((request) async {
-      final path = request.url.path;
-      Object? body;
-      var status = 200;
-      Map<String, dynamic> page(List<Map<String, dynamic>> items) =>
-          {'items': items, 'total': items.length, 'page': 1, 'size': 24, 'pages': 1};
+  final path = request.url.path;
+  Object? body;
+  var status = 200;
+  Map<String, dynamic> page(List<Map<String, dynamic>> items) => {
+    'items': items,
+    'total': items.length,
+    'page': 1,
+    'size': 24,
+    'pages': 1,
+  };
 
-      if (path == '/api/media') {
-        body = page([_mediaJson]);
-      } else if (path == '/api/prompts') {
-        body = page([_promptJson]);
-      } else if (path == '/api/tags') {
-        body = [
-          {'id': 1, 'name': '赛博朋克', 'useCount': 12, 'category': _categories[0]},
-          {'id': 2, 'name': '电影感', 'useCount': 7, 'category': _categories[1]},
-          {'id': 3, 'name': '8K', 'useCount': 3, 'category': _categories[2]},
-        ];
-      } else if (path == '/api/tags/categories') {
-        body = _categories;
-      } else if (path == '/api/stats') {
-        body = {
-          'prompts': 1,
-          'media': 1,
-          'tags': 3,
-          'favoritePrompts': 1,
-          'favoriteMedia': 0,
-          'byKind': {'IMAGE': 1},
-          'byMediaKind': {'IMAGE': 1},
-        };
-      } else {
-        body = <Object>[];
-      }
+  if (path == '/api/media') {
+    body = page([_mediaJson]);
+  } else if (path == '/api/prompts') {
+    body = page([_promptJson]);
+  } else if (path == '/api/tags') {
+    body = [
+      {'id': 1, 'name': '赛博朋克', 'useCount': 12, 'category': _categories[0]},
+      {'id': 2, 'name': '电影感', 'useCount': 7, 'category': _categories[1]},
+      {'id': 3, 'name': '8K', 'useCount': 3, 'category': _categories[2]},
+    ];
+  } else if (path == '/api/tags/categories') {
+    body = _categories;
+  } else if (path == '/api/stats') {
+    body = {
+      'prompts': 1,
+      'media': 1,
+      'tags': 3,
+      'favoritePrompts': 1,
+      'favoriteMedia': 0,
+      'byKind': {'IMAGE': 1},
+      'byMediaKind': {'IMAGE': 1},
+    };
+  } else {
+    body = <Object>[];
+  }
 
-      return http.Response(
-        jsonEncode(body),
-        status,
-        headers: {'content-type': 'application/json; charset=utf-8'},
-      );
-    });
+  return http.Response(
+    jsonEncode(body),
+    status,
+    headers: {'content-type': 'application/json; charset=utf-8'},
+  );
+});
 
 Future<LibraryStore> _store() async {
   SharedPreferences.setMockInitialValues({});
   final settings = SettingsStore();
   await settings.load();
-  final store = LibraryStore(settings, api: ApiClient(settings.baseUrl, client: _mockClient()));
+  final store = LibraryStore(
+    settings,
+    api: ApiClient(settings.baseUrl, client: _mockClient()),
+  );
   await store.refreshAll();
   return store;
 }
@@ -138,11 +146,20 @@ Future<void> _pump(WidgetTester tester, Widget page, LibraryStore store) async {
 /// 这个控件被自己祖先里的裁剪区切掉了吗？（被切 = 用户看不见）
 bool _clipped(WidgetTester tester, Finder finder) {
   final rect = tester.getRect(finder.first);
-  for (var node = tester.renderObject(finder.first).parent; node != null; node = node.parent) {
+  for (
+    var node = tester.renderObject(finder.first).parent;
+    node != null;
+    node = node.parent
+  ) {
     if (node is RenderClipRect || node is RenderClipRRect) {
       final box = node as RenderBox;
       final origin = box.localToGlobal(Offset.zero);
-      final viewport = Rect.fromLTWH(origin.dx, origin.dy, box.size.width, box.size.height);
+      final viewport = Rect.fromLTWH(
+        origin.dx,
+        origin.dy,
+        box.size.width,
+        box.size.height,
+      );
       if (!viewport.contains(rect.topLeft) ||
           !viewport.contains(rect.bottomRight - const Offset(0.01, 0.01))) {
         return true;
@@ -159,7 +176,8 @@ Future<void> _expectAllVisible(WidgetTester tester, List<String> labels) async {
   // 是它自己的光标滚动），要把它排掉，否则用例会在无关的东西上红。
   final horizontal = find.byType(Scrollable).evaluate().where((e) {
     final s = e.widget as Scrollable;
-    if (s.axisDirection != AxisDirection.right && s.axisDirection != AxisDirection.left) {
+    if (s.axisDirection != AxisDirection.right &&
+        s.axisDirection != AxisDirection.left) {
       return false;
     }
     return s.restorationId != 'editable';
@@ -199,11 +217,21 @@ void main() {
 
     // 前提：这一排确实放不下一行（否则用例没测到折行）
     final firstRow = tester.getRect(find.text('全部')).top;
-    expect(tester.getRect(find.text('清除未关联产物')).top, greaterThan(firstRow),
-        reason: '「清除未关联产物」被挤到后面的行 = 真的折行了');
+    expect(
+      tester.getRect(find.text('清除未关联产物')).top,
+      greaterThan(firstRow),
+      reason: '「清除未关联产物」被挤到后面的行 = 真的折行了',
+    );
 
     await _expectAllVisible(tester, const [
-      '全部', '图片', '视频', '音频', '仅收藏', '未关联', '清除未关联产物', '最新加入',
+      '全部',
+      '图片',
+      '视频',
+      '音频',
+      '仅收藏',
+      '未关联',
+      '清除未关联产物',
+      '最新加入',
     ]);
 
     // 排序按钮 + 统计也在
@@ -219,11 +247,22 @@ void main() {
     // 2026-10-11 起筛选栏是"**组**"（`FilterGroupRow`）：组内联排、放不下整组换行。
     // 「清理」那一组在最右边，窄屏必然被挤到后面的行。
     final firstRow = tester.getRect(find.text('全部')).top;
-    expect(tester.getRect(find.text('一键清除未关联')).top, greaterThan(firstRow),
-        reason: '「一键清除未关联」被挤到后面的行 = 真的折行了');
+    expect(
+      tester.getRect(find.text('一键清除未关联')).top,
+      greaterThan(firstRow),
+      reason: '「一键清除未关联」被挤到后面的行 = 真的折行了',
+    );
 
     await _expectAllVisible(tester, const [
-      '全部', '生图', '生视频', '生音频', '混合', '仅收藏', '未关联产物', '一键清除未关联', '最新创建',
+      '全部',
+      '生图',
+      '生视频',
+      '生音频',
+      '混合',
+      '仅收藏',
+      '未关联产物',
+      '一键清除未关联',
+      '最新创建',
     ]);
     expect(find.textContaining('共 1 条'), findsOneWidget);
   });
@@ -235,14 +274,13 @@ void main() {
 
     final firstRow = tester.getRect(find.text('全部分类')).top;
     // 分类名在**卡片**里也会出现（同一个分类），所以取第一个（筛选行那个）
-    expect(tester.getRect(find.text(_categories.last).first).top, greaterThan(firstRow),
-        reason: '最后一个分类被挤到后面的行 = 真的折行了');
+    expect(
+      tester.getRect(find.text(_categories.last).first).top,
+      greaterThan(firstRow),
+      reason: '最后一个分类被挤到后面的行 = 真的折行了',
+    );
 
-    await _expectAllVisible(tester, [
-      '全部分类',
-      ..._categories,
-      '按使用频率',
-    ]);
+    await _expectAllVisible(tester, ['全部分类', ..._categories, '按使用频率']);
   });
 
   // 宽窗口：**分区各占一行**（2026-10-11 起筛选选项按功能分区显示，
@@ -270,12 +308,18 @@ void main() {
     }
     // 同一分区里的选项**仍然一行**（宽窗口放得下就不该折）
     final typeTop = tester.getRect(find.text('全部')).top;
-    expect(tester.getRect(find.text('图片')).top, closeTo(typeTop, 1),
-        reason: '「类型」分区里几个选项该在同一行');
+    expect(
+      tester.getRect(find.text('图片')).top,
+      closeTo(typeTop, 1),
+      reason: '「类型」分区里几个选项该在同一行',
+    );
 
     // 不同分区**分属不同的行**（清理是破坏性动作，刻意与筛选分开）
-    expect(tester.getRect(find.text('清理')).top, greaterThan(typeTop),
-        reason: '「清理」是单独一区，不与类型同排');
+    expect(
+      tester.getRect(find.text('清理')).top,
+      greaterThan(typeTop),
+      reason: '「清理」是单独一区，不与类型同排',
+    );
     expect(find.text('清除未关联产物'), findsOneWidget);
   });
 
@@ -308,8 +352,11 @@ void main() {
     // 收起状态：分区没了，但**摘要露出来**（含当前排序档）
     expect(find.text('类型'), findsNothing);
     expect(find.byTooltip('展开筛选'), findsOneWidget);
-    expect(find.textContaining('最新加入'), findsWidgets,
-        reason: '收起后必须能看出当前生效的筛选项');
+    expect(
+      find.textContaining('最新加入'),
+      findsWidgets,
+      reason: '收起后必须能看出当前生效的筛选项',
+    );
   });
 
   // 折叠状态要**记住**（用户 2026-10-11：记忆当前状态）。

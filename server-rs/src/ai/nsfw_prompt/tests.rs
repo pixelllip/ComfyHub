@@ -12,9 +12,18 @@ fn no_sentinels_left() {
     }
     // 阈值确实插进去了（Kotlin 侧是 ${...}，这里必须变成数字）
     let persona = persona_block();
-    assert!(persona.contains(&format!("最多主动查询 {} 次", crate::tools::policy::MAX_COMFY_QUERIES_PER_RUN)));
-    assert!(persona.contains(&format!("最多联网 {} 次", crate::tools::policy::MAX_WEB_QUERIES_PER_RUN)));
-    assert!(persona.contains(&format!("最多新增 {} 条", crate::ai::memory::MAX_ENTRIES_PER_RUN)));
+    assert!(persona.contains(&format!(
+        "最多主动查询 {} 次",
+        crate::tools::policy::MAX_COMFY_QUERIES_PER_RUN
+    )));
+    assert!(persona.contains(&format!(
+        "最多联网 {} 次",
+        crate::tools::policy::MAX_WEB_QUERIES_PER_RUN
+    )));
+    assert!(persona.contains(&format!(
+        "最多新增 {} 条",
+        crate::ai::memory::MAX_ENTRIES_PER_RUN
+    )));
 }
 
 #[test]
@@ -44,20 +53,38 @@ fn blocks_are_not_empty_and_trimmed() {
 fn 第19条钉住图像编辑的四条实测结论() {
     let persona = persona_block();
     // ① 贴人物图首选 AI 软遮罩（要有那条抠图链），且要先查模型在不在
-    assert!(persona.contains("refine_foreground=true"), "第 19 条少了 AI 软遮罩那条链");
-    assert!(persona.contains("不再随包带"), "要写明仓库不再随包带这类工作流、用户得自备");
-    assert!(persona.contains("mattingModels.usable"), "少了「先查模型在不在」这一步");
+    assert!(
+        persona.contains("refine_foreground=true"),
+        "第 19 条少了 AI 软遮罩那条链"
+    );
+    assert!(
+        persona.contains("不再随包带"),
+        "要写明仓库不再随包带这类工作流、用户得自备"
+    );
+    assert!(
+        persona.contains("mattingModels.usable"),
+        "少了「先查模型在不在」这一步"
+    );
     // ② 缺模型要指引用户下载，且**不许**硬跑 / 默默降级（颜色抠图那一档 2026-09-27 已删除）
-    assert!(persona.contains("如实让用户下模型"), "少了「缺模型就指引用户下」");
+    assert!(
+        persona.contains("如实让用户下模型"),
+        "少了「缺模型就指引用户下」"
+    );
     assert!(persona.contains("静默下载"), "要写明为什么不能硬跑");
     assert!(
         persona.contains("也绝不降级") && !persona.contains("matteSource=\"model\""),
         "颜色抠图档已删除：不能再教模型传 matteSource，也不能留「降级成颜色抠图」的说法",
     );
     // ③ krea2 **不适合做编辑**（这条以前没写，提示里还在推荐它做编辑）
-    assert!(persona.contains("不适合做编辑"), "krea2 那条实测结论必须在常驻提示里");
+    assert!(
+        persona.contains("不适合做编辑"),
+        "krea2 那条实测结论必须在常驻提示里"
+    );
     // ④ 「先想能不能不抠」那两条路
-    assert!(persona.contains("先想能不能不抠"), "少了「不抠图更稳」那一步");
+    assert!(
+        persona.contains("先想能不能不抠"),
+        "少了「不抠图更稳」那一步"
+    );
 }
 
 /// 第 17 条点名的四个联网工具**必须真的实现了**（P4 第 64 步把那个洞补上了）。
@@ -102,7 +129,13 @@ fn 第17条那句共用额度点名了所有吃这份预算的工具() {
         .map(|offset| after + offset)
         .unwrap_or(persona.len());
     let window = &persona[start..end];
-    for name in ["web_search", "web_fetch", "civitai_search", "danbooru_lookup", "find_model"] {
+    for name in [
+        "web_search",
+        "web_fetch",
+        "civitai_search",
+        "danbooru_lookup",
+        "find_model",
+    ] {
         assert!(
             window.contains(name),
             "「共用这一个额度」漏了 {name}（它按类别真的吃这份预算）：{window}"
@@ -124,7 +157,10 @@ fn 第17条那句共用额度点名了所有吃这份预算的工具() {
 #[test]
 fn 第20条钉住配方规则且点名的三件工具都真的实现了() {
     let persona = persona_block();
-    assert!(persona.contains("20. **换（新）模型时先看"), "第 20 条没进常驻段");
+    assert!(
+        persona.contains("20. **换（新）模型时先看"),
+        "第 20 条没进常驻段"
+    );
     for needle in [
         "comfy_list_recipes",
         "skeletonHash",
@@ -140,7 +176,11 @@ fn 第20条钉住配方规则且点名的三件工具都真的实现了() {
     ] {
         assert!(persona.contains(needle), "第 20 条少了 {needle}");
     }
-    for name in ["comfy_learn_workflow", "comfy_list_recipes", "comfy_bind_recipe"] {
+    for name in [
+        "comfy_learn_workflow",
+        "comfy_list_recipes",
+        "comfy_bind_recipe",
+    ] {
         assert!(
             crate::tools::tools::is_implemented(name),
             "{name} 进了系统提示，却没进 IMPLEMENTED —— 模型按提示去找它只会失败"
@@ -165,7 +205,13 @@ fn 第24条要求成品提示词放进_text_代码块() {
         persona.contains("```text"),
         "围栏语言要写 text：渲染器据此把模型硬折行的提示词拼回一段"
     );
-    for needle in ["正面提示词", "负面提示词", "Danbooru tag 栈", "一版一块", "都不算交付"] {
+    for needle in [
+        "正面提示词",
+        "负面提示词",
+        "Danbooru tag 栈",
+        "一版一块",
+        "都不算交付",
+    ] {
         assert!(persona.contains(needle), "第 24 条少了 {needle}");
     }
 }

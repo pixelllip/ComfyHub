@@ -51,7 +51,12 @@ MockClient _mockClient() {
       };
     } else if (path == '/api/ai/nsfw') {
       // NSFW 开关（两个选项放一起）：默认全关
-      body = {'enabled': false, 'blur': false, 'effectiveBlur': false, 'promptVersion': 'nsfw-v1'};
+      body = {
+        'enabled': false,
+        'blur': false,
+        'effectiveBlur': false,
+        'promptVersion': 'nsfw-v1',
+      };
     } else if (path == '/api/tags' || path == '/api/tags/categories') {
       body = <Object>[];
     } else if (path == '/api/stats') {
@@ -65,7 +70,13 @@ MockClient _mockClient() {
         'byMediaKind': <String, int>{},
       };
     } else if (path == '/api/prompts' || path == '/api/media') {
-      body = {'items': <Object>[], 'total': 0, 'page': 1, 'size': 24, 'pages': 0};
+      body = {
+        'items': <Object>[],
+        'total': 0,
+        'page': 1,
+        'size': 24,
+        'pages': 0,
+      };
     } else {
       status = 404;
       body = {'error': 'not found: $path'};
@@ -90,7 +101,10 @@ Future<BackendLauncher> _pumpSettings(
   final settings = SettingsStore();
   await settings.load();
   final client = _mockClient();
-  final store = LibraryStore(settings, api: ApiClient(settings.baseUrl, client: client));
+  final store = LibraryStore(
+    settings,
+    api: ApiClient(settings.baseUrl, client: client),
+  );
   // 「端口没能要回来」是后端写在 .run\api.json 里的事实，由 launcher 读懂后交给界面。
   // 这里直接把它摆出来（真值的来源在 backend_launcher_test.dart 里验）。
   final launcher = BackendLauncher(settings)
@@ -148,15 +162,26 @@ void main() {
     await tester.pumpAndSettle();
     const switchTitle = '启动 App 时自动拉起服务';
     final tile = find
-        .ancestor(of: find.text(switchTitle), matching: find.byType(SwitchListTile))
+        .ancestor(
+          of: find.text(switchTitle),
+          matching: find.byType(SwitchListTile),
+        )
         .first;
-    final card = find.ancestor(of: find.text(switchTitle), matching: find.byType(Card)).first;
+    final card = find
+        .ancestor(of: find.text(switchTitle), matching: find.byType(Card))
+        .first;
     final tileRect = tester.getRect(tile);
     final cardRect = tester.getRect(card);
-    expect(tileRect.left - cardRect.left, greaterThanOrEqualTo(20),
-        reason: '左侧要有留白，不能贴到卡片边缘');
-    expect(cardRect.right - tileRect.right, greaterThanOrEqualTo(20),
-        reason: '右侧（开关那一侧）也要有留白');
+    expect(
+      tileRect.left - cardRect.left,
+      greaterThanOrEqualTo(20),
+      reason: '左侧要有留白，不能贴到卡片边缘',
+    );
+    expect(
+      cardRect.right - tileRect.right,
+      greaterThanOrEqualTo(20),
+      reason: '右侧（开关那一侧）也要有留白',
+    );
   });
 
   // 用户 2026-11-06："不应该是跳转开发者的项目目录吧？" —— 设置首页这一项原来
@@ -175,8 +200,11 @@ void main() {
 
     expect(find.text('数据目录'), findsOneWidget);
     expect(find.text('打开项目目录'), findsNothing, reason: '不许再把运行根目录摆给用户');
-    expect(find.text(r'D:\demo\viewer\storage'), findsOneWidget,
-        reason: '副标题写产物 / 附件 / AI 文件所在的那个目录');
+    expect(
+      find.text(r'D:\demo\viewer\storage'),
+      findsOneWidget,
+      reason: '副标题写产物 / 附件 / AI 文件所在的那个目录',
+    );
 
     // 点进去是子页：看当前位置、打开、换位置
     await tester.tap(find.text('数据目录'));
@@ -209,8 +237,11 @@ void main() {
     expect(picker.left, greaterThan(title.right), reason: '选择器要在标题右边');
     // 标题行带一句副标题（两行），选择器在右侧垂直居中 —— 两者中心允许差半个
     // 行高；真正"另起一行"时差值会跳到 40 以上。
-    expect((picker.center.dy - title.center.dy).abs(), lessThan(20),
-        reason: '两者必须在同一行，不能另起一行');
+    expect(
+      (picker.center.dy - title.center.dy).abs(),
+      lessThan(20),
+      reason: '两者必须在同一行，不能另起一行',
+    );
   });
 
   // 用户 2026-11-05："窗口宽度较大时依然允许多列排布"。
@@ -260,7 +291,9 @@ void main() {
     expect(blur, findsOneWidget);
 
     // 同一张卡片里（"放一起"）
-    final card = find.ancestor(of: find.text('NSFW 模式'), matching: find.byType(Card)).first;
+    final card = find
+        .ancestor(of: find.text('NSFW 模式'), matching: find.byType(Card))
+        .first;
     expect(
       find.descendant(of: card, matching: find.text('NSFW 内容模糊显示')),
       findsOneWidget,
@@ -269,8 +302,11 @@ void main() {
 
     // 主开关关着 → 模糊那一项不可点
     expect(tester.widget<SwitchListTile>(master).value, isFalse);
-    expect(tester.widget<SwitchListTile>(blur).onChanged, isNull,
-        reason: 'NSFW 模式没开时模糊选项应当置灰');
+    expect(
+      tester.widget<SwitchListTile>(blur).onChanged,
+      isNull,
+      reason: 'NSFW 模式没开时模糊选项应当置灰',
+    );
   });
 
   // 用户 bug（窄窗口）："控件显示不全"。
@@ -290,12 +326,12 @@ void main() {
     await tester.tap(find.text('本地服务（后端 + 数据库）'));
     await tester.pumpAndSettle();
 
-    expect(tester.takeException(), isNull, reason: '窄窗口下设置页不许 RenderFlex overflow');
-    for (final label in const [
-      '自动探测',
-      '保存并测试连接',
-      '恢复默认',
-    ]) {
+    expect(
+      tester.takeException(),
+      isNull,
+      reason: '窄窗口下设置页不许 RenderFlex overflow',
+    );
+    for (final label in const ['自动探测', '保存并测试连接', '恢复默认']) {
       expect(find.text(label), findsOneWidget, reason: '$label 不能被裁掉');
     }
 
@@ -328,8 +364,11 @@ void main() {
 
     expect(find.text('允许手机 / 局域网设备连接'), findsOneWidget);
     expect(find.textContaining('① 让后端监听局域网'), findsOneWidget);
-    expect(find.textContaining('② 配对闸门'), findsOneWidget,
-        reason: '必须指出另一道闸在哪，否则两个开关看着就是重复的');
+    expect(
+      find.textContaining('② 配对闸门'),
+      findsOneWidget,
+      reason: '必须指出另一道闸在哪，否则两个开关看着就是重复的',
+    );
   });
 
   // 「端口没能要回上次那个」必须显示出来（2026-10-13，与「端口粘住」一起加的）。
@@ -352,8 +391,11 @@ void main() {
       await tester.tap(find.text('本地服务（后端 + 数据库）'));
       await tester.pumpAndSettle();
 
-      expect(find.textContaining('6430 这次没能用上'), findsOneWidget,
-          reason: '${width}dp：端口回落必须写出来');
+      expect(
+        find.textContaining('6430 这次没能用上'),
+        findsOneWidget,
+        reason: '${width}dp：端口回落必须写出来',
+      );
       expect(find.textContaining('重新扫一次'), findsOneWidget);
       expect(tester.takeException(), isNull, reason: '${width}dp 下这条提示不许溢出');
     }
@@ -362,7 +404,10 @@ void main() {
     tester.view.physicalSize = const Size(1700, 1200);
     await _pumpSettings(tester);
     // 正常时**首页**就不该出现这条警告（子页里也不该有，但先守住第一道）
-    expect(find.textContaining('这次没能用上'), findsNothing,
-        reason: '端口正常时不许常年亮一条警告');
+    expect(
+      find.textContaining('这次没能用上'),
+      findsNothing,
+      reason: '端口正常时不许常年亮一条警告',
+    );
   });
 }

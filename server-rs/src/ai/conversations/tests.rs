@@ -24,7 +24,10 @@ fn 可空列在_dto_上都有回落值() {
     assert_eq!(conv.title, "新对话", "标题空着就回落成「新对话」，不是空串");
     assert_eq!(conv.system_prompt_version, "v1");
     assert!(!conv.archived);
-    assert_eq!(conv.message_count, 0, "取不到 message_count 就当 0（那两条 SQL 之外的行）");
+    assert_eq!(
+        conv.message_count, 0,
+        "取不到 message_count 就当 0（那两条 SQL 之外的行）"
+    );
     assert!(conv.created_at.is_none() && conv.updated_at.is_none());
 
     let mut stmt = conn

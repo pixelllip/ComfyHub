@@ -11,30 +11,40 @@ import 'package:viewer/widgets/markdown.dart';
 import 'package:viewer/widgets/markdown_view.dart';
 
 /// 把块列表压成便于断言的字符串（行内片段只取文本 + 样式标记）。
-String dump(List<MdBlock> blocks) => blocks.map((b) {
+String dump(List<MdBlock> blocks) => blocks
+    .map((b) {
       String spans(List<MdInline> s) => s
-          .map((x) =>
-              '${x.bold ? 'b:' : ''}${x.italic ? 'i:' : ''}${x.code ? 'c:' : ''}'
-              '${x.strike ? 's:' : ''}${x.link != null ? 'l:' : ''}${x.text}')
+          .map(
+            (x) =>
+                '${x.bold ? 'b:' : ''}${x.italic ? 'i:' : ''}${x.code ? 'c:' : ''}'
+                '${x.strike ? 's:' : ''}${x.link != null ? 'l:' : ''}${x.text}',
+          )
           .join(',');
       if (b is MdParagraph) return 'P(${spans(b.spans)})';
       if (b is MdHeading) return 'H${b.level}(${spans(b.spans)})';
-      if (b is MdListItem) return 'LI${b.ordered ? '${b.index}.' : '•'}(${spans(b.spans)})';
+      if (b is MdListItem) {
+        return 'LI${b.ordered ? '${b.index}.' : '•'}(${spans(b.spans)})';
+      }
       if (b is MdQuote) return 'Q[${dump(b.blocks)}]';
       if (b is MdCodeBlock) return 'CODE(${b.language ?? ''}){${b.code}}';
       if (b is MdRule) return 'RULE';
       if (b is MdTable) {
-        String row(List<List<MdInline>> cells) => cells.map((c) => spans(c)).join('|');
+        String row(List<List<MdInline>> cells) =>
+            cells.map((c) => spans(c)).join('|');
         return 'TABLE[${b.alignments.map((a) => a.name).join(',')}]{'
             '${row(b.header)}${b.rows.isEmpty ? '' : ' :: ${b.rows.map(row).join(' :: ')}'}}';
       }
       return '$b';
-    }).join(' | ');
+    })
+    .join(' | ');
 
 void main() {
   test('粗体 / 斜体 / 删除线 / 行内代码', () {
-    expect(parseInline('这是**粗体**结束'),
-        [const MdInline('这是'), const MdInline('粗体', bold: true), const MdInline('结束')]);
+    expect(parseInline('这是**粗体**结束'), [
+      const MdInline('这是'),
+      const MdInline('粗体', bold: true),
+      const MdInline('结束'),
+    ]);
 
     expect(parseInline('*斜体*'), [const MdInline('斜体', italic: true)]);
     expect(parseInline('~~删掉~~'), [const MdInline('删掉', strike: true)]);
@@ -48,8 +58,11 @@ void main() {
   });
 
   test('链接：显式链接与裸链接', () {
-    expect(parseInline('看[这里](https://a.example/x)吧'),
-        [const MdInline('看'), const MdInline('这里', link: 'https://a.example/x'), const MdInline('吧')]);
+    expect(parseInline('看[这里](https://a.example/x)吧'), [
+      const MdInline('看'),
+      const MdInline('这里', link: 'https://a.example/x'),
+      const MdInline('吧'),
+    ]);
 
     // 裸链接自动识别，末尾句号不算地址的一部分
     final auto = parseInline('见 https://a.example/x。');
@@ -132,7 +145,11 @@ void main() {
       // 以前这里会吐成 "**Anima…以 " + code + " 为准）**"，两头的 `**` 原样显示
       expect(spans.first.text, startsWith('Anima'));
       expect(spans.first.bold, isTrue);
-      expect(spans.any((s) => s.text == '**'), isFalse, reason: '不能有裸露的 ** 字面量');
+      expect(
+        spans.any((s) => s.text == '**'),
+        isFalse,
+        reason: '不能有裸露的 ** 字面量',
+      );
       final code = spans.firstWhere((s) => s.code);
       expect(code.text, 'anima-prompt');
       expect(code.bold, isTrue, reason: '代码片段还在粗体里面，样式要继承');
@@ -162,11 +179,21 @@ void main() {
       // 仓库里的真实写法（workflow_blueprint.rs）：夹在正文与行内代码中间
       final spans = parseInline('② 提交时开 ##模拟用户行为##（`comfy_load_workflow`）');
       expect(spans.firstWhere((s) => s.text == '模拟用户行为').bold, isTrue);
-      expect(spans.any((s) => s.text.contains('#')), isFalse, reason: '不能有裸露的 #');
-      expect(spans.where((s) => s.bold && !s.code), hasLength(1), reason: '一段粗体就够了');
+      expect(
+        spans.any((s) => s.text.contains('#')),
+        isFalse,
+        reason: '不能有裸露的 #',
+      );
+      expect(
+        spans.where((s) => s.bold && !s.code),
+        hasLength(1),
+        reason: '一段粗体就够了',
+      );
 
       // 系统提示 / 工具描述里的写法：分隔符内侧带空格，空格不算内容
-      expect(parseInline('## 模拟用户行为 ##'), [const MdInline('模拟用户行为', bold: true)]);
+      expect(parseInline('## 模拟用户行为 ##'), [
+        const MdInline('模拟用户行为', bold: true),
+      ]);
 
       // 段落走一遍：界面上看到的确实是粗体，不是字面量
       final d = dump(parseMarkdown('提交时开 ##模拟用户行为##（默认开着）'));
@@ -216,19 +243,36 @@ void main() {
 ''');
       final t = blocks.whereType<MdTable>().toList();
       expect(t, hasLength(1), reason: '不能退化成一堆带竖线的段落');
-      expect(t.first.alignments, [MdColumnAlign.none, MdColumnAlign.none, MdColumnAlign.none]);
-      expect(t.first.header.map((c) => c.first.text).toList(), ['工具', '说明', '备注']);
+      expect(t.first.alignments, [
+        MdColumnAlign.none,
+        MdColumnAlign.none,
+        MdColumnAlign.none,
+      ]);
+      expect(t.first.header.map((c) => c.first.text).toList(), [
+        '工具',
+        '说明',
+        '备注',
+      ]);
       expect(t.first.rows, hasLength(2));
       // 单元格里的行内标记照常解析
       expect(t.first.rows.first[0].first.code, isTrue);
-      expect(t.first.rows.first[1].firstWhere((s) => s.text == 'Skills').bold, isTrue);
-      expect(dump(blocks), contains('TABLE[', ), reason: 'dump 也要能表示表格');
+      expect(
+        t.first.rows.first[1].firstWhere((s) => s.text == 'Skills').bold,
+        isTrue,
+      );
+      expect(dump(blocks), contains('TABLE['), reason: 'dump 也要能表示表格');
     });
 
     test('对齐标记被识别', () {
-      final blocks = parseMarkdown('| a | b | c |\n|:--|:-:|--:|\n| 1 | 2 | 3 |\n');
+      final blocks = parseMarkdown(
+        '| a | b | c |\n|:--|:-:|--:|\n| 1 | 2 | 3 |\n',
+      );
       final t = blocks.single as MdTable;
-      expect(t.alignments, [MdColumnAlign.left, MdColumnAlign.center, MdColumnAlign.right]);
+      expect(t.alignments, [
+        MdColumnAlign.left,
+        MdColumnAlign.center,
+        MdColumnAlign.right,
+      ]);
     });
 
     test('没有分隔行就不是表格（普通段落里的竖线不能变形）', () {
@@ -244,18 +288,26 @@ void main() {
     });
 
     test('列数不齐的表格不会崩：以分隔行为准，多的丢、少的补空', () {
-      final blocks = parseMarkdown('| a | b |\n|---|---|\n| 1 | 2 | 3 |\n| 9 |\n');
+      final blocks = parseMarkdown(
+        '| a | b |\n|---|---|\n| 1 | 2 | 3 |\n| 9 |\n',
+      );
       final t = blocks.single as MdTable;
       expect(t.header, hasLength(2));
       expect(t.rows.first, hasLength(2));
-      expect(t.rows.last.map((c) => c.map((s) => s.text).join()).toList(), ['9', '']);
+      expect(t.rows.last.map((c) => c.map((s) => s.text).join()).toList(), [
+        '9',
+        '',
+      ]);
     });
 
     test('表格后面紧跟的正文不会被吃进表格', () {
       final blocks = parseMarkdown('| a |\n|---|\n| 1 |\n\n后面这段话是正文\n');
       expect(blocks.whereType<MdTable>(), hasLength(1));
       final p = blocks.whereType<MdParagraph>().toList();
-      expect(p.map((x) => x.spans.map((s) => s.text).join()).join(), contains('后面这段话是正文'));
+      expect(
+        p.map((x) => x.spans.map((s) => s.text).join()).join(),
+        contains('后面这段话是正文'),
+      );
     });
   });
 
@@ -271,49 +323,76 @@ void main() {
 
 看完这张表就知道有哪些工具了。
 ''';
-      await tester.pumpWidget(MaterialApp(
-        home: Scaffold(
-          body: Center(
-            child: SizedBox(
-              width: 560, // 聊天气泡的实际可用宽度量级
-              child: SingleChildScrollView(child: MarkdownText(reply)),
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: Center(
+              child: SizedBox(
+                width: 560, // 聊天气泡的实际可用宽度量级
+                child: SingleChildScrollView(child: MarkdownText(reply)),
+              ),
             ),
           ),
         ),
-      ));
+      );
       await tester.pumpAndSettle();
 
       expect(tester.takeException(), isNull);
       expect(find.byType(Table), findsOneWidget);
-      expect(find.textContaining('list_skills', findRichText: true), findsOneWidget);
-      expect(find.textContaining('`', findRichText: true), findsNothing, reason: '反引号不该出现在界面上');
-      expect(find.textContaining('**', findRichText: true), findsNothing, reason: '星号不该出现在界面上');
+      expect(
+        find.textContaining('list_skills', findRichText: true),
+        findsOneWidget,
+      );
+      expect(
+        find.textContaining('`', findRichText: true),
+        findsNothing,
+        reason: '反引号不该出现在界面上',
+      );
+      expect(
+        find.textContaining('**', findRichText: true),
+        findsNothing,
+        reason: '星号不该出现在界面上',
+      );
     });
 
     testWidgets('宽 4 列的表格在窄气泡里也不会溢出', (tester) async {
-      const reply = '| 一 | 二 | 三 | 四 |\n|---|---|---|---|\n'
+      const reply =
+          '| 一 | 二 | 三 | 四 |\n|---|---|---|---|\n'
           '| 很长的中文内容会自己换行 | 内容 | 内容 | 内容 |\n';
-      await tester.pumpWidget(MaterialApp(
-        home: Scaffold(
-          body: Center(child: SizedBox(width: 320, child: MarkdownText(reply))),
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: Center(
+              child: SizedBox(width: 320, child: MarkdownText(reply)),
+            ),
+          ),
         ),
-      ));
+      );
       await tester.pumpAndSettle();
-      expect(tester.takeException(), isNull, reason: 'RenderFlex overflow 会在这里冒出来');
+      expect(
+        tester.takeException(),
+        isNull,
+        reason: 'RenderFlex overflow 会在这里冒出来',
+      );
     });
   });
 
   group('超宽表格：横向滚动 + 常驻滚动条', () {
     testWidgets('7 列表格不再把每列压成一个字，出现横向滚动条', (tester) async {
-      const reply = '| 模型 | 用途 | 节点 | 输入 | 输出 | 备注 | 来源 |\n'
+      const reply =
+          '| 模型 | 用途 | 节点 | 输入 | 输出 | 备注 | 来源 |\n'
           '|---|---|---|---|---|---|---|\n'
           '| MOSS-Image | 文生图 / 布局 | 36 KSampler | 提示词 / 分辨率 | 图片 | 8 步 DMD | 官方模板 |\n'
           '| Krea 2 | 文生图 / 参考图 | 40 SamplerCustom | 提示词 / 参考图 | 图片 | Turbo 8 步 | 本机模板 |\n';
-      await tester.pumpWidget(MaterialApp(
-        home: Scaffold(
-          body: Center(child: SizedBox(width: 360, child: MarkdownText(reply))),
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: Center(
+              child: SizedBox(width: 360, child: MarkdownText(reply)),
+            ),
+          ),
         ),
-      ));
+      );
       await tester.pumpAndSettle();
       expect(tester.takeException(), isNull);
       expect(find.byType(Scrollbar), findsOneWidget, reason: '超宽表要能横向滚动');
@@ -322,15 +401,20 @@ void main() {
   });
 
   group('代码块：单行超宽要换行，多行保持横向滚动', () {
-    const oneLine = 'curl -X POST http://127.0.0.1:8080/api/ai/conversations/xxx/runs '
+    const oneLine =
+        'curl -X POST http://127.0.0.1:8080/api/ai/conversations/xxx/runs '
         '-H "Content-Type: application/json" -d @body.json';
 
     Future<void> pump(WidgetTester tester, String reply) async {
-      await tester.pumpWidget(MaterialApp(
-        home: Scaffold(
-          body: Center(child: SizedBox(width: 320, child: MarkdownText(reply))),
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: Center(
+              child: SizedBox(width: 320, child: MarkdownText(reply)),
+            ),
+          ),
         ),
-      ));
+      );
       await tester.pumpAndSettle();
     }
 
@@ -339,16 +423,24 @@ void main() {
 
       expect(tester.takeException(), isNull);
       // 不再有横向滚动容器
-      expect(find.byType(SingleChildScrollView), findsNothing,
-          reason: '单行代码块该折行显示，而不是让人横向拖着看');
+      expect(
+        find.byType(SingleChildScrollView),
+        findsNothing,
+        reason: '单行代码块该折行显示，而不是让人横向拖着看',
+      );
       final size = tester.getSize(find.text(oneLine));
       expect(size.width, lessThanOrEqualTo(320), reason: '不能超出容器宽度');
       // 一行的高度约 13.5 × 1.4 ≈ 19；折行之后一定明显更高
-      expect(size.height, greaterThan(30), reason: '要真的折成多行（实际高 ${size.height}）');
+      expect(
+        size.height,
+        greaterThan(30),
+        reason: '要真的折成多行（实际高 ${size.height}）',
+      );
     });
 
     testWidgets('多行代码块仍然横向滚动（缩进与对齐不能被自动折行破坏）', (tester) async {
-      const multi = 'line-one-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n'
+      const multi =
+          'line-one-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n'
           'line-two-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
       await pump(tester, '```\n$multi\n```');
 
@@ -363,19 +455,26 @@ void main() {
     testWidgets('多行纯文本（text 块）改成换行显示，不再横向拖', (tester) async {
       // 现场（2026-10-29）：模型把提示词按字段写成 ```text 里的多行长文本 ——
       // 每行是一个完整字段（所以不是"硬折行"、不会被 reflow 合并），但行宽远超气泡。
-      const prose = 'Anime character design sheet of Sagisawa Arisa, a petite girl with a bright face.\n'
+      const prose =
+          'Anime character design sheet of Sagisawa Arisa, a petite girl with a bright face.\n'
           'Hair: pure ash-grey-and-silver, very long, falling well past the waist, softly wavy.\n'
           'Clothing: a deep navy sailor school uniform with a close-fitting blouse and long sleeves.\n'
           'Rendering: reference-sheet layout of the same character in three views, strict profile.';
       await pump(tester, '```text\n$prose\n```');
 
       expect(tester.takeException(), isNull);
-      expect(find.byType(SingleChildScrollView), findsNothing,
-          reason: '纯文本块该折行显示，而不是让人横向拖着看');
+      expect(
+        find.byType(SingleChildScrollView),
+        findsNothing,
+        reason: '纯文本块该折行显示，而不是让人横向拖着看',
+      );
       final size = tester.getSize(find.text(prose));
       expect(size.width, lessThanOrEqualTo(320), reason: '不能超出容器宽度');
-      expect(size.height, greaterThan(60),
-          reason: '四行长文本折行之后一定明显变高（实际高 ${size.height}）');
+      expect(
+        size.height,
+        greaterThan(60),
+        reason: '四行长文本折行之后一定明显变高（实际高 ${size.height}）',
+      );
     });
 
     testWidgets('text 块里真是代码 / 表格时仍然横滚（有滚动条）', (tester) async {
@@ -392,8 +491,11 @@ void main() {
           .widgetList<DefaultSelectionStyle>(find.byType(DefaultSelectionStyle))
           .where((style) => style.selectionColor != null)
           .toList();
-      expect(styles, isNotEmpty,
-          reason: '代码块必须显式给 selectionColor：外层 SelectionArea 靠它画高亮');
+      expect(
+        styles,
+        isNotEmpty,
+        reason: '代码块必须显式给 selectionColor：外层 SelectionArea 靠它画高亮',
+      );
     });
   });
 
@@ -422,19 +524,21 @@ void main() {
 
     testWidgets('类型行 / 分隔线 / 复制按钮都在，复制的是原文', (tester) async {
       final clipboard = mockClipboard(tester);
-      await tester.pumpWidget(MaterialApp(
-        home: Scaffold(
-          body: Center(
-            child: SizedBox(
-              width: 360,
-              // 与聊天气泡同构：外层 SelectionArea，按钮必须仍然点得动。
-              child: SelectionArea(
-                child: MarkdownText('```dart\n$code\n```', selectable: false),
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: Center(
+              child: SizedBox(
+                width: 360,
+                // 与聊天气泡同构：外层 SelectionArea，按钮必须仍然点得动。
+                child: SelectionArea(
+                  child: MarkdownText('```dart\n$code\n```', selectable: false),
+                ),
               ),
             ),
           ),
         ),
-      ));
+      );
       await tester.pumpAndSettle();
 
       expect(find.text('dart'), findsOneWidget, reason: '类型行要显示代码类型');
@@ -452,19 +556,24 @@ void main() {
 
     testWidgets('类型行（含「复制」）不进选择域：全选复制不会把它带走', (tester) async {
       final clipboard = mockClipboard(tester);
-      await tester.pumpWidget(MaterialApp(
-        home: Scaffold(
-          body: Center(
-            child: SizedBox(
-              width: 360,
-              // 与聊天气泡同构：外层一个 SelectionArea，MarkdownText 不再自己包一层。
-              child: SelectionArea(
-                child: MarkdownText('说明\n\n```\n$code\n```', selectable: false),
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: Center(
+              child: SizedBox(
+                width: 360,
+                // 与聊天气泡同构：外层一个 SelectionArea，MarkdownText 不再自己包一层。
+                child: SelectionArea(
+                  child: MarkdownText(
+                    '说明\n\n```\n$code\n```',
+                    selectable: false,
+                  ),
+                ),
               ),
             ),
           ),
         ),
-      ));
+      );
       await tester.pumpAndSettle();
 
       final region = tester.state<SelectableRegionState>(
@@ -474,8 +583,9 @@ void main() {
       await tester.pump();
       // 用「复制」菜单项自己的 onPressed（等价于用户点右键 → 复制），
       // 不直接调已废弃的 copySelection。
-      final copy = region.contextMenuButtonItems
-          .firstWhere((item) => item.type == ContextMenuButtonType.copy);
+      final copy = region.contextMenuButtonItems.firstWhere(
+        (item) => item.type == ContextMenuButtonType.copy,
+      );
       copy.onPressed!();
       await tester.pumpAndSettle();
 
@@ -490,7 +600,8 @@ void main() {
   group('硬折行的散文（模型按 ~80 列折行的提示词）', () {
     // 真实数据：DeepSeek 把一整段提示词按 80 列折行（行里是真实的 \n）。
     // 显示 / 复制都要并回一段，否则粘到别处会一行一断。
-    const wrapped = 'A chest-up shot cropped at the waist, camera at her shoulder height set\n'
+    const wrapped =
+        'A chest-up shot cropped at the waist, camera at her shoulder height set\n'
         'behind and to her right, Sakuragi Mizuha standing with her back half turned to\n'
         'the lens and her waist twisted, looking back over her right shoulder into the\n'
         'cold air with her chin lifted.\n'
@@ -512,43 +623,25 @@ void main() {
 
     test('真代码 / 短行排版原样保留（返回 null）', () {
       // 有缩进
-      expect(
-        reflowWrappedProse(
-          'def f(x):\n    return x\n',
-          'python',
-        ),
-        isNull,
-      );
+      expect(reflowWrappedProse('def f(x):\n    return x\n', 'python'), isNull);
       // 没有语言标记，但行首是缩进
-      expect(
-        reflowWrappedProse(
-          'def f(x):\n    return x\n',
-          null,
-        ),
-        isNull,
-      );
+      expect(reflowWrappedProse('def f(x):\n    return x\n', null), isNull);
       // 一行一句（每行都以句末标点收尾，不是从句子中间断开的）
       expect(
         reflowWrappedProse(
           '这是一句很长很长的话，长到已经超过六十个字符了所以看起来像被折过一样但其实是故意分行的。\n'
-          '这是第二句同样很长的话，也超过六十个字符了而且同样是以句号收尾的。\n'
-          '这是第三句，同样超过六十个字符，用来证明整段都是这种一行一句的排版。\n',
+              '这是第二句同样很长的话，也超过六十个字符了而且同样是以句号收尾的。\n'
+              '这是第三句，同样超过六十个字符，用来证明整段都是这种一行一句的排版。\n',
           'text',
         ),
         isNull,
       );
       // 模板 / 列表 / 表格
       expect(
-        reflowWrappedProse(
-          '<|im_start|>system\n[系统提示]\n<|im_end|>\n',
-          'text',
-        ),
+        reflowWrappedProse('<|im_start|>system\n[系统提示]\n<|im_end|>\n', 'text'),
         isNull,
       );
-      expect(
-        reflowWrappedProse('- 第一项\n- 第二项\n', 'text'),
-        isNull,
-      );
+      expect(reflowWrappedProse('- 第一项\n- 第二项\n', 'text'), isNull);
       // 短行列表（一行一个标签）也不动
       expect(
         reflowWrappedProse(
@@ -597,16 +690,18 @@ void main() {
         ),
       );
 
-      await tester.pumpWidget(MaterialApp(
-        home: Scaffold(
-          body: Center(
-            child: SizedBox(
-              width: 360,
-              child: MarkdownText('```\n$wrapped\n```'),
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: Center(
+              child: SizedBox(
+                width: 360,
+                child: MarkdownText('```\n$wrapped\n```'),
+              ),
             ),
           ),
         ),
-      ));
+      );
       await tester.pumpAndSettle();
 
       expect(find.text(joined), findsOneWidget, reason: '显示要并回一段');
@@ -623,39 +718,70 @@ void main() {
       expect(
         codeBlockWraps(
           'Hair: very long ash-grey hair, falling past the waist.\n'
-          'Clothing: a deep navy sailor uniform with long sleeves.',
+              'Clothing: a deep navy sailor uniform with long sleeves.',
           'text',
         ),
         isTrue,
       );
-      expect(codeBlockWraps('def f():\n    return 1', 'text'), isFalse, reason: '缩进是代码');
-      expect(codeBlockWraps('| a | b |\n|---|---|', 'text'), isFalse, reason: '表格折了就废了');
-      expect(codeBlockWraps('+---+\n| a |', 'text'), isFalse, reason: 'ASCII 框线');
-      expect(codeBlockWraps('line one\nline two', null), isFalse, reason: '空语言按原来的"多行=代码"');
+      expect(
+        codeBlockWraps('def f():\n    return 1', 'text'),
+        isFalse,
+        reason: '缩进是代码',
+      );
+      expect(
+        codeBlockWraps('| a | b |\n|---|---|', 'text'),
+        isFalse,
+        reason: '表格折了就废了',
+      );
+      expect(
+        codeBlockWraps('+---+\n| a |', 'text'),
+        isFalse,
+        reason: 'ASCII 框线',
+      );
+      expect(
+        codeBlockWraps('line one\nline two', null),
+        isFalse,
+        reason: '空语言按原来的"多行=代码"',
+      );
       expect(codeBlockWraps('one line', null), isTrue, reason: '单行照旧折行');
-      expect(codeBlockWraps('a\nb', 'dart', reflowed: true), isTrue, reason: '并回一段的硬折行散文');
+      expect(
+        codeBlockWraps('a\nb', 'dart', reflowed: true),
+        isTrue,
+        reason: '并回一段的硬折行散文',
+      );
     });
   });
 
   group('两列表格：铺满容器、自动换行', () {
     testWidgets('两列长单元格不横向滚动，宽度铺满容器', (tester) async {
-      const reply = '| 参数 | 说明 |\n'
+      const reply =
+          '| 参数 | 说明 |\n'
           '|---|---|\n'
           '| prompt | 这里是一段很长的说明文字，用来把两列表格撑宽；'
           '它应该自动换行铺满容器，而不是让整张表向右延伸。 |\n';
-      await tester.pumpWidget(MaterialApp(
-        home: Scaffold(
-          body: Center(child: SizedBox(width: 320, child: MarkdownText(reply))),
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: Center(
+              child: SizedBox(width: 320, child: MarkdownText(reply)),
+            ),
+          ),
         ),
-      ));
+      );
       await tester.pumpAndSettle();
 
       expect(tester.takeException(), isNull);
-      expect(find.byType(SingleChildScrollView), findsNothing,
-          reason: '两列表格不许横向滚动');
+      expect(
+        find.byType(SingleChildScrollView),
+        findsNothing,
+        reason: '两列表格不许横向滚动',
+      );
       expect(find.byType(Scrollbar), findsNothing);
-      expect(tester.getSize(find.byType(Table)).width, 320,
-          reason: '两列表格要铺满对话容器');
+      expect(
+        tester.getSize(find.byType(Table)).width,
+        320,
+        reason: '两列表格要铺满对话容器',
+      );
     });
   });
 }

@@ -59,9 +59,11 @@ class _TagEditorState extends State<TagEditor> {
     final allTags = context.watch<LibraryStore>().tags;
     final q = _controller.text.trim().toLowerCase();
     final suggestions = allTags
-        .where((t) =>
-            !widget.value.contains(t.name) &&
-            (q.isEmpty || t.name.toLowerCase().contains(q)))
+        .where(
+          (t) =>
+              !widget.value.contains(t.name) &&
+              (q.isEmpty || t.name.toLowerCase().contains(q)),
+        )
         .take(q.isEmpty ? 14 : 8)
         .toList();
 
@@ -109,7 +111,9 @@ class _TagEditorState extends State<TagEditor> {
           const SizedBox(height: 8),
           Text(
             q.isEmpty ? '常用标签' : '匹配的标签',
-            style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline),
+            style: theme.textTheme.labelSmall?.copyWith(
+              color: theme.colorScheme.outline,
+            ),
           ),
           const SizedBox(height: 4),
           Wrap(
@@ -151,7 +155,9 @@ class TagFilterPanel extends StatelessWidget {
   Widget build(BuildContext context) {
     final store = context.watch<LibraryStore>();
     final theme = Theme.of(context);
-    final tags = store.tags.where((t) => category == null || t.category == category).toList();
+    final tags = store.tags
+        .where((t) => category == null || t.category == category)
+        .toList();
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,

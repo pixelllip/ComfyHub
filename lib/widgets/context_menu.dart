@@ -168,8 +168,14 @@ class ContextMenuScopeState extends State<ContextMenuScope> {
     // 菜单尺寸按屏幕边界夹一下：点得太靠右下角时不能跑出窗口
     final screen = MediaQuery.sizeOf(context);
     final estimated = pending.estimatedSize();
-    final maxLeft = (screen.width - estimated.width - 8).clamp(8.0, screen.width);
-    final maxTop = (screen.height - estimated.height - 8).clamp(8.0, screen.height);
+    final maxLeft = (screen.width - estimated.width - 8).clamp(
+      8.0,
+      screen.width,
+    );
+    final maxTop = (screen.height - estimated.height - 8).clamp(
+      8.0,
+      screen.height,
+    );
     final left = pending.globalPosition.dx.clamp(8.0, maxLeft);
     final top = pending.globalPosition.dy.clamp(8.0, maxTop);
 
@@ -188,7 +194,9 @@ class ContextMenuScopeState extends State<ContextMenuScope> {
                 elevation: 8,
                 borderRadius: BorderRadius.circular(8),
                 clipBehavior: Clip.antiAlias,
-                color: theme.menuTheme.style?.backgroundColor?.resolve({}) ?? theme.canvasColor,
+                color:
+                    theme.menuTheme.style?.backgroundColor?.resolve({}) ??
+                    theme.canvasColor,
                 child: IntrinsicWidth(
                   child: Column(
                     mainAxisSize: MainAxisSize.min,

@@ -30,12 +30,18 @@ fn looks_like_comfy_两种形态都认_只有_output_不认() {
     let any = root.join("portable");
     std::fs::create_dir_all(any.join("output")).unwrap();
     std::fs::create_dir_all(any.join("models")).unwrap();
-    assert!(looks_like_comfy(&any).0, "output/ + models/ 是任何形态都有的");
+    assert!(
+        looks_like_comfy(&any).0,
+        "output/ + models/ 是任何形态都有的"
+    );
 
     let bogus = root.join("随便建的");
     std::fs::create_dir_all(bogus.join("output")).unwrap();
     let (ok, _reason) = looks_like_comfy(&bogus);
-    assert!(!ok, "只有一个空 output/ 不算 ComfyUI（误判的代价是捕获一条也收不到）");
+    assert!(
+        !ok,
+        "只有一个空 output/ 不算 ComfyUI（误判的代价是捕获一条也收不到）"
+    );
 }
 
 #[test]
@@ -45,7 +51,10 @@ fn 三个目录来源都要认_少搬一条就会静默少结果() {
     let configured_home = make_home(&root.join("from-config"));
     let output = configured_home.join("output");
     std::fs::create_dir_all(&output).unwrap();
-    let cfg_dir = configured_home.join("user").join("default").join("workflows");
+    let cfg_dir = configured_home
+        .join("user")
+        .join("default")
+        .join("workflows");
     write_workflow(&cfg_dir, "a.json", r#"{"nodes":[]}"#);
 
     // ② 项目内的 comfyui（探测那一档）
@@ -55,11 +64,15 @@ fn 三个目录来源都要认_少搬一条就会静默少结果() {
     write_workflow(&proj_dir, "b.json", r#"{"nodes":[]}"#);
 
     let dirs = workflow_dirs(&project_root, Some(&output.to_string_lossy()));
-    let names: Vec<String> =
-        dirs.iter().map(|d| d.to_string_lossy().to_string()).collect();
+    let names: Vec<String> = dirs
+        .iter()
+        .map(|d| d.to_string_lossy().to_string())
+        .collect();
     assert!(
-        names.iter().any(|n| n.ends_with("from-config\\ComfyUI\\user\\default\\workflows")
-            || n.ends_with("from-config/ComfyUI/user/default/workflows")),
+        names.iter().any(
+            |n| n.ends_with("from-config\\ComfyUI\\user\\default\\workflows")
+                || n.ends_with("from-config/ComfyUI/user/default/workflows")
+        ),
         "① 配置的输出目录那一档：{names:?}"
     );
     assert!(
@@ -73,7 +86,11 @@ fn 只列真的能用的_坏_json_空文件_非_json_与未知格式都跳过() 
     let root = tmpdir("scan");
     let dir = root.join("workflows");
     write_workflow(&dir, "ui.json", r#"{"nodes":[],"links":[]}"#);
-    write_workflow(&dir, "api.json", r#"{"1":{"class_type":"KSampler","inputs":{}}}"#);
+    write_workflow(
+        &dir,
+        "api.json",
+        r#"{"1":{"class_type":"KSampler","inputs":{}}}"#,
+    );
     write_workflow(&dir, "broken.json", "{ 这不是 json");
     write_workflow(&dir, "weird.json", r#"{"hello":"world"}"#);
     write_workflow(&dir, "notes.txt", r#"{"nodes":[]}"#);
@@ -83,9 +100,19 @@ fn 只列真的能用的_坏_json_空文件_非_json_与未知格式都跳过() 
     let files = scan(std::slice::from_ref(&dir), None, MAX_FILES);
     let mut names: Vec<&str> = files.iter().map(|f| f.name.as_str()).collect();
     names.sort();
-    assert_eq!(names, vec!["api.json", "ui.json"], "只列 ui/api 两种真能跑的");
-    assert_eq!(files.iter().find(|f| f.name == "ui.json").unwrap().format, "ui");
-    assert_eq!(files.iter().find(|f| f.name == "api.json").unwrap().format, "api");
+    assert_eq!(
+        names,
+        vec!["api.json", "ui.json"],
+        "只列 ui/api 两种真能跑的"
+    );
+    assert_eq!(
+        files.iter().find(|f| f.name == "ui.json").unwrap().format,
+        "ui"
+    );
+    assert_eq!(
+        files.iter().find(|f| f.name == "api.json").unwrap().format,
+        "api"
+    );
     // sha256 是内容寻址的键（`comfy_load_workflow` 用 file:<sha256>），必须真的是 64 位 hex
     let sha = &files.iter().find(|f| f.name == "ui.json").unwrap().sha256;
     assert_eq!(sha.len(), 64);
@@ -112,12 +139,20 @@ fn 清单的键集合与_是否入库如实反映() {
     write_workflow(&dir, "a.json", r#"{"nodes":[]}"#);
 
     let json = list_json(std::slice::from_ref(&dir), None, 50, |sha| {
-        if sha.len() == 64 { Some(310) } else { None }
+        if sha.len() == 64 {
+            Some(310)
+        } else {
+            None
+        }
     });
     let obj = json.as_object().unwrap();
     let mut keys: Vec<&str> = obj.keys().map(|s| s.as_str()).collect();
     keys.sort();
-    assert_eq!(keys, vec!["count", "dirs", "files", "hint", "total"], "少一个键 = 界面上少一块内容");
+    assert_eq!(
+        keys,
+        vec!["count", "dirs", "files", "hint", "total"],
+        "少一个键 = 界面上少一块内容"
+    );
     let file = &obj["files"][0];
     assert_eq!(file["inLibrary"], true);
     assert_eq!(file["promptId"], 310);
@@ -170,7 +205,10 @@ fn 一小时前的文件时间戳是_iso8601_utc() {
     assert_eq!(&ts[10..11], "T");
     // 小数位：0 / 3 / 6 / 9 位（Java `Instant.toString()` 的规则，Kotlin 侧逐个比过）
     let frac = ts.trim_end_matches('Z').split('.').nth(1).unwrap_or("");
-    assert!(matches!(frac.len(), 0 | 3 | 6 | 9), "小数位只能是 0/3/6/9：{ts}");
+    assert!(
+        matches!(frac.len(), 0 | 3 | 6 | 9),
+        "小数位只能是 0/3/6/9：{ts}"
+    );
 }
 
 /// 小数位规则（三位一组去尾零）现在住在 [`crate::infra::iso_time`] —— 那里有用例专门钉它。
@@ -179,7 +217,9 @@ fn 一小时前的文件时间戳是_iso8601_utc() {
 fn 文件时间戳走的是共享的_iso_时间格式化() {
     use std::time::{Duration, UNIX_EPOCH};
     let at = |nanos: u64| {
-        crate::infra::iso_time::from_system_time(UNIX_EPOCH + Duration::new(1_774_512_000, nanos as u32))
+        crate::infra::iso_time::from_system_time(
+            UNIX_EPOCH + Duration::new(1_774_512_000, nanos as u32),
+        )
     };
     // 整秒：**没有小数点**
     assert_eq!(at(0), "2026-03-26T08:00:00Z");

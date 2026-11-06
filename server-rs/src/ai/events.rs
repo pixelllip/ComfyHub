@@ -27,8 +27,8 @@ use std::sync::Mutex;
 
 use serde_json::Value;
 
-use crate::web::routes::{ApiError, AppState};
 use crate::ai::runs::{self, StoredEvent, EVENT_BATCH};
+use crate::web::routes::{ApiError, AppState};
 
 /// 内存里每个 Run 最多留多少条（Kotlin `RunEventBus.MEMORY_KEEP`）。
 ///
@@ -57,7 +57,10 @@ struct EventBatcherOwned {
 
 impl EventBatcherOwned {
     fn new(size: usize) -> Self {
-        Self { batch: Vec::new(), size: size.max(1) }
+        Self {
+            batch: Vec::new(),
+            size: size.max(1),
+        }
     }
 }
 
@@ -74,7 +77,9 @@ impl Default for RunEventBus {
 
 impl RunEventBus {
     pub fn new() -> Self {
-        Self { streams: Mutex::new(HashMap::new()) }
+        Self {
+            streams: Mutex::new(HashMap::new()),
+        }
     }
 
     /// 开一次 Run 的流（`POST /runs` 时调；重复 open 是幂等的，**不清空已有的 seq**）。
@@ -122,7 +127,10 @@ impl RunEventBus {
             while stream.events.len() > MEMORY_KEEP {
                 stream.events.pop_front();
             }
-            stream.batcher.batch.push((event.seq, event.r#type.clone(), payload.clone()));
+            stream
+                .batcher
+                .batch
+                .push((event.seq, event.r#type.clone(), payload.clone()));
             if stream.batcher.batch.len() >= stream.batcher.size {
                 to_write = Some(std::mem::take(&mut stream.batcher.batch));
             }
@@ -168,7 +176,10 @@ impl RunEventBus {
     /// 内存里的最近事件（排查用；**回放一律从库里读**）。
     pub fn history(&self, run_id: &str) -> Vec<StoredEvent> {
         let streams = self.streams.lock().unwrap_or_else(|e| e.into_inner());
-        streams.get(run_id).map(|s| s.events.iter().cloned().collect()).unwrap_or_default()
+        streams
+            .get(run_id)
+            .map(|s| s.events.iter().cloned().collect())
+            .unwrap_or_default()
     }
 
     /// 流是否已经收尾（不在流里也算收尾 —— "进程不知道这次 Run"）。
@@ -203,7 +214,11 @@ impl RunEventBus {
 }
 
 /// 一批事件落库（**一个事务**，R2 的 `BEGIN IMMEDIATE` 由 `state.write` 保证）。
-fn write_batch(state: &AppState, run_id: &str, batch: &[(i64, String, Value)]) -> Result<(), ApiError> {
+fn write_batch(
+    state: &AppState,
+    run_id: &str,
+    batch: &[(i64, String, Value)],
+) -> Result<(), ApiError> {
     let run_id = run_id.to_string();
     let batch: Vec<(i64, String, String)> = batch
         .iter()

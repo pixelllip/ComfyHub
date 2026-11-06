@@ -25,7 +25,12 @@ fn 找不到脚本时如实回_false_而不是假装成功() {
     std::fs::create_dir_all(&missing_root).unwrap();
     assert!(locate_poster_script(&missing_root).is_none());
     let dest = dir.join("out.png");
-    assert!(!write_video_poster(&missing_root, &dir.join("a.mp4"), &dest, POSTER_SIZE));
+    assert!(!write_video_poster(
+        &missing_root,
+        &dir.join("a.mp4"),
+        &dest,
+        POSTER_SIZE
+    ));
     assert!(!dest.exists(), "失败时不许留半份文件");
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -33,5 +38,8 @@ fn 找不到脚本时如实回_false_而不是假装成功() {
 #[test]
 fn 脚本位置按项目根拼() {
     let root = PathBuf::from(r"D:\proj");
-    assert_eq!(root.join(POSTER_SCRIPT), PathBuf::from(r"D:\proj\scripts\video-poster.ps1"));
+    assert_eq!(
+        root.join(POSTER_SCRIPT),
+        PathBuf::from(r"D:\proj\scripts\video-poster.ps1")
+    );
 }

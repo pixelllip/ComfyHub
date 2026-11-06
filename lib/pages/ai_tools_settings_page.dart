@@ -133,7 +133,9 @@ class _AiToolsSettingsPageState extends State<AiToolsSettingsPage> {
           content: Text(message),
           behavior: SnackBarBehavior.floating,
           duration: Duration(seconds: error ? 8 : 3),
-          backgroundColor: error ? Theme.of(context).colorScheme.errorContainer : null,
+          backgroundColor: error
+              ? Theme.of(context).colorScheme.errorContainer
+              : null,
         ),
       );
   }
@@ -189,7 +191,9 @@ class _AiToolsSettingsPageState extends State<AiToolsSettingsPage> {
               'web_search 和 web_fetch 都走这个后端。出厂免密钥就能用，按来源限速，每小时约 1000 次。'
               '两个工具的默认权限都是「询问」，因为查询词会发给搜索服务，每一次都要你点批准。'
               '嫌烦可以在下面改成「允许」。抓取目标只接受公开网址，内网与本机地址会被拒绝。',
-              style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.outline),
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.outline,
+              ),
             ),
             const SizedBox(height: 10),
             Row(
@@ -199,17 +203,25 @@ class _AiToolsSettingsPageState extends State<AiToolsSettingsPage> {
                   size: 10,
                   color: !cred.configured
                       ? theme.colorScheme.outline
-                      : (cred.source == 'env' ? theme.colorScheme.outline : Colors.green),
+                      : (cred.source == 'env'
+                            ? theme.colorScheme.outline
+                            : Colors.green),
                 ),
                 const SizedBox(width: 6),
-                Text(cred.source == 'none' ? '未填密钥（免密钥模式）' : cred.label,
-                    style: theme.textTheme.bodySmall),
+                Text(
+                  cred.source == 'none' ? '未填密钥（免密钥模式）' : cred.label,
+                  style: theme.textTheme.bodySmall,
+                ),
               ],
             ),
             const SizedBox(height: 8),
             if (cred.source == 'env')
-              Text('密钥由环境变量 COMFYHUB_CRED_keenable 提供，是只读的，不能在应用内修改或移除。',
-                  style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline))
+              Text(
+                '密钥由环境变量 COMFYHUB_CRED_keenable 提供，是只读的，不能在应用内修改或移除。',
+                style: theme.textTheme.labelSmall?.copyWith(
+                  color: theme.colorScheme.outline,
+                ),
+              )
             else ...[
               TextField(
                 controller: _searchKey,
@@ -233,7 +245,9 @@ class _AiToolsSettingsPageState extends State<AiToolsSettingsPage> {
                   ),
                   const SizedBox(width: 8),
                   OutlinedButton.icon(
-                    onPressed: _searchBusy || !cred.configured ? null : _removeSearchKey,
+                    onPressed: _searchBusy || !cred.configured
+                        ? null
+                        : _removeSearchKey,
                     icon: const Icon(Icons.delete_outline, size: 18),
                     label: const Text('移除密钥'),
                   ),
@@ -267,10 +281,15 @@ class _AiToolsSettingsPageState extends State<AiToolsSettingsPage> {
                 if (_error != null)
                   Container(
                     width: double.infinity,
-                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 10,
+                    ),
                     color: Theme.of(context).colorScheme.errorContainer,
-                    child: Text('读取工具权限失败，$_error',
-                        style: Theme.of(context).textTheme.bodySmall),
+                    child: Text(
+                      '读取工具权限失败，$_error',
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
                   ),
                 Expanded(
                   // 卡片高度差几倍（默认策略一段、白名单两段、工具清单很长），
@@ -304,10 +323,19 @@ class _AiToolsSettingsPageState extends State<AiToolsSettingsPage> {
                           estimatedHeight: 280,
                         ),
                         if (_policy.autoReadRoots.isNotEmpty)
-                          AdaptiveSection(_autoReadCard(), estimatedHeight: 160),
+                          AdaptiveSection(
+                            _autoReadCard(),
+                            estimatedHeight: 160,
+                          ),
                         AdaptiveSection(_webSearchCard(), estimatedHeight: 320),
-                        AdaptiveSection(_attachmentCacheCard(), estimatedHeight: 240),
-                        AdaptiveSection(_toolsEntryCard(), estimatedHeight: 160),
+                        AdaptiveSection(
+                          _attachmentCacheCard(),
+                          estimatedHeight: 240,
+                        ),
+                        AdaptiveSection(
+                          _toolsEntryCard(),
+                          estimatedHeight: 160,
+                        ),
                       ],
                     ),
                   ),
@@ -329,25 +357,34 @@ class _AiToolsSettingsPageState extends State<AiToolsSettingsPage> {
           children: [
             Row(
               children: [
-                Icon(Icons.shield_outlined, size: 18, color: theme.colorScheme.onTertiaryContainer),
+                Icon(
+                  Icons.shield_outlined,
+                  size: 18,
+                  color: theme.colorScheme.onTertiaryContainer,
+                ),
                 const SizedBox(width: 6),
-                Text('默认策略',
-                    style: theme.textTheme.titleSmall
-                        ?.copyWith(color: theme.colorScheme.onTertiaryContainer)),
+                Text(
+                  '默认策略',
+                  style: theme.textTheme.titleSmall?.copyWith(
+                    color: theme.colorScheme.onTertiaryContainer,
+                  ),
+                ),
               ],
             ),
             const SizedBox(height: 8),
             Text(
               _policy.defaultWriteHint,
-              style: theme.textTheme.bodyMedium
-                  ?.copyWith(color: theme.colorScheme.onTertiaryContainer),
+              style: theme.textTheme.bodyMedium?.copyWith(
+                color: theme.colorScheme.onTertiaryContainer,
+              ),
             ),
             const SizedBox(height: 4),
             Text(
               '工具调用分允许、询问、拒绝三档。允许会直接执行，询问会在聊天里等你点「批准 / 拒绝」，'
               '拒绝会直接挡掉。需要审批的工具会在回复气泡里出按钮，没人点就按拒绝处理。',
-              style: theme.textTheme.bodySmall
-                  ?.copyWith(color: theme.colorScheme.onTertiaryContainer),
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onTertiaryContainer,
+              ),
             ),
           ],
         ),
@@ -369,7 +406,11 @@ class _AiToolsSettingsPageState extends State<AiToolsSettingsPage> {
           children: [
             Row(
               children: [
-                Icon(Icons.travel_explore_outlined, size: 18, color: theme.colorScheme.primary),
+                Icon(
+                  Icons.travel_explore_outlined,
+                  size: 18,
+                  color: theme.colorScheme.primary,
+                ),
                 const SizedBox(width: 6),
                 Text('自动放行（只读）', style: theme.textTheme.titleSmall),
               ],
@@ -379,7 +420,9 @@ class _AiToolsSettingsPageState extends State<AiToolsSettingsPage> {
               '这些是本机 ComfyUI 的目录，后端每次现探、自动只读放行，'
               '所以 AI 能直接读你自己的工作流文件（例如 user\\default\\workflows 下的 .json），'
               '不用你手动加白名单。写入仍然只允许上面那些目录，这些目录不在写白名单里。',
-              style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.outline),
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.outline,
+              ),
             ),
             const SizedBox(height: 8),
             for (final root in _policy.autoReadRoots)
@@ -387,7 +430,9 @@ class _AiToolsSettingsPageState extends State<AiToolsSettingsPage> {
                 padding: const EdgeInsets.only(bottom: 4),
                 child: SelectableText(
                   root,
-                  style: theme.textTheme.bodySmall?.copyWith(fontFamily: 'monospace'),
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    fontFamily: 'monospace',
+                  ),
                 ),
               ),
           ],
@@ -412,12 +457,16 @@ class _AiToolsSettingsPageState extends State<AiToolsSettingsPage> {
               '限制单次回复里模型能自己跑多少步，防止它绕圈子烧钱。'
               '（回答一次 AI 的提问会重置"调用总数"这一窗的额度 —— '
               '你刚做完选择，它就该接着把这件事做完。）',
-              style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.outline),
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.outline,
+              ),
             ),
             const SizedBox(height: 10),
             _dropdownRow<int>(
               label: '工具轮数上限',
-              value: stepOptions.contains(_policy.maxToolSteps) ? _policy.maxToolSteps : 25,
+              value: stepOptions.contains(_policy.maxToolSteps)
+                  ? _policy.maxToolSteps
+                  : 25,
               options: stepOptions,
               labelOf: (v) => '$v 轮',
               onChanged: (v) => _patch({'maxToolSteps': v}, '工具轮数上限已设为 $v'),
@@ -425,7 +474,9 @@ class _AiToolsSettingsPageState extends State<AiToolsSettingsPage> {
             const SizedBox(height: 8),
             _dropdownRow<int>(
               label: '调用总数上限',
-              value: callOptions.contains(_policy.maxCallsPerRun) ? _policy.maxCallsPerRun : 48,
+              value: callOptions.contains(_policy.maxCallsPerRun)
+                  ? _policy.maxCallsPerRun
+                  : 48,
               options: callOptions,
               labelOf: (v) => '$v 次',
               onChanged: (v) => _patch({'maxCallsPerRun': v}, '调用总数上限已设为 $v'),
@@ -438,7 +489,9 @@ class _AiToolsSettingsPageState extends State<AiToolsSettingsPage> {
                 '单次读写上限是读 ${formatSize(_policy.maxReadBytes)}、'
                 '写 ${formatSize(_policy.maxWriteBytes)}。后端固定，界面不能改，'
                 '读不完可以按 offset 分段读。',
-                style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline),
+                style: theme.textTheme.labelSmall?.copyWith(
+                  color: theme.colorScheme.outline,
+                ),
               ),
             ],
           ],
@@ -492,8 +545,12 @@ class _AiToolsSettingsPageState extends State<AiToolsSettingsPage> {
           children: [
             Text(title, style: theme.textTheme.titleSmall),
             const SizedBox(height: 4),
-            Text(hint,
-                style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.outline)),
+            Text(
+              hint,
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.outline,
+              ),
+            ),
             const SizedBox(height: 8),
             if (roots.isEmpty)
               Text('（空）', style: theme.textTheme.bodySmall)
@@ -508,7 +565,10 @@ class _AiToolsSettingsPageState extends State<AiToolsSettingsPage> {
                     tooltip: '移除',
                     icon: const Icon(Icons.remove_circle_outline, size: 16),
                     visualDensity: VisualDensity.compact,
-                    constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
+                    constraints: const BoxConstraints(
+                      minWidth: 28,
+                      minHeight: 28,
+                    ),
                     padding: EdgeInsets.zero,
                     onPressed: _saving ? null : () => onRemove(root),
                   ),
@@ -670,8 +730,7 @@ class _AiToolsSettingsPageState extends State<AiToolsSettingsPage> {
     return Card(
       clipBehavior: Clip.antiAlias,
       child: ListTile(
-        contentPadding:
-            const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
         leading: const Icon(Icons.tune),
         title: const Text('逐工具权限'),
         subtitle: Text(
@@ -683,47 +742,41 @@ class _AiToolsSettingsPageState extends State<AiToolsSettingsPage> {
         onTap: _tools.isEmpty
             ? null
             : () => Navigator.of(context).push(
-                  MaterialPageRoute<void>(
-                    builder: (_) => _ToolPermissionsPage(
-                      tools: _tools,
-                      policy: _policy,
-                      onPatch: _patch,
-                    ),
+                MaterialPageRoute<void>(
+                  builder: (_) => _ToolPermissionsPage(
+                    tools: _tools,
+                    policy: _policy,
+                    onPatch: _patch,
                   ),
                 ),
+              ),
       ),
     );
   }
 
-  Future<void> _addWriteRoot(String root) => _patch(
-        {
-          'writeRoots': [..._policy.writeRoots, root],
-        },
-        '已加入写目录 $root',
-      );
+  Future<void> _addWriteRoot(String root) => _patch({
+    'writeRoots': [..._policy.writeRoots, root],
+  }, '已加入写目录 $root');
 
-  Future<void> _addReadRoot(String root) => _patch(
-        {
-          'readRoots': [..._policy.readRoots, root],
-        },
-        '已加入读目录 $root',
-      );
+  Future<void> _addReadRoot(String root) => _patch({
+    'readRoots': [..._policy.readRoots, root],
+  }, '已加入读目录 $root');
 
   /// 移除一个目录。**新建列表**再发（`_policy` 里的列表可能是 const，而且就地改会
   /// 让"撤销 / 重试"拿到被改过的旧状态）。
-  Future<void> _removeWriteRoot(String root) => _patch(
-        {
-          'writeRoots': [for (final r in _policy.writeRoots) if (r != root) r],
-        },
-        '已移除写目录 $root',
-      );
+  Future<void> _removeWriteRoot(String root) => _patch({
+    'writeRoots': [
+      for (final r in _policy.writeRoots)
+        if (r != root) r,
+    ],
+  }, '已移除写目录 $root');
 
-  Future<void> _removeReadRoot(String root) => _patch(
-        {
-          'readRoots': [for (final r in _policy.readRoots) if (r != root) r],
-        },
-        '已移除读目录 $root',
-      );
+  Future<void> _removeReadRoot(String root) => _patch({
+    'readRoots': [
+      for (final r in _policy.readRoots)
+        if (r != root) r,
+    ],
+  }, '已移除读目录 $root');
 }
 
 /// 「逐工具权限」子页。
@@ -739,7 +792,8 @@ class _ToolPermissionsPage extends StatefulWidget {
   final Future<(List<AiToolInfo>, AiToolPolicy)?> Function(
     Map<String, dynamic> patch,
     String message,
-  ) onPatch;
+  )
+  onPatch;
 
   const _ToolPermissionsPage({
     required this.tools,
@@ -776,12 +830,9 @@ class _ToolPermissionsPageState extends State<_ToolPermissionsPage> {
 
   Future<void> _setAccess(AiToolInfo tool, String value) async {
     setState(() => _saving = true);
-    final result = await widget.onPatch(
-      {
-        'overrides': {..._policy.overrides, tool.name: value},
-      },
-      '${tool.name} 已设为「${AiToolPolicy.accessLabel(value)}」',
-    );
+    final result = await widget.onPatch({
+      'overrides': {..._policy.overrides, tool.name: value},
+    }, '${tool.name} 已设为「${AiToolPolicy.accessLabel(value)}」');
     if (!mounted) return;
     setState(() {
       _saving = false;
@@ -818,16 +869,16 @@ class _ToolPermissionsPageState extends State<_ToolPermissionsPage> {
               alignment: Alignment.centerLeft,
               child: Text(
                 '共 ${_tools.length} 个工具。改动立刻生效，后端每次调用现算，不用重启。',
-                style: theme.textTheme.bodySmall
-                    ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
               ),
             ),
           ),
           Expanded(
             child: shown.isEmpty
                 ? Center(
-                    child: Text('没有匹配的工具',
-                        style: theme.textTheme.bodyMedium),
+                    child: Text('没有匹配的工具', style: theme.textTheme.bodyMedium),
                   )
                 : ListView.separated(
                     padding: const EdgeInsets.fromLTRB(16, 0, 16, 32),
@@ -845,80 +896,84 @@ class _ToolPermissionsPageState extends State<_ToolPermissionsPage> {
 
   Widget _row(ThemeData theme, AiToolInfo tool) {
     return Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Icon(
-            switch (tool.category) {
-              'skill' => Icons.auto_awesome_outlined,
-              'files' => Icons.folder_outlined,
-              'memory' => Icons.push_pin_outlined,
-              'layout' => Icons.dashboard_customize_outlined,
-              'web' => Icons.travel_explore_outlined,
-              'library' => Icons.menu_book_outlined,
-              _ => Icons.dns_outlined,
-            },
-            size: 16,
-            color: tool.isDenied
-                ? theme.colorScheme.error
-                : theme.colorScheme.onSurfaceVariant,
-          ),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Flexible(
-                      child: Text(
-                        tool.name,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: theme.textTheme.labelMedium,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(
+          switch (tool.category) {
+            'skill' => Icons.auto_awesome_outlined,
+            'files' => Icons.folder_outlined,
+            'memory' => Icons.push_pin_outlined,
+            'layout' => Icons.dashboard_customize_outlined,
+            'web' => Icons.travel_explore_outlined,
+            'library' => Icons.menu_book_outlined,
+            _ => Icons.dns_outlined,
+          },
+          size: 16,
+          color: tool.isDenied
+              ? theme.colorScheme.error
+              : theme.colorScheme.onSurfaceVariant,
+        ),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Flexible(
+                    child: Text(
+                      tool.name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: theme.textTheme.labelMedium,
+                    ),
+                  ),
+                  if (tool.mutating) ...[
+                    const SizedBox(width: 6),
+                    Tooltip(
+                      message: '这个工具会写盘或改数据',
+                      child: Icon(
+                        Icons.edit_outlined,
+                        size: 13,
+                        color: theme.colorScheme.error,
                       ),
                     ),
-                    if (tool.mutating) ...[
-                      const SizedBox(width: 6),
-                      Tooltip(
-                        message: '这个工具会写盘或改数据',
-                        child: Icon(Icons.edit_outlined,
-                            size: 13, color: theme.colorScheme.error),
-                      ),
-                    ],
-                    if (tool.overridden) ...[
-                      const SizedBox(width: 6),
-                      const _Tag('已改'),
-                    ],
                   ],
+                  if (tool.overridden) ...[
+                    const SizedBox(width: 6),
+                    const _Tag('已改'),
+                  ],
+                ],
+              ),
+              Text(
+                tool.description,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: theme.textTheme.labelSmall?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
                 ),
-                Text(
-                  tool.description,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: theme.textTheme.labelSmall
-                      ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(width: 8),
-          DropdownButton<String>(
-            value: AiToolPolicy.accessOptions.containsKey(tool.access)
-                ? tool.access
-                : 'ask',
-            isDense: true,
-            onChanged: _saving
-                ? null
-                : (v) {
-                    if (v == null) return;
-                    _setAccess(tool, v);
-                  },
-            items: [
-              for (final entry in AiToolPolicy.accessOptions.entries)
-                DropdownMenuItem(value: entry.key, child: Text(entry.value)),
+              ),
             ],
           ),
-        ],
+        ),
+        const SizedBox(width: 8),
+        DropdownButton<String>(
+          value: AiToolPolicy.accessOptions.containsKey(tool.access)
+              ? tool.access
+              : 'ask',
+          isDense: true,
+          onChanged: _saving
+              ? null
+              : (v) {
+                  if (v == null) return;
+                  _setAccess(tool, v);
+                },
+          items: [
+            for (final entry in AiToolPolicy.accessOptions.entries)
+              DropdownMenuItem(value: entry.key, child: Text(entry.value)),
+          ],
+        ),
+      ],
     );
   }
 }

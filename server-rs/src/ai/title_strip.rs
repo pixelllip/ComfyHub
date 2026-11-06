@@ -177,7 +177,9 @@ impl TitleStripper {
 /// 缓冲末尾那段"可能还没收全的标记"从哪个下标开始（`[标` / `[/标` 的前缀）；
 /// 其余一律可以立刻放行 —— 否则模型一开口就被按住，流式看起来像卡住。
 fn last_partial_marker_start(buffer: &str) -> usize {
-    let Some(bracket) = buffer.rfind('[') else { return buffer.len() };
+    let Some(bracket) = buffer.rfind('[') else {
+        return buffer.len();
+    };
     let tail = &buffer[bracket..];
     let is_partial = (tail.chars().count() < OPEN.chars().count() && OPEN.starts_with(tail))
         || (tail.chars().count() < CLOSE.chars().count() && CLOSE.starts_with(tail));
@@ -191,8 +193,14 @@ fn last_partial_marker_start(buffer: &str) -> usize {
 /// 标题文本的清洗：压空白、去掉模型爱加的前缀与包裹（`标题：xxx`、`《xxx》`、`"xxx"`…）。
 fn clean_title(raw: &str) -> Option<String> {
     let collapsed: String = raw.split_whitespace().collect::<Vec<_>>().join(" ");
-    let trim_chars = ['：', ':', '"', '\'', '“', '”', '‘', '’', '《', '》', '【', '】', '「', '」', '[', ']', '#', '*'];
-    let mut text = collapsed.trim().trim_matches(|c| trim_chars.contains(&c)).to_string();
+    let trim_chars = [
+        '：', ':', '"', '\'', '“', '”', '‘', '’', '《', '》', '【', '】', '「', '」', '[', ']',
+        '#', '*',
+    ];
+    let mut text = collapsed
+        .trim()
+        .trim_matches(|c| trim_chars.contains(&c))
+        .to_string();
     if let Some(rest) = text.strip_prefix("标题") {
         text = rest.trim_start_matches(['：', ':', ' ', '\t']).to_string();
     }

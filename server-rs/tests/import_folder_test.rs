@@ -113,13 +113,26 @@ async fn 导入目录_用_png_内嵌的_prompt_还原出提示词() {
     write_png(&nested.join("nested.png"), 3, &[]);
 
     let state = state(&dir);
-    let (status, body) = post_json(&state, "/api/capture/import", json!({ "dir": source.display().to_string() })).await;
+    let (status, body) = post_json(
+        &state,
+        "/api/capture/import",
+        json!({ "dir": source.display().to_string() }),
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "{body}");
-    assert_eq!(body["scanned"], json!(3), "三张图都要被扫到（txt 不算）：{body}");
+    assert_eq!(
+        body["scanned"],
+        json!(3),
+        "三张图都要被扫到（txt 不算）：{body}"
+    );
     assert_eq!(body["imported"], json!(3), "{body}");
     assert_eq!(body["duplicates"], json!(0), "{body}");
     assert_eq!(body["failed"], json!(0), "{body}");
-    assert_eq!(body["promptsCreated"], json!(1), "只有带元数据的那张建提示词：{body}");
+    assert_eq!(
+        body["promptsCreated"],
+        json!(1),
+        "只有带元数据的那张建提示词：{body}"
+    );
     let prompt_ids = body["promptIds"].as_array().unwrap();
     assert_eq!(prompt_ids.len(), 1, "{body}");
 
@@ -150,7 +163,12 @@ async fn 导入目录_用_png_内嵌的_prompt_还原出提示词() {
     assert_eq!(linked, 1, "带元数据那张要关联到提示词");
 
     // ⑤ 再导一次：同一份内容不许重复入库
-    let (_, again) = post_json(&state, "/api/capture/import", json!({ "dir": source.display().to_string() })).await;
+    let (_, again) = post_json(
+        &state,
+        "/api/capture/import",
+        json!({ "dir": source.display().to_string() }),
+    )
+    .await;
     assert_eq!(again["imported"], json!(0), "{again}");
     assert_eq!(again["duplicates"], json!(3), "{again}");
     let media_count: i64 = state
@@ -190,7 +208,11 @@ async fn 不递归_与_自己的_storage_都不许被导入() {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{body}");
-    assert_eq!(body["scanned"], json!(0), "自己的 storage 一个都不许导：{body}");
+    assert_eq!(
+        body["scanned"],
+        json!(0),
+        "自己的 storage 一个都不许导：{body}"
+    );
 
     let _ = std::fs::remove_dir_all(dir);
 }
@@ -199,9 +221,17 @@ async fn 不递归_与_自己的_storage_都不许被导入() {
 async fn 目录不存在与缺_dir_都是人话_400() {
     let dir = temp_dir("errors");
     let state = state(&dir);
-    let (status, body) = post_json(&state, "/api/capture/import", json!({ "dir": "D:\\definitely-not-here" })).await;
+    let (status, body) = post_json(
+        &state,
+        "/api/capture/import",
+        json!({ "dir": "D:\\definitely-not-here" }),
+    )
+    .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
-    assert!(body["error"].as_str().unwrap().contains("目录不存在"), "{body}");
+    assert!(
+        body["error"].as_str().unwrap().contains("目录不存在"),
+        "{body}"
+    );
 
     let (status, body) = post_json(&state, "/api/capture/import", json!({})).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);

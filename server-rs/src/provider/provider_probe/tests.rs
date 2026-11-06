@@ -55,14 +55,26 @@ fn 数模型个数认两种信封() {
 
 #[test]
 fn 从正文细化错误码() {
-    assert_eq!(crate::provider::upstream::refine_from_body(r#"{"error":{"code":"insufficient_quota"}}"#), Some("QUOTA_EXCEEDED"));
-    assert_eq!(crate::provider::upstream::refine_from_body("Invalid API key"), Some("MISSING_CREDENTIAL"));
-    assert_eq!(crate::provider::upstream::refine_from_body("rate limit exceeded"), Some("RATE_LIMIT"));
+    assert_eq!(
+        crate::provider::upstream::refine_from_body(r#"{"error":{"code":"insufficient_quota"}}"#),
+        Some("QUOTA_EXCEEDED")
+    );
+    assert_eq!(
+        crate::provider::upstream::refine_from_body("Invalid API key"),
+        Some("MISSING_CREDENTIAL")
+    );
+    assert_eq!(
+        crate::provider::upstream::refine_from_body("rate limit exceeded"),
+        Some("RATE_LIMIT")
+    );
     assert_eq!(
         crate::provider::upstream::refine_from_body("The model is not supported on this endpoint"),
         Some("PROTOCOL_ERROR")
     );
-    assert_eq!(crate::provider::upstream::refine_from_body("something else"), None);
+    assert_eq!(
+        crate::provider::upstream::refine_from_body("something else"),
+        None
+    );
 }
 
 #[test]
@@ -72,22 +84,32 @@ fn 接口明确声明的能力逐维度读出来() {
     assert!(parse_declared_capabilities(obj.as_object().unwrap()).is_none());
 
     // 数组形态 + 混装 tools
-    let obj: Value =
-        serde_json::from_str(r#"{"id":"m","input_modalities":["text","image"],"capabilities":["vision","tools"]}"#)
-            .unwrap();
+    let obj: Value = serde_json::from_str(
+        r#"{"id":"m","input_modalities":["text","image"],"capabilities":["vision","tools"]}"#,
+    )
+    .unwrap();
     let declared = parse_declared_capabilities(obj.as_object().unwrap()).unwrap();
-    assert_eq!(declared.modalities.as_deref(), Some(&["text".to_string(), "image".to_string()][..]));
+    assert_eq!(
+        declared.modalities.as_deref(),
+        Some(&["text".to_string(), "image".to_string()][..])
+    );
     assert_eq!(declared.tools, Some(true));
     assert_eq!(declared.reasoning, None, "没声明的维度必须是 None");
 
     // OpenRouter 的 architecture.modality
-    let obj: Value = serde_json::from_str(r#"{"id":"m","architecture":{"modality":"text+image->text"}}"#).unwrap();
+    let obj: Value =
+        serde_json::from_str(r#"{"id":"m","architecture":{"modality":"text+image->text"}}"#)
+            .unwrap();
     let declared = parse_declared_capabilities(obj.as_object().unwrap()).unwrap();
-    assert_eq!(declared.modalities.as_deref(), Some(&["text".to_string(), "image".to_string()][..]));
+    assert_eq!(
+        declared.modalities.as_deref(),
+        Some(&["text".to_string(), "image".to_string()][..])
+    );
 
     // 布尔开关
     let obj: Value =
-        serde_json::from_str(r#"{"id":"m","supports_vision":true,"supports_reasoning":true}"#).unwrap();
+        serde_json::from_str(r#"{"id":"m","supports_vision":true,"supports_reasoning":true}"#)
+            .unwrap();
     let declared = parse_declared_capabilities(obj.as_object().unwrap()).unwrap();
     let modalities = declared.modalities.unwrap();
     assert!(modalities.contains(&"image".to_string()), "{modalities:?}");
@@ -114,7 +136,14 @@ fn 候选_逐维度合并且来源如实() {
     assert_eq!(candidates[0]["tools"], json!(true), "工具默认给上");
     assert_eq!(candidates[0]["reasoning"], json!(false));
     assert_eq!(candidates[0]["capabilitySource"], json!("discovered"));
-    assert!(candidates[0]["capabilityNote"].as_str().unwrap().contains("接口"), "{:?}", candidates[0]);
+    assert!(
+        candidates[0]["capabilityNote"]
+            .as_str()
+            .unwrap()
+            .contains("接口"),
+        "{:?}",
+        candidates[0]
+    );
 
     // ② 接口什么都没说、内置目录也没有 → 仅文本 + 默认给工具 + unknown
     let body = r#"{"data":[{"id":"完全不认识的模型-xyz"}]}"#;
@@ -122,7 +151,10 @@ fn 候选_逐维度合并且来源如实() {
     assert_eq!(candidates[0]["modalities"], json!(["text"]));
     assert_eq!(candidates[0]["capabilitySource"], json!("unknown"));
     assert!(
-        candidates[0]["capabilityNote"].as_str().unwrap().contains("仅文本"),
+        candidates[0]["capabilityNote"]
+            .as_str()
+            .unwrap()
+            .contains("仅文本"),
         "{:?}",
         candidates[0]
     );
@@ -150,7 +182,10 @@ fn 内置目录命中时来源标_builtin_并带上规则名() {
     assert_eq!(candidates[0]["capabilitySource"], json!("builtin"));
     assert_eq!(candidates[0]["reasoning"], json!(hit.reasoning));
     assert!(
-        candidates[0]["capabilityNote"].as_str().unwrap().contains(&hit.matched_by),
+        candidates[0]["capabilityNote"]
+            .as_str()
+            .unwrap()
+            .contains(&hit.matched_by),
         "说明里要点出命中的规则：{:?}",
         candidates[0]
     );

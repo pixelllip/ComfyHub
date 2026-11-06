@@ -29,7 +29,11 @@ class PromptDetailPage extends StatefulWidget {
   /// 默认 `false`（预设视角）；从画廊 / 标签页进来时传 `true`。
   final bool showParams;
 
-  const PromptDetailPage({super.key, required this.promptId, this.showParams = false});
+  const PromptDetailPage({
+    super.key,
+    required this.promptId,
+    this.showParams = false,
+  });
 
   @override
   State<PromptDetailPage> createState() => _PromptDetailPageState();
@@ -156,7 +160,8 @@ class _PromptDetailPageState extends State<PromptDetailPage> {
             ],
             button: (context, controller, isOpen) => IconButton(
               tooltip: '更多',
-              onPressed: () => controller.isOpen ? controller.close() : controller.open(),
+              onPressed: () =>
+                  controller.isOpen ? controller.close() : controller.open(),
               icon: const Icon(Icons.more_vert),
             ),
           ),
@@ -178,7 +183,9 @@ class _PromptDetailPageState extends State<PromptDetailPage> {
                   _SourceBadge(source: p.source!, sourceRef: p.sourceRef),
                 Text(
                   '创建于 ${formatDateTime(p.createdAt)}',
-                  style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline),
+                  style: theme.textTheme.labelSmall?.copyWith(
+                    color: theme.colorScheme.outline,
+                  ),
                 ),
                 if (p.hasWorkflow)
                   WorkflowButton(
@@ -212,7 +219,10 @@ class _PromptDetailPageState extends State<PromptDetailPage> {
             if ((p.notes ?? '').isNotEmpty) ...[
               Text('备注', style: theme.textTheme.titleSmall),
               const SizedBox(height: 6),
-              Text(p.notes!, style: theme.textTheme.bodyMedium?.copyWith(height: 1.5)),
+              Text(
+                p.notes!,
+                style: theme.textTheme.bodyMedium?.copyWith(height: 1.5),
+              ),
               const SizedBox(height: 16),
             ],
 
@@ -231,7 +241,9 @@ class _PromptDetailPageState extends State<PromptDetailPage> {
             if (p.tags.isEmpty)
               Text(
                 '还没有标签 —— 打上标签后就能在提示词库里按标签搜索',
-                style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.outline),
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.outline,
+                ),
               )
             else
               Wrap(
@@ -258,11 +270,18 @@ class _PromptDetailPageState extends State<PromptDetailPage> {
             const SizedBox(height: 24),
             Row(
               children: [
-                Text('关联产物 (${_media.length})', style: theme.textTheme.titleSmall),
+                Text(
+                  '关联产物 (${_media.length})',
+                  style: theme.textTheme.titleSmall,
+                ),
                 const Spacer(),
                 FilledButton.tonalIcon(
                   onPressed: () async {
-                    final ok = await showUploadSheet(context, promptId: p.id, prompt: p);
+                    final ok = await showUploadSheet(
+                      context,
+                      promptId: p.id,
+                      prompt: p,
+                    );
                     if (ok) await _load();
                   },
                   icon: const Icon(Icons.upload_file, size: 18),
@@ -281,7 +300,10 @@ class _PromptDetailPageState extends State<PromptDetailPage> {
                 ),
                 child: Column(
                   children: [
-                    Icon(Icons.image_not_supported_outlined, color: theme.colorScheme.outline),
+                    Icon(
+                      Icons.image_not_supported_outlined,
+                      color: theme.colorScheme.outline,
+                    ),
                     const SizedBox(height: 8),
                     Text('还没有关联的产物', style: theme.textTheme.bodySmall),
                   ],
@@ -313,8 +335,14 @@ class _PromptDetailPageState extends State<PromptDetailPage> {
           ),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('取消')),
-          FilledButton(onPressed: () => Navigator.pop(ctx, working), child: const Text('保存')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, working),
+            child: const Text('保存'),
+          ),
         ],
       ),
     );
@@ -325,7 +353,8 @@ class _PromptDetailPageState extends State<PromptDetailPage> {
     final before = p.tags.map((e) => e.name).toSet();
     final after = result.toSet();
     final toAdd = after.difference(before).toList();
-    final toRemove = before.difference(after)
+    final toRemove = before
+        .difference(after)
         .map((name) => p.tags.firstWhere((t) => t.name == name).id)
         .toList();
 
@@ -346,11 +375,11 @@ class _SourceBadge extends StatelessWidget {
   const _SourceBadge({required this.source, this.sourceRef});
 
   static String _labelOf(String source) => switch (source) {
-        'ComfyUI' => 'ComfyUI 自动捕获',
-        'ComfyUI-Import' => '历史导入',
-        // 后端以后加了新来源，原样显示总比显示"未知"有用
-        _ => source,
-      };
+    'ComfyUI' => 'ComfyUI 自动捕获',
+    'ComfyUI-Import' => '历史导入',
+    // 后端以后加了新来源，原样显示总比显示"未知"有用
+    _ => source,
+  };
 
   @override
   Widget build(BuildContext context) {
@@ -364,7 +393,11 @@ class _SourceBadge extends StatelessWidget {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(Icons.cloud_download_outlined, size: 12, color: theme.colorScheme.primary),
+          Icon(
+            Icons.cloud_download_outlined,
+            size: 12,
+            color: theme.colorScheme.primary,
+          ),
           const SizedBox(width: 4),
           Text(
             _labelOf(source),
@@ -396,8 +429,8 @@ class _MediaGrid extends StatelessWidget {
         final columns = constraints.maxWidth > 900
             ? 4
             : constraints.maxWidth > 620
-                ? 3
-                : 2;
+            ? 3
+            : 2;
         return GridView.builder(
           shrinkWrap: true,
           physics: const NeverScrollableScrollPhysics(),
@@ -412,7 +445,9 @@ class _MediaGrid extends StatelessWidget {
             media: media[i],
             onTap: () async {
               await Navigator.of(context).push(
-                MaterialPageRoute(builder: (_) => MediaDetailPage(mediaId: media[i].id)),
+                MaterialPageRoute(
+                  builder: (_) => MediaDetailPage(mediaId: media[i].id),
+                ),
               );
               await onChanged();
             },

@@ -61,7 +61,10 @@ pub struct ToolFailure {
 
 impl ToolFailure {
     pub fn new(code: &str, message: impl Into<String>) -> Self {
-        Self { code: code.to_string(), message: message.into() }
+        Self {
+            code: code.to_string(),
+            message: message.into(),
+        }
     }
 }
 
@@ -89,7 +92,11 @@ impl ToolOutcome {
     pub fn new(content: impl Into<String>, payload: Value) -> Self {
         let content = content.into();
         let preview = preview_of(&content);
-        Self { content, preview, payload }
+        Self {
+            content,
+            preview,
+            payload,
+        }
     }
 }
 
@@ -113,7 +120,10 @@ pub fn truncate_result(text: &str) -> (String, bool) {
         return (text.to_string(), false);
     }
     let head: String = chars[..MAX_RESULT_CHARS].iter().collect();
-    (format!("{head}\n…（结果过长已截断，共 {} 字符）", chars.len()), true)
+    (
+        format!("{head}\n…（结果过长已截断，共 {} 字符）", chars.len()),
+        true,
+    )
 }
 
 /// 工具卡摘要（Kotlin `preview`）：空白压平 + 超长补省略号。
@@ -226,10 +236,9 @@ impl ToolSession {
             "web" => self.web_queries_in_window += 1,
             // ⚠ `comfy_submit` 不算"查询"（见 `ai_settings::is_comfy_query` 的注释：
             //   把它算进去会让"AI 自己搭工作流"那条路走不通）
-            "comfy"
-                if crate::ai::ai_settings::is_comfy_query(name) => {
-                    self.comfy_queries_in_window += 1;
-                }
+            "comfy" if crate::ai::ai_settings::is_comfy_query(name) => {
+                self.comfy_queries_in_window += 1;
+            }
             _ => {}
         }
     }
@@ -285,7 +294,9 @@ impl ToolSession {
 ///
 /// ⚠ 只有 [`is_implemented`] 为真的才下发（`declaredTo = 清单 ∩ 本地实现`，M3 的纪律）：
 /// 把没实现的也发下去，模型就会去调一个必然失败的调用。
-pub fn specs(policy: &crate::tools::policy::ToolPolicy) -> Vec<crate::provider::protocol::ToolSpec> {
+pub fn specs(
+    policy: &crate::tools::policy::ToolPolicy,
+) -> Vec<crate::provider::protocol::ToolSpec> {
     catalog(policy)
         .into_iter()
         .map(|tool| spec_of_view(&tool))
@@ -322,14 +333,18 @@ pub fn spec_of_view(view: &ToolView<'_>) -> crate::provider::protocol::ToolSpec 
 ///    摘除在 `ai::executor::handle_call` 的入口做，**只有一处**。
 /// 3. **只改对象型 schema**：MCP 工具可能是 `oneOf` 一类形状，硬塞 `properties` 会破坏它。
 fn add_reason_property(parameters: &mut Value) {
-    let Some(schema) = parameters.as_object_mut() else { return };
+    let Some(schema) = parameters.as_object_mut() else {
+        return;
+    };
     let is_object = schema.get("type").and_then(Value::as_str) == Some("object")
         || schema.contains_key("properties");
     if !is_object {
         return;
     }
     let entry = schema.entry("properties").or_insert_with(|| json!({}));
-    let Some(properties) = entry.as_object_mut() else { return };
+    let Some(properties) = entry.as_object_mut() else {
+        return;
+    };
     properties.entry("reason").or_insert_with(|| {
         json!({
             "type": "string",
@@ -356,7 +371,9 @@ fn add_reason_property(parameters: &mut Value) {
 /// * 最多解 4 层（字符串 → 对象 → 字符串…实际见过 2 层）；
 /// * 解不出来 / 解完不是对象 → **原样返回**，让工具自己报错（不许吞成 `{}`）。
 pub fn normalize_arguments_text(raw: &str) -> String {
-    let Ok(mut value) = serde_json::from_str::<Value>(raw) else { return raw.to_string() };
+    let Ok(mut value) = serde_json::from_str::<Value>(raw) else {
+        return raw.to_string();
+    };
     for _ in 0..4 {
         let next = match &value {
             Value::Object(map) if map.len() == 1 => map
@@ -594,7 +611,10 @@ pub fn specs_with(
     policy: &crate::tools::policy::ToolPolicy,
     extra: &[ToolView<'static>],
 ) -> Vec<crate::provider::protocol::ToolSpec> {
-    catalog_with(policy, extra).iter().map(spec_of_view).collect()
+    catalog_with(policy, extra)
+        .iter()
+        .map(spec_of_view)
+        .collect()
 }
 
 /// 执行一次工具调用。
@@ -639,15 +659,18 @@ pub async fn execute(
         // 本机模型清单（`ComfyModels` 的 Rust 版）：**只报不改**，回答"盘上有 / 实例看不到"
         "comfy_env_report" => crate::comfy::comfy_models::tool_env_report(state, arguments).await,
         // 两段式找工作流：先搜库；库里 0 条就回头看本机（用户 bug ⑤）
-        "comfy_find_workflow" => crate::workflow::workflow_search::tool_find_workflow(state, arguments),
+        "comfy_find_workflow" => {
+            crate::workflow::workflow_search::tool_find_workflow(state, arguments)
+        }
         // ---- 体检两件（P4 第 62 步：用户建议 ①/⑤）----------------------------
         // 两件都是**只报不改**：`check_inputs` 列"还等着外部给的位置"（用户没给参考图时
         // 模型最容易硬提交），`fit_workflow` 把图里点名的模型与本机清单对一遍。
         // ⚠ `check_inputs` 不碰 `state`，要的是"本次带没带图片附件"——
         //   那个事实在 session 里（与喂给系统提示的是同一个值）。
-        "comfy_check_inputs" => {
-            crate::workflow::workflow_fit::tool_check_inputs(arguments, session.has_image_attachment)
-        }
+        "comfy_check_inputs" => crate::workflow::workflow_fit::tool_check_inputs(
+            arguments,
+            session.has_image_attachment,
+        ),
         "comfy_fit_workflow" => {
             crate::workflow::workflow_fit::tool_fit_workflow(state, arguments).await
         }
@@ -670,7 +693,8 @@ pub async fn execute(
         // 这条审"接线本身"（界面格式也认 —— 广播节点该填却没填的那几路只有它看得见）。
         // 判据与界面上「看蓝图」那一页**同一份**（`workflow_blueprint::build`）。
         "comfy_diagnose_workflow" => {
-            crate::workflow::workflow_blueprint::tool_diagnose_workflow(state, policy, arguments).await
+            crate::workflow::workflow_blueprint::tool_diagnose_workflow(state, policy, arguments)
+                .await
         }
         // ---- 配方三件（P4 第 67 步：用户"新模型该怎么接上已有骨架"）----------------
         // 学（归纳 + 落库）与绑（只报不改地算出该改哪几个 overrides 键）都走
@@ -679,8 +703,12 @@ pub async fn execute(
         "comfy_learn_workflow" => {
             crate::workflow::workflow_recipe::tool_learn_workflow(state, policy, arguments).await
         }
-        "comfy_list_recipes" => crate::workflow::workflow_recipe::tool_list_recipes(state, arguments),
-        "comfy_bind_recipe" => crate::workflow::workflow_recipe::tool_bind_recipe(state, arguments).await,
+        "comfy_list_recipes" => {
+            crate::workflow::workflow_recipe::tool_list_recipes(state, arguments)
+        }
+        "comfy_bind_recipe" => {
+            crate::workflow::workflow_recipe::tool_bind_recipe(state, arguments).await
+        }
         // ---- 起 / 停实例（2026-09-28 用户 bug「通过 CLI 启动 comfyui 总是失败」）------
         // 起法在 [`crate::comfy::comfy_launch`]：用工作区自己的 `.venv\python.exe` 跑 main.py
         // （绕开 comfy-cli —— 它启动时要写两个**项目外**的文件，受限环境里必然 Errno 13）。
@@ -690,14 +718,18 @@ pub async fn execute(
         // ---- 提交（P4 第 48 步：**R10 的落点**）------------------------------
         // 「审核 → 审批 → 提交 → 自己等 → captureRun 入库 → mediaIds」这条链：
         // 审批由执行器（`default_access = ASK`）负责，其余都在 `workflow_submit` 里。
-        "comfy_submit" => crate::workflow::workflow_submit::tool_submit(state, policy, arguments).await,
+        "comfy_submit" => {
+            crate::workflow::workflow_submit::tool_submit(state, policy, arguments).await
+        }
         // ---- 图像编辑三件（图像编辑那一批：投放 + 遮罩）----------------------
         // 两阶段编辑（"先出人物、再换上去" / "换背景保人物"）的地基：ComfyUI 的
         // LoadImage / LoadImageMask **只能读它自己的 input 目录**，而画廊产物与用户附件
         // 都不在那里 —— 这两件工具是唯一的投放通道，`comfy_make_mask` 则解决
         // "手机 / 平板上画不出遮罩"这件事（与 Kotlin `AiImageEdit` 逐条对照）。
         "comfy_use_media" => crate::comfy::image_edit::tool_use_media(state, arguments).await,
-        "comfy_use_attachment" => crate::comfy::image_edit::tool_use_attachment(state, arguments).await,
+        "comfy_use_attachment" => {
+            crate::comfy::image_edit::tool_use_attachment(state, arguments).await
+        }
         "comfy_make_mask" => crate::comfy::image_edit::tool_make_mask(state, arguments).await,
         // ---- 看产物（2026-10-29：用户"能不能让 AI 看我直接在 comfy 运行的产物"）------
         // 只读画廊最近的图片并返回 `referenceImages`；真正把图附进上下文的是执行器
@@ -890,7 +922,9 @@ pub fn take_utf16(text: &str, limit: usize) -> String {
 pub fn untrusted_banner(kind: &str, query: Option<&str>) -> String {
     let mut out = crate::tools::mobile_tools::UNTRUSTED_BANNER_TEMPLATE.replace("{kind}", kind);
     if let Some(query) = query.filter(|q| !q.trim().is_empty()) {
-        out.push_str(&crate::tools::mobile_tools::UNTRUSTED_BANNER_QUERY_LINE.replace("{query}", query));
+        out.push_str(
+            &crate::tools::mobile_tools::UNTRUSTED_BANNER_QUERY_LINE.replace("{query}", query),
+        );
     }
     out
 }
@@ -940,13 +974,24 @@ pub(crate) fn java_error_name(error: &reqwest::Error) -> &'static str {
 
 /// Skills 的两个根目录（与 `run_kit` / `skills::snapshot` **同一个算法**）。
 fn skill_roots(state: &AppState) -> (PathBuf, PathBuf) {
-    let storage = state.media_dir().parent().unwrap_or(state.media_dir()).to_path_buf();
-    (state.project_root().join("skills").join("builtin"), storage.join("ai").join("skills"))
+    let storage = state
+        .media_dir()
+        .parent()
+        .unwrap_or(state.media_dir())
+        .to_path_buf();
+    (
+        state.project_root().join("skills").join("builtin"),
+        storage.join("ai").join("skills"),
+    )
 }
 
 /// 长期记忆所在目录。
 fn memory_dir(state: &AppState) -> PathBuf {
-    state.media_dir().parent().unwrap_or(state.media_dir()).join("ai")
+    state
+        .media_dir()
+        .parent()
+        .unwrap_or(state.media_dir())
+        .join("ai")
 }
 
 /// `list_skills`：**连不合法的一起列出来**（带 `validationError`）——
@@ -1084,11 +1129,18 @@ fn list_dir(
         .and_then(Value::as_str)
         .map(str::to_string)
         .unwrap_or_else(|| {
-            policy.write_roots.first().map(|p| p.display().to_string()).unwrap_or_default()
+            policy
+                .write_roots
+                .first()
+                .map(|p| p.display().to_string())
+                .unwrap_or_default()
         });
     let dir = policy.resolve_read(&raw)?;
     if !dir.is_dir() {
-        return Err(ToolFailure::new("NOT_A_DIRECTORY", format!("不是目录：{}", dir.display())));
+        return Err(ToolFailure::new(
+            "NOT_A_DIRECTORY",
+            format!("不是目录：{}", dir.display()),
+        ));
     }
     let depth = int_arg(arguments, "depth").unwrap_or(1).clamp(1, 2);
     let max_entries = 200usize;
@@ -1116,7 +1168,11 @@ fn list_dir(
     let mut text = dir.display().to_string();
     text.push('\n');
     let listing = lines.join("\n");
-    text.push_str(if lines.is_empty() { "(空目录)" } else { listing.as_str() });
+    text.push_str(if lines.is_empty() {
+        "(空目录)"
+    } else {
+        listing.as_str()
+    });
     if truncated {
         text.push_str(&format!("\n…（超过 {max_entries} 条已截断）"));
     }
@@ -1161,13 +1217,18 @@ fn read_file(
     let raw = string_arg(arguments, "path")?;
     let file = policy.resolve_read(&raw)?;
     if !file.is_file() {
-        return Err(ToolFailure::new("NOT_A_FILE", format!("不是文件：{}", file.display())));
+        return Err(ToolFailure::new(
+            "NOT_A_FILE",
+            format!("不是文件：{}", file.display()),
+        ));
     }
     let limit = int_arg(arguments, "maxBytes")
         .unwrap_or(crate::tools::policy::DEFAULT_MAX_READ_BYTES)
         .clamp(1, crate::tools::policy::DEFAULT_MAX_READ_BYTES);
     let size = std::fs::metadata(&file).map(|m| m.len()).unwrap_or(0);
-    let start = int_arg(arguments, "offset").unwrap_or(0).clamp(0, size as i64) as u64;
+    let start = int_arg(arguments, "offset")
+        .unwrap_or(0)
+        .clamp(0, size as i64) as u64;
 
     // 只读这一窗（不把整个文件读进内存：`maxBytes` 2MB，而文件可能是几百 MB 的视频）
     let window = read_window(&file, start, limit as usize)?;
@@ -1184,14 +1245,18 @@ fn read_file(
     } else {
         String::new()
     };
-    Ok(ToolOutcome::new(format!("{}\n{text}{note}", file.display()), Value::Null))
+    Ok(ToolOutcome::new(
+        format!("{}\n{text}{note}", file.display()),
+        Value::Null,
+    ))
 }
 
 /// 读文件的 `[start, start+limit)` 这一段（短读是正常的：文件可能就到头了）。
 fn read_window(file: &std::path::Path, start: u64, limit: usize) -> Result<Vec<u8>, ToolFailure> {
     use std::io::{Read, Seek, SeekFrom};
-    let mut handle = std::fs::File::open(file)
-        .map_err(|e| ToolFailure::new("IO_ERROR", format!("打不开文件（{}）：{e}", file.display())))?;
+    let mut handle = std::fs::File::open(file).map_err(|e| {
+        ToolFailure::new("IO_ERROR", format!("打不开文件（{}）：{e}", file.display()))
+    })?;
     if start > 0 {
         handle
             .seek(SeekFrom::Start(start))
@@ -1279,8 +1344,12 @@ fn write_file(
     }
     let target = policy.resolve_write(&raw)?;
     if let Some(parent) = target.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| ToolFailure::new("IO_ERROR", format!("建不了目录（{}）：{e}", parent.display())))?;
+        std::fs::create_dir_all(parent).map_err(|e| {
+            ToolFailure::new(
+                "IO_ERROR",
+                format!("建不了目录（{}）：{e}", parent.display()),
+            )
+        })?;
     }
     let append = arguments.get("mode").and_then(Value::as_str) == Some("append");
     let result = if append {
@@ -1293,7 +1362,12 @@ fn write_file(
     } else {
         std::fs::write(&target, bytes)
     };
-    result.map_err(|e| ToolFailure::new("IO_ERROR", format!("写不了文件（{}）：{e}", target.display())))?;
+    result.map_err(|e| {
+        ToolFailure::new(
+            "IO_ERROR",
+            format!("写不了文件（{}）：{e}", target.display()),
+        )
+    })?;
     Ok(ToolOutcome::new(
         format!(
             "已写入 {}（{} 字节，{}）。",
@@ -1360,9 +1434,8 @@ fn comfy_get_run(state: &AppState, arguments: &Value) -> Result<ToolOutcome, Too
     let found = match found {
         Some(info) => Some(info),
         None => match trimmed.parse::<i64>() {
-            Ok(prompt_id) => {
-                crate::comfy::capture::find_run_by_prompt_id(state, prompt_id).map_err(capture_failure)?
-            }
+            Ok(prompt_id) => crate::comfy::capture::find_run_by_prompt_id(state, prompt_id)
+                .map_err(capture_failure)?,
             Err(_) => None,
         },
     };
@@ -1390,7 +1463,9 @@ fn comfy_get_run(state: &AppState, arguments: &Value) -> Result<ToolOutcome, Too
 /// 各写一份 SQL 的后果是"界面上搜得到、AI 说没有"，而那种不一致不会有任何用例变红。
 fn search_prompts(state: &AppState, arguments: &Value) -> Result<ToolOutcome, ToolFailure> {
     let id = int_arg(arguments, "id");
-    let limit = int_arg(arguments, "limit").unwrap_or(5).clamp(1, MAX_LIBRARY_RESULTS);
+    let limit = int_arg(arguments, "limit")
+        .unwrap_or(5)
+        .clamp(1, MAX_LIBRARY_RESULTS);
     // Kotlin：`includePrompt` 缺席或不是 "false" 都算 true（只显式写 false 才省掉正文）
     let include_prompt = arguments.get("includePrompt").and_then(Value::as_str) != Some("false");
     let query = arguments
@@ -1450,7 +1525,11 @@ fn search_prompts(state: &AppState, arguments: &Value) -> Result<ToolOutcome, To
         text.push_str(&format!(
             "── [{}] {}\n",
             prompt.id,
-            if prompt.title.is_empty() { "(无标题)" } else { prompt.title.as_str() }
+            if prompt.title.is_empty() {
+                "(无标题)"
+            } else {
+                prompt.title.as_str()
+            }
         ));
         text.push_str(&format!(
             "   {} · 来源 {} · 产物 {} 张 · {}\n",
@@ -1476,10 +1555,19 @@ fn search_prompts(state: &AppState, arguments: &Value) -> Result<ToolOutcome, To
         };
         text.push_str(&format!(
             "   参数: {size}steps={} cfg={} sampler={} seed={} 底模={}\n",
-            prompt.steps.map(|v| v.to_string()).unwrap_or_else(|| "?".into()),
-            prompt.cfg_scale.map(|v| v.to_string()).unwrap_or_else(|| "?".into()),
+            prompt
+                .steps
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "?".into()),
+            prompt
+                .cfg_scale
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "?".into()),
             prompt.sampler.as_deref().unwrap_or("?"),
-            prompt.seed.map(|v| v.to_string()).unwrap_or_else(|| "?".into()),
+            prompt
+                .seed
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "?".into()),
             prompt.checkpoint.as_deref().unwrap_or("?")
         ));
         if !prompt.tags.is_empty() {
@@ -1487,9 +1575,19 @@ fn search_prompts(state: &AppState, arguments: &Value) -> Result<ToolOutcome, To
             text.push_str(&format!("   tag: {}\n", names.join("、")));
         }
         if include_prompt {
-            text.push_str(&format!("   正面: {}\n", clip_text(&prompt.positive_prompt, MAX_PROMPT_CHARS)));
-            if let Some(negative) = prompt.negative_prompt.as_deref().filter(|n| !n.trim().is_empty()) {
-                text.push_str(&format!("   负面: {}\n", clip_text(negative, MAX_PROMPT_CHARS / 2)));
+            text.push_str(&format!(
+                "   正面: {}\n",
+                clip_text(&prompt.positive_prompt, MAX_PROMPT_CHARS)
+            ));
+            if let Some(negative) = prompt
+                .negative_prompt
+                .as_deref()
+                .filter(|n| !n.trim().is_empty())
+            {
+                text.push_str(&format!(
+                    "   负面: {}\n",
+                    clip_text(negative, MAX_PROMPT_CHARS / 2)
+                ));
             }
         }
     }
@@ -1536,7 +1634,10 @@ fn comfy_list_workflows(state: &AppState, arguments: &Value) -> Result<ToolOutco
     let limit = int_arg(arguments, "limit").unwrap_or(20).clamp(1, 100) as usize;
     let json = crate::comfy::comfy_dirs::workflows_json(
         state,
-        crate::comfy::comfy_dirs::WorkflowQuery { q: query, limit: Some(limit) },
+        crate::comfy::comfy_dirs::WorkflowQuery {
+            q: query,
+            limit: Some(limit),
+        },
     )
     .map_err(capture_failure)?;
     Ok(ToolOutcome::new(json.to_string(), json))
@@ -1556,7 +1657,9 @@ async fn comfy_get_status(state: &AppState, arguments: &Value) -> Result<ToolOut
         .get("includeRecent")
         .and_then(Value::as_bool)
         .unwrap_or(true);
-    let mut status = crate::comfy::capture::status_json(state).await.map_err(capture_failure)?;
+    let mut status = crate::comfy::capture::status_json(state)
+        .await
+        .map_err(capture_failure)?;
     // 最近提交过的任务（Kotlin `comfyStatus` = `CaptureStatus` + `submitter.submissions(5)`）。
     //
     // ⚠ **这里以前恒给空数组**（第 42 步写的注释是"Rust 侧 `comfy_submit` 还没搬 → 此刻确实一个都没有"）
@@ -1564,7 +1667,10 @@ async fn comfy_get_status(state: &AppState, arguments: &Value) -> Result<ToolOut
     //   模型刚提交完就来查状态，看到 `[]` 会以为自己**根本没提交过**（正是 Kotlin 在那行旁边写下的
     //   "模型查状态时就能看到自己刚提交的那个跑到哪了"）。取最近 5 条，与 Kotlin 同。
     if let Some(obj) = status.as_object_mut() {
-        obj.insert("submissions".into(), Value::Array(crate::comfy::capture::submissions_json(state, 5)));
+        obj.insert(
+            "submissions".into(),
+            Value::Array(crate::comfy::capture::submissions_json(state, 5)),
+        );
         // **跑到哪一步了**（P4 第 72 步）：模型必须能回答"现在跑到哪个节点、几成"。
         //
         // ⚠ 只有 WS 能给出这件事（REST 的 `/queue` 没有进度、`/progress` 404、`/history`
@@ -1574,7 +1680,10 @@ async fn comfy_get_status(state: &AppState, arguments: &Value) -> Result<ToolOut
             obj.insert("current".into(), current.to_json());
             obj.insert("currentStep".into(), Value::String(current.human()));
         }
-        obj.insert("progressConnected".into(), Value::Bool(state.comfy_progress.is_connected()));
+        obj.insert(
+            "progressConnected".into(),
+            Value::Bool(state.comfy_progress.is_connected()),
+        );
     }
     // **抠图模型在不在**（2026-09-27）：`easy imageRemBg` 只读 `<ComfyUI 根>\models\rembg`，
     // 而文件不在时它会自己去 HuggingFace 静默下载（表现是"点了按钮没反应"）。
@@ -1582,9 +1691,15 @@ async fn comfy_get_status(state: &AppState, arguments: &Value) -> Result<ToolOut
     // ⚠ 这是**加在工具返回里**（不是加在 `/api/capture/status` 那个端点里）：那个端点的键集合
     //   是界面契约（有用例钉着精确键集合），加一个键就会红。
     if let Ok(config) = crate::comfy::capture::capture_config(state) {
-        let roots = crate::comfy::comfy_dirs::comfy_homes(&state.project_root(), config.output_dir.as_deref());
+        let roots = crate::comfy::comfy_dirs::comfy_homes(
+            &state.project_root(),
+            config.output_dir.as_deref(),
+        );
         if let Some(obj) = status.as_object_mut() {
-            obj.insert("mattingModels".into(), crate::comfy::image_edit::matting_models(&roots));
+            obj.insert(
+                "mattingModels".into(),
+                crate::comfy::image_edit::matting_models(&roots),
+            );
         }
     }
 
@@ -1640,12 +1755,18 @@ async fn comfy_load_workflow(
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|t| !t.is_empty());
-    let include_graph = arguments.get("includeGraph").and_then(Value::as_bool).unwrap_or(false);
+    let include_graph = arguments
+        .get("includeGraph")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     let tolerate = arguments
         .get("tolerateUnsupported")
         .and_then(Value::as_bool)
         .unwrap_or(false);
-    let emulate = arguments.get("emulateFrontend").and_then(Value::as_bool).unwrap_or(true);
+    let emulate = arguments
+        .get("emulateFrontend")
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
     let json = crate::workflow::workflow_load::load_from_file(
         state,
         &file,
@@ -1756,7 +1877,10 @@ fn image_url_of_spec(
         if id.is_empty() {
             return Ok(None);
         }
-        match region.map(|r| r.trim().to_string()).filter(|r| !r.is_empty()) {
+        match region
+            .map(|r| r.trim().to_string())
+            .filter(|r| !r.is_empty())
+        {
             Some(region) => {
                 let crop = crate::media::attachments::crop_image(
                     state,
@@ -1837,7 +1961,9 @@ fn option_of_spec(
         let text = text.trim();
         return Ok((!text.is_empty()).then(|| (text.to_string(), String::new())));
     }
-    let Some(obj) = raw.as_object() else { return Ok(None) };
+    let Some(obj) = raw.as_object() else {
+        return Ok(None);
+    };
     let text = obj
         .get("text")
         .or_else(|| obj.get("label"))
@@ -1848,7 +1974,8 @@ fn option_of_spec(
     if text.is_empty() {
         return Ok(None);
     }
-    let image = image_url_of_spec(state, obj, &format!("第 {} 个选项", index + 1))?.unwrap_or_default();
+    let image =
+        image_url_of_spec(state, obj, &format!("第 {} 个选项", index + 1))?.unwrap_or_default();
     Ok(Some((text, image)))
 }
 
@@ -1904,7 +2031,10 @@ fn question_specs(state: &AppState, arguments: &Value) -> Result<Vec<AskSpec>, T
                     options,
                     option_images,
                     image_url,
-                    multi_select: q.get("multiSelect").and_then(Value::as_bool).unwrap_or(false),
+                    multi_select: q
+                        .get("multiSelect")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false),
                     header: q
                         .get("header")
                         .and_then(Value::as_str)
@@ -1932,17 +2062,16 @@ fn question_specs(state: &AppState, arguments: &Value) -> Result<Vec<AskSpec>, T
     }
     let (options, option_images) = options_of(state, arguments.get("options"))?;
     let empty = serde_json::Map::new();
-    let image_url = image_url_of_spec(
-        state,
-        arguments.as_object().unwrap_or(&empty),
-        "问题",
-    )?;
+    let image_url = image_url_of_spec(state, arguments.as_object().unwrap_or(&empty), "问题")?;
     Ok(vec![AskSpec {
         question: single,
         options,
         option_images,
         image_url,
-        multi_select: arguments.get("multiSelect").and_then(Value::as_bool).unwrap_or(false),
+        multi_select: arguments
+            .get("multiSelect")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
         header: arguments
             .get("header")
             .and_then(Value::as_str)
@@ -2012,7 +2141,10 @@ async fn wait_for_answers(
                 return out;
             }
         }
-        tokio::time::sleep(std::time::Duration::from_millis(crate::ai::questions::QUESTION_POLL_MS)).await;
+        tokio::time::sleep(std::time::Duration::from_millis(
+            crate::ai::questions::QUESTION_POLL_MS,
+        ))
+        .await;
     }
 }
 
@@ -2093,8 +2225,13 @@ async fn ask_user_question(
         .map_err(failure_of)?;
         // 落库之后**再读回**那一行：发给界面的形状与 `GET /api/ai/questions/{id}` 完全一致
         // （少一次"手拼一份 JSON 与库里那份不一致"的机会）
-        let Some(row) = crate::ai::questions::find_stored(state, &question_id).map_err(failure_of)? else {
-            return Err(ToolFailure::new("QUESTION_WRITE_FAILED", "提问落库后读不回来"));
+        let Some(row) =
+            crate::ai::questions::find_stored(state, &question_id).map_err(failure_of)?
+        else {
+            return Err(ToolFailure::new(
+                "QUESTION_WRITE_FAILED",
+                "提问落库后读不回来",
+            ));
         };
         records.push(row);
         // ⚠ 形状必须是**嵌套**的 `question` 对象（用户 bug 2026-09-21 的现场根因之一）：
@@ -2129,7 +2266,8 @@ async fn ask_user_question(
     let any_answered = answers.iter().any(Option::is_some);
     let budget_reset = any_answered && session.reset_budget();
 
-    let answered_json = |record: &crate::ai::questions::StoredQuestion, answer: &Option<crate::ai::questions::Answer>| {
+    let answered_json = |record: &crate::ai::questions::StoredQuestion,
+                         answer: &Option<crate::ai::questions::Answer>| {
         let mut out = serde_json::Map::new();
         out.insert("questionId".into(), json!(record.question_id));
         out.insert("index".into(), json!(record.index));
@@ -2173,11 +2311,15 @@ async fn ask_user_question(
     payload.insert(
         "asked".into(),
         records[0]
-            .with_answer(answers[0].as_ref().unwrap_or(&crate::ai::questions::Answer {
-                answer: String::new(),
-                option_index: None,
-                option_indexes: Vec::new(),
-            }))
+            .with_answer(
+                answers[0]
+                    .as_ref()
+                    .unwrap_or(&crate::ai::questions::Answer {
+                        answer: String::new(),
+                        option_index: None,
+                        option_indexes: Vec::new(),
+                    }),
+            )
             .to_json(),
     );
     payload.insert(
@@ -2271,8 +2413,17 @@ fn failure_of(error: crate::web::routes::ApiError) -> ToolFailure {
 /// 本机日期（`YYYY-MM-DD`，按本机时区）—— 交给 SQLite 算。
 fn today(state: &AppState) -> Result<String, ToolFailure> {
     state
-        .with(|conn| conn.query_row("SELECT date('now','localtime')", [], |row| row.get::<_, String>(0)))
-        .map_err(|e| ToolFailure::new("MEMORY_WRITE_FAILED", format!("拿不到本机日期：{}", e.human())))
+        .with(|conn| {
+            conn.query_row("SELECT date('now','localtime')", [], |row| {
+                row.get::<_, String>(0)
+            })
+        })
+        .map_err(|e| {
+            ToolFailure::new(
+                "MEMORY_WRITE_FAILED",
+                format!("拿不到本机日期：{}", e.human()),
+            )
+        })
 }
 
 /// 扫全量（含非法项）—— `list_skills` 用它。

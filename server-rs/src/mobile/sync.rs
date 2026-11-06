@@ -74,12 +74,21 @@ pub const NOT_SYNCED: &[(&str, &str)] = &[
     ("app_settings", "含配对令牌明文与本地设置，绝不外发"),
     ("ai_providers", "含凭据引用，只在桌面侧"),
     ("ai_models", "模型目录由 run-kit 版本化下发"),
-    ("ai_run_events", "单 Run 上万条的调试日志；工具过程看 ai_runs / ai_tool_calls"),
-    ("ai_questions", "提问闸门只在桌面侧（手机看实时提问走 GET /api/ai/pending）"),
+    (
+        "ai_run_events",
+        "单 Run 上万条的调试日志；工具过程看 ai_runs / ai_tool_calls",
+    ),
+    (
+        "ai_questions",
+        "提问闸门只在桌面侧（手机看实时提问走 GET /api/ai/pending）",
+    ),
     // 2026-09-27（M5）：手机的排队提交（契约 §4.1）是**一条指令**，不是给手机镜像的行 ——
     // 手机本来就知道自己在等什么；结果只经"往发起那条会话追加一条助手消息"回传（那几条表在
     // SYNCED 里）。它也**不该有**账本触发器：那是"手机反过来把桌面的工作单改掉"的入口。
-    ("submit_jobs", "排队提交是桌面侧的工作单；结果经会话消息下行（契约 §4.1）"),
+    (
+        "submit_jobs",
+        "排队提交是桌面侧的工作单；结果经会话消息下行（契约 §4.1）",
+    ),
 ];
 
 /// `app_settings` 里 run-kit 版本号的键（与 Kotlin `RunKit.KEY_VERSION` 同值）。
@@ -112,14 +121,21 @@ pub struct TableStatus {
 pub fn manifest(state: &AppState) -> Result<SyncManifest, ApiError> {
     state.with(|conn| {
         let schema_version = crate::infra::db::schema_version(conn)?;
-        let cursor: i64 = conn.query_row("SELECT COALESCE(MAX(seq), 0) FROM _sync_log", [], |row| row.get(0))?;
+        let cursor: i64 =
+            conn.query_row("SELECT COALESCE(MAX(seq), 0) FROM _sync_log", [], |row| {
+                row.get(0)
+            })?;
         // 时间与库里其余地方同口径（TEXT ISO-8601 UTC），不引 chrono
         let server_time: String =
-            conn.query_row("SELECT strftime('%Y-%m-%dT%H:%M:%SZ','now')", [], |row| row.get(0))?;
+            conn.query_row("SELECT strftime('%Y-%m-%dT%H:%M:%SZ','now')", [], |row| {
+                row.get(0)
+            })?;
         let kit_version: Option<String> = conn
-            .query_row("SELECT v FROM app_settings WHERE k = ?1", [KEY_KIT_VERSION], |row| {
-                row.get::<_, Option<String>>(0)
-            })
+            .query_row(
+                "SELECT v FROM app_settings WHERE k = ?1",
+                [KEY_KIT_VERSION],
+                |row| row.get::<_, Option<String>>(0),
+            )
             .optional()?
             .flatten()
             .filter(|v| !v.trim().is_empty());
@@ -128,36 +144,57 @@ pub fn manifest(state: &AppState) -> Result<SyncManifest, ApiError> {
         for name in SYNCED {
             // 白名单写死，但**表是不是真的在**要问库：不在说明 schema 与这里脱节了
             let exists: Option<String> = conn
-                .query_row("SELECT name FROM sqlite_master WHERE type='table' AND name = ?1", [name], |row| {
-                    row.get(0)
-                })
+                .query_row(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name = ?1",
+                    [name],
+                    |row| row.get(0),
+                )
                 .optional()?;
             if exists.is_none() {
                 continue;
             }
             // 表名来自**编译期常量白名单**（不是用户输入），所以 format! 不是注入面
-            let count: i64 = conn.query_row(&format!("SELECT COUNT(*) FROM {name}"), [], |row| row.get(0))?;
+            let count: i64 =
+                conn.query_row(&format!("SELECT COUNT(*) FROM {name}"), [], |row| {
+                    row.get(0)
+                })?;
             tables.insert(
                 (*name).to_string(),
-                TableStatus { synced: true, row_count: Some(count), reason: None },
+                TableStatus {
+                    synced: true,
+                    row_count: Some(count),
+                    reason: None,
+                },
             );
         }
         for (name, reason) in NOT_SYNCED {
             let exists: Option<String> = conn
-                .query_row("SELECT name FROM sqlite_master WHERE type='table' AND name = ?1", [name], |row| {
-                    row.get(0)
-                })
+                .query_row(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name = ?1",
+                    [name],
+                    |row| row.get(0),
+                )
                 .optional()?;
             if exists.is_none() {
                 continue;
             }
             tables.insert(
                 (*name).to_string(),
-                TableStatus { synced: false, row_count: None, reason: Some((*reason).to_string()) },
+                TableStatus {
+                    synced: false,
+                    row_count: None,
+                    reason: Some((*reason).to_string()),
+                },
             );
         }
 
-        Ok(SyncManifest { schema_version, kit_version, cursor, server_time, tables })
+        Ok(SyncManifest {
+            schema_version,
+            kit_version,
+            cursor,
+            server_time,
+            tables,
+        })
     })
 }
 
@@ -269,12 +306,19 @@ pub fn changes(state: &AppState, since: i64, limit: i64) -> Result<SyncChanges, 
 
 enum ChangesOutcome {
     /// 游标落在保留窗口之外 → 调用方翻成 `410 Gone`
-    Gone { since: i64, min: i64 },
+    Gone {
+        since: i64,
+        min: i64,
+    },
     Changes(SyncChanges),
 }
 
 /// [changes] 的实现体（单独一个函数：`state.with` 的闭包没法标返回类型）。
-fn changes_on(conn: &rusqlite::Connection, since: i64, limit: i64) -> rusqlite::Result<ChangesOutcome> {
+fn changes_on(
+    conn: &rusqlite::Connection,
+    since: i64,
+    limit: i64,
+) -> rusqlite::Result<ChangesOutcome> {
     {
         // 保留窗口的左边界。空账本 = 无窗口（不 410：新手机本来就没游标）
         let min_seq: Option<i64> = conn.query_row("SELECT MIN(seq) FROM _sync_log", [], |row| {
@@ -307,9 +351,17 @@ fn changes_on(conn: &rusqlite::Connection, since: i64, limit: i64) -> rusqlite::
         params.push(Box::new(limit + 1));
         let mut stmt = conn.prepare(&sql)?;
         let rows: Vec<LogRow> = stmt
-            .query_map(rusqlite::params_from_iter(params.iter().map(|p| p.as_ref())), |row| {
-                Ok(LogRow { seq: row.get(0)?, tbl: row.get(1)?, pk: row.get(2)?, op: row.get(3)? })
-            })?
+            .query_map(
+                rusqlite::params_from_iter(params.iter().map(|p| p.as_ref())),
+                |row| {
+                    Ok(LogRow {
+                        seq: row.get(0)?,
+                        tbl: row.get(1)?,
+                        pk: row.get(2)?,
+                        op: row.get(3)?,
+                    })
+                },
+            )?
             .collect::<Result<_, _>>()?;
 
         let has_more = rows.len() as i64 > limit;
@@ -319,7 +371,9 @@ fn changes_on(conn: &rusqlite::Connection, since: i64, limit: i64) -> rusqlite::
         let mut deletes: BTreeMap<String, Vec<serde_json::Value>> = BTreeMap::new();
 
         for row in &window {
-            let Some(kind) = pk_kind(&row.tbl) else { continue };
+            let Some(kind) = pk_kind(&row.tbl) else {
+                continue;
+            };
             if row.op == "delete" {
                 if let Some(key) = delete_key(kind, &row.pk) {
                     deletes.entry(row.tbl.clone()).or_default().push(key);
@@ -339,11 +393,18 @@ fn changes_on(conn: &rusqlite::Connection, since: i64, limit: i64) -> rusqlite::
             window.last().map(|r| r.seq).unwrap_or(since)
         } else {
             let max: i64 =
-                conn.query_row("SELECT COALESCE(MAX(seq), 0) FROM _sync_log", [], |row| row.get(0))?;
+                conn.query_row("SELECT COALESCE(MAX(seq), 0) FROM _sync_log", [], |row| {
+                    row.get(0)
+                })?;
             max.max(since)
         };
 
-        Ok(ChangesOutcome::Changes(SyncChanges { cursor, has_more, upserts, deletes }))
+        Ok(ChangesOutcome::Changes(SyncChanges {
+            cursor,
+            has_more,
+            upserts,
+            deletes,
+        }))
     }
 }
 
@@ -415,7 +476,9 @@ fn row_to_json(row: &rusqlite::Row) -> rusqlite::Result<serde_json::Value> {
             ValueRef::Text(t) => serde_json::json!(String::from_utf8_lossy(t).into_owned()),
             // 契约 §1：二进制不进库（走 HTTP + ETag）。真出现 blob 说明 schema 被破了 ——
             // 用十六进制如实带出去，**不许静默变成 null**（那就是悄悄丢数据）
-            ValueRef::Blob(b) => serde_json::json!(b.iter().map(|x| format!("{x:02x}")).collect::<String>()),
+            ValueRef::Blob(b) => {
+                serde_json::json!(b.iter().map(|x| format!("{x:02x}")).collect::<String>())
+            }
         };
         map.insert(name.to_string(), value);
     }
@@ -520,7 +583,10 @@ pub fn push(state: &AppState, request: PushRequest) -> Result<PushResult, ApiErr
             request.batch.len()
         )));
     }
-    let mut result = PushResult { applied: Vec::new(), rejected: Vec::new() };
+    let mut result = PushResult {
+        applied: Vec::new(),
+        rejected: Vec::new(),
+    };
     for item in &request.batch {
         match apply_one(state, item) {
             Ok(()) => result.applied.push(item.ref_id.clone()),
@@ -555,11 +621,17 @@ fn apply_one(state: &AppState, item: &PushItem) -> Result<(), Rejected> {
     if PHONE_FORBIDDEN.contains(&item.kind.as_str()) {
         return Err(reject(
             "FORBIDDEN_KIND",
-            format!("{} 由桌面在提交时产生，手机不许创建（总纲 §3.3）", item.kind),
+            format!(
+                "{} 由桌面在提交时产生，手机不许创建（总纲 §3.3）",
+                item.kind
+            ),
         ));
     }
     let Some(table) = table_of_kind(&item.kind) else {
-        return Err(reject("UNKNOWN_KIND", format!("未知的上行类型：{}", item.kind)));
+        return Err(reject(
+            "UNKNOWN_KIND",
+            format!("未知的上行类型：{}", item.kind),
+        ));
     };
     // ② op：目前只支持 upsert（delete 是"手机删桌面数据"，还没定策略）
     if let Some(op) = item.op.as_deref() {
@@ -568,7 +640,10 @@ fn apply_one(state: &AppState, item: &PushItem) -> Result<(), Rejected> {
         }
     }
     let Some(obj) = item.payload.as_object() else {
-        return Err(reject("BAD_PAYLOAD", "payload 必须是对象（完整行）".to_string()));
+        return Err(reject(
+            "BAD_PAYLOAD",
+            "payload 必须是对象（完整行）".to_string(),
+        ));
     };
 
     state
@@ -577,7 +652,10 @@ fn apply_one(state: &AppState, item: &PushItem) -> Result<(), Rejected> {
             //    列名验证过字符集之后再拼进 SQL —— payload 的键来自手机，这里是注入面。
             let columns = table_columns(tx, table)?;
             if columns.is_empty() {
-                return Ok(Err(reject("UNKNOWN_TABLE", format!("桌面没有 {table} 这张表"))));
+                return Ok(Err(reject(
+                    "UNKNOWN_TABLE",
+                    format!("桌面没有 {table} 这张表"),
+                )));
             }
             // ★ 主键**从 schema 现查**（`PRAGMA table_info` 的 pk 字段），不要假定叫 `id`：
             //   `ai_message_parts` 的主键是 `(message_id, ordinal)`，假定 `id` 会让
@@ -626,7 +704,10 @@ fn apply_one(state: &AppState, item: &PushItem) -> Result<(), Rejected> {
                 if actual != item.ref_id {
                     return Ok(Err(reject(
                         "REF_MISMATCH",
-                        format!("refId ({}) 与 payload 的主键 ({actual}) 不一致", item.ref_id),
+                        format!(
+                            "refId ({}) 与 payload 的主键 ({actual}) 不一致",
+                            item.ref_id
+                        ),
                     )));
                 }
             }
@@ -660,9 +741,17 @@ fn apply_one(state: &AppState, item: &PushItem) -> Result<(), Rejected> {
 
             // ⑤ 幂等 upsert：**绝不能用 INSERT OR REPLACE**
             //    （R3：它内部是 DELETE+INSERT，会点亮 DELETE 触发器往 _sync_log 写**假的 delete**）
-            let quoted = cols.iter().map(|c| quote_ident(c)).collect::<Vec<_>>().join(", ");
+            let quoted = cols
+                .iter()
+                .map(|c| quote_ident(c))
+                .collect::<Vec<_>>()
+                .join(", ");
             let holders = vec!["?"; cols.len()].join(", ");
-            let conflict = pk_cols.iter().map(|c| quote_ident(c)).collect::<Vec<_>>().join(", ");
+            let conflict = pk_cols
+                .iter()
+                .map(|c| quote_ident(c))
+                .collect::<Vec<_>>()
+                .join(", ");
             let updates = cols
                 .iter()
                 .filter(|c| !pk_cols.contains(c))
@@ -720,7 +809,10 @@ fn payload_to_sql(value: Option<&serde_json::Value>) -> Box<dyn rusqlite::ToSql>
 
 /// 列名只允许 `[A-Za-z0-9_]`，然后加双引号 —— 双保险（键来自手机，是注入面）。
 fn quote_ident(name: &str) -> String {
-    let safe: String = name.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '_').collect();
+    let safe: String = name
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '_')
+        .collect();
     format!("\"{safe}\"")
 }
 
@@ -779,7 +871,12 @@ pub struct BootstrapPage {
 /// 1. **绝不发 `.db` 文件**：`app_settings` 里有配对令牌明文，发整库等于把令牌送到
 ///    "可能已经丢了"的手机上。这里只发 [SYNCED] 里的表，一张都不多。
 /// 2. 手机侧走完全量后把游标置为 `manifest.cursor`（**不是** bootstrap 自己的页号）。
-pub fn bootstrap(state: &AppState, table: &str, page: i64, page_size: i64) -> Result<BootstrapPage, ApiError> {
+pub fn bootstrap(
+    state: &AppState,
+    table: &str,
+    page: i64,
+    page_size: i64,
+) -> Result<BootstrapPage, ApiError> {
     if !SYNCED.contains(&table) {
         return Err(ApiError::bad_request(format!(
             "table 不在同步范围内：{table}；合法值：{}",
@@ -790,15 +887,27 @@ pub fn bootstrap(state: &AppState, table: &str, page: i64, page_size: i64) -> Re
     let page_size = page_size.clamp(1, 1000);
 
     state.with(|conn| {
-        let total: i64 = conn.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| row.get(0))?;
-        let total_pages = if total == 0 { 1 } else { (total + page_size - 1) / page_size };
+        let total: i64 = conn.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+            row.get(0)
+        })?;
+        let total_pages = if total == 0 {
+            1
+        } else {
+            (total + page_size - 1) / page_size
+        };
         // 排序要**稳定**：按主键排，否则翻页时行会重复/漏掉（SQLite 不保证无 ORDER BY 的顺序）
         let sql = format!("SELECT * FROM {table} ORDER BY rowid ASC LIMIT ?1 OFFSET ?2");
         let mut stmt = conn.prepare(&sql)?;
         let rows = stmt
             .query_map([page_size, (page - 1) * page_size], row_to_json)?
             .collect::<rusqlite::Result<Vec<serde_json::Value>>>()?;
-        Ok(BootstrapPage { table: table.to_string(), page, page_size, total_pages, rows })
+        Ok(BootstrapPage {
+            table: table.to_string(),
+            page,
+            page_size,
+            total_pages,
+            rows,
+        })
     })
 }
 

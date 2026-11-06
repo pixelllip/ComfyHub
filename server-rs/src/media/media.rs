@@ -38,7 +38,8 @@ use crate::web::routes::{ApiError, AppState};
 const FROM: &str = "FROM media_assets m LEFT JOIN prompts p ON p.id = m.prompt_id";
 
 /// 产物的列清单（与 Kotlin `MediaRepo.COLS` 逐列一致，别加别减）。
-const COLS: &str = "m.id, m.prompt_id, m.kind, m.title, m.original_name, m.stored_name, m.mime_type,
+const COLS: &str =
+    "m.id, m.prompt_id, m.kind, m.title, m.original_name, m.stored_name, m.mime_type,
      m.size_bytes, m.width, m.height, m.duration_ms, m.sha256, m.source, m.favorite, m.notes,
      m.nsfw, m.created_at, m.updated_at, (m.workflow_json IS NOT NULL) AS has_workflow,
      p.title AS prompt_title, p.positive_prompt AS prompt_positive,
@@ -197,7 +198,11 @@ pub fn search(state: &AppState, q: &MediaQuery) -> Result<Paged<MediaDto>, ApiEr
             }
         }
 
-        if let Some(kind) = q.kind.as_ref().map(|k| k.trim().to_uppercase()).filter(|k| !k.is_empty() && k != "ALL")
+        if let Some(kind) = q
+            .kind
+            .as_ref()
+            .map(|k| k.trim().to_uppercase())
+            .filter(|k| !k.is_empty() && k != "ALL")
         {
             clauses.push("m.kind = ?".to_string());
             args.push(Box::new(kind));
@@ -256,7 +261,11 @@ pub fn search(state: &AppState, q: &MediaQuery) -> Result<Paged<MediaDto>, ApiEr
                            OR (x.created_at = m.created_at AND x.id < m.id))))"
             )
         };
-        let total_where = if collapse { &representative_only } else { &where_sql };
+        let total_where = if collapse {
+            &representative_only
+        } else {
+            &where_sql
+        };
         let total: i64 = {
             let sql = format!("SELECT COUNT(*) {FROM} {total_where}");
             let mut stmt = conn.prepare(&sql)?;
@@ -265,7 +274,11 @@ pub fn search(state: &AppState, q: &MediaQuery) -> Result<Paged<MediaDto>, ApiEr
         };
 
         // 列表本身也要只留代表 —— 否则"总共 12 组"配上 40 个格子。
-        let list_where = if collapse { &representative_only } else { &where_sql };
+        let list_where = if collapse {
+            &representative_only
+        } else {
+            &where_sql
+        };
         let sql = format!("SELECT {COLS} {FROM} {list_where} ORDER BY {order} LIMIT ? OFFSET ?");
         let mut stmt = conn.prepare(&sql)?;
         {
@@ -288,9 +301,11 @@ pub fn get(state: &AppState, id: i64) -> Result<MediaDto, ApiError> {
     state
         .with(|conn| {
             let media = conn
-                .query_row(&format!("SELECT {COLS} {FROM} WHERE m.id = ?1"), params![id], |row| {
-                    media_from_row(row)
-                })
+                .query_row(
+                    &format!("SELECT {COLS} {FROM} WHERE m.id = ?1"),
+                    params![id],
+                    media_from_row,
+                )
                 .optional()?;
             match media {
                 Some(mut m) => {
@@ -312,7 +327,7 @@ fn merged_tags(conn: &rusqlite::Connection, media: &MediaDto) -> rusqlite::Resul
               WHERE mt.media_id = ?1 ORDER BY t.name",
         )?;
         let rows = stmt.query_map(params![media.id], |row| row.get::<_, String>(0))?;
-        
+
         rows.collect::<rusqlite::Result<Vec<_>>>()?
     };
     if let Some(prompt_id) = media.prompt_id {
@@ -383,7 +398,11 @@ fn normalize_path(path: &FsPath) -> Option<PathBuf> {
 }
 
 /// `GET /api/media/{id}/file` —— 原件，支持 Range 与 ETag。
-pub async fn media_file(state: AppState, id: i64, headers: HeaderMap) -> Result<Response, ApiError> {
+pub async fn media_file(
+    state: AppState,
+    id: i64,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
     let media = get(&state, id)?;
     let path = resolve_media(state.media_dir(), &media.stored_name)
         .ok_or_else(|| ApiError::not_found(format!("文件已丢失: {}", media.stored_name)))?;
@@ -392,7 +411,14 @@ pub async fn media_file(state: AppState, id: i64, headers: HeaderMap) -> Result<
         .clone()
         .filter(|m| !m.is_empty())
         .unwrap_or_else(|| "application/octet-stream".to_string());
-    serve_path(&path, media.sha256.as_deref(), &mime, &media.original_name, &headers).await
+    serve_path(
+        &path,
+        media.sha256.as_deref(),
+        &mime,
+        &media.original_name,
+        &headers,
+    )
+    .await
 }
 
 /// 把磁盘上的一个文件流出去：**ETag（内容寻址）+ `If-None-Match` 304 + 单段 Range 206**。
@@ -427,7 +453,10 @@ pub async fn serve_path(
     };
 
     // 命中 ETag → 304（内容寻址 + immutable：这一条能省掉整段视频的流量）
-    if let Some(inm) = headers.get(header::IF_NONE_MATCH).and_then(|v| v.to_str().ok()) {
+    if let Some(inm) = headers
+        .get(header::IF_NONE_MATCH)
+        .and_then(|v| v.to_str().ok())
+    {
         if inm.split(',').any(|t| t.trim() == etag || t.trim() == "*") {
             return Ok(Response::builder()
                 .status(StatusCode::NOT_MODIFIED)
@@ -437,7 +466,11 @@ pub async fn serve_path(
         }
     }
 
-    let mime = if mime.trim().is_empty() { "application/octet-stream" } else { mime };
+    let mime = if mime.trim().is_empty() {
+        "application/octet-stream"
+    } else {
+        mime
+    };
     let disposition = inline_disposition(name);
 
     // Range：视频拖动进度条就靠它
@@ -513,7 +546,13 @@ fn parse_range(raw: &str, len: u64) -> Option<(u64, u64)> {
 fn inline_disposition(name: &str) -> String {
     let ascii: String = name
         .chars()
-        .map(|c| if c.is_ascii() && c != '"' && c != '\\' { c } else { '_' })
+        .map(|c| {
+            if c.is_ascii() && c != '"' && c != '\\' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect();
     let encoded: String = name
         .bytes()
@@ -530,7 +569,9 @@ fn inline_disposition(name: &str) -> String {
 
 /// 给"还没搬"的媒体端点用的统一 501。
 pub fn not_migrated(what: &str) -> ApiError {
-    ApiError::not_implemented(format!("{what} 还没搬到 Rust（灰度中，先走 Kotlin 的 8080）"))
+    ApiError::not_implemented(format!(
+        "{what} 还没搬到 Rust（灰度中，先走 Kotlin 的 8080）"
+    ))
 }
 
 /// 小工具：`HeaderValue` 的构造失败不该 panic（那是 500 的另一种写法）。
@@ -669,7 +710,10 @@ pub fn list_by_prompt(state: &AppState, prompt_id: i64) -> Result<Vec<MediaDto>,
 /// 前端 `Prompt.fromJson` 会把这个 body 解析成一条空提示词（弹窗里显示空字段），
 /// 而不是报错。我们回 404：Dart 的 `mediaPrompt` 对非 2xx 是抛异常（界面显示失败），
 /// 至少不会假装"拿到了一条提示词"。**切流时这条要在验收清单上过一遍。**
-pub fn prompt_of_media(state: &AppState, media_id: i64) -> Result<Option<crate::web::models::PromptDto>, ApiError> {
+pub fn prompt_of_media(
+    state: &AppState,
+    media_id: i64,
+) -> Result<Option<crate::web::models::PromptDto>, ApiError> {
     let media = get(state, media_id)?;
     let Some(prompt_id) = media.prompt_id else {
         return Ok(None);

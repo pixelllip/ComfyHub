@@ -5,7 +5,8 @@ final _dateFmt = DateFormat('yyyy-MM-dd HH:mm');
 final _dateShortFmt = DateFormat('MM-dd HH:mm');
 
 String formatDateTime(DateTime? dt) => dt == null ? '—' : _dateFmt.format(dt);
-String formatDateShort(DateTime? dt) => dt == null ? '—' : _dateShortFmt.format(dt);
+String formatDateShort(DateTime? dt) =>
+    dt == null ? '—' : _dateShortFmt.format(dt);
 
 String formatSize(int bytes) {
   if (bytes <= 0) return '0 B';
@@ -51,7 +52,9 @@ String relativeTime(DateTime? dt) {
 /// 现在只有**色相**由名字散列决定（360° 色轮，撞色概率更低），饱和度 / 亮度
 /// 跟着 [scheme] 的明暗走 —— 深色主题取亮一点、浅色主题取深一点。
 Color tagColor(String name, {Color? fallback, ColorScheme? scheme}) {
-  if (name.isEmpty) return fallback ?? scheme?.primary ?? const Color(0xFF7C5CFF);
+  if (name.isEmpty) {
+    return fallback ?? scheme?.primary ?? const Color(0xFF7C5CFF);
+  }
   var hash = 0;
   for (final c in name.codeUnits) {
     hash = (hash * 31 + c) & 0x7fffffff;

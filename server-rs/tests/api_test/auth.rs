@@ -4,7 +4,6 @@
 
 use super::common::*;
 
-
 /// **默认行为一个字节都不许变**：闸门关着时，非回环不带令牌也照样通。
 ///
 /// 这条是三条既有 e2e（capture / submit / ai-tools）与桌面 App 的代言人：
@@ -14,12 +13,28 @@ async fn auth_gate_is_off_by_default_and_blocks_only_when_enabled() {
     let _serial = auth_test_lock().lock().await;
     let state = state();
     // （一）没有 auth.pairing 这一行 = 今天的行为
-    let (status, _) = send_as(router_for(state.clone()), "GET", "/api/prompts", None, "10.9.1.1", None).await;
+    let (status, _) = send_as(
+        router_for(state.clone()),
+        "GET",
+        "/api/prompts",
+        None,
+        "10.9.1.1",
+        None,
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "闸门默认关着：局域网请求照旧放行");
 
     // （二）开着以后：没带令牌 → 403（**不是 401**）
     seed_auth(&state, false);
-    let (status, body) = send_as(router_for(state.clone()), "GET", "/api/prompts", None, "10.9.1.2", None).await;
+    let (status, body) = send_as(
+        router_for(state.clone()),
+        "GET",
+        "/api/prompts",
+        None,
+        "10.9.1.2",
+        None,
+    )
+    .await;
     assert_eq!(status, StatusCode::FORBIDDEN);
     assert_eq!(body["error"], "需要配对令牌（X-ComfyHub-Token）");
     assert!(body.get("detail").is_none(), "普通错误只有 error 一个键");
@@ -60,7 +75,15 @@ async fn auth_gate_is_off_by_default_and_blocks_only_when_enabled() {
     assert_eq!(status, StatusCode::OK);
 
     // 回环永远放行（桌面 App / 脚本 / e2e 走的就是这条）
-    let (status, _) = send_as(router_for(state.clone()), "GET", "/api/prompts", None, "127.0.0.1", None).await;
+    let (status, _) = send_as(
+        router_for(state.clone()),
+        "GET",
+        "/api/prompts",
+        None,
+        "127.0.0.1",
+        None,
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "回环不带令牌也必须通");
 }
 
@@ -120,8 +143,15 @@ async fn auth_pair_flow_hands_out_a_device_token_exactly_once() {
     assert_eq!(mine["deviceName"], "OnePlus 8T");
 
     // 非回环读这张列表 → 403（它是"谁有钥匙"的情报）
-    let (status, _) =
-        send_as(router_for(state.clone()), "GET", "/api/auth/pair/pending", None, "10.9.2.2", None).await;
+    let (status, _) = send_as(
+        router_for(state.clone()),
+        "GET",
+        "/api/auth/pair/pending",
+        None,
+        "10.9.2.2",
+        None,
+    )
+    .await;
     assert_eq!(status, StatusCode::FORBIDDEN);
 
     // ③ 码错 → 400「配对失败」，且**不回显** ticket / code
@@ -142,7 +172,10 @@ async fn auth_pair_flow_hands_out_a_device_token_exactly_once() {
     assert_eq!(body["error"], "配对失败");
     let text = body.to_string();
     assert!(!text.contains(&code), "失败响应里不许回显 6 位码");
-    assert!(!text.contains(&request_id) || true, "（会话 id 可以回显，它是攻击者自己给的）");
+    assert!(
+        !text.contains(&request_id) || true,
+        "（会话 id 可以回显，它是攻击者自己给的）"
+    );
 
     // ④ 码对 → 拿到**这台设备专属**的令牌（只此一次）
     let (status, body) = send_as(
@@ -176,16 +209,36 @@ async fn auth_pair_flow_hands_out_a_device_token_exactly_once() {
         None,
     )
     .await;
-    assert_eq!(status, StatusCode::GONE, "用过的会话 → 410（手机据此回桌面重新发起）");
+    assert_eq!(
+        status,
+        StatusCode::GONE,
+        "用过的会话 → 410（手机据此回桌面重新发起）"
+    );
 
     // ⑥ 令牌真的能用：拿它打一条受保护的端点
-    let (status, _) = send_as(router_for(state.clone()), "GET", "/api/ai/conversations", None, "10.9.2.1", Some(&token)).await;
+    let (status, _) = send_as(
+        router_for(state.clone()),
+        "GET",
+        "/api/ai/conversations",
+        None,
+        "10.9.2.1",
+        Some(&token),
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
 
     // ⑥′ "最后活跃"要**立刻**看得到（内存里那笔还没落库的活跃也要叠加上来）。
     // 少了叠加这一层，界面上的"最后活跃"会停在上一次落库的时刻（30 秒前），
     // 表现是"数据没错、只是旧了" —— 那种最容易被当成 bug 去查后端。
-    let (_, status_body) = send_as(router_for(state.clone()), "GET", "/api/auth", None, "127.0.0.1", None).await;
+    let (_, status_body) = send_as(
+        router_for(state.clone()),
+        "GET",
+        "/api/auth",
+        None,
+        "127.0.0.1",
+        None,
+    )
+    .await;
     let just_seen = status_body["devices"]
         .as_array()
         .unwrap()
@@ -193,8 +246,14 @@ async fn auth_pair_flow_hands_out_a_device_token_exactly_once() {
         .find(|d| d["id"] == "phone-e2e-1")
         .expect("刚配的设备")
         .clone();
-    assert_eq!(just_seen["lastIp"], "10.9.2.1", "最后来源地址就是刚打过来的那个");
-    assert!(just_seen["lastSeenAt"].is_string(), "最后活跃不必等 30 秒落库");
+    assert_eq!(
+        just_seen["lastIp"], "10.9.2.1",
+        "最后来源地址就是刚打过来的那个"
+    );
+    assert!(
+        just_seen["lastSeenAt"].is_string(),
+        "最后活跃不必等 30 秒落库"
+    );
 
     // ⑦ 设备列表：**有这台设备、但绝不含令牌**（连前缀都不回）
     let (status, body) = send_as(
@@ -218,8 +277,17 @@ async fn auth_pair_flow_hands_out_a_device_token_exactly_once() {
     // （`lastSeenAt` / `lastIp` 有没有取决于活跃记录落库没有，所以这里逐条算，
     //  不写成"键一定等于某四个" —— 那会随"谁先跑了 GET /api/auth"而红）
     let device_keys = keys(&device);
-    for required in ["allowCredentials", "allowCredentialsUpload", "id", "name", "pairedAt"] {
-        assert!(device_keys.iter().any(|k| k == required), "设备行少了 {required}：{device_keys:?}");
+    for required in [
+        "allowCredentials",
+        "allowCredentialsUpload",
+        "id",
+        "name",
+        "pairedAt",
+    ] {
+        assert!(
+            device_keys.iter().any(|k| k == required),
+            "设备行少了 {required}：{device_keys:?}"
+        );
     }
     for key in &device_keys {
         assert!(
@@ -248,7 +316,11 @@ async fn auth_pair_flow_hands_out_a_device_token_exactly_once() {
     );
     // 而且令牌**确实落库了**（不是只在响应里一闪而过）
     let stored = read_setting(&state, "auth.pairing").expect("auth.pairing 已落库");
-    assert!(stored["devices"].as_array().unwrap().iter().any(|d| d["id"] == "phone-e2e-1"));
+    assert!(stored["devices"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|d| d["id"] == "phone-e2e-1"));
 
     // ⑧ 吊销 → **立刻** 401（无宽限期）
     let (status, _) = send_as(
@@ -261,7 +333,15 @@ async fn auth_pair_flow_hands_out_a_device_token_exactly_once() {
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    let (status, _) = send_as(router_for(state.clone()), "GET", "/api/ai/conversations", None, "10.9.2.1", Some(&token)).await;
+    let (status, _) = send_as(
+        router_for(state.clone()),
+        "GET",
+        "/api/ai/conversations",
+        None,
+        "10.9.2.1",
+        Some(&token),
+    )
+    .await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
     // 别的设备不受影响（夹具里那台仍然通）
     let (status, _) = send_as(
@@ -293,7 +373,15 @@ async fn auth_claim_voids_the_session_after_five_wrong_codes() {
     .await;
     let request_id = body["requestId"].as_str().unwrap().to_string();
 
-    let (_, listing) = send_as(router_for(state.clone()), "GET", "/api/auth/pair/pending", None, "127.0.0.1", None).await;
+    let (_, listing) = send_as(
+        router_for(state.clone()),
+        "GET",
+        "/api/auth/pair/pending",
+        None,
+        "127.0.0.1",
+        None,
+    )
+    .await;
     let code = listing["pending"]
         .as_array()
         .unwrap()
@@ -322,7 +410,9 @@ async fn auth_claim_voids_the_session_after_five_wrong_codes() {
         router_for(state.clone()),
         "POST",
         "/api/auth/pair/claim",
-        Some(serde_json::json!({"requestId": request_id, "code": wrong, "deviceId": "phone-brute"})),
+        Some(
+            serde_json::json!({"requestId": request_id, "code": wrong, "deviceId": "phone-brute"}),
+        ),
         "10.9.3.1",
         None,
     )
@@ -338,7 +428,11 @@ async fn auth_claim_voids_the_session_after_five_wrong_codes() {
         None,
     )
     .await;
-    assert_eq!(status, StatusCode::GONE, "作废是硬判据，不许被一个正确的码救回来");
+    assert_eq!(
+        status,
+        StatusCode::GONE,
+        "作废是硬判据，不许被一个正确的码救回来"
+    );
 }
 
 /// **密钥下行**：只认"回环 或 已配对且被显式授权"的设备（与闸门开关无关）。
@@ -357,14 +451,33 @@ async fn credentials_downlink_requires_an_authorized_device() {
         "auth.pairing",
         &serde_json::json!({"enabled": false, "token": "g"}).to_string(),
     );
-    let (status, body) = send_as(router_for(state.clone()), "GET", &uri, None, "10.9.4.1", None).await;
+    let (status, body) = send_as(
+        router_for(state.clone()),
+        "GET",
+        &uri,
+        None,
+        "10.9.4.1",
+        None,
+    )
+    .await;
     assert_eq!(status, StatusCode::FORBIDDEN);
     assert_eq!(body["error"], "需要配对令牌（X-ComfyHub-Token）");
 
     seed_auth(&state, false);
     // ② 配对了但没勾"允许密钥" → 403（含全局令牌也不行）
-    for token in ["device-token-43chars-bbbbbbbbbbbbbbbbbbbbbb", "global-token-43chars-aaaaaaaaaaaaaaaaaaaaaa"] {
-        let (status, _) = send_as(router_for(state.clone()), "GET", &uri, None, "10.9.4.2", Some(token)).await;
+    for token in [
+        "device-token-43chars-bbbbbbbbbbbbbbbbbbbbbb",
+        "global-token-43chars-aaaaaaaaaaaaaaaaaaaaaa",
+    ] {
+        let (status, _) = send_as(
+            router_for(state.clone()),
+            "GET",
+            &uri,
+            None,
+            "10.9.4.2",
+            Some(token),
+        )
+        .await;
         assert_eq!(status, StatusCode::FORBIDDEN, "令牌 {token:?} 不该能读密钥");
     }
 
@@ -383,7 +496,15 @@ async fn credentials_downlink_requires_an_authorized_device() {
     assert_eq!(body["credentials"][reference], "sk-fixture-value");
 
     // ④ 本机回环永远可以（桌面 App 自己要用）
-    let (status, body) = send_as(router_for(state.clone()), "GET", &uri, None, "127.0.0.1", None).await;
+    let (status, body) = send_as(
+        router_for(state.clone()),
+        "GET",
+        &uri,
+        None,
+        "127.0.0.1",
+        None,
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["credentials"][reference], "sk-fixture-value");
 
@@ -422,11 +543,25 @@ async fn auth_switch_and_rotate_behave_as_documented() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["enabled"], true);
     assert_eq!(body["hasToken"], true, "打开开关时顺手生成长期令牌");
-    assert_eq!(keys(&body), vec!["devices", "enabled", "hasToken", "pending", "schema"]);
-    let first = read_setting(&state, "auth.pairing").unwrap()["token"].as_str().unwrap().to_string();
+    assert_eq!(
+        keys(&body),
+        vec!["devices", "enabled", "hasToken", "pending", "schema"]
+    );
+    let first = read_setting(&state, "auth.pairing").unwrap()["token"]
+        .as_str()
+        .unwrap()
+        .to_string();
 
     // 非回环打管理端点 → 403（只允许本机）
-    let (status, _) = send_as(router_for(state.clone()), "GET", "/api/auth", None, "10.9.5.1", None).await;
+    let (status, _) = send_as(
+        router_for(state.clone()),
+        "GET",
+        "/api/auth",
+        None,
+        "10.9.5.1",
+        None,
+    )
+    .await;
     assert_eq!(status, StatusCode::FORBIDDEN);
 
     // 参数不对 → 400（不是静默当成 false）
@@ -454,7 +589,10 @@ async fn auth_switch_and_rotate_behave_as_documented() {
     .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["revokedDevices"], 1, "轮换要说清楚吊销了几台");
-    let second = read_setting(&state, "auth.pairing").unwrap()["token"].as_str().unwrap().to_string();
+    let second = read_setting(&state, "auth.pairing").unwrap()["token"]
+        .as_str()
+        .unwrap()
+        .to_string();
     assert_ne!(first, second);
     // 旧设备令牌立刻 401，新全局令牌 200
     let (status, _) = send_as(
@@ -467,7 +605,15 @@ async fn auth_switch_and_rotate_behave_as_documented() {
     )
     .await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
-    let (status, _) = send_as(router_for(state.clone()), "GET", "/api/prompts", None, "10.9.5.2", Some(&second)).await;
+    let (status, _) = send_as(
+        router_for(state.clone()),
+        "GET",
+        "/api/prompts",
+        None,
+        "10.9.5.2",
+        Some(&second),
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
 }
 
@@ -488,7 +634,10 @@ async fn pair_start_hands_out_only_a_ticket_not_a_token() {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{body}");
-    assert!(body["ticket"].is_string() && body["code"].is_string(), "{body}");
+    assert!(
+        body["ticket"].is_string() && body["code"].is_string(),
+        "{body}"
+    );
     assert!(body["urls"].is_array(), "{body}");
     // 长期令牌：既不在响应里，也不落库（这时候还**没有任何设备**）
     let raw = body.to_string();
@@ -525,9 +674,16 @@ async fn claim_attempts_are_rate_limited_per_source_address() {
             bodies.push(body.to_string());
             break;
         }
-        assert_eq!(status, StatusCode::BAD_REQUEST, "限速之前只能是「配对失败」");
+        assert_eq!(
+            status,
+            StatusCode::BAD_REQUEST,
+            "限速之前只能是「配对失败」"
+        );
     }
-    assert!(saw_rate_limited, "同一个来源反复兑码必须被限速（设计 §5.2 的来源地址口径）");
+    assert!(
+        saw_rate_limited,
+        "同一个来源反复兑码必须被限速（设计 §5.2 的来源地址口径）"
+    );
     // 429 的响应里**不回显任何凭据**（ticket / code / 会话 id）
     let text = bodies.join(" ");
     assert!(!text.contains("000000"), "429 不许回显码：{text}");
@@ -544,7 +700,11 @@ async fn claim_attempts_are_rate_limited_per_source_address() {
         None,
     )
     .await;
-    assert_eq!(status, StatusCode::BAD_REQUEST, "限速按 IP 分桶，不该误伤别的来源");
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "限速按 IP 分桶，不该误伤别的来源"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -558,26 +718,64 @@ async fn pair_start_hands_out_a_ticket_and_the_scan_flow_claims() {
     let app = router_for(st.clone());
 
     // ① 桌面出码
-    let (status, body) = send_as(app.clone(), "POST", "/api/auth/pair/start", None, "127.0.0.1", None).await;
+    let (status, body) = send_as(
+        app.clone(),
+        "POST",
+        "/api/auth/pair/start",
+        None,
+        "127.0.0.1",
+        None,
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "{body}");
     let ticket = body["ticket"].as_str().unwrap_or("").to_string();
     let code = body["code"].as_str().unwrap_or("").to_string();
     assert!(ticket.len() >= 40, "ticket 要够长：{body}");
     assert_eq!(code.len(), 6, "6 位十进制码：{body}");
-    assert!(body["urls"].is_array(), "urls 永远是数组（一条都没有时是空数组）：{body}");
-    assert!(body["expiresAt"].is_string() && body["codeExpiresAt"].is_string(), "{body}");
+    assert!(
+        body["urls"].is_array(),
+        "urls 永远是数组（一条都没有时是空数组）：{body}"
+    );
+    assert!(
+        body["expiresAt"].is_string() && body["codeExpiresAt"].is_string(),
+        "{body}"
+    );
 
     // ② 扫码会话**不进** pair/pending（那张列表是给"手机举手"那条路用的）
     //
     // ⚠ 判据是"**条数没变**"而不是"条数为 0"：`sessions()` 是**进程级全局态**，
     // 同进程里并行跑的别的配对用例随时会往里放"手机举手"的会话（本仓踩过这个坑，
     // 所以 auth 用例还有一把 `auth_test_lock`）。断言 0 会变成"看谁先跑"的偶发红。
-    let (status, before) = send_as(app.clone(), "GET", "/api/auth/pair/pending", None, "127.0.0.1", None).await;
+    let (status, before) = send_as(
+        app.clone(),
+        "GET",
+        "/api/auth/pair/pending",
+        None,
+        "127.0.0.1",
+        None,
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "{before}");
     let count_before = before["pending"].as_array().unwrap().len();
-    let (status, again) = send_as(app.clone(), "POST", "/api/auth/pair/start", None, "127.0.0.1", None).await;
+    let (status, again) = send_as(
+        app.clone(),
+        "POST",
+        "/api/auth/pair/start",
+        None,
+        "127.0.0.1",
+        None,
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "{again}");
-    let (status, after) = send_as(app.clone(), "GET", "/api/auth/pair/pending", None, "127.0.0.1", None).await;
+    let (status, after) = send_as(
+        app.clone(),
+        "GET",
+        "/api/auth/pair/pending",
+        None,
+        "127.0.0.1",
+        None,
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "{after}");
     assert_eq!(
         after["pending"].as_array().unwrap().len(),
@@ -598,7 +796,8 @@ async fn pair_start_hands_out_a_ticket_and_the_scan_flow_claims() {
             "deviceName": "KB2000"
         })),
         "10.0.0.9",
-    None)
+        None,
+    )
     .await;
     assert_eq!(status, StatusCode::OK, "{claim}");
     assert!(claim["token"].as_str().unwrap_or("").len() >= 40, "{claim}");
@@ -627,9 +826,14 @@ async fn pair_start_hands_out_a_ticket_and_the_scan_flow_claims() {
             "deviceName": "另一台手机"
         })),
         "10.0.0.10",
-    None)
+        None,
+    )
     .await;
-    assert_eq!(status, StatusCode::GONE, "用过的会话再兑必须是 410：{reused}");
+    assert_eq!(
+        status,
+        StatusCode::GONE,
+        "用过的会话再兑必须是 410：{reused}"
+    );
 }
 
 /// 非回环不许生成二维码（ticket 编进二维码 = 看到的人就能拿去兑）。
@@ -639,7 +843,10 @@ async fn pair_start_is_loopback_only() {
     let (status, body) = send_as(app, "POST", "/api/auth/pair/start", None, "10.0.0.9", None).await;
     assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
     assert!(
-        body["error"].as_str().unwrap_or("").contains("只允许在本机"),
+        body["error"]
+            .as_str()
+            .unwrap_or("")
+            .contains("只允许在本机"),
         "要说清是（只允许在本机）：{body}"
     );
 }

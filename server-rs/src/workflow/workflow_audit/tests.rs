@@ -6,11 +6,20 @@ use super::*;
 use crate::comfy::comfy_models::{LocalModel, Source};
 
 fn graph(text: &str) -> Map<String, Value> {
-    serde_json::from_str::<Value>(text).unwrap().as_object().unwrap().clone()
+    serde_json::from_str::<Value>(text)
+        .unwrap()
+        .as_object()
+        .unwrap()
+        .clone()
 }
 
 fn find(report: &Report, check: &str) -> Vec<Finding> {
-    report.findings.iter().filter(|f| f.check == check).cloned().collect()
+    report
+        .findings
+        .iter()
+        .filter(|f| f.check == check)
+        .cloned()
+        .collect()
 }
 
 /// 一份干净的最小骨架（Krea2 Turbo 的官方档位）。
@@ -31,7 +40,11 @@ fn clean_graph() -> Map<String, Value> {
 #[test]
 fn 官方档位的骨架不报必跑不了的问题() {
     let report = audit(&clean_graph(), None, None);
-    assert!(report.blocking().is_empty(), "这份骨架是官方档位、无前端节点：不该有 BLOCK：{}", report.render());
+    assert!(
+        report.blocking().is_empty(),
+        "这份骨架是官方档位、无前端节点：不该有 BLOCK：{}",
+        report.render()
+    );
     assert!(report.blocking_refusal().is_none());
     // 唯一会报的是"固定 seed + 固定前缀"那条提醒 —— 重复跑同一份图会落同一个文件名，
     // 被去重吞掉（那次白跑 78 秒）。它是提醒，不是拦。
@@ -59,7 +72,11 @@ fn 纯前端节点必须拦_那次是_20_个() {
     assert_eq!(f.len(), 1);
     let f = &f[0];
     assert_eq!(f.level, Level::Block);
-    assert!(f.detail.contains("0.01"), "要说清后果（0.01 秒空跑）：{}", f.detail);
+    assert!(
+        f.detail.contains("0.01"),
+        "要说清后果（0.01 秒空跑）：{}",
+        f.detail
+    );
     for id in ["10", "15", "20", "163"] {
         assert!(f.nodes.contains(&id.to_string()), "{:?}", f.nodes);
     }
@@ -99,7 +116,11 @@ fn object_info_里有的显示节点不算纯前端() {
         }"#,
     );
     let findings = find(&audit(&g, Some(&info), None), CHECK_FRONTEND);
-    assert!(findings.is_empty(), "PreviewAny 是 ComfyUI 自带真节点：{}", findings[0].detail);
+    assert!(
+        findings.is_empty(),
+        "PreviewAny 是 ComfyUI 自带真节点：{}",
+        findings[0].detail
+    );
     assert!(audit(&g, Some(&info), None).blocking_refusal().is_none());
 }
 
@@ -134,7 +155,10 @@ fn 版本不兼容的节点必须拦_并指向更新节点包() {
     let f = &findings[0];
     assert_eq!(f.level, Level::Block);
     let fix = f.fix.as_ref().expect("要给出路");
-    assert!(fix.contains("更新"), "要给出路：不是「这工作流坏了」而是「更新节点包」：{fix}");
+    assert!(
+        fix.contains("更新"),
+        "要给出路：不是「这工作流坏了」而是「更新节点包」：{fix}"
+    );
     assert!(f.detail.contains("IS_CHANGED"), "{}", f.detail);
 }
 
@@ -150,10 +174,17 @@ fn 固定_seed_加固定前缀必须提醒_那次白跑_78_秒() {
     assert_eq!(findings.len(), 1);
     let f = &findings[0];
     assert_eq!(f.level, Level::Warn, "不是「跑不了」，不许拦提交");
-    assert!(f.detail.contains("未重复入库") || f.detail.contains("mediaCount"), "{}", f.detail);
+    assert!(
+        f.detail.contains("未重复入库") || f.detail.contains("mediaCount"),
+        "{}",
+        f.detail
+    );
     let fix = f.fix.as_ref().expect("要给可直接用的修法");
     assert!(fix.contains("overrides"), "要给可直接用的修法：{fix}");
-    assert!(audit(&g, None, None).blocking_refusal().is_none(), "只提醒不拦");
+    assert!(
+        audit(&g, None, None).blocking_refusal().is_none(),
+        "只提醒不拦"
+    );
 }
 
 #[test]
@@ -191,7 +222,10 @@ fn 不认识的模型不判参数() {
           "5": {"class_type": "KSampler", "inputs": {"steps": 999, "cfg": 42.0, "sampler_name": "weird"}}
         }"#,
     );
-    assert!(find(&audit(&g, None, None), CHECK_PARAMS).is_empty(), "不知道就别猜");
+    assert!(
+        find(&audit(&g, None, None), CHECK_PARAMS).is_empty(),
+        "不知道就别猜"
+    );
 }
 
 #[test]
@@ -240,7 +274,11 @@ fn 给_krea_2_堆_tag_要提醒_给_anima_写整段自然语言也要提醒() {
     let anima_findings = find(&audit(&anima, None, None), CHECK_PROMPT_STYLE);
     assert_eq!(anima_findings.len(), 1);
     let anima_finding = &anima_findings[0];
-    assert_eq!(anima_finding.level, Level::Info, "Anima 这条是背景提示，不是警告");
+    assert_eq!(
+        anima_finding.level,
+        Level::Info,
+        "Anima 这条是背景提示，不是警告"
+    );
     let fix = anima_finding.fix.as_ref().unwrap();
     assert!(fix.contains("anima-prompt"), "{fix}");
 }
@@ -299,7 +337,11 @@ fn 闸门只拦必跑不了的三项_参数与显存不拦() {
     );
     let report = audit(&g, None, None);
     assert!(!report.findings.is_empty(), "参数/显存/前缀都该报");
-    assert!(report.blocking_refusal().is_none(), "但没有一项是「跑不了」—— 不许拦：{}", report.render());
+    assert!(
+        report.blocking_refusal().is_none(),
+        "但没有一项是「跑不了」—— 不许拦：{}",
+        report.render()
+    );
 }
 
 #[test]
@@ -307,12 +349,16 @@ fn 非阻断的结论能单独渲染出来_给提交结果的提示用() {
     // 提交闸门放行的那些（参数 / 显存 / 提示词风格 / 输出前缀 / 加载器目录）
     // 要能**单独**渲染成一段提示 —— 拦下的那些走 `blocking_refusal`，不走这里。
     let clean = audit(&clean_graph(), None, None);
-    let notes = clean.render_non_blocking().expect("固定 seed + 固定前缀那条要单独渲染出来");
+    let notes = clean
+        .render_non_blocking()
+        .expect("固定 seed + 固定前缀那条要单独渲染出来");
     assert!(notes.contains(CHECK_OUTPUT_NAME), "{notes}");
     assert!(!notes.contains("🔴"), "这里只许有非阻断的项：{notes}");
 
     // 一条结论都没有时**不许**多出一句"审核通过"的噪声（提交结果里那会天天出现）
-    let bare = graph(r#"{"1": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "a.safetensors"}}}"#);
+    let bare = graph(
+        r#"{"1": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "a.safetensors"}}}"#,
+    );
     assert!(audit(&bare, None, None).render_non_blocking().is_none());
 }
 
@@ -330,15 +376,30 @@ fn json_形状要能直接被界面与模型用() {
 /// Kotlin `FrontendNodesTest` 里关于这两条判据的断言（广播 / 显示节点的模式匹配）。
 #[test]
 fn 广播型与显示型前端节点的判据与_kotlin_一致() {
-    for cls in
-        ["Anything Everywhere", "Anything Everywhere3?", "Prompts Everywhere", "Seed Everywhere"]
-    {
+    for cls in [
+        "Anything Everywhere",
+        "Anything Everywhere3?",
+        "Prompts Everywhere",
+        "Seed Everywhere",
+    ] {
         assert!(is_broadcast(cls), "{cls} 应当是广播型");
     }
     assert!(is_broadcast("Anything Everywhere (3)"), "模式匹配要认变体");
-    assert!(is_broadcast("MyEverythingEverywhere"), "`Everywhere\\b` 没有前导词边界");
-    assert!(!is_broadcast("Everywhere3"), "`Everywhere\\b` 后面接着词字符时不算（要靠那张表）");
-    for cls in ["PreviewImage", "ShowText", "Display Any", "DisplayFloat", "ShowAnything"] {
+    assert!(
+        is_broadcast("MyEverythingEverywhere"),
+        "`Everywhere\\b` 没有前导词边界"
+    );
+    assert!(
+        !is_broadcast("Everywhere3"),
+        "`Everywhere\\b` 后面接着词字符时不算（要靠那张表）"
+    );
+    for cls in [
+        "PreviewImage",
+        "ShowText",
+        "Display Any",
+        "DisplayFloat",
+        "ShowAnything",
+    ] {
         assert!(is_display(cls), "{cls} 应当是显示型");
     }
     assert!(!is_display("KSampler"));
@@ -360,8 +421,16 @@ fn 种子是数字串时照样算写死() {
     );
     let findings = find(&audit(&g, None, None), CHECK_OUTPUT_NAME);
     assert_eq!(findings.len(), 1);
-    assert!(findings[0].nodes.contains(&"5".to_string()), "{:?}", findings[0].nodes);
-    assert!(findings[0].nodes.contains(&"7".to_string()), "{:?}", findings[0].nodes);
+    assert!(
+        findings[0].nodes.contains(&"5".to_string()),
+        "{:?}",
+        findings[0].nodes
+    );
+    assert!(
+        findings[0].nodes.contains(&"7".to_string()),
+        "{:?}",
+        findings[0].nodes
+    );
 }
 
 /// `cfg` 的渲染要与 Kotlin 的 `Double.toString()` 一致（`1.0` 不是 `1`）。

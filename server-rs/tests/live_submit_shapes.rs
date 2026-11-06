@@ -34,13 +34,16 @@ fn comfy_base() -> String {
 }
 
 fn ui_workflow() -> Option<Map<String, Value>> {
-    let Some(path) = std::env::var("COMFYHUB_LIVE_WORKFLOW").ok().filter(|p| !p.trim().is_empty())
+    let Some(path) = std::env::var("COMFYHUB_LIVE_WORKFLOW")
+        .ok()
+        .filter(|p| !p.trim().is_empty())
     else {
         eprintln!("跳过：没有设置 COMFYHUB_LIVE_WORKFLOW（本用例要一份界面格式工作流的路径）");
         return None;
     };
     let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("读不到 {path}：{e}"));
-    let value: Value = serde_json::from_str(&text).unwrap_or_else(|e| panic!("{path} 不是合法 JSON：{e}"));
+    let value: Value =
+        serde_json::from_str(&text).unwrap_or_else(|e| panic!("{path} 不是合法 JSON：{e}"));
     let Some(map) = value.as_object() else {
         eprintln!("跳过：{path} 顶层不是对象");
         return None;
@@ -58,13 +61,16 @@ fn ui_workflow() -> Option<Map<String, Value>> {
 async fn 转出来的图_comfyui_收得下() {
     let base = comfy_base();
     let Some(ui) = ui_workflow() else { return };
-    let object_info = match comfyhub_server_rs::comfy::comfy_client::get_json(&format!("{base}/object_info")).await {
-        Ok(value) => value.as_object().cloned().unwrap_or_default(),
-        Err(error) => {
-            eprintln!("跳过：连不上 {base}（{error}）—— 这份抽查要 ComfyUI 在跑");
-            return;
-        }
-    };
+    let object_info =
+        match comfyhub_server_rs::comfy::comfy_client::get_json(&format!("{base}/object_info"))
+            .await
+        {
+            Ok(value) => value.as_object().cloned().unwrap_or_default(),
+            Err(error) => {
+                eprintln!("跳过：连不上 {base}（{error}）—— 这份抽查要 ComfyUI 在跑");
+                return;
+            }
+        };
 
     let converted = workflow_convert::to_api_graph(&ui, &object_info, true)
         .unwrap_or_else(|e| panic!("转换失败：{e}"));
@@ -77,23 +83,38 @@ async fn 转出来的图_comfyui_收得下() {
     // ① 先把"引用一定是字符串"钉死（数字引用的现场就是 KeyError）
     let mut numeric: Vec<String> = Vec::new();
     for (id, node) in &converted.graph {
-        let Some(inputs) = node.get("inputs").and_then(Value::as_object) else { continue };
+        let Some(inputs) = node.get("inputs").and_then(Value::as_object) else {
+            continue;
+        };
         for (name, value) in inputs {
-            let Some(list) = value.as_array() else { continue };
+            let Some(list) = value.as_array() else {
+                continue;
+            };
             if list.len() == 2 && list[0].is_number() {
                 numeric.push(format!("{id}.{name}"));
             }
         }
     }
-    assert!(numeric.is_empty(), "连线引用写成了数字（ComfyUI 会 KeyError）：{numeric:?}");
+    assert!(
+        numeric.is_empty(),
+        "连线引用写成了数字（ComfyUI 会 KeyError）：{numeric:?}"
+    );
 
     // ② 真提交一次（`client_id` 随便给一个稳定值，方便在队列里认出它）
     let body = json!({ "prompt": converted.graph, "client_id": "comfyhub-live-submit-check" });
-    let outcome = comfyhub_server_rs::comfy::comfy_client::post_json(&format!("{base}/prompt"), &body).await;
+    let outcome =
+        comfyhub_server_rs::comfy::comfy_client::post_json(&format!("{base}/prompt"), &body).await;
     let prompt_id = match outcome {
         Ok(value) => {
-            let id = value.get("prompt_id").and_then(Value::as_str).unwrap_or_default().to_string();
-            eprintln!("ComfyUI 收下了：prompt_id={id}（节点 {}）", converted.node_count);
+            let id = value
+                .get("prompt_id")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string();
+            eprintln!(
+                "ComfyUI 收下了：prompt_id={id}（节点 {}）",
+                converted.node_count
+            );
             id
         }
         Err(error) => panic!("ComfyUI 拒了这张图（说明转换出来的形状还是不对）：{error}"),
@@ -111,7 +132,10 @@ async fn 转出来的图_comfyui_收得下() {
     // ④ 顺带盯一眼"转换没把前端节点漏进来"（真前端类在 /object_info 里查不到）
     let mut leaked: HashSet<String> = HashSet::new();
     for node in converted.graph.values() {
-        let class = node.get("class_type").and_then(Value::as_str).unwrap_or_default();
+        let class = node
+            .get("class_type")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
         if !object_info.contains_key(class) {
             leaked.insert(class.to_string());
         }

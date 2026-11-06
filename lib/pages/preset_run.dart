@@ -27,7 +27,9 @@ import '../widgets/common.dart';
 Future<PromptKind?> showPresetRunDialog(BuildContext context, Prompt prompt) {
   // 预设指定了用途就默认选它；`MIXED`（混合）在"这次要出什么"上没有意义，
   // 退化成生图（与"未指定"同一个默认值）。
-  final initial = prompt.kind == PromptKind.mixed ? PromptKind.image : prompt.kind;
+  final initial = prompt.kind == PromptKind.mixed
+      ? PromptKind.image
+      : prompt.kind;
   return showDialog<PromptKind>(
     context: context,
     builder: (context) => _PresetRunDialog(
@@ -96,9 +98,21 @@ class _PresetRunDialogState extends State<_PresetRunDialog> {
               const SizedBox(height: 6),
               SegmentedButton<PromptKind>(
                 segments: const [
-                  ButtonSegment(value: PromptKind.image, label: Text('生图'), icon: Icon(Icons.image_outlined)),
-                  ButtonSegment(value: PromptKind.video, label: Text('生视频'), icon: Icon(Icons.movie_outlined)),
-                  ButtonSegment(value: PromptKind.audio, label: Text('生音频'), icon: Icon(Icons.music_note_outlined)),
+                  ButtonSegment(
+                    value: PromptKind.image,
+                    label: Text('生图'),
+                    icon: Icon(Icons.image_outlined),
+                  ),
+                  ButtonSegment(
+                    value: PromptKind.video,
+                    label: Text('生视频'),
+                    icon: Icon(Icons.movie_outlined),
+                  ),
+                  ButtonSegment(
+                    value: PromptKind.audio,
+                    label: Text('生音频'),
+                    icon: Icon(Icons.music_note_outlined),
+                  ),
                 ],
                 selected: {_kind},
                 onSelectionChanged: (s) => setState(() => _kind = s.first),
@@ -106,7 +120,9 @@ class _PresetRunDialogState extends State<_PresetRunDialog> {
               const SizedBox(height: 6),
               Text(
                 widget.specified ? '已按预设的用途选好，可以改。' : '这个预设没指定用途，选一个再继续。',
-                style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.outline),
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.outline,
+                ),
               ),
               const SizedBox(height: 16),
               // ---- 提示词详情（发送前让用户看一眼）----
@@ -123,14 +139,19 @@ class _PresetRunDialogState extends State<_PresetRunDialog> {
               const SizedBox(height: 12),
               Text(
                 '确认后会把上面的提示词填进「AI 工作台」的输入框（会新建一条对话），还要你自己按发送。',
-                style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.outline),
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.outline,
+                ),
               ),
             ],
           ),
         ),
       ),
       actions: [
-        TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('取消')),
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('取消'),
+        ),
         FilledButton(
           onPressed: () => Navigator.of(context).pop(_kind),
           child: const Text('送到工作台'),
@@ -139,7 +160,12 @@ class _PresetRunDialogState extends State<_PresetRunDialog> {
     );
   }
 
-  Widget _preview(ThemeData theme, String label, String text, {required bool dim}) {
+  Widget _preview(
+    ThemeData theme,
+    String label,
+    String text, {
+    required bool dim,
+  }) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -149,7 +175,9 @@ class _PresetRunDialogState extends State<_PresetRunDialog> {
           width: double.infinity,
           padding: const EdgeInsets.all(10),
           decoration: BoxDecoration(
-            color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.4),
+            color: theme.colorScheme.surfaceContainerHighest.withValues(
+              alpha: 0.4,
+            ),
             borderRadius: BorderRadius.circular(8),
           ),
           child: SelectableText(
@@ -223,8 +251,8 @@ String buildPresetRunText(Prompt prompt, PromptKind kind) {
 }
 
 String _kindAction(PromptKind kind) => switch (kind) {
-      PromptKind.image => '生图',
-      PromptKind.video => '生视频',
-      PromptKind.audio => '生音频',
-      PromptKind.mixed => '生成内容',
-    };
+  PromptKind.image => '生图',
+  PromptKind.video => '生视频',
+  PromptKind.audio => '生音频',
+  PromptKind.mixed => '生成内容',
+};

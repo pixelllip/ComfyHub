@@ -35,8 +35,10 @@ use serde::Serialize;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
-use crate::tools::mobile_tools::{MobileToolSpec, MOBILE_TOOLS, UNTRUSTED_BANNER_QUERY_LINE, UNTRUSTED_BANNER_TEMPLATE};
 use crate::ai::nsfw_prompt;
+use crate::tools::mobile_tools::{
+    MobileToolSpec, MOBILE_TOOLS, UNTRUSTED_BANNER_QUERY_LINE, UNTRUSTED_BANNER_TEMPLATE,
+};
 use crate::tools::policy::{ToolAccess, ToolPolicy};
 use crate::web::routes::{ApiError, AppState};
 use crate::{ai::memory, ai::skills, ai::system_prompt};
@@ -103,7 +105,9 @@ pub fn next_version(previous: Option<&str>, changed: bool, today: &str) -> Strin
     }
     let previous = previous.unwrap_or("");
     let prev_date = previous.rsplit_once('.').map(|(d, _)| d).unwrap_or("");
-    let prev_seq = previous.rsplit_once('.').and_then(|(_, s)| s.parse::<i64>().ok());
+    let prev_seq = previous
+        .rsplit_once('.')
+        .and_then(|(_, s)| s.parse::<i64>().ok());
     match (prev_date == today, prev_seq) {
         (true, Some(seq)) => format!("{today}.{}", seq + 1),
         _ => format!("{today}.1"),
@@ -154,7 +158,8 @@ fn kit_parts(policy: &ToolPolicy, nsfw_enabled: bool) -> KitParts {
             .join(",")
     );
 
-    let budget_json = format!("{{\"perImageBytes\":{MAX_INLINE_BYTES},\"totalBytes\":{MAX_TOTAL_BYTES}}}");
+    let budget_json =
+        format!("{{\"perImageBytes\":{MAX_INLINE_BYTES},\"totalBytes\":{MAX_TOTAL_BYTES}}}");
     let banner = format!("{UNTRUSTED_BANNER_TEMPLATE}{UNTRUSTED_BANNER_QUERY_LINE}");
 
     let signature = Signature {
@@ -167,7 +172,11 @@ fn kit_parts(policy: &ToolPolicy, nsfw_enabled: bool) -> KitParts {
         title_instruction: nsfw_prompt::TITLE_INSTRUCTION.to_string(),
         continue_instruction: nsfw_prompt::CONTINUE_INSTRUCTION.to_string(),
     };
-    KitParts { tools, tools_array, signature }
+    KitParts {
+        tools,
+        tools_array,
+        signature,
+    }
 }
 
 /// JSON 字符串字面量（与 kotlinx 一样：只转义必须转义的，非 ASCII 原样输出）。
@@ -182,9 +191,11 @@ fn json_string(text: &str) -> String {
 pub fn nsfw_enabled(state: &AppState) -> Result<bool, ApiError> {
     let raw: Option<String> = state.with(|conn| {
         Ok(conn
-            .query_row("SELECT v FROM app_settings WHERE k = ?1", [KEY_NSFW], |row| {
-                row.get::<_, Option<String>>(0)
-            })
+            .query_row(
+                "SELECT v FROM app_settings WHERE k = ?1",
+                [KEY_NSFW],
+                |row| row.get::<_, Option<String>>(0),
+            )
             .ok()
             .flatten())
     })?;
@@ -211,7 +222,9 @@ fn setting(state: &AppState, key: &str) -> Result<Option<String>, ApiError> {
 
 /// 当前版本（`/status` 与 bump 判定都读它）。
 fn current_version(state: &AppState) -> Result<Option<String>, ApiError> {
-    Ok(setting(state, KEY_VERSION)?.map(|v| v.trim().to_string()).filter(|v| !v.is_empty()))
+    Ok(setting(state, KEY_VERSION)?
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty()))
 }
 
 /// 本地日期（Kotlin `LocalDate.now()`）；用 SQLite 的 `localtime` 拿，不引时间库。
@@ -221,7 +234,11 @@ fn current_version(state: &AppState) -> Result<Option<String>, ApiError> {
 /// （[`crate::ai::system_prompt::render`]）。后者的粒度**刻意只到天**，
 /// 理由见 `system_prompt` 文件头"为什么环境头里没有精确时间"。
 pub fn local_date(state: &AppState) -> Result<String, ApiError> {
-    state.with(|conn| conn.query_row("SELECT date('now','localtime')", [], |row| row.get::<_, String>(0)))
+    state.with(|conn| {
+        conn.query_row("SELECT date('now','localtime')", [], |row| {
+            row.get::<_, String>(0)
+        })
+    })
 }
 
 /// 对齐版本号：签名一致就沿用；不一致就 bump 并持久化。返回 `(kitVersion, changed)`。
@@ -310,7 +327,11 @@ pub fn build(
 
     let (provider, model_id) = resolve_provider_model(state, provider_override, model_override)?;
 
-    let storage = state.media_dir().parent().unwrap_or(state.media_dir()).to_path_buf();
+    let storage = state
+        .media_dir()
+        .parent()
+        .unwrap_or(state.media_dir())
+        .to_path_buf();
     let skill_catalog = skills::catalog(
         &state.project_root().join("skills").join("builtin"),
         &storage.join("ai").join("skills"),
@@ -339,7 +360,11 @@ pub fn build(
         // ⚠ 这里传的是**手机工具**那一份（`parts.tools`）：run-kit 的 systemPrompt 必须与
         // Kotlin 的 `toolsFor(MOBILE)` 逐字一致 —— 桌面专属工具（`read_file` 等）
         // 手机调不到，不许出现在手机的系统提示里（R11 / 总纲 §3.5）。
-        &parts.tools.iter().map(|t| crate::tools::tools::ToolView::from(*t)).collect::<Vec<_>>(),
+        &parts
+            .tools
+            .iter()
+            .map(|t| crate::tools::tools::ToolView::from(*t))
+            .collect::<Vec<_>>(),
         &skill_catalog,
         &policy,
         &memory_text,
@@ -362,7 +387,10 @@ pub fn build(
         title_instruction: nsfw_prompt::TITLE_INSTRUCTION.to_string(),
         continue_instruction: nsfw_prompt::CONTINUE_INSTRUCTION.to_string(),
         models,
-        inline_budget: InlineBudgetDto { per_image_bytes: MAX_INLINE_BYTES, total_bytes: MAX_TOTAL_BYTES },
+        inline_budget: InlineBudgetDto {
+            per_image_bytes: MAX_INLINE_BYTES,
+            total_bytes: MAX_TOTAL_BYTES,
+        },
     })
 }
 
@@ -384,20 +412,24 @@ fn resolve_provider_model(
 ) -> Result<(ProviderBrief, String), ApiError> {
     let providers = enabled_providers(state)?;
 
-    let provider: Option<ProviderBrief> = match provider_override.map(str::trim).filter(|s| !s.is_empty()) {
-        Some(id) => Some(
-            providers
-                .into_iter()
-                .find(|p| p.id == id)
-                .ok_or_else(|| ApiError::ai("CONFIG_ERROR", format!("run-kit：Provider 不存在或未启用: {id}")))?,
-        ),
-        None => providers.into_iter().next(),
-    };
+    let provider: Option<ProviderBrief> =
+        match provider_override.map(str::trim).filter(|s| !s.is_empty()) {
+            Some(id) => Some(providers.into_iter().find(|p| p.id == id).ok_or_else(|| {
+                ApiError::ai(
+                    "CONFIG_ERROR",
+                    format!("run-kit：Provider 不存在或未启用: {id}"),
+                )
+            })?),
+            None => providers.into_iter().next(),
+        };
 
     let model_id = match model_override.map(str::trim).filter(|s| !s.is_empty()) {
         Some(model) => {
             let p = provider.as_ref().ok_or_else(|| {
-                ApiError::ai("CONFIG_ERROR", "run-kit：指定了 modelId 但没有任何可用 Provider")
+                ApiError::ai(
+                    "CONFIG_ERROR",
+                    "run-kit：指定了 modelId 但没有任何可用 Provider",
+                )
             })?;
             let exists = models_of(state, &p.id)?.iter().any(|m| m.0 == model);
             if !exists {
@@ -409,7 +441,11 @@ fn resolve_provider_model(
             model.to_string()
         }
         None => match provider.as_ref() {
-            Some(p) => models_of(state, &p.id)?.into_iter().next().map(|m| m.0).unwrap_or_default(),
+            Some(p) => models_of(state, &p.id)?
+                .into_iter()
+                .next()
+                .map(|m| m.0)
+                .unwrap_or_default(),
             None => String::new(),
         },
     };
@@ -454,21 +490,31 @@ fn models_of(state: &AppState, provider_id: &str) -> Result<Vec<(String, Value)>
             .collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(rows)
     })?;
-    Ok(rows.into_iter().map(|m| (m.id.clone(), run_kit_model(&m))).collect())
+    Ok(rows
+        .into_iter()
+        .map(|m| (m.id.clone(), run_kit_model(&m)))
+        .collect())
 }
 
 /// `models[]`：**绝不含密钥**（连 `credentialRef` 的名字都不带 —— 手机拿了没用还多漏一样）。
 fn models_json(state: &AppState, provider_override: Option<&str>) -> Result<Vec<Value>, ApiError> {
-    let providers: Vec<ProviderBrief> = match provider_override.map(str::trim).filter(|s| !s.is_empty()) {
-        Some(id) => enabled_providers(state)?.into_iter().filter(|p| p.id == id).collect(),
-        None => enabled_providers(state)?,
-    };
+    let providers: Vec<ProviderBrief> =
+        match provider_override.map(str::trim).filter(|s| !s.is_empty()) {
+            Some(id) => enabled_providers(state)?
+                .into_iter()
+                .filter(|p| p.id == id)
+                .collect(),
+            None => enabled_providers(state)?,
+        };
     let mut out: Vec<Value> = Vec::new();
     for provider in providers {
         for (_, dto) in models_of(state, &provider.id)? {
             let mut object = dto;
             if let Value::Object(ref mut map) = object {
-                map.insert("providerName".into(), Value::String(provider.display_name.clone()));
+                map.insert(
+                    "providerName".into(),
+                    Value::String(provider.display_name.clone()),
+                );
                 map.insert("providerApi".into(), Value::String(provider.api.clone()));
                 // 键序按 Kotlin 的插入序重排（canon 比较不在意，但读起来一致）
                 map.insert("providerId".into(), Value::String(provider.id.clone()));

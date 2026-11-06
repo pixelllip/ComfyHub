@@ -65,10 +65,18 @@ fn 头部与白名单如实写出来() {
 #[test]
 fn 同一个日期渲染两次逐字节相同() {
     let a = render_with(&policy("{}"), false, "- 甲\n");
-    assert_eq!(a, render_with(&policy("{}"), false, "- 甲\n"), "同输入必须同输出");
+    assert_eq!(
+        a,
+        render_with(&policy("{}"), false, "- 甲\n"),
+        "同输入必须同输出"
+    );
 
     // 易变值**只许出现一次**（那一行）。多一处 = 多一个"跨天必断"的位置。
-    assert_eq!(a.matches(TODAY).count(), 1, "`{TODAY}` 只许出现在『当前日期』那一行");
+    assert_eq!(
+        a.matches(TODAY).count(),
+        1,
+        "`{TODAY}` 只许出现在『当前日期』那一行"
+    );
 
     // 跨天：逐字节比较时**只有那一行**允许不同
     let other = render_on("2026-10-01", &policy("{}"), false, "- 甲\n");

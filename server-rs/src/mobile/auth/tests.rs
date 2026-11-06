@@ -48,11 +48,23 @@ fn rolling_code_is_six_digits_and_window_scoped() {
     // 同一个 60 秒窗口内恒定、跨窗口必变（滚动的唯一含义）。
     // ⚠ 窗口是按 `unix / 60` 切的，不是"从第一次请求起算 60 秒"：
     //    1_700_000_000 落在窗口的第 20 秒，所以 +39 还在同一格、+40 就换格了。
-    assert_eq!(code_for("ticket", 1_700_000_000), code_for("ticket", 1_700_000_039));
-    assert_ne!(code_for("ticket", 1_700_000_000), code_for("ticket", 1_700_000_040));
-    assert_ne!(code_for("ticket", 1_700_000_000), code_for("ticket", 1_700_000_060));
+    assert_eq!(
+        code_for("ticket", 1_700_000_000),
+        code_for("ticket", 1_700_000_039)
+    );
+    assert_ne!(
+        code_for("ticket", 1_700_000_000),
+        code_for("ticket", 1_700_000_040)
+    );
+    assert_ne!(
+        code_for("ticket", 1_700_000_000),
+        code_for("ticket", 1_700_000_060)
+    );
     // 换 ticket 就换码（"作废 ticket 自动作废码"）
-    assert_ne!(code_for("ticket", 1_700_000_000), code_for("other", 1_700_000_000));
+    assert_ne!(
+        code_for("ticket", 1_700_000_000),
+        code_for("other", 1_700_000_000)
+    );
 }
 
 #[test]
@@ -60,7 +72,13 @@ fn gate_lets_anonymous_pairing_paths_through() {
     // 闸门开着、没有令牌：这两条路径必须放行（它们就是给未配对设备用的）
     for path in [PAIR_REQUEST_PATH, PAIR_CLAIM_PATH] {
         assert!(matches!(
-            decide(path, "POST", Some("10.0.0.9".parse().unwrap()), None, &file_enabled()),
+            decide(
+                path,
+                "POST",
+                Some("10.0.0.9".parse().unwrap()),
+                None,
+                &file_enabled()
+            ),
             Verdict::Allow(_)
         ));
     }
@@ -81,12 +99,28 @@ fn gate_forbids_and_unauthorizes_differently() {
     }
     // 对的 → 放行
     assert_eq!(
-        decide("/api/prompts", "GET", remote, Some("device-token"), &file_enabled()),
-        Verdict::Allow(Grant::Device { id: "phone-1".into(), allow_credentials: true, allow_credentials_upload: false })
+        decide(
+            "/api/prompts",
+            "GET",
+            remote,
+            Some("device-token"),
+            &file_enabled()
+        ),
+        Verdict::Allow(Grant::Device {
+            id: "phone-1".into(),
+            allow_credentials: true,
+            allow_credentials_upload: false
+        })
     );
     // 全局令牌也算
     assert_eq!(
-        decide("/api/prompts", "GET", remote, Some("global-token"), &file_enabled()),
+        decide(
+            "/api/prompts",
+            "GET",
+            remote,
+            Some("global-token"),
+            &file_enabled()
+        ),
         Verdict::Allow(Grant::Global)
     );
 }
@@ -97,12 +131,24 @@ fn gate_off_keeps_todays_behaviour() {
     let file = AuthFile::default();
     assert!(!file.enabled);
     assert!(matches!(
-        decide("/api/prompts", "GET", Some("10.0.0.9".parse().unwrap()), None, &file),
+        decide(
+            "/api/prompts",
+            "GET",
+            Some("10.0.0.9".parse().unwrap()),
+            None,
+            &file
+        ),
         Verdict::Allow(_)
     ));
     // 三条既有 e2e / 桌面 App 走的是回环那条
     assert!(matches!(
-        decide("/api/prompts", "GET", Some("127.0.0.1".parse().unwrap()), None, &file),
+        decide(
+            "/api/prompts",
+            "GET",
+            Some("127.0.0.1".parse().unwrap()),
+            None,
+            &file
+        ),
         Verdict::Allow(Grant::Loopback)
     ));
 }
@@ -158,11 +204,20 @@ fn credentials_endpoint_is_never_anonymous() {
     // 勾了 → 放行
     assert!(matches!(
         decide(CREDENTIALS_PATH, "GET", remote, Some("granted"), &off),
-        Verdict::Allow(Grant::Device { allow_credentials: true, .. })
+        Verdict::Allow(Grant::Device {
+            allow_credentials: true,
+            ..
+        })
     ));
     // 本机回环 → 放行（桌面 App 自己要用）
     assert!(matches!(
-        decide(CREDENTIALS_PATH, "GET", Some("127.0.0.1".parse().unwrap()), None, &off),
+        decide(
+            CREDENTIALS_PATH,
+            "GET",
+            Some("127.0.0.1".parse().unwrap()),
+            None,
+            &off
+        ),
         Verdict::Allow(Grant::Loopback)
     ));
 
@@ -192,7 +247,10 @@ fn the_two_credential_switches_are_independent() {
     let remote = Some("10.0.0.9".parse().unwrap());
     assert!(matches!(
         decide(CREDENTIALS_PATH, "PUT", remote, Some("upload-only"), &file),
-        Verdict::Allow(Grant::Device { allow_credentials_upload: true, .. })
+        Verdict::Allow(Grant::Device {
+            allow_credentials_upload: true,
+            ..
+        })
     ));
     match decide(CREDENTIALS_PATH, "GET", remote, Some("upload-only"), &file) {
         Verdict::Forbidden(msg) => assert!(msg.contains("读取密钥"), "措辞要指对方向：{msg}"),
@@ -210,10 +268,12 @@ fn the_two_credential_switches_are_independent() {
 #[test]
 fn auth_file_tolerates_missing_keys() {
     // 旧的 `/1` 形状（没有 devices）与手工改过的 JSON 都要能读
-    let old: AuthFile = serde_json::from_str(r#"{"schema":"comfyhub-inbound-auth/1","enabled":true}"#).unwrap();
+    let old: AuthFile =
+        serde_json::from_str(r#"{"schema":"comfyhub-inbound-auth/1","enabled":true}"#).unwrap();
     assert!(old.devices.is_empty());
     assert_eq!(old.token, None);
-    let partial: AuthFile = serde_json::from_str(r#"{"enabled":true,"devices":[{"id":"p","token":"t"}]}"#).unwrap();
+    let partial: AuthFile =
+        serde_json::from_str(r#"{"enabled":true,"devices":[{"id":"p","token":"t"}]}"#).unwrap();
     assert_eq!(partial.devices.len(), 1);
     assert!(!partial.devices[0].allow_credentials);
     assert_eq!(partial.schema, SCHEMA);
@@ -230,7 +290,10 @@ fn dpapi_round_trip_works() {
     assert_eq!(dpapi::unprotect(&sealed).expect("DPAPI 解密失败"), plain);
     // 密文按 Kotlin 的形状落盘：base64 文本
     let text = base64_with(B64STD, &sealed, true);
-    assert_eq!(dpapi::unprotect(&base64_decode(&text).unwrap()).unwrap(), plain);
+    assert_eq!(
+        dpapi::unprotect(&base64_decode(&text).unwrap()).unwrap(),
+        plain
+    );
 }
 
 #[cfg(windows)]
@@ -253,12 +316,19 @@ fn resolve_credential_reads_the_managed_store_env_first() {
     )
     .unwrap();
 
-    let state = AppState::new(crate::infra::db::open_memory().unwrap(), ":memory:", media.clone());
+    let state = AppState::new(
+        crate::infra::db::open_memory().unwrap(),
+        ":memory:",
+        media.clone(),
+    );
     assert_eq!(resolve_credential(&state, "fixture.ref").unwrap(), plain);
 
     // 环境变量优先（与 Kotlin `CredentialService.resolve` 同顺序）
     std::env::set_var("fixture.ref", "from-env");
-    assert_eq!(resolve_credential(&state, "fixture.ref").unwrap(), "from-env");
+    assert_eq!(
+        resolve_credential(&state, "fixture.ref").unwrap(),
+        "from-env"
+    );
     std::env::remove_var("fixture.ref");
 
     // 桌面上没有的 ref → 404 形状的人话（不是 500、也不是空串）

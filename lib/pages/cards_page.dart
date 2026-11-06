@@ -816,25 +816,21 @@ class _CardEditorDialogState extends State<_CardEditorDialog> {
     }
   }
 
-  Widget _field(
-    String key,
-    String label, {
-    String? hint,
-    int maxLines = 1,
-  }) => Padding(
-    padding: const EdgeInsets.only(bottom: 10),
-    child: TextField(
-      controller: _c[key],
-      maxLines: maxLines,
-      decoration: InputDecoration(
-        labelText: label,
-        hintText: hint,
-        alignLabelWithHint: maxLines > 1,
-        isDense: true,
-        border: const OutlineInputBorder(),
-      ),
-    ),
-  );
+  Widget _field(String key, String label, {String? hint, int maxLines = 1}) =>
+      Padding(
+        padding: const EdgeInsets.only(bottom: 10),
+        child: TextField(
+          controller: _c[key],
+          maxLines: maxLines,
+          decoration: InputDecoration(
+            labelText: label,
+            hintText: hint,
+            alignLabelWithHint: maxLines > 1,
+            isDense: true,
+            border: const OutlineInputBorder(),
+          ),
+        ),
+      );
 
   @override
   Widget build(BuildContext context) {

@@ -84,8 +84,11 @@ void main() {
       seedColor: accent,
       accentMode: AppAccentMode.off,
     );
-    expect(off.colorScheme.primary, base.colorScheme.primary,
-        reason: 'off 档不读系统颜色');
+    expect(
+      off.colorScheme.primary,
+      base.colorScheme.primary,
+      reason: 'off 档不读系统颜色',
+    );
     expect(off.colorScheme.surface, base.colorScheme.surface);
   });
 
@@ -94,8 +97,10 @@ void main() {
     expect(theme.extension<AppShapes>(), isNotNull);
     expect(theme.extension<AppColors>(), isNotNull);
     final light = AppTheme.build(Brightness.light);
-    expect(theme.extension<AppColors>()!.success,
-        isNot(light.extension<AppColors>()!.success));
+    expect(
+      theme.extension<AppColors>()!.success,
+      isNot(light.extension<AppColors>()!.success),
+    );
   });
 
   test('主体底色：浅色是白、深色是灰（不跟强调色染色）', () {

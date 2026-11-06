@@ -4,7 +4,6 @@
 
 use super::common::*;
 
-
 // ===========================================================================
 //  会话与消息的读侧（P4 第 21 步）
 // ===========================================================================
@@ -58,7 +57,11 @@ async fn ai_conversations_and_messages_keep_order_and_block_shape() {
         .iter()
         .map(|c| c["id"].as_str().unwrap())
         .collect();
-    assert_eq!(ids, vec!["conv-1", "conv-0"], "按 updated_at DESC，且归档的默认不出现：{list}");
+    assert_eq!(
+        ids,
+        vec!["conv-1", "conv-0"],
+        "按 updated_at DESC，且归档的默认不出现：{list}"
+    );
 
     let first = &list[0];
     assert_eq!(
@@ -75,16 +78,35 @@ async fn ai_conversations_and_messages_keep_order_and_block_shape() {
     // 标题是原样读出来的（NULL → 「新对话」那条回落见 `conversations.rs` 的单元用例：
     // 真 schema 上 `title` 是 NOT NULL，夹具里构造不出 NULL）
     assert_eq!(first["title"], "未命名");
-    assert_eq!(first["createdAt"], "2026-09-23T04:00:00Z", "`.000Z` 要按 Java 规则收成整秒");
+    assert_eq!(
+        first["createdAt"], "2026-09-23T04:00:00Z",
+        "`.000Z` 要按 Java 规则收成整秒"
+    );
     assert_eq!(first["updatedAt"], "2026-09-23T04:30:00Z");
 
     // `includeArchived=1` / `=true` 才列归档的
-    let (_, with_arch) = get_json(router_for(state.clone()), "/api/ai/conversations?includeArchived=1").await;
+    let (_, with_arch) = get_json(
+        router_for(state.clone()),
+        "/api/ai/conversations?includeArchived=1",
+    )
+    .await;
     assert_eq!(with_arch.as_array().unwrap().len(), 3);
-    let (_, with_arch2) = get_json(router_for(state.clone()), "/api/ai/conversations?includeArchived=true").await;
+    let (_, with_arch2) = get_json(
+        router_for(state.clone()),
+        "/api/ai/conversations?includeArchived=true",
+    )
+    .await;
     assert_eq!(with_arch2.as_array().unwrap().len(), 3);
-    let (_, not_arch) = get_json(router_for(state.clone()), "/api/ai/conversations?includeArchived=yes").await;
-    assert_eq!(not_arch.as_array().unwrap().len(), 2, "别的值一律当 false（Kotlin 只认 1/true）");
+    let (_, not_arch) = get_json(
+        router_for(state.clone()),
+        "/api/ai/conversations?includeArchived=yes",
+    )
+    .await;
+    assert_eq!(
+        not_arch.as_array().unwrap().len(),
+        2,
+        "别的值一律当 false（Kotlin 只认 1/true）"
+    );
 
     // ---- 详情 ----
     let (status, one) = get_json(router_for(state.clone()), "/api/ai/conversations/conv-1").await;
@@ -94,44 +116,76 @@ async fn ai_conversations_and_messages_keep_order_and_block_shape() {
     assert_eq!(one["messageCount"], 2);
     // 没有 provider_id 的会话：可空键**不出现**
     let (_, bare) = get_json(router_for(state.clone()), "/api/ai/conversations/conv-arch").await;
-    assert!(!bare.as_object().unwrap().contains_key("providerId"), "{bare}");
+    assert!(
+        !bare.as_object().unwrap().contains_key("providerId"),
+        "{bare}"
+    );
     assert!(!bare.as_object().unwrap().contains_key("modelId"));
 
     // ---- 消息 + 有序块 ----
-    let (status, msgs) = get_json(router_for(state.clone()), "/api/ai/conversations/conv-1/messages").await;
+    let (status, msgs) = get_json(
+        router_for(state.clone()),
+        "/api/ai/conversations/conv-1/messages",
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "body={msgs}");
     let msgs = msgs.as_array().unwrap();
     assert_eq!(
-        msgs.iter().map(|m| m["id"].as_str().unwrap()).collect::<Vec<_>>(),
+        msgs.iter()
+            .map(|m| m["id"].as_str().unwrap())
+            .collect::<Vec<_>>(),
         vec!["msg-a", "msg-b"],
         "必须按 seq 排，不是插入顺序"
     );
     assert_eq!(
         keys(&msgs[1]),
         vec![
-            "conversationId", "createdAt", "id", "modelId", "parts", "providerId",
-            "providerResponseId", "role", "seq", "status", "text", "updatedAt", "usage",
+            "conversationId",
+            "createdAt",
+            "id",
+            "modelId",
+            "parts",
+            "providerId",
+            "providerResponseId",
+            "role",
+            "seq",
+            "status",
+            "text",
+            "updatedAt",
+            "usage",
         ]
     );
     // 没有 provider / usage 的那条：可空键一个都不出现，但 `parts` 一定在（空数组）
     let user_msg = &msgs[0];
     for absent in ["providerId", "modelId", "providerResponseId", "usage"] {
-        assert!(!user_msg.as_object().unwrap().contains_key(absent), "{absent}：{user_msg}");
+        assert!(
+            !user_msg.as_object().unwrap().contains_key(absent),
+            "{absent}：{user_msg}"
+        );
     }
     assert_eq!(user_msg["parts"], serde_json::json!([]));
 
     // ★ 块顺序：插入顺序是 2,0,1，取出来必须是 0,1,2 —— 工具卡要插在正文之间
     let parts = msgs[1]["parts"].as_array().unwrap();
     assert_eq!(
-        parts.iter().map(|p| p["type"].as_str().unwrap()).collect::<Vec<_>>(),
+        parts
+            .iter()
+            .map(|p| p["type"].as_str().unwrap())
+            .collect::<Vec<_>>(),
         vec!["text", "tool_call", "tool_result"],
         "块顺序乱了 = 工具卡位置不对（而正文还在，看起来只是『有点怪』）"
     );
     // 每个块：只带自己有的键
     assert_eq!(keys(&parts[0]), vec!["text", "type"]);
     assert_eq!(keys(&parts[1]), vec!["jsonPayload", "toolCallId", "type"]);
-    assert_eq!(parts[1]["jsonPayload"], serde_json::json!({"name": "comfy_submit"}));
-    assert_eq!(parts[2]["jsonPayload"], serde_json::json!({"mediaIds": [7]}));
+    assert_eq!(
+        parts[1]["jsonPayload"],
+        serde_json::json!({"name": "comfy_submit"})
+    );
+    assert_eq!(
+        parts[2]["jsonPayload"],
+        serde_json::json!({"mediaIds": [7]})
+    );
     // usage 是**对象**，不是字符串
     assert_eq!(msgs[1]["usage"], serde_json::json!({"total_tokens": 12}));
     assert_eq!(msgs[1]["providerResponseId"], "resp-1");
@@ -150,12 +204,19 @@ async fn ai_conversations_and_messages_keep_order_and_block_shape() {
             Ok(())
         })
         .unwrap();
-    let (status, empty) = get_json(router_for(state.clone()), "/api/ai/conversations/conv-empty/messages").await;
+    let (status, empty) = get_json(
+        router_for(state.clone()),
+        "/api/ai/conversations/conv-empty/messages",
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(empty, serde_json::json!([]));
 
     // 会话不存在 → 400 CONFIG_ERROR（不是 404、不是空数组）
-    for path in ["/api/ai/conversations/nope", "/api/ai/conversations/nope/messages"] {
+    for path in [
+        "/api/ai/conversations/nope",
+        "/api/ai/conversations/nope/messages",
+    ] {
         let (status, err) = get_json(router_for(state.clone()), path).await;
         assert_eq!(status, StatusCode::BAD_REQUEST, "{path} body={err}");
         assert_eq!(keys(&err), vec!["detail", "error"]);
@@ -190,11 +251,19 @@ async fn ai_messages_survive_broken_json_columns() {
         })
         .unwrap();
 
-    let (status, msgs) = get_json(router_for(state), "/api/ai/conversations/conv-bad/messages").await;
-    assert_eq!(status, StatusCode::OK, "一条脏 json 不该连累整段历史：{msgs}");
+    let (status, msgs) =
+        get_json(router_for(state), "/api/ai/conversations/conv-bad/messages").await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "一条脏 json 不该连累整段历史：{msgs}"
+    );
     let msg = &msgs[0];
     assert_eq!(msg["text"], "正文");
-    assert!(!msg.as_object().unwrap().contains_key("usage"), "坏 usage_json 当『没有』：{msg}");
+    assert!(
+        !msg.as_object().unwrap().contains_key("usage"),
+        "坏 usage_json 当『没有』：{msg}"
+    );
     assert_eq!(
         keys(&msg["parts"][0]),
         vec!["type"],
@@ -258,10 +327,26 @@ async fn pending_lists_only_what_is_really_waiting() {
     // 第一条：带 header、没有 answer / optionIndex / optionIndexes（可空键不出现）
     assert_eq!(
         keys(&asks[0]),
-        vec!["allowFreeText", "answered", "askedAt", "conversationId", "groupId", "header",
-             "index", "multiSelect", "options", "question", "questionId", "runId", "total"]
+        vec![
+            "allowFreeText",
+            "answered",
+            "askedAt",
+            "conversationId",
+            "groupId",
+            "header",
+            "index",
+            "multiSelect",
+            "options",
+            "question",
+            "questionId",
+            "runId",
+            "total"
+        ]
     );
-    assert_eq!(asks[0]["askedAt"], 1_790_258_405_647_i64, "⚠ 提问的 askedAt 是**毫秒数**");
+    assert_eq!(
+        asks[0]["askedAt"], 1_790_258_405_647_i64,
+        "⚠ 提问的 askedAt 是**毫秒数**"
+    );
     assert_eq!(asks[0]["options"], serde_json::json!(["1", "2", "4"]));
     assert_eq!(asks[0]["answered"], false);
     assert_eq!(asks[0]["index"], 1);
@@ -274,8 +359,14 @@ async fn pending_lists_only_what_is_really_waiting() {
     assert_eq!(asks[1]["optionIndexes"], serde_json::json!([0, 2]));
     assert_eq!(asks[1]["multiSelect"], true);
     assert_eq!(asks[1]["allowFreeText"], false);
-    assert!(asks[1].get("header").is_none(), "NULL 的 header 整个键不出现");
-    assert!(asks[1].get("options").is_some(), "options 一定是数组（空也是 []）");
+    assert!(
+        asks[1].get("header").is_none(),
+        "NULL 的 header 整个键不出现"
+    );
+    assert!(
+        asks[1].get("options").is_some(),
+        "options 一定是数组（空也是 []）"
+    );
     assert_eq!(asks[1]["options"], serde_json::json!([]));
 
     // 审批：只回 running Run 上那条 pending；已收尾 Run 的残留与 approved 的都不算
@@ -283,7 +374,14 @@ async fn pending_lists_only_what_is_really_waiting() {
     assert_eq!(approvals.len(), 1, "只列真的还在等的：{approvals:?}");
     assert_eq!(
         keys(&approvals[0]),
-        vec!["argumentsJson", "askedAt", "callId", "conversationId", "name", "runId"]
+        vec![
+            "argumentsJson",
+            "askedAt",
+            "callId",
+            "conversationId",
+            "name",
+            "runId"
+        ]
     );
     assert_eq!(approvals[0]["callId"], "call-live");
     assert_eq!(approvals[0]["name"], "comfy_submit");
@@ -322,7 +420,11 @@ async fn conversation_write_side_creates_patches_and_deletes() {
     assert_eq!(body["archived"], false);
     assert_eq!(body["messageCount"], 0);
     assert_eq!(body["systemPromptVersion"], "v1");
-    assert!(body["id"].as_str().unwrap().len() >= 32, "id 是 UUID：{}", body["id"]);
+    assert!(
+        body["id"].as_str().unwrap().len() >= 32,
+        "id 是 UUID：{}",
+        body["id"]
+    );
 
     let (status, created) = send_json(
         router_for(state.clone()),
@@ -405,8 +507,16 @@ async fn conversation_write_side_creates_patches_and_deletes() {
     let (messages, parts): (i64, i64) = state
         .with(|conn| {
             Ok((
-                conn.query_row("SELECT COUNT(*) FROM ai_messages WHERE conversation_id = 'conv-0'", [], |r| r.get(0))?,
-                conn.query_row("SELECT COUNT(*) FROM ai_message_parts WHERE message_id = 'msg-0'", [], |r| r.get(0))?,
+                conn.query_row(
+                    "SELECT COUNT(*) FROM ai_messages WHERE conversation_id = 'conv-0'",
+                    [],
+                    |r| r.get(0),
+                )?,
+                conn.query_row(
+                    "SELECT COUNT(*) FROM ai_message_parts WHERE message_id = 'msg-0'",
+                    [],
+                    |r| r.get(0),
+                )?,
             ))
         })
         .unwrap();
@@ -465,7 +575,10 @@ async fn append_message_assigns_seq_and_writes_parts_atomically() {
     assert_eq!(body["parts"][0]["type"], "text");
     assert_eq!(body["parts"][1]["type"], "tool_call");
     assert_eq!(body["parts"][1]["jsonPayload"]["name"], "web_search");
-    assert!(body["parts"][1]["jsonPayload"].is_object(), "jsonPayload 是对象，不是字符串");
+    assert!(
+        body["parts"][1]["jsonPayload"].is_object(),
+        "jsonPayload 是对象，不是字符串"
+    );
     // 块里没值的键**不出现**（形状纪律）
     assert!(body["parts"][0].get("toolCallId").is_none());
 
@@ -481,7 +594,8 @@ async fn append_message_assigns_seq_and_writes_parts_atomically() {
     assert_ne!(second["id"], "msg-mine");
 
     // 发消息要**把会话顶上去**（列表按 updated_at 排序，不顶就沉底）
-    let (_, conversation) = get_json(router_for(state.clone()), "/api/ai/conversations/conv-0").await;
+    let (_, conversation) =
+        get_json(router_for(state.clone()), "/api/ai/conversations/conv-0").await;
     assert_eq!(conversation["messageCount"], 3, "夹具 1 条 + 新加的 2 条");
 
     // 非法角色 / 非法状态 / 不存在的会话 → 400 + 稳定码 + 人话
@@ -517,11 +631,19 @@ async fn append_message_assigns_seq_and_writes_parts_atomically() {
     assert_eq!(body["detail"], "会话不存在: nope");
 
     // 非法的那几次**一行都没写进去**（校验在事务之前）
-    let (_, conversation) = get_json(router_for(state.clone()), "/api/ai/conversations/conv-0").await;
-    assert_eq!(conversation["messageCount"], 3, "被拒的追加不许留下半截数据");
+    let (_, conversation) =
+        get_json(router_for(state.clone()), "/api/ai/conversations/conv-0").await;
+    assert_eq!(
+        conversation["messageCount"], 3,
+        "被拒的追加不许留下半截数据"
+    );
 
     // 读回来时块是**按 ordinal 升序**的（工具卡位置不能乱）
-    let (_, messages) = get_json(router_for(state.clone()), "/api/ai/conversations/conv-0/messages").await;
+    let (_, messages) = get_json(
+        router_for(state.clone()),
+        "/api/ai/conversations/conv-0/messages",
+    )
+    .await;
     let mine = messages
         .as_array()
         .unwrap()
@@ -590,7 +712,10 @@ async fn run_persistence_round_trips_shape_and_terminal_state() {
     assert_eq!(run.user_message_id.as_deref(), Some("msg-0"));
     assert_eq!(run.reasoning_effort.as_deref(), Some("off"));
     assert_eq!(run.prompt_version.as_deref(), Some("v13"));
-    assert!(run.started_at.is_some(), "started_at 由 SQL 侧 strftime 写，读完要有值");
+    assert!(
+        run.started_at.is_some(),
+        "started_at 由 SQL 侧 strftime 写，读完要有值"
+    );
     assert!(run.completed_at.is_none());
     // 可空键的**键集合**（少一个 = 界面少一块；多一个 = 前端拿不到类型）
     let value = serde_json::to_value(&run).unwrap();
@@ -626,8 +751,14 @@ async fn run_persistence_round_trips_shape_and_terminal_state() {
             )
         })
         .unwrap();
-    assert!(snapshots.0.contains("\"credentialRef\":\"GOAT_KEY\""), "快照里只有引用名");
-    assert!(!snapshots.0.contains("sk-"), "快照里**绝不能**有密钥值（AIH-023）");
+    assert!(
+        snapshots.0.contains("\"credentialRef\":\"GOAT_KEY\""),
+        "快照里只有引用名"
+    );
+    assert!(
+        !snapshots.0.contains("sk-"),
+        "快照里**绝不能**有密钥值（AIH-023）"
+    );
     assert!(snapshots.1.contains("\"nsfwPromptVersion\":\"v1\""));
     assert_eq!(snapshots.2, r#"{"count":0,"skills":[]}"#);
 
@@ -648,7 +779,10 @@ async fn run_persistence_round_trips_shape_and_terminal_state() {
     assert_eq!(done.status, "completed");
     assert!(done.completed_at.is_some());
     let value = serde_json::to_value(&done).unwrap();
-    assert!(value.get("errorCode").is_none(), "成功时 errorCode 键不出现");
+    assert!(
+        value.get("errorCode").is_none(),
+        "成功时 errorCode 键不出现"
+    );
 
     // 不存在的 Run → 400 + 稳定码 + 人话（**不是** 404：前端按 error 分支）
     let missing = runs::get(&state, "nope").unwrap_err();
@@ -685,7 +819,11 @@ async fn run_events_replay_after_seq_and_prune_keeps_the_tail() {
     let mut batcher = runs::EventBatcher::new(&state, run.id.clone(), 3);
     for seq in 1..=7 {
         batcher
-            .add(seq, "text.delta", &serde_json::json!({ "text": format!("t{seq}") }))
+            .add(
+                seq,
+                "text.delta",
+                &serde_json::json!({ "text": format!("t{seq}") }),
+            )
             .unwrap();
     }
     assert_eq!(
@@ -693,17 +831,30 @@ async fn run_events_replay_after_seq_and_prune_keeps_the_tail() {
         6,
         "满一批就写：7 条里前 6 条已经落库"
     );
-    assert_eq!(batcher.flush().unwrap(), 1, "收尾必须 flush（否则最后那条 run.completed 会丢）");
+    assert_eq!(
+        batcher.flush().unwrap(),
+        1,
+        "收尾必须 flush（否则最后那条 run.completed 会丢）"
+    );
     assert_eq!(runs::events(&state, &run.id, 0).unwrap().len(), 7);
 
     // 断线续传：`?after=5` 只拿 6 / 7（游标语义的唯一读法）
     let tail = runs::events(&state, &run.id, 5).unwrap();
     assert_eq!(tail.iter().map(|e| e.seq).collect::<Vec<_>>(), vec![6, 7]);
-    assert_eq!(tail[0].to_sse(), "id: 6\nevent: text.delta\ndata: {\"text\":\"t6\"}\n\n");
+    assert_eq!(
+        tail[0].to_sse(),
+        "id: 6\nevent: text.delta\ndata: {\"text\":\"t6\"}\n\n"
+    );
 
     // 幂等：同 (run_id, seq) 再写一遍不产生第二行
-    runs::append_event(&state, &run.id, 7, "text.delta", &serde_json::json!({"text": "again"}))
-        .unwrap();
+    runs::append_event(
+        &state,
+        &run.id,
+        7,
+        "text.delta",
+        &serde_json::json!({"text": "again"}),
+    )
+    .unwrap();
     let again = runs::events(&state, &run.id, 0).unwrap();
     assert_eq!(again.len(), 7);
     assert_eq!(again[6].payload["text"], "t7", "重放不许改写已有的那一行");
@@ -711,7 +862,10 @@ async fn run_events_replay_after_seq_and_prune_keeps_the_tail() {
     // 保留窗口（R5）：keep=3 → 只留最后 3 条，**删的是最老的**
     assert_eq!(runs::prune_events(&state, &run.id, 3).unwrap(), 4);
     let kept = runs::events(&state, &run.id, 0).unwrap();
-    assert_eq!(kept.iter().map(|e| e.seq).collect::<Vec<_>>(), vec![5, 6, 7]);
+    assert_eq!(
+        kept.iter().map(|e| e.seq).collect::<Vec<_>>(),
+        vec![5, 6, 7]
+    );
     assert_eq!(
         runs::events(&state, &run.id, 4).unwrap().len(),
         3,
@@ -730,7 +884,11 @@ async fn run_events_replay_after_seq_and_prune_keeps_the_tail() {
         .unwrap();
     let events = runs::events(&state, &run.id, 7).unwrap();
     assert_eq!(events.len(), 1);
-    assert_eq!(events[0].payload, serde_json::json!({}), "脏 payload 当空对象");
+    assert_eq!(
+        events[0].payload,
+        serde_json::json!({}),
+        "脏 payload 当空对象"
+    );
 }
 
 /// 启动恢复：还在 `running` 的 Run 收成 failed、pending 审批按拒绝收尾。
@@ -799,7 +957,10 @@ async fn startup_recovery_fails_stale_runs_and_denies_pending_approvals() {
 
     // 再挂一个 pending，然后走"后端重启"
     runs::insert_pending_tool_call(&state, &running.id, "call-2", "read_file", "{}").unwrap();
-    assert_eq!(runs::fail_stale_running(&state, "后端重启导致 Run 中断").unwrap(), 1);
+    assert_eq!(
+        runs::fail_stale_running(&state, "后端重启导致 Run 中断").unwrap(),
+        1
+    );
     assert_eq!(runs::expire_stale_pending_tool_calls(&state).unwrap(), 1);
 
     let stale = runs::get(&state, &running.id).unwrap();
@@ -816,7 +977,10 @@ async fn startup_recovery_fails_stale_runs_and_denies_pending_approvals() {
         .into_iter()
         .find(|c| c["callId"] == "call-2")
         .unwrap();
-    assert_eq!(denied["status"], "denied", "重启 = 最彻底的超时，按拒绝处理");
+    assert_eq!(
+        denied["status"], "denied",
+        "重启 = 最彻底的超时，按拒绝处理"
+    );
     assert!(denied["error"].as_str().unwrap().contains("重启"));
 }
 
@@ -848,7 +1012,12 @@ async fn run_events_stream_replays_and_resumes() {
     for text in ["你", "好", "呀"] {
         state
             .bus
-            .emit(&state, &run.id, "text.delta", &serde_json::json!({ "messageId": "assistant-1", "text": text }))
+            .emit(
+                &state,
+                &run.id,
+                "text.delta",
+                &serde_json::json!({ "messageId": "assistant-1", "text": text }),
+            )
             .unwrap();
     }
     comfyhub_server_rs::ai::run_lifecycle::finish_run(
@@ -863,7 +1032,12 @@ async fn run_events_stream_replays_and_resumes() {
     .unwrap();
 
     // 全量回放：4 条事件、`seq` 从 1 连续到 4、终态在最后
-    let body = read_sse(router_for(state.clone()), &format!("/api/ai/runs/{}/events", run.id), "").await;
+    let body = read_sse(
+        router_for(state.clone()),
+        &format!("/api/ai/runs/{}/events", run.id),
+        "",
+    )
+    .await;
     let frames = parse_sse(&body);
     assert_eq!(frames.len(), 4, "三段正文 + run.completed：{body}");
     assert_eq!(frames[0].0, Some(1));
@@ -871,7 +1045,10 @@ async fn run_events_stream_replays_and_resumes() {
     assert_eq!(frames[0].2["text"], "你");
     assert_eq!(frames[3].1, "run.completed");
     assert_eq!(frames[3].2["runId"], run.id.as_str());
-    assert!(!body.contains("event: heartbeat"), "收尾之后立刻结束，不发心跳");
+    assert!(
+        !body.contains("event: heartbeat"),
+        "收尾之后立刻结束，不发心跳"
+    );
 
     // 断线续传：`?after=2` 只拿后两条
     let body = read_sse(
@@ -881,7 +1058,10 @@ async fn run_events_stream_replays_and_resumes() {
     )
     .await;
     let frames = parse_sse(&body);
-    assert_eq!(frames.iter().map(|f| f.0.unwrap()).collect::<Vec<_>>(), vec![3, 4]);
+    assert_eq!(
+        frames.iter().map(|f| f.0.unwrap()).collect::<Vec<_>>(),
+        vec![3, 4]
+    );
 
     // 浏览器 `EventSource` 自动重连带的是 `Last-Event-ID` 头（不认它就永远从 0 重放）
     let body = read_sse_with_headers(

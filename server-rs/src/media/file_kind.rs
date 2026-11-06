@@ -63,7 +63,9 @@ impl Detected {
 }
 
 /// 纯文本扩展名白名单：这些类型没有魔数，只能靠内容嗅探 + 扩展名共同确认。
-const TEXT_EXT: [&str; 9] = ["txt", "md", "markdown", "csv", "tsv", "json", "yaml", "yml", "log"];
+const TEXT_EXT: [&str; 9] = [
+    "txt", "md", "markdown", "csv", "tsv", "json", "yaml", "yml", "log",
+];
 
 /// 识别一个文件（`head` 是开头若干字节，建议 ≥ 64B）。
 pub fn detect(head: &[u8], file_name: &str, declared_mime: Option<&str>) -> Detected {
@@ -82,8 +84,16 @@ pub fn detect(head: &[u8], file_name: &str, declared_mime: Option<&str>) -> Dete
 
     // 2) ISO BMFF（mp4/mov/avif/heic…）：ftyp 盒子
     if let Some(mime) = ftyp_mime(head) {
-        let kind = if mime.starts_with("video/") { FileKind::Video } else { FileKind::Image };
-        return Detected { kind, mime_type: Some(mime), basis: "signature:ftyp".to_string() };
+        let kind = if mime.starts_with("video/") {
+            FileKind::Video
+        } else {
+            FileKind::Image
+        };
+        return Detected {
+            kind,
+            mime_type: Some(mime),
+            basis: "signature:ftyp".to_string(),
+        };
     }
 
     // 3) 纯文本：内容全是可打印 UTF-8 且扩展名在白名单里才算数
@@ -97,7 +107,9 @@ pub fn detect(head: &[u8], file_name: &str, declared_mime: Option<&str>) -> Dete
 
     // 4) 声明 MIME 是已知的文本类，且扩展名也在白名单 → 仍然只当文本
     if TEXT_EXT.contains(&ext.as_str())
-        && declared_mime.map(|m| m.starts_with("text/")).unwrap_or(false)
+        && declared_mime
+            .map(|m| m.starts_with("text/"))
+            .unwrap_or(false)
         && looks_like_text(head)
     {
         return Detected {
@@ -108,7 +120,11 @@ pub fn detect(head: &[u8], file_name: &str, declared_mime: Option<&str>) -> Dete
     }
 
     // 5) 认不出来 —— 不认识就是不认识，不做任何乐观回退
-    Detected { kind: FileKind::Unknown, mime_type: None, basis: "none".to_string() }
+    Detected {
+        kind: FileKind::Unknown,
+        mime_type: None,
+        basis: "none".to_string(),
+    }
 }
 
 fn signature(bytes: &[u8], ext: &str) -> Option<Detected> {
@@ -118,16 +134,20 @@ fn signature(bytes: &[u8], ext: &str) -> Option<Detected> {
     fn ascii(b: &[u8], i: usize, text: &str) -> bool {
         at(b, i, text.as_bytes())
     }
-    let image = |mime: &str| Some(Detected {
-        kind: FileKind::Image,
-        mime_type: Some(mime.to_string()),
-        basis: "signature".to_string(),
-    });
-    let audio = |mime: &str| Some(Detected {
-        kind: FileKind::Audio,
-        mime_type: Some(mime.to_string()),
-        basis: "signature".to_string(),
-    });
+    let image = |mime: &str| {
+        Some(Detected {
+            kind: FileKind::Image,
+            mime_type: Some(mime.to_string()),
+            basis: "signature".to_string(),
+        })
+    };
+    let audio = |mime: &str| {
+        Some(Detected {
+            kind: FileKind::Audio,
+            mime_type: Some(mime.to_string()),
+            basis: "signature".to_string(),
+        })
+    };
 
     if at(bytes, 0, &[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]) {
         return image("image/png");

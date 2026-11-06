@@ -33,8 +33,8 @@ fn 角色卡门面查的是角色卡而不是画风卡() {
     );
 
     // 画风卡那一边没有这张卡
-    let other = crate::library::style_cards::tool_search(&state, &serde_json::json!({}))
-        .unwrap_err();
+    let other =
+        crate::library::style_cards::tool_search(&state, &serde_json::json!({})).unwrap_err();
     assert_eq!(other.code, "NOT_FOUND");
     assert!(other.message.contains("画风卡"), "{}", other.message);
 

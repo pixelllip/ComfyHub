@@ -37,7 +37,11 @@ void main() {
     final paths = <String>[];
     final client = MockClient((request) async {
       paths.add(request.url.path);
-      return http.Response('[]', 200, headers: {'content-type': 'application/json'});
+      return http.Response(
+        '[]',
+        200,
+        headers: {'content-type': 'application/json'},
+      );
     });
     return (client: client, paths: paths);
   }
@@ -54,13 +58,19 @@ void main() {
 
     final loading = store.load();
     await Future<void>.delayed(const Duration(milliseconds: 30));
-    expect(rec.paths, isEmpty,
-        reason: '后端还没起，这会儿发出去只能是打 8080 兜底地址（必失败，用户看到的就是那句 ClientException）');
+    expect(
+      rec.paths,
+      isEmpty,
+      reason: '后端还没起，这会儿发出去只能是打 8080 兜底地址（必失败，用户看到的就是那句 ClientException）',
+    );
 
     gate.complete();
     await loading;
-    expect(rec.paths, contains('/api/ai/providers'),
-        reason: '闸门开了之后必须真的去拉 —— 否则等于"等完什么都不做"');
+    expect(
+      rec.paths,
+      contains('/api/ai/providers'),
+      reason: '闸门开了之后必须真的去拉 —— 否则等于"等完什么都不做"',
+    );
   });
 
   test('NSFW 设置：同样站在闸门后面（读不到会静默停在默认值）', () async {
@@ -93,7 +103,11 @@ void main() {
     final paths = <String>[];
     final client = MockClient((request) async {
       paths.add(request.url.path);
-      return http.Response('[]', 200, headers: {'content-type': 'application/json'});
+      return http.Response(
+        '[]',
+        200,
+        headers: {'content-type': 'application/json'},
+      );
     });
     final gate = Completer<void>();
     final store = AiWorkspaceStore(

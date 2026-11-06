@@ -24,8 +24,8 @@
 //!
 //! 没有设 `COMFYHUB_SPOT_DB` 时**直接跳过**（打印一句），不假装通过。
 
-use comfyhub_server_rs::web::routes::AppState;
 use comfyhub_server_rs::tools::tools::{self, ToolSession};
+use comfyhub_server_rs::web::routes::AppState;
 
 /// 打开真库副本 + 真实 storage（没设环境变量就跳过）。
 fn spot_state() -> Option<(AppState, std::path::PathBuf)> {
@@ -35,7 +35,9 @@ fn spot_state() -> Option<(AppState, std::path::PathBuf)> {
         return None;
     }
     let media = match std::env::var("COMFYHUB_SPOT_STORAGE") {
-        Ok(storage) if !storage.trim().is_empty() => std::path::PathBuf::from(storage).join("media"),
+        Ok(storage) if !storage.trim().is_empty() => {
+            std::path::PathBuf::from(storage).join("media")
+        }
         _ => std::path::Path::new(&db)
             .parent()
             .unwrap_or(std::path::Path::new("."))
@@ -55,7 +57,16 @@ fn spot_state() -> Option<(AppState, std::path::PathBuf)> {
 async fn call(state: &AppState, name: &str, arguments: serde_json::Value) -> serde_json::Value {
     let policy = comfyhub_server_rs::tools::policy::ToolPolicy::load(state).expect("读策略");
     let mut session = ToolSession::default();
-    match tools::execute(state, &policy, "spot-run", "spot-conv", name, &arguments, &mut session).await
+    match tools::execute(
+        state,
+        &policy,
+        "spot-run",
+        "spot-conv",
+        name,
+        &arguments,
+        &mut session,
+    )
+    .await
     {
         Ok(out) => {
             println!("── {name} OK ──\n{}", out.content);
@@ -77,19 +88,20 @@ async fn call(state: &AppState, name: &str, arguments: serde_json::Value) -> ser
 #[tokio::test]
 #[ignore = "真库副本抽查：需要 COMFYHUB_SPOT_DB / COMFYHUB_SPOT_STORAGE"]
 async fn real_db_spot_check_replay_ingest() {
-    let Some((state, _root)) = spot_state() else { return };
+    let Some((state, _root)) = spot_state() else {
+        return;
+    };
     // 挑一条**有产物**的真记录（最近的那条）
     let picked: Option<(String, String)> = state
         .with(|conn| {
             use rusqlite::OptionalExtension;
-            conn
-                .query_row(
-                    "SELECT run_key, raw FROM capture_runs \
+            conn.query_row(
+                "SELECT run_key, raw FROM capture_runs \
                       WHERE raw IS NOT NULL AND media_count > 0 ORDER BY id DESC LIMIT 1",
-                    [],
-                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
-                )
-                .optional()
+                [],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            )
+            .optional()
         })
         .unwrap();
     let Some((run_key, raw)) = picked else {
@@ -98,7 +110,9 @@ async fn real_db_spot_check_replay_ingest() {
     };
     let entry: serde_json::Value = serde_json::from_str(&raw).expect("raw 是 JSON");
     let config = comfyhub_server_rs::comfy::capture::capture_config(&state).expect("读配置");
-    let request = comfyhub_server_rs::comfy::capture_ingest::build_ingest_request(&run_key, &entry, &config, false);
+    let request = comfyhub_server_rs::comfy::capture_ingest::build_ingest_request(
+        &run_key, &entry, &config, false,
+    );
     println!(
         "重放 {run_key}：产物条目 {} 个，输出目录 {:?}，下载兜底 {}",
         request.outputs.len(),
@@ -108,15 +122,28 @@ async fn real_db_spot_check_replay_ingest() {
 
     // ⚠ 先把这条记录与它建的提示词从**副本**里清掉，否则 claim 会被幂等键挡住
     //    （这正是"同一次生成只建一条提示词"的实证）
-    let claim_first = comfyhub_server_rs::comfy::capture_ingest::begin_run(&state, &run_key, "ComfyUI", Some(&entry), false)
-        .expect("claim");
-    println!("先抢一次（副本里已有 success 行）→ claimed={}", claim_first.claimed);
+    let claim_first = comfyhub_server_rs::comfy::capture_ingest::begin_run(
+        &state,
+        &run_key,
+        "ComfyUI",
+        Some(&entry),
+        false,
+    )
+    .expect("claim");
+    println!(
+        "先抢一次（副本里已有 success 行）→ claimed={}",
+        claim_first.claimed
+    );
     assert!(!claim_first.claimed, "success 是终态，不该被重抢");
 
     state
         .write(|tx| {
             let prompt_id: Option<i64> = tx
-                .query_row("SELECT prompt_id FROM capture_runs WHERE run_key = ?1", [&run_key], |r| r.get(0))
+                .query_row(
+                    "SELECT prompt_id FROM capture_runs WHERE run_key = ?1",
+                    [&run_key],
+                    |r| r.get(0),
+                )
                 .ok()
                 .flatten();
             if let Some(id) = prompt_id {
@@ -128,13 +155,23 @@ async fn real_db_spot_check_replay_ingest() {
         })
         .unwrap();
 
-    let claim = comfyhub_server_rs::comfy::capture_ingest::begin_run(&state, &run_key, "ComfyUI", Some(&entry), false)
-        .expect("重新抢");
+    let claim = comfyhub_server_rs::comfy::capture_ingest::begin_run(
+        &state,
+        &run_key,
+        "ComfyUI",
+        Some(&entry),
+        false,
+    )
+    .expect("重新抢");
     assert!(claim.claimed, "清掉之后必须能重新抢");
-    let outcome = comfyhub_server_rs::comfy::capture_ingest::ingest_claimed(&state, &request, &config).await;
+    let outcome =
+        comfyhub_server_rs::comfy::capture_ingest::ingest_claimed(&state, &request, &config).await;
     println!("结果：{}", outcome.to_json());
     // 产物文件可能早被用户删了 —— 那是**如实**的 failed，不是错误；但提示词一定要建出来
-    assert!(outcome.created || outcome.message.is_some(), "要么建了提示词、要么如实说为什么没建");
+    assert!(
+        outcome.created || outcome.message.is_some(),
+        "要么建了提示词、要么如实说为什么没建"
+    );
     if let Some(prompt_id) = outcome.prompt_id {
         let (title, positive, seed): (String, String, Option<i64>) = state
             .with(|conn| {
@@ -145,7 +182,10 @@ async fn real_db_spot_check_replay_ingest() {
                 )
             })
             .unwrap();
-        println!("提示词 {prompt_id}：title={title:?} seed={seed:?} positive[:60]={:?}", positive.chars().take(60).collect::<String>());
+        println!(
+            "提示词 {prompt_id}：title={title:?} seed={seed:?} positive[:60]={:?}",
+            positive.chars().take(60).collect::<String>()
+        );
         assert!(!title.trim().is_empty());
     }
 }
@@ -158,12 +198,19 @@ async fn real_db_spot_check_replay_ingest() {
 #[tokio::test]
 #[ignore = "真库副本抽查：需要 COMFYHUB_SPOT_DB / COMFYHUB_SPOT_STORAGE"]
 async fn real_db_spot_check_load_workflow_files() {
-    let Some((state, root)) = spot_state() else { return };
+    let Some((state, root)) = spot_state() else {
+        return;
+    };
     let policy = comfyhub_server_rs::tools::policy::ToolPolicy::load(&state).expect("读策略");
     let config = comfyhub_server_rs::comfy::capture::capture_config(&state).expect("读配置");
-    let dirs = comfyhub_server_rs::comfy::comfy_dirs::workflow_dirs(&root, config.output_dir.as_deref());
+    let dirs =
+        comfyhub_server_rs::comfy::comfy_dirs::workflow_dirs(&root, config.output_dir.as_deref());
     let files = comfyhub_server_rs::comfy::comfy_dirs::scan(&dirs, None, 5);
-    println!("真机上扫到 {} 个候选（列前 {} 个）", files.len(), 5.min(files.len()));
+    println!(
+        "真机上扫到 {} 个候选（列前 {} 个）",
+        files.len(),
+        5.min(files.len())
+    );
     let mut api_loaded = 0;
     let mut ui_refused = 0;
     for file in &files {
@@ -176,12 +223,7 @@ async fn real_db_spot_check_load_workflow_files() {
             }
         };
         match comfyhub_server_rs::workflow::workflow_load::load_from_file(
-            &state,
-            &resolved,
-            None,
-            false,
-            false,
-            true,
+            &state, &resolved, None, false, false, true,
         )
         .await
         {
@@ -200,12 +242,18 @@ async fn real_db_spot_check_load_workflow_files() {
                     file.name, failure.message
                 );
                 ui_refused += 1;
-                println!("  · {}（{}）→ 如实拒绝：{}", file.name, file.format, failure.message);
+                println!(
+                    "  · {}（{}）→ 如实拒绝：{}",
+                    file.name, file.format, failure.message
+                );
             }
         }
     }
     // 至少要有文件被正确判成两种格式之一（一个文件都没有说明抽查没生效）
-    assert!(api_loaded + ui_refused > 0, "一个文件都没读到 —— 抽查没生效");
+    assert!(
+        api_loaded + ui_refused > 0,
+        "一个文件都没读到 —— 抽查没生效"
+    );
     println!("API 直接入库 {api_loaded} 个；界面格式按「ComfyUI 没在跑」如实拒绝 {ui_refused} 个");
 }
 
@@ -213,11 +261,18 @@ async fn real_db_spot_check_load_workflow_files() {
 #[tokio::test]
 #[ignore = "真库副本抽查：需要 COMFYHUB_SPOT_DB / COMFYHUB_SPOT_STORAGE"]
 async fn real_db_spot_check_comfy_queries() {
-    let Some((state, root)) = spot_state() else { return };
+    let Some((state, root)) = spot_state() else {
+        return;
+    };
     println!("项目根={}（库=COMFYHUB_SPOT_DB）", root.display());
 
     // ① 列本机工作流：真机上应当能探到用户 ComfyUI 的 workflows 目录
-    let listed = call(&state, "comfy_list_workflows", serde_json::json!({ "limit": 5 })).await;
+    let listed = call(
+        &state,
+        "comfy_list_workflows",
+        serde_json::json!({ "limit": 5 }),
+    )
+    .await;
     println!(
         "目录来源 {} 个，命中 {} 份（total {}）",
         listed["dirs"].as_array().map(Vec::len).unwrap_or(0),
@@ -227,7 +282,9 @@ async fn real_db_spot_check_comfy_queries() {
     assert!(listed["files"].is_array());
 
     // ③ 捕获状态（第 42 步）：真机上 ComfyUI 可能在也可能不在 —— **两种都要如实**
-    let status = comfyhub_server_rs::comfy::capture::status_json(&state).await.expect("状态");
+    let status = comfyhub_server_rs::comfy::capture::status_json(&state)
+        .await
+        .expect("状态");
     println!("── /api/capture/status ──\n{status}");
     assert!(status["comfyReachable"].is_boolean());
     assert!(status["capturedRuns"].as_i64().unwrap_or(0) >= 0);
@@ -368,7 +425,10 @@ async fn real_db_spot_check_comfy_queries() {
         .iter()
         .filter(|line| line.contains("positive: rust=\"\"") && !line.contains("kotlin=\"\""))
         .count();
-    assert_eq!(empty_positive, 0, "Rust 解析出的正向提示词不该系统性为空：{mismatches:?}");
+    assert_eq!(
+        empty_positive, 0,
+        "Rust 解析出的正向提示词不该系统性为空：{mismatches:?}"
+    );
 
     // ④ 按 runKey 查一条**真库里存在**的捕获记录
     let run_key: Option<String> = state
@@ -385,13 +445,21 @@ async fn real_db_spot_check_comfy_queries() {
         .unwrap();
     match run_key {
         Some(key) => {
-            let found = call(&state, "comfy_get_run", serde_json::json!({ "runKey": key })).await;
+            let found = call(
+                &state,
+                "comfy_get_run",
+                serde_json::json!({ "runKey": key }),
+            )
+            .await;
             assert_eq!(found["runKey"], key);
             assert!(found["status"].is_string());
             // 可空键**整个不出现**（Kotlin `explicitNulls = false`）
             for nullable in ["title", "error", "capturedAt", "promptId"] {
                 if found.get(nullable).is_some() {
-                    assert!(!found[nullable].is_null(), "{nullable} 出现了却是 null：{found}");
+                    assert!(
+                        !found[nullable].is_null(),
+                        "{nullable} 出现了却是 null：{found}"
+                    );
                 }
             }
         }
@@ -420,15 +488,32 @@ async fn live_danbooru_lookup() {
     std::fs::create_dir_all(&media).ok();
     let state = AppState::new(conn, ":memory:", media);
 
-    let outcome = call(&state, "danbooru_lookup", serde_json::json!({ "query": "shinku (nte)" })).await;
-    println!("{}", serde_json::to_string_pretty(&outcome).unwrap_or_default());
-    assert_eq!(outcome["character"]["tag"], "shinku_(nte)", "角色 tag 要真的解析出来：{outcome}");
+    let outcome = call(
+        &state,
+        "danbooru_lookup",
+        serde_json::json!({ "query": "shinku (nte)" }),
+    )
+    .await;
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&outcome).unwrap_or_default()
+    );
+    assert_eq!(
+        outcome["character"]["tag"], "shinku_(nte)",
+        "角色 tag 要真的解析出来：{outcome}"
+    );
     assert!(
-        outcome["character"]["relatedTags"].as_array().map(|a| !a.is_empty()).unwrap_or(false),
+        outcome["character"]["relatedTags"]
+            .as_array()
+            .map(|a| !a.is_empty())
+            .unwrap_or(false),
         "同现 tag 是规范 tag 栈的来源，不该是空的：{outcome}"
     );
     assert!(outcome["character"]["otherNames"].is_array(), "{outcome}");
-    assert!(outcome["verifiedAt"].as_str().unwrap_or("").ends_with('Z'), "{outcome}");
+    assert!(
+        outcome["verifiedAt"].as_str().unwrap_or("").ends_with('Z'),
+        "{outcome}"
+    );
 }
 
 // ===========================================================================
@@ -459,8 +544,14 @@ async fn live_web_tools_smoke() {
         serde_json::json!({ "query": "对比 SDXL 与 Flux 出图速度的实测博客" }),
     )
     .await;
-    println!("{}", serde_json::to_string_pretty(&search).unwrap_or_default());
-    assert!(search["count"].as_i64().unwrap_or(0) >= 1, "一条都没搜到：{search}");
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&search).unwrap_or_default()
+    );
+    assert!(
+        search["count"].as_i64().unwrap_or(0) >= 1,
+        "一条都没搜到：{search}"
+    );
     assert!(search["query"].is_string());
 
     // ② civitai_search：安全档（`Most Downloaded` 里的空格是**必须编码**的那一处）
@@ -470,9 +561,18 @@ async fn live_web_tools_smoke() {
         serde_json::json!({ "query": "anime style", "limit": 3 }),
     )
     .await;
-    println!("{}", serde_json::to_string_pretty(&civitai).unwrap_or_default());
-    assert!(civitai["count"].as_i64().unwrap_or(0) >= 1, "Civitai 一条都没搜到：{civitai}");
-    assert!(civitai["models"][0]["pageUrl"].as_str().unwrap_or("").starts_with("https://civitai.com/models/"));
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&civitai).unwrap_or_default()
+    );
+    assert!(
+        civitai["count"].as_i64().unwrap_or(0) >= 1,
+        "Civitai 一条都没搜到：{civitai}"
+    );
+    assert!(civitai["models"][0]["pageUrl"]
+        .as_str()
+        .unwrap_or("")
+        .starts_with("https://civitai.com/models/"));
 
     // ③ find_model：三个源都要各占一行（先查本机说的是这台真机器的清单）
     let found = call(
@@ -481,7 +581,10 @@ async fn live_web_tools_smoke() {
         serde_json::json!({ "query": "anima base", "type": "checkpoint", "limit": 3 }),
     )
     .await;
-    println!("{}", serde_json::to_string_pretty(&found).unwrap_or_default());
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&found).unwrap_or_default()
+    );
     let sources = found["sources"].as_array().unwrap();
     assert_eq!(sources.len(), 3, "三个源一条不少：{found}");
     assert_eq!(sources[0]["source"], "civitai");
@@ -502,16 +605,33 @@ async fn live_web_tools_smoke() {
 #[tokio::test]
 #[ignore = "真库 + 真 ComfyUI 目录：COMFYHUB_SPOT_DB 指一份库副本"]
 async fn comfy_env_report_reads_the_real_machine() {
-    let Some((state, root)) = spot_state() else { return };
-    let payload = call(&state, "comfy_env_report", serde_json::json!({ "limit": 5 })).await;
-    println!("{}", serde_json::to_string_pretty(&payload).unwrap_or_default());
+    let Some((state, root)) = spot_state() else {
+        return;
+    };
+    let payload = call(
+        &state,
+        "comfy_env_report",
+        serde_json::json!({ "limit": 5 }),
+    )
+    .await;
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&payload).unwrap_or_default()
+    );
 
     // 形状（这些键是模型据以判断"要不要让用户重启"的全部依据）
-    for key in ["instanceLoadable", "onDisk", "invisibleToInstance", "merged", "inventorySource"] {
+    for key in [
+        "instanceLoadable",
+        "onDisk",
+        "invisibleToInstance",
+        "merged",
+        "inventorySource",
+    ] {
         assert!(payload.get(key).is_some(), "少了 {key}：{payload}");
     }
     assert!(
-        ["object_info", "scan", "none"].contains(&payload["inventorySource"].as_str().unwrap_or("")),
+        ["object_info", "scan", "none"]
+            .contains(&payload["inventorySource"].as_str().unwrap_or("")),
         "{payload}"
     );
     assert!(payload["models"].is_array(), "{payload}");
@@ -519,11 +639,22 @@ async fn comfy_env_report_reads_the_real_machine() {
     // 真机上必须**扫到东西**（这台机器的 ComfyUI 根是探得到的；扫不到说明三份目录来源断了）
     let on_disk = payload["onDisk"].as_i64().unwrap_or(0);
     println!("project_root = {}", root.display());
-    println!("盘上扫到 {on_disk} 个模型，实例能加载 {} 个", payload["instanceLoadable"]);
-    assert!(on_disk > 0, "真机上扫不到任何模型 —— 三份目录来源或后缀表断了：{payload}");
+    println!(
+        "盘上扫到 {on_disk} 个模型，实例能加载 {} 个",
+        payload["instanceLoadable"]
+    );
+    assert!(
+        on_disk > 0,
+        "真机上扫不到任何模型 —— 三份目录来源或后缀表断了：{payload}"
+    );
 
     // 带过滤再问一次：只列 checkpoints，且条数不许超过 limit
-    let only = call(&state, "comfy_env_report", serde_json::json!({ "folder": "checkpoints", "limit": 3 })).await;
+    let only = call(
+        &state,
+        "comfy_env_report",
+        serde_json::json!({ "folder": "checkpoints", "limit": 3 }),
+    )
+    .await;
     assert!(only["models"].as_array().unwrap().len() <= 3, "{only}");
     assert!(
         only["models"]
@@ -533,7 +664,10 @@ async fn comfy_env_report_reads_the_real_machine() {
             .all(|m| m["folder"] == "checkpoints"),
         "{only}"
     );
-    assert_eq!(only["instanceLoadable"], payload["instanceLoadable"], "两次问的是同一份清单");
+    assert_eq!(
+        only["instanceLoadable"], payload["instanceLoadable"],
+        "两次问的是同一份清单"
+    );
 }
 
 // ===========================================================================
@@ -552,7 +686,9 @@ async fn comfy_env_report_reads_the_real_machine() {
 #[tokio::test]
 #[ignore = "活体抽查：需要 ComfyUI 在跑 + COMFYHUB_SPOT_DB 指一份库副本"]
 async fn live_投放的目录就是实例在读的那一份() {
-    let Some((state, root)) = spot_state() else { return };
+    let Some((state, root)) = spot_state() else {
+        return;
+    };
     let config = comfyhub_server_rs::comfy::capture::capture_config(&state).expect("读捕获配置");
     let comfy_url = config.comfy_url.clone();
 
@@ -563,9 +699,21 @@ async fn live_投放的目录就是实例在读的那一份() {
     for (dir, source) in &candidates {
         println!("  [{source}] {}", dir.display());
     }
-    let probed = comfyhub_server_rs::comfy::comfy_client::instance_input_dir(&comfy_url, &candidates.iter().map(|(d, _)| d.clone()).collect::<Vec<_>>())
-        .await;
-    println!("实例自己报的 input = {}", probed.as_ref().map(|p| p.display().to_string()).unwrap_or_else(|| "（问不到）".into()));
+    let probed = comfyhub_server_rs::comfy::comfy_client::instance_input_dir(
+        &comfy_url,
+        &candidates
+            .iter()
+            .map(|(d, _)| d.clone())
+            .collect::<Vec<_>>(),
+    )
+    .await;
+    println!(
+        "实例自己报的 input = {}",
+        probed
+            .as_ref()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| "（问不到）".into())
+    );
 
     // 投一张遮罩进去（`filename` 固定成唯一的，跑完自己删）
     let name = format!("comfyhub-spot-{}.png", std::process::id());
@@ -578,7 +726,10 @@ async fn live_投放的目录就是实例在读的那一份() {
         }),
     )
     .await;
-    println!("{}", serde_json::to_string_pretty(&payload).unwrap_or_default());
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&payload).unwrap_or_default()
+    );
     let input_dir = std::path::PathBuf::from(payload["inputDir"].as_str().expect("要回 inputDir"));
     assert_eq!(payload["filename"], name, "文件名该是我们给的那个");
 
@@ -587,7 +738,9 @@ async fn live_投放的目录就是实例在读的那一份() {
         .await
         .expect("问得到实例的名单");
     if names.is_empty() {
-        println!("⚠ 实例的 input 名单是空的 —— 跳过'看不看得见'那两条（这台机器的实例没有 input 文件）");
+        println!(
+            "⚠ 实例的 input 名单是空的 —— 跳过'看不看得见'那两条（这台机器的实例没有 input 文件）"
+        );
     } else {
         assert!(
             names.iter().any(|n| n == &name),
@@ -599,7 +752,10 @@ async fn live_投放的目录就是实例在读的那一份() {
     }
     // ② 来路如实：问到了实例就是 `instance`
     if probed.is_some() {
-        assert_eq!(payload["inputDirSource"], "instance", "问得到实例时就该以它为准：{payload}");
+        assert_eq!(
+            payload["inputDirSource"], "instance",
+            "问得到实例时就该以它为准：{payload}"
+        );
     }
 
     // 收尾：删掉我们刚投的那一份（**只删自己刚建的那个文件名**）
@@ -619,32 +775,59 @@ async fn live_投放的目录就是实例在读的那一份() {
 #[tokio::test]
 #[ignore = "真库：COMFYHUB_SPOT_DB 指一份库副本"]
 async fn comfy_find_workflow_is_truthful_about_runnable() {
-    let Some((state, _root)) = spot_state() else { return };
+    let Some((state, _root)) = spot_state() else {
+        return;
+    };
 
     // 先随便挑一个库里真有东西的关键词：拿第一条提示词的**正面提示词里一个词**试
     let first = call(&state, "search_prompts", serde_json::json!({ "limit": 1 })).await;
-    let query = first["items"][0]["title"].as_str().unwrap_or("").trim().to_string();
+    let query = first["items"][0]["title"]
+        .as_str()
+        .unwrap_or("")
+        .trim()
+        .to_string();
     println!("拿标题当关键词：{query:?}");
-    assert!(!query.is_empty(), "库里一条提示词都没有，这条抽查没法做：{first}");
+    assert!(
+        !query.is_empty(),
+        "库里一条提示词都没有，这条抽查没法做：{first}"
+    );
 
-    let hit = call(&state, "comfy_find_workflow", serde_json::json!({ "query": query, "limit": 5 })).await;
+    let hit = call(
+        &state,
+        "comfy_find_workflow",
+        serde_json::json!({ "query": query, "limit": 5 }),
+    )
+    .await;
     println!("{}", serde_json::to_string_pretty(&hit).unwrap_or_default());
     assert_eq!(hit["query"], query);
     // 关键词就是库里的标题，所以**这一段必须命中**（命中不了说明两段式查询或搜索语义断了）
-    assert!(hit["count"].as_i64().unwrap_or(0) > 0, "库里有这条标题却搜不到：{hit}");
+    assert!(
+        hit["count"].as_i64().unwrap_or(0) > 0,
+        "库里有这条标题却搜不到：{hit}"
+    );
     {
         let items = hit["workflows"].as_array().unwrap();
         assert!(items.len() <= 5, "{hit}");
         // ★ 这一条就是"有意与 Kotlin 不同"的判据：默认档（不带图）下也必须**如实**
         //   报 runnable —— Kotlin 那条 `if (includeGraph) … else null` 会让这里全是 false
         let runnable = items.iter().filter(|w| w["runnable"] == true).count();
-        println!("命中 {} 条，runnable=true 的有 {} 条", items.len(), runnable);
-        assert!(runnable > 0, "真库上一条 runnable 都没有 —— 要么查询词不对，要么 runnable 又变回假话了：{hit}");
+        println!(
+            "命中 {} 条，runnable=true 的有 {} 条",
+            items.len(),
+            runnable
+        );
+        assert!(
+            runnable > 0,
+            "真库上一条 runnable 都没有 —— 要么查询词不对，要么 runnable 又变回假话了：{hit}"
+        );
         // 没带图时**不许**把图带出来（体积是当初想省的东西）
         assert!(items.iter().all(|w| w.get("apiGraph").is_none()), "{hit}");
         // runnable=true 的那几条**不许**带那句"没有 API 节点图"的 note（那是假话）
         assert!(
-            items.iter().filter(|w| w["runnable"] == true).all(|w| w.get("note").is_none()),
+            items
+                .iter()
+                .filter(|w| w["runnable"] == true)
+                .all(|w| w.get("note").is_none()),
             "{hit}"
         );
         // 带上图时：runnable 必须还是同一个结论，且图真的在
@@ -662,8 +845,10 @@ async fn comfy_find_workflow_is_truthful_about_runnable() {
         );
         if runnable > 0 {
             let some = g.iter().find(|w| w["runnable"] == true).unwrap();
-            assert!(some["apiGraph"].is_object(), "includeGraph=true 时图必须真的在：{some}");
+            assert!(
+                some["apiGraph"].is_object(),
+                "includeGraph=true 时图必须真的在：{some}"
+            );
         }
     }
 }
-

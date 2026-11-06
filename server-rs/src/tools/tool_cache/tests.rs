@@ -42,7 +42,13 @@ fn policy_with(label: &str, read_roots: &[&str]) -> (ToolPolicy, PathBuf) {
 fn 参数键序不同也算同一组参数() {
     let _guard = serial();
     let (policy, _) = policy_with("cache-key-order", &["data"]);
-    store(&policy, "comfy_get_status", &json!({ "a": 1, "b": 2 }), "队列空", &json!({}));
+    store(
+        &policy,
+        "comfy_get_status",
+        &json!({ "a": 1, "b": 2 }),
+        "队列空",
+        &json!({}),
+    );
     let hit = lookup(&policy, "comfy_get_status", &json!({ "b": 2, "a": 1 }))
         .expect("模型两次拼 JSON 的键序经常不一样，键序不该影响命中");
     assert!(hit.content.contains("队列空"));
@@ -67,13 +73,28 @@ fn 命中时正文与摘要都如实标注() {
     let (content, preview, payload) = lookup(&policy, "comfy_get_status", &json!({}))
         .expect("应当命中")
         .into_wire();
-    assert!(content.starts_with("[缓存命中]"), "正文必须如实说是缓存：{content}");
-    assert!(content.contains("没有重新执行"), "必须写明没有重新执行：{content}");
-    assert!(content.contains("队列里有 2 个任务"), "原结果一个字都不能少：{content}");
-    assert!(preview.starts_with("[缓存命中]"), "工具卡上那一行也要看得见：{preview}");
+    assert!(
+        content.starts_with("[缓存命中]"),
+        "正文必须如实说是缓存：{content}"
+    );
+    assert!(
+        content.contains("没有重新执行"),
+        "必须写明没有重新执行：{content}"
+    );
+    assert!(
+        content.contains("队列里有 2 个任务"),
+        "原结果一个字都不能少：{content}"
+    );
+    assert!(
+        preview.starts_with("[缓存命中]"),
+        "工具卡上那一行也要看得见：{preview}"
+    );
     assert_eq!(payload["cached"], json!(true));
     assert_eq!(payload["queued"], json!(2), "工具自己的负载一个键都不能丢");
-    assert!(payload["cachedAgeSeconds"].is_number(), "给界面一个能显示「多久之前」的数");
+    assert!(
+        payload["cachedAgeSeconds"].is_number(),
+        "给界面一个能显示「多久之前」的数"
+    );
 }
 
 /// 名单是白名单不是黑名单：会改世界的、闸门、以及**自己有更严去重**的那几条
@@ -133,22 +154,34 @@ fn 磁盘类工具按文件变动失效() {
     std::fs::write(&file, "第一版").expect("写测试文件");
     let args = json!({ "path": file.display().to_string() });
     store(&policy, "read_file", &args, "第一版", &json!({}));
-    assert!(lookup(&policy, "read_file", &args).is_some(), "没动过就该命中");
+    assert!(
+        lookup(&policy, "read_file", &args).is_some(),
+        "没动过就该命中"
+    );
 
     // ① 长度变了
     std::fs::write(&file, "第二版（更长）").expect("覆盖测试文件");
-    assert!(lookup(&policy, "read_file", &args).is_none(), "文件被改了就必须重新读");
+    assert!(
+        lookup(&policy, "read_file", &args).is_none(),
+        "文件被改了就必须重新读"
+    );
 
     // ② 长度不变、只有 mtime 变（**显式设 mtime**，不靠"写得够快就同秒"这种巧合）
     std::fs::write(&file, "第三版").expect("覆盖测试文件");
     store(&policy, "read_file", &args, "第三版", &json!({}));
     assert!(lookup(&policy, "read_file", &args).is_some());
-    let handle = std::fs::File::options().write(true).open(&file).expect("打开测试文件");
+    let handle = std::fs::File::options()
+        .write(true)
+        .open(&file)
+        .expect("打开测试文件");
     handle
         .set_modified(SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000))
         .expect("设置 mtime");
     drop(handle);
-    assert!(lookup(&policy, "read_file", &args).is_none(), "只动 mtime 也算被动过");
+    assert!(
+        lookup(&policy, "read_file", &args).is_none(),
+        "只动 mtime 也算被动过"
+    );
 }
 
 /// 读白名单收紧之后，缓存**不能**继续把那份内容续出去 ——
@@ -166,10 +199,19 @@ fn 读白名单收紧之后不再供那份内容() {
 
     let narrowed = ToolPolicy::new(
         policy.project_root.clone(),
-        ToolPolicyConfig { read_roots: vec!["other".into()], ..Default::default() },
+        ToolPolicyConfig {
+            read_roots: vec!["other".into()],
+            ..Default::default()
+        },
     );
-    assert!(narrowed.resolve_read(&raw).is_err(), "前提：收紧之后这个路径本身就过不了准入");
-    assert!(lookup(&narrowed, "read_file", &args).is_none(), "过不了准入的路径一律不许命中缓存");
+    assert!(
+        narrowed.resolve_read(&raw).is_err(),
+        "前提：收紧之后这个路径本身就过不了准入"
+    );
+    assert!(
+        lookup(&narrowed, "read_file", &args).is_none(),
+        "过不了准入的路径一律不许命中缓存"
+    );
 }
 
 /// TTL 到期就真跑（用例把钟往前拨，不 `sleep`）。
@@ -177,14 +219,32 @@ fn 读白名单收紧之后不再供那份内容() {
 fn 过了_ttl_就不再命中() {
     let _guard = serial();
     let (policy, _) = policy_with("cache-ttl", &["data"]);
-    store(&policy, "comfy_get_status", &json!({}), "队列空", &json!({}));
+    store(
+        &policy,
+        "comfy_get_status",
+        &json!({}),
+        "队列空",
+        &json!({}),
+    );
     let now = Instant::now();
     assert!(
-        lookup_at(&policy, "comfy_get_status", &json!({}), now + Duration::from_secs(1)).is_some(),
+        lookup_at(
+            &policy,
+            "comfy_get_status",
+            &json!({}),
+            now + Duration::from_secs(1)
+        )
+        .is_some(),
         "1 秒之后还在 TTL 里"
     );
     assert!(
-        lookup_at(&policy, "comfy_get_status", &json!({}), now + Duration::from_secs(11)).is_none(),
+        lookup_at(
+            &policy,
+            "comfy_get_status",
+            &json!({}),
+            now + Duration::from_secs(11)
+        )
+        .is_none(),
         "10 秒的 TTL 过去之后必须真跑"
     );
 }
@@ -195,12 +255,26 @@ fn 缓存条数有上限() {
     let _guard = serial();
     let (policy, _) = policy_with("cache-bound", &["data"]);
     for index in 0..(MAX_ENTRIES + 20) {
-        store(&policy, "comfy_get_status", &json!({ "i": index }), "x", &json!({}));
+        store(
+            &policy,
+            "comfy_get_status",
+            &json!({ "i": index }),
+            "x",
+            &json!({}),
+        );
     }
     assert_eq!(entry_count(), MAX_ENTRIES, "条数必须卡在上限");
-    assert!(lookup(&policy, "comfy_get_status", &json!({ "i": 0 })).is_none(), "最老的先被淘汰");
     assert!(
-        lookup(&policy, "comfy_get_status", &json!({ "i": MAX_ENTRIES + 19 })).is_some(),
+        lookup(&policy, "comfy_get_status", &json!({ "i": 0 })).is_none(),
+        "最老的先被淘汰"
+    );
+    assert!(
+        lookup(
+            &policy,
+            "comfy_get_status",
+            &json!({ "i": MAX_ENTRIES + 19 })
+        )
+        .is_some(),
         "最新的还在"
     );
 }
@@ -211,7 +285,13 @@ fn 超长结果不进缓存() {
     let _guard = serial();
     let (policy, _) = policy_with("cache-big", &["data"]);
     let big = "字".repeat(MAX_CONTENT_CHARS + 1);
-    assert!(!store(&policy, "comfy_get_status", &json!({}), &big, &json!({})));
+    assert!(!store(
+        &policy,
+        "comfy_get_status",
+        &json!({}),
+        &big,
+        &json!({})
+    ));
     assert!(lookup(&policy, "comfy_get_status", &json!({})).is_none());
     assert_eq!(entry_count(), 0);
 }
@@ -223,9 +303,15 @@ fn 非对象负载也带上缓存标记() {
     let (policy, _) = policy_with("cache-payload", &["data"]);
     let args = json!({ "url": "https://example.com" });
     store(&policy, "web_fetch", &args, "正文", &json!("纯文本"));
-    let (_, _, payload) = lookup(&policy, "web_fetch", &args).expect("命中").into_wire();
+    let (_, _, payload) = lookup(&policy, "web_fetch", &args)
+        .expect("命中")
+        .into_wire();
     assert_eq!(payload["cached"], json!(true));
-    assert_eq!(payload["result"], json!("纯文本"), "非对象负载要原样留在 result 里");
+    assert_eq!(
+        payload["result"],
+        json!("纯文本"),
+        "非对象负载要原样留在 result 里"
+    );
 }
 
 /// 写操作之后缓存的答案就过期了 —— 清空是**唯一**的失效动作（纪律 4）。
@@ -233,7 +319,13 @@ fn 非对象负载也带上缓存标记() {
 fn 写操作之后缓存被清空() {
     let _guard = serial();
     let (policy, _) = policy_with("cache-invalidate", &["data"]);
-    store(&policy, "comfy_list_workflows", &json!({}), "两份工作流", &json!({}));
+    store(
+        &policy,
+        "comfy_list_workflows",
+        &json!({}),
+        "两份工作流",
+        &json!({}),
+    );
     assert_eq!(entry_count(), 1);
     assert_eq!(invalidate_all(), 1);
     assert!(lookup(&policy, "comfy_list_workflows", &json!({})).is_none());

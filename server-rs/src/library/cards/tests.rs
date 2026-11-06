@@ -40,7 +40,11 @@ fn media(conn: &Connection, name: &str) -> i64 {
 }
 
 fn test_state() -> AppState {
-    AppState::new(conn(), ":memory:", crate::infra::testpaths::scratch("media"))
+    AppState::new(
+        conn(),
+        ":memory:",
+        crate::infra::testpaths::scratch("media"),
+    )
 }
 
 #[test]
@@ -165,7 +169,15 @@ fn 字段超长报错而不是截断() {
     assert!(format!("{err:?}").contains("负面提示词 超出上限"));
     assert!(create(&conn, CardKind::Character, &CardInput::default()).is_err());
     let long_name = "名".repeat(MAX_NAME_CHARS + 1);
-    assert!(create(&conn, CardKind::Character, &CardInput { name: long_name, ..Default::default() }).is_err());
+    assert!(create(
+        &conn,
+        CardKind::Character,
+        &CardInput {
+            name: long_name,
+            ..Default::default()
+        }
+    )
+    .is_err());
 }
 
 #[test]
@@ -183,19 +195,35 @@ fn 搜索命中正文与负面() {
     )
     .unwrap();
 
-    assert_eq!(list(&conn, CardKind::Character, None, MAX_SEARCH).unwrap().len(), 2);
-    assert_eq!(list(&conn, CardKind::Character, Some("shin"), MAX_SEARCH).unwrap().len(), 1);
     assert_eq!(
-        list(&conn, CardKind::Character, Some("sheep horns"), MAX_SEARCH).unwrap().len(),
+        list(&conn, CardKind::Character, None, MAX_SEARCH)
+            .unwrap()
+            .len(),
+        2
+    );
+    assert_eq!(
+        list(&conn, CardKind::Character, Some("shin"), MAX_SEARCH)
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(
+        list(&conn, CardKind::Character, Some("sheep horns"), MAX_SEARCH)
+            .unwrap()
+            .len(),
         1,
         "正文要命中"
     );
     assert_eq!(
-        list(&conn, CardKind::Character, Some("green skin"), MAX_SEARCH).unwrap().len(),
+        list(&conn, CardKind::Character, Some("green skin"), MAX_SEARCH)
+            .unwrap()
+            .len(),
         1,
         "负面提示词要命中"
     );
-    assert!(list(&conn, CardKind::Character, Some("不存在"), MAX_SEARCH).unwrap().is_empty());
+    assert!(list(&conn, CardKind::Character, Some("不存在"), MAX_SEARCH)
+        .unwrap()
+        .is_empty());
 }
 
 #[test]
@@ -218,10 +246,17 @@ fn 角色卡与画风卡同名也是两条记录() {
     assert!(c.prompt.unwrap().contains("red eyes"));
     assert!(s.prompt.unwrap().contains("moonlight"));
     assert_eq!(
-        list(&conn, CardKind::Character, Some("月光"), MAX_SEARCH).unwrap().len(),
+        list(&conn, CardKind::Character, Some("月光"), MAX_SEARCH)
+            .unwrap()
+            .len(),
         1
     );
-    assert_eq!(list(&conn, CardKind::Style, Some("月光"), MAX_SEARCH).unwrap().len(), 1);
+    assert_eq!(
+        list(&conn, CardKind::Style, Some("月光"), MAX_SEARCH)
+            .unwrap()
+            .len(),
+        1
+    );
 }
 
 #[test]
@@ -233,7 +268,11 @@ fn 示例产物保持加入顺序_并且不能超限() {
     let c = media(&conn, "c.png");
 
     let examples = replace_examples(&conn, CardKind::Style, id, &[c, a, b, a]).unwrap();
-    assert_eq!(examples.iter().map(|e| e.id).collect::<Vec<_>>(), vec![c, a, b], "去重且保持顺序");
+    assert_eq!(
+        examples.iter().map(|e| e.id).collect::<Vec<_>>(),
+        vec![c, a, b],
+        "去重且保持顺序"
+    );
     assert_eq!(examples[0].file_url, format!("/api/media/{c}/file"));
     assert_eq!(examples[0].thumb_url, format!("/api/media/{c}/thumb"));
 
@@ -242,7 +281,9 @@ fn 示例产物保持加入顺序_并且不能超限() {
     assert_eq!(list_examples(&conn, CardKind::Style, id).unwrap().len(), 3);
 
     // 上限：报错而不是截断
-    let ids: Vec<i64> = (0..=MAX_EXAMPLES).map(|i| media(&conn, &format!("x{i}.png"))).collect();
+    let ids: Vec<i64> = (0..=MAX_EXAMPLES)
+        .map(|i| media(&conn, &format!("x{i}.png")))
+        .collect();
     let err = replace_examples(&conn, CardKind::Style, id, &ids).unwrap_err();
     assert!(format!("{err:?}").contains("最多"), "{err:?}");
 
@@ -258,9 +299,14 @@ fn 删产物会从卡片示例里自动摘掉() {
     let a = media(&conn, "a.png");
     let b = media(&conn, "b.png");
     replace_examples(&conn, CardKind::Character, id, &[a, b]).unwrap();
-    conn.execute("DELETE FROM media_assets WHERE id = ?1", params![a]).unwrap();
+    conn.execute("DELETE FROM media_assets WHERE id = ?1", params![a])
+        .unwrap();
     let left = list_examples(&conn, CardKind::Character, id).unwrap();
-    assert_eq!(left.iter().map(|e| e.id).collect::<Vec<_>>(), vec![b], "外键级联要摘掉");
+    assert_eq!(
+        left.iter().map(|e| e.id).collect::<Vec<_>>(),
+        vec![b],
+        "外键级联要摘掉"
+    );
 }
 
 #[test]
@@ -272,9 +318,21 @@ fn 工具_正文空着就明说() {
         &serde_json::json!({ "name": "Shinku" }),
     )
     .unwrap();
-    assert!(first.content.contains("已保存角色卡 #1「Shinku」（新建）"), "{}", first.content);
-    assert!(first.content.contains("正面提示词:（空）"), "{}", first.content);
-    assert!(first.content.contains("还空着**正面提示词**"), "{}", first.content);
+    assert!(
+        first.content.contains("已保存角色卡 #1「Shinku」（新建）"),
+        "{}",
+        first.content
+    );
+    assert!(
+        first.content.contains("正面提示词:（空）"),
+        "{}",
+        first.content
+    );
+    assert!(
+        first.content.contains("还空着**正面提示词**"),
+        "{}",
+        first.content
+    );
     assert!(first.content.contains("600+ token"), "{}", first.content);
 
     // 第二轮补正文：负面提示词不许被抹掉
@@ -287,12 +345,24 @@ fn 工具_正文空着就明说() {
         }),
     )
     .unwrap();
-    assert!(second.content.contains("（合并更新）"), "{}", second.content);
-    assert!(second.payload["prompt"].as_str().unwrap().contains("head to toe"));
+    assert!(
+        second.content.contains("（合并更新）"),
+        "{}",
+        second.content
+    );
+    assert!(second.payload["prompt"]
+        .as_str()
+        .unwrap()
+        .contains("head to toe"));
     assert!(!second.content.contains("还空着"), "{}", second.content);
 
     // 画风卡同样会提醒（文案里给出 100~200 token 的目标）
-    let style = tool_save(&state, CardKind::Style, &serde_json::json!({ "name": "赛博国风" })).unwrap();
+    let style = tool_save(
+        &state,
+        CardKind::Style,
+        &serde_json::json!({ "name": "赛博国风" }),
+    )
+    .unwrap();
     assert!(style.content.contains("已保存画风卡"), "{}", style.content);
     assert!(style.content.contains("100~200 token"), "{}", style.content);
 }
@@ -330,15 +400,28 @@ fn 工具_save_可以顺手挂示例产物() {
 #[test]
 fn 工具_搜索查不到时给对下一步() {
     let state = test_state();
-    let err = tool_search(&state, CardKind::Style, &serde_json::json!({ "query": "厚涂" })).unwrap_err();
+    let err = tool_search(
+        &state,
+        CardKind::Style,
+        &serde_json::json!({ "query": "厚涂" }),
+    )
+    .unwrap_err();
     assert_eq!(err.code, "NOT_FOUND");
     assert!(err.message.contains("画风卡"), "{}", err.message);
     assert!(err.message.contains("save_style_card"), "{}", err.message);
     assert!(err.message.contains("100~200 token"), "{}", err.message);
 
-    let err = tool_search(&state, CardKind::Character, &serde_json::json!({ "query": "shinku" }))
-        .unwrap_err();
-    assert!(err.message.contains("save_character_card"), "{}", err.message);
+    let err = tool_search(
+        &state,
+        CardKind::Character,
+        &serde_json::json!({ "query": "shinku" }),
+    )
+    .unwrap_err();
+    assert!(
+        err.message.contains("save_character_card"),
+        "{}",
+        err.message
+    );
     assert!(err.message.contains("danbooru_lookup"), "{}", err.message);
 }
 
@@ -353,7 +436,10 @@ fn 正文形状把正文与示例都画出来() {
     assert!(text.contains("#1「Shinku」（角色卡）"), "{text}");
     assert!(text.contains("正面提示词: A quiet girl"), "{text}");
     assert!(text.contains("负面提示词: blurry, low quality"), "{text}");
-    assert!(text.contains(&format!("示例产物（1）: #{sample}「sample.png」")), "{text}");
+    assert!(
+        text.contains(&format!("示例产物（1）: #{sample}「sample.png」")),
+        "{text}"
+    );
     assert!(!text.contains("tag"), "卡片正文不许再出现 tag 版：{text}");
 
     let empty = CardDto {
@@ -375,7 +461,10 @@ fn 直接建同名卡是_400_那一档而不是_500() {
     let conn = conn();
     create(&conn, CardKind::Style, &input("赛博国风")).unwrap();
     let err = create(&conn, CardKind::Style, &input("赛博国风")).unwrap_err();
-    assert!(matches!(err, WriteError::Conflict(_)), "同名的 POST 要能被界面理解成 400：{err:?}");
+    assert!(
+        matches!(err, WriteError::Conflict(_)),
+        "同名的 POST 要能被界面理解成 400：{err:?}"
+    );
     let message = format!("{err:?}");
     assert!(message.contains("同名画风卡已经存在"), "{message}");
 }
@@ -385,7 +474,10 @@ fn 删除与不存在的行为() {
     let conn = conn();
     let id = create(&conn, CardKind::Character, &input("Shinku")).unwrap();
     assert!(delete(&conn, CardKind::Character, id).unwrap());
-    assert!(!delete(&conn, CardKind::Character, id).unwrap(), "删第二次要如实说没删到");
+    assert!(
+        !delete(&conn, CardKind::Character, id).unwrap(),
+        "删第二次要如实说没删到"
+    );
     assert!(get(&conn, CardKind::Character, id).unwrap().is_none());
     assert!(!update(&conn, CardKind::Character, id, &input("Shinku")).unwrap());
 }

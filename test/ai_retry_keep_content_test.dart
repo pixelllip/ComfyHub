@@ -57,7 +57,11 @@ void _failAssistant({required bool withContent}) {
             'toolCallId': 'call_1',
             'jsonPayload': {'name': 'comfy_get_status', 'arguments': '{}'},
           },
-          {'type': 'tool_result', 'toolCallId': 'call_1', 'text': '{"queueRunning":0}'},
+          {
+            'type': 'tool_result',
+            'toolCallId': 'call_1',
+            'text': '{"queueRunning":0}',
+          },
         ]
       : <Object>[];
 }
@@ -77,8 +81,12 @@ MockClient _fakeBackend() {
           'endpointTrust': 'loopback',
           'enabled': true,
           'revision': 1,
-          'credential': {'configured': true, 'source': 'managed', 'writable': true},
-        }
+          'credential': {
+            'configured': true,
+            'source': 'managed',
+            'writable': true,
+          },
+        },
       ];
     } else if (path == '/api/ai/providers/local-gw/models') {
       body = [
@@ -92,7 +100,7 @@ MockClient _fakeBackend() {
           'thinkingEfforts': <String, String>{},
           'capabilitySource': 'manual',
           'enabled': true,
-        }
+        },
       ];
     } else if (path == '/api/ai/conversations' && request.method == 'POST') {
       final conv = {
@@ -135,7 +143,11 @@ MockClient _fakeBackend() {
             'parts': <Object>[],
           },
         ];
-        body = {'runId': 'r1', 'assistantMessageId': 'a1', 'userMessageId': 'u1'};
+        body = {
+          'runId': 'r1',
+          'assistantMessageId': 'a1',
+          'userMessageId': 'u1',
+        };
       } else {
         // 重试：后端**另起一条**（原来那条有内容）或**就地复用**（空壳）
         if (_retryAssistantId != 'a1') {
@@ -167,7 +179,8 @@ MockClient _fakeBackend() {
       final delta = _failWithContent
           ? 'id: 2\nevent: text.delta\ndata: {"messageId":"a1","text":${jsonEncode(_partial)}}\n\n'
           : '';
-      final sse = 'id: 1\nevent: run.started\ndata: {"runId":"r1"}\n\n'
+      final sse =
+          'id: 1\nevent: run.started\ndata: {"runId":"r1"}\n\n'
           '$delta'
           'id: 3\nevent: run.failed\ndata: {"runId":"r1","code":"RATE_LIMIT",'
           '"message":"被限流（HTTP 429）"}\n\n';
@@ -179,7 +192,8 @@ MockClient _fakeBackend() {
     } else if (path == '/api/ai/runs/r2/events') {
       // 取样点：`retry()` 刚把新的流式占位放进列表，`_reloadMessages` 还没跑
       _atStreamOpen = List<AiMessage>.of(_storeRef!.messages);
-      final sse = 'id: 1\nevent: run.started\ndata: {"runId":"r2"}\n\n'
+      final sse =
+          'id: 1\nevent: run.started\ndata: {"runId":"r2"}\n\n'
           'id: 2\nevent: text.delta\ndata: {"messageId":"$_retryAssistantId","text":"接上"}\n\n'
           'id: 3\nevent: message.completed\n'
           'data: {"messageId":"$_retryAssistantId","text":"接上没说完的部分。","steps":0}\n\n'
@@ -247,8 +261,11 @@ void main() {
   test('有内容的失败回复：重试另起一条气泡，原来那条原样留着', () async {
     await sendThenRetry();
 
-    expect(_atStreamOpen.map((m) => m.id).toList(), ['u1', 'a1', 'a2'],
-        reason: '重试不许把有内容的失败回复从界面上顶掉（用户 bug：429 之后看不到已回复的内容）');
+    expect(_atStreamOpen.map((m) => m.id).toList(), [
+      'u1',
+      'a1',
+      'a2',
+    ], reason: '重试不许把有内容的失败回复从界面上顶掉（用户 bug：429 之后看不到已回复的内容）');
     final old = _atStreamOpen.firstWhere((m) => m.id == 'a1');
     expect(old.status, 'failed', reason: '旧气泡如实留在失败上（带「重试」按钮）');
     expect(old.text, contains(_partial), reason: '已经说出去的正文必须还在');
@@ -260,8 +277,10 @@ void main() {
     _retryAssistantId = 'a1'; // 空壳 → 后端就地重置复用同一条
     await sendThenRetry(expectContent: false);
 
-    expect(_atStreamOpen.map((m) => m.id).toList(), ['u1', 'a1'],
-        reason: '空壳就地复用，会话里不许冒出多余气泡');
+    expect(_atStreamOpen.map((m) => m.id).toList(), [
+      'u1',
+      'a1',
+    ], reason: '空壳就地复用，会话里不许冒出多余气泡');
     expect(_atStreamOpen.firstWhere((m) => m.id == 'a1').status, 'streaming');
   });
 }

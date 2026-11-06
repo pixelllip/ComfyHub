@@ -43,11 +43,7 @@ void _expectAllStylesColored(TextTheme theme, Brightness brightness) {
   };
   styles.forEach((name, style) {
     expect(style, isNotNull, reason: '[$label] $name 不该是空的（主题必须给出这一档）');
-    expect(
-      style!.color,
-      isNotNull,
-      reason: '[$label] $name 没有颜色 → 会被画成白色',
-    );
+    expect(style!.color, isNotNull, reason: '[$label] $name 没有颜色 → 会被画成白色');
   });
 }
 
@@ -68,20 +64,30 @@ void main() {
       final label = brightness.name;
 
       void check(String what, TextStyle? style) => expect(
-            style?.color,
-            isNotNull,
-            reason: '[$label] $what 覆盖了 M3 默认值，必须自己给颜色',
-          );
+        style?.color,
+        isNotNull,
+        reason: '[$label] $what 覆盖了 M3 默认值，必须自己给颜色',
+      );
 
       check('appBarTheme.titleTextStyle', theme.appBarTheme.titleTextStyle);
       check('tabBarTheme.labelStyle', theme.tabBarTheme.labelStyle);
-      check('tabBarTheme.unselectedLabelStyle', theme.tabBarTheme.unselectedLabelStyle);
+      check(
+        'tabBarTheme.unselectedLabelStyle',
+        theme.tabBarTheme.unselectedLabelStyle,
+      );
       check('chipTheme.labelStyle', theme.chipTheme.labelStyle);
-      check('chipTheme.secondaryLabelStyle', theme.chipTheme.secondaryLabelStyle);
-      check('navigationRailTheme.selectedLabelTextStyle',
-          theme.navigationRailTheme.selectedLabelTextStyle);
-      check('navigationRailTheme.unselectedLabelTextStyle',
-          theme.navigationRailTheme.unselectedLabelTextStyle);
+      check(
+        'chipTheme.secondaryLabelStyle',
+        theme.chipTheme.secondaryLabelStyle,
+      );
+      check(
+        'navigationRailTheme.selectedLabelTextStyle',
+        theme.navigationRailTheme.selectedLabelTextStyle,
+      );
+      check(
+        'navigationRailTheme.unselectedLabelTextStyle',
+        theme.navigationRailTheme.unselectedLabelTextStyle,
+      );
       // 底部导航是按状态取样式的：三态都要有颜色（禁用态以前也没管过）
       for (final states in const [
         {WidgetState.selected},
@@ -132,7 +138,8 @@ void main() {
         expect(
           dark,
           expectDark,
-          reason: '[${brightness.name}] $text 解析成了 ${dark ? '深' : '浅'}色 —— '
+          reason:
+              '[${brightness.name}] $text 解析成了 ${dark ? '深' : '浅'}色 —— '
               '与底色同色就是看不见（浅色主题必须解析成深色）',
         );
       }

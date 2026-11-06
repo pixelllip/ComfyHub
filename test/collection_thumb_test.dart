@@ -16,23 +16,22 @@ Map<String, dynamic> _json({
   Object? collectionId,
   Object? collectionSize,
   Object? collectionPreview,
-}) =>
-    {
-      'id': id,
-      'kind': 'IMAGE',
-      'title': 't',
-      'originalName': 'a.png',
-      'storedName': 'a.png',
-      'sizeBytes': 0,
-      'favorite': false,
-      'nsfw': false,
-      'hasWorkflow': false,
-      'fileUrl': '/api/media/$id/file',
-      'thumbUrl': '/api/media/$id/thumb',
-      'collectionId': ?collectionId,
-      'collectionSize': ?collectionSize,
-      'collectionPreview': ?collectionPreview,
-    };
+}) => {
+  'id': id,
+  'kind': 'IMAGE',
+  'title': 't',
+  'originalName': 'a.png',
+  'storedName': 'a.png',
+  'sizeBytes': 0,
+  'favorite': false,
+  'nsfw': false,
+  'hasWorkflow': false,
+  'fileUrl': '/api/media/$id/file',
+  'thumbUrl': '/api/media/$id/thumb',
+  'collectionId': ?collectionId,
+  'collectionSize': ?collectionSize,
+  'collectionPreview': ?collectionPreview,
+};
 
 void main() {
   test('没进组的产物：collectionSize 退回 1，不算一组', () {
@@ -44,18 +43,28 @@ void main() {
   });
 
   test('只有自己一个的集合：collectionId 有值但不算一组', () {
-    final m = MediaAsset.fromJson(_json(collectionId: 7, collectionSize: 1, collectionPreview: [1]));
+    final m = MediaAsset.fromJson(
+      _json(collectionId: 7, collectionSize: 1, collectionPreview: [1]),
+    );
     expect(m.collectionId, 7);
     expect(m.isCollection, isFalse, reason: '一张的"组"按普通格子显示，不叠放、不显示角标');
   });
 
   test('成员多于一个：算一组，且解析出可叠的封面 id', () {
     final m = MediaAsset.fromJson(
-      _json(collectionId: 7, collectionSize: 4, collectionPreview: [11, 12, 13]),
+      _json(
+        collectionId: 7,
+        collectionSize: 4,
+        collectionPreview: [11, 12, 13],
+      ),
     );
     expect(m.isCollection, isTrue);
     expect(m.collectionSize, 4);
-    expect(m.collectionPreview, [11, 12, 13], reason: '后端只给头三张，总数靠 collectionSize');
+    expect(m.collectionPreview, [
+      11,
+      12,
+      13,
+    ], reason: '后端只给头三张，总数靠 collectionSize');
   });
 
   test('collectionId 有、size 缺失：不许当成一组（宁可少叠，不可误叠）', () {
@@ -66,7 +75,9 @@ void main() {
   });
 
   test('collectionPreview 里的脏值不会让解析炸掉', () {
-    final m = MediaAsset.fromJson(_json(collectionId: 7, collectionSize: 2, collectionPreview: []));
+    final m = MediaAsset.fromJson(
+      _json(collectionId: 7, collectionSize: 2, collectionPreview: []),
+    );
     expect(m.collectionPreview, isEmpty);
     expect(m.isCollection, isTrue, reason: 'size>1 就是一组，封面拿不到时退化成单图渲染');
   });

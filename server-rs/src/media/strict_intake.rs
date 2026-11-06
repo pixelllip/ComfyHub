@@ -58,11 +58,17 @@ pub struct PreflightResult {
 
 impl PreflightResult {
     pub fn allow() -> Self {
-        Self { allowed: true, blockers: Vec::new() }
+        Self {
+            allowed: true,
+            blockers: Vec::new(),
+        }
     }
 
     pub fn block(reasons: Vec<String>) -> Self {
-        Self { allowed: false, blockers: reasons }
+        Self {
+            allowed: false,
+            blockers: reasons,
+        }
     }
 }
 
@@ -107,7 +113,9 @@ pub fn resolve(
             fact: AttachmentFact {
                 name: name.to_string(),
                 modality: None,
-                mime_type: detected.mime_type.unwrap_or_else(|| declared_mime.to_string()),
+                mime_type: detected
+                    .mime_type
+                    .unwrap_or_else(|| declared_mime.to_string()),
                 size_bytes,
                 pixels,
             },
@@ -120,7 +128,9 @@ pub fn resolve(
         fact: AttachmentFact {
             name: name.to_string(),
             modality: detected.kind.modality().map(|m| m.to_string()),
-            mime_type: detected.mime_type.unwrap_or_else(|| declared_mime.to_string()),
+            mime_type: detected
+                .mime_type
+                .unwrap_or_else(|| declared_mime.to_string()),
             size_bytes,
             pixels,
         },
@@ -133,7 +143,10 @@ pub fn resolve(
 /// 与 Kotlin `AdapterCapabilities.transportsFor` 同一张表：**三家都只实现了图片的
 /// `inline_base64`**（视频 / 音频 / 文档 / 文本一律空集 → 预检会如实说"尚未实现"）。
 pub fn adapter_transports(api: &str, modality: &str) -> Vec<&'static str> {
-    let known_api = matches!(api, "openai-completions" | "openai-responses" | "anthropic-messages");
+    let known_api = matches!(
+        api,
+        "openai-completions" | "openai-responses" | "anthropic-messages"
+    );
     if known_api && modality == "image" {
         vec!["inline_base64"]
     } else {
@@ -215,7 +228,10 @@ pub fn evaluate(
     };
     if usable.is_empty() {
         blockers.push(if declared.is_empty() {
-            format!("{}的传输方式当前协议适配器尚未实现", modality_label(&modality))
+            format!(
+                "{}的传输方式当前协议适配器尚未实现",
+                modality_label(&modality)
+            )
         } else {
             format!(
                 "{}的传输方式（{}）当前协议适配器尚未实现",
@@ -223,7 +239,8 @@ pub fn evaluate(
                 declared.join("、")
             )
         });
-    } else if usable.iter().any(|t| t == "inline_base64") && attachment.size_bytes > MAX_INLINE_BYTES
+    } else if usable.iter().any(|t| t == "inline_base64")
+        && attachment.size_bytes > MAX_INLINE_BYTES
     {
         blockers.push(format!(
             "文件 {} 超过内联发送上限（{} MB），请先压缩或换一张更小的图",
@@ -246,7 +263,9 @@ pub fn evaluate(
             blockers.push(format!("附件数量超过上限（{max_count}）"));
         }
     }
-    if !model.mime_allowlist.is_empty() && !matches_mime(&model.mime_allowlist, &attachment.mime_type) {
+    if !model.mime_allowlist.is_empty()
+        && !matches_mime(&model.mime_allowlist, &attachment.mime_type)
+    {
         blockers.push(format!("该模型不接受 {} 类型", attachment.mime_type));
     }
 

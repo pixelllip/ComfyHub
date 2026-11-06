@@ -7,16 +7,56 @@ use super::*;
 #[test]
 fn 魔数优先且逐类认得出() {
     let cases: Vec<(Vec<u8>, &str, FileKind, &str)> = vec![
-        (vec![0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0, 0], "a.png", FileKind::Image, "image/png"),
-        (vec![0xFF, 0xD8, 0xFF, 0xE0], "a.jpg", FileKind::Image, "image/jpeg"),
-        (b"GIF89a....".to_vec(), "a.gif", FileKind::Image, "image/gif"),
-        (b"RIFF????WEBP".to_vec(), "a.webp", FileKind::Image, "image/webp"),
-        (vec![0x42, 0x4D, 0x00], "a.bmp", FileKind::Image, "image/bmp"),
-        (b"RIFF????WAVE".to_vec(), "a.wav", FileKind::Audio, "audio/wav"),
+        (
+            vec![0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0, 0],
+            "a.png",
+            FileKind::Image,
+            "image/png",
+        ),
+        (
+            vec![0xFF, 0xD8, 0xFF, 0xE0],
+            "a.jpg",
+            FileKind::Image,
+            "image/jpeg",
+        ),
+        (
+            b"GIF89a....".to_vec(),
+            "a.gif",
+            FileKind::Image,
+            "image/gif",
+        ),
+        (
+            b"RIFF????WEBP".to_vec(),
+            "a.webp",
+            FileKind::Image,
+            "image/webp",
+        ),
+        (
+            vec![0x42, 0x4D, 0x00],
+            "a.bmp",
+            FileKind::Image,
+            "image/bmp",
+        ),
+        (
+            b"RIFF????WAVE".to_vec(),
+            "a.wav",
+            FileKind::Audio,
+            "audio/wav",
+        ),
         (b"OggS....".to_vec(), "a.ogg", FileKind::Audio, "audio/ogg"),
-        (b"fLaC....".to_vec(), "a.flac", FileKind::Audio, "audio/flac"),
+        (
+            b"fLaC....".to_vec(),
+            "a.flac",
+            FileKind::Audio,
+            "audio/flac",
+        ),
         (b"ID3\x03".to_vec(), "a.mp3", FileKind::Audio, "audio/mpeg"),
-        (b"%PDF-1.7".to_vec(), "a.pdf", FileKind::Document, "application/pdf"),
+        (
+            b"%PDF-1.7".to_vec(),
+            "a.pdf",
+            FileKind::Document,
+            "application/pdf",
+        ),
     ];
     for (head, name, kind, mime) in cases {
         let detected = detect(&head, name, None);
@@ -77,8 +117,14 @@ fn 纯文本要扩展名与内容同时成立() {
     assert_eq!(detected.kind, FileKind::Unknown);
 
     // json / csv 各自给对 MIME
-    assert_eq!(detect(b"{\"a\":1}", "x.json", None).mime_type.as_deref(), Some("application/json"));
-    assert_eq!(detect(b"a,b\n1,2", "x.csv", None).mime_type.as_deref(), Some("text/csv"));
+    assert_eq!(
+        detect(b"{\"a\":1}", "x.json", None).mime_type.as_deref(),
+        Some("application/json")
+    );
+    assert_eq!(
+        detect(b"a,b\n1,2", "x.csv", None).mime_type.as_deref(),
+        Some("text/csv")
+    );
 }
 
 #[test]
@@ -88,7 +134,10 @@ fn zip_系按扩展名给_ooxml_mime() {
         detect(&head, "a.docx", None).mime_type.as_deref(),
         Some("application/vnd.openxmlformats-officedocument.wordprocessingml.document")
     );
-    assert_eq!(detect(&head, "a.zip", None).mime_type.as_deref(), Some("application/zip"));
+    assert_eq!(
+        detect(&head, "a.zip", None).mime_type.as_deref(),
+        Some("application/zip")
+    );
 }
 
 #[test]

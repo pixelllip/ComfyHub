@@ -34,8 +34,8 @@ use rusqlite::{params, OptionalExtension};
 use serde::Serialize;
 use serde_json::{Map, Value};
 
-use crate::media::file_kind::{self, FileKind};
 use crate::infra::iso_time::iso_time;
+use crate::media::file_kind::{self, FileKind};
 use crate::web::routes::{ApiError, AppState};
 
 /// 单个附件的上传硬上限（Kotlin `AiAttachmentStore.MAX_UPLOAD_BYTES`）。
@@ -216,7 +216,9 @@ fn new_stored_name(original_name: &str) -> String {
     let ext: String = original_name
         .rsplit_once('.')
         .map(|(_, ext)| ext.to_lowercase())
-        .filter(|ext| !ext.is_empty() && ext.len() <= 8 && ext.chars().all(|c| c.is_ascii_alphanumeric()))
+        .filter(|ext| {
+            !ext.is_empty() && ext.len() <= 8 && ext.chars().all(|c| c.is_ascii_alphanumeric())
+        })
         .unwrap_or_default();
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -257,7 +259,9 @@ fn safe_path_id(id: &str) -> Option<&str> {
     let trimmed = id.trim();
     let ok = !trimmed.is_empty()
         && trimmed.len() <= 64
-        && trimmed.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+        && trimmed
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
     ok.then_some(trimmed)
 }
 
@@ -297,7 +301,9 @@ pub fn insert(
 
 fn row_to_dto(row: &rusqlite::Row<'_>) -> rusqlite::Result<AttachmentDto> {
     let created: Option<String> = row.get("created_at")?;
-    let kind: String = row.get::<_, Option<String>>("kind")?.unwrap_or_else(|| "document".to_string());
+    let kind: String = row
+        .get::<_, Option<String>>("kind")?
+        .unwrap_or_else(|| "document".to_string());
     Ok(AttachmentDto {
         id: row.get("id")?,
         name: row
@@ -321,11 +327,16 @@ fn row_to_dto(row: &rusqlite::Row<'_>) -> rusqlite::Result<AttachmentDto> {
 
 pub fn get(state: &AppState, id: &str) -> Result<Option<AttachmentDto>, ApiError> {
     // 非法 id 与"库里没有"一样回 None（见 `safe_path_id` 的注释）
-    let Some(id) = safe_path_id(id) else { return Ok(None) };
+    let Some(id) = safe_path_id(id) else {
+        return Ok(None);
+    };
     state.with(|conn| {
-        conn
-            .query_row("SELECT * FROM ai_attachments WHERE id = ?1", params![id], row_to_dto)
-            .optional()
+        conn.query_row(
+            "SELECT * FROM ai_attachments WHERE id = ?1",
+            params![id],
+            row_to_dto,
+        )
+        .optional()
     })
 }
 
@@ -355,12 +366,16 @@ pub fn list(state: &AppState, ids: &[String]) -> Result<Vec<AttachmentDto>, ApiE
 }
 
 pub fn stored_name(state: &AppState, id: &str) -> Result<Option<String>, ApiError> {
-    let Some(id) = safe_path_id(id) else { return Ok(None) };
+    let Some(id) = safe_path_id(id) else {
+        return Ok(None);
+    };
     state.with(|conn| {
         Ok(conn
-            .query_row("SELECT stored_name FROM ai_attachments WHERE id = ?1", params![id], |row| {
-                row.get::<_, Option<String>>(0)
-            })
+            .query_row(
+                "SELECT stored_name FROM ai_attachments WHERE id = ?1",
+                params![id],
+                |row| row.get::<_, Option<String>>(0),
+            )
             .optional()?
             .flatten())
     })
@@ -368,7 +383,12 @@ pub fn stored_name(state: &AppState, id: &str) -> Result<Option<String>, ApiErro
 
 pub fn delete_row(state: &AppState, id: &str) -> Result<bool, ApiError> {
     // 参数化查询，id 原样交给 SQLite（查不到就是 0 行）
-    state.write(|conn| Ok(conn.execute("DELETE FROM ai_attachments WHERE id = ?1", params![id.trim()])? > 0))
+    state.write(|conn| {
+        Ok(conn.execute(
+            "DELETE FROM ai_attachments WHERE id = ?1",
+            params![id.trim()],
+        )? > 0)
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -413,18 +433,28 @@ fn save_inner(
     origin: &str,
 ) -> Result<AttachmentDto, ApiError> {
     let trimmed = name.trim();
-    let file_name: String = if trimmed.is_empty() { "attachment.bin".to_string() } else { trimmed.to_string() }
-        .chars()
-        .take(255)
-        .collect();
+    let file_name: String = if trimmed.is_empty() {
+        "attachment.bin".to_string()
+    } else {
+        trimmed.to_string()
+    }
+    .chars()
+    .take(255)
+    .collect();
     let size = std::fs::metadata(tmp).map(|m| m.len()).unwrap_or(0);
     if size == 0 {
-        return Err(ApiError::ai("UNSUPPORTED_CONTENT", format!("文件 {file_name} 是空的")));
+        return Err(ApiError::ai(
+            "UNSUPPORTED_CONTENT",
+            format!("文件 {file_name} 是空的"),
+        ));
     }
     if size > MAX_UPLOAD_BYTES {
         return Err(ApiError::ai(
             "UNSUPPORTED_CONTENT",
-            format!("文件 {file_name} 超过单附件上限（{} MB）", MAX_UPLOAD_BYTES / 1024 / 1024),
+            format!(
+                "文件 {file_name} 超过单附件上限（{} MB）",
+                MAX_UPLOAD_BYTES / 1024 / 1024
+            ),
         ));
     }
     let head = read_head(tmp, MAX_HEAD_BYTES);
@@ -440,13 +470,16 @@ fn save_inner(
     }
 
     let dir = attachment_dir(state);
-    std::fs::create_dir_all(&dir).map_err(|e| ApiError::internal(format!("建附件目录失败：{e}")))?;
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| ApiError::internal(format!("建附件目录失败：{e}")))?;
     let stored = new_stored_name(&file_name);
     let dest = dir.join(&stored);
     std::fs::rename(tmp, &dest)
         .or_else(|_| {
             // 跨盘 rename 会失败：退化成"复制 + 删源"
-            std::fs::copy(tmp, &dest).map(|_| ()).and_then(|_| std::fs::remove_file(tmp))
+            std::fs::copy(tmp, &dest)
+                .map(|_| ())
+                .and_then(|_| std::fs::remove_file(tmp))
         })
         .map_err(|e| ApiError::internal(format!("落盘失败：{e}")))?;
 
@@ -460,11 +493,7 @@ fn save_inner(
         id: uuid_like(),
         name: file_name,
         kind: detected.kind.wire().to_string(),
-        modality: detected
-            .kind
-            .modality()
-            .unwrap_or("document")
-            .to_string(),
+        modality: detected.kind.modality().unwrap_or("document").to_string(),
         mime_type: detected
             .mime_type
             .clone()
@@ -531,8 +560,12 @@ pub fn crop_image(
             format!("裁剪区域必须是 \"x,y,w,h\" 四个 0~1 的数：{region}"),
         ));
     };
-    let source = get(state, source_id)?
-        .ok_or_else(|| ApiError::ai("INVALID_ARGUMENT", format!("要裁图的附件不存在：{source_id}")))?;
+    let source = get(state, source_id)?.ok_or_else(|| {
+        ApiError::ai(
+            "INVALID_ARGUMENT",
+            format!("要裁图的附件不存在：{source_id}"),
+        )
+    })?;
     if source.kind != "image" {
         return Err(ApiError::ai(
             "INVALID_ARGUMENT",
@@ -586,7 +619,9 @@ pub fn save_bytes(
 
 fn read_head(path: &Path, max: usize) -> Vec<u8> {
     use std::io::Read;
-    let Ok(mut file) = std::fs::File::open(path) else { return Vec::new() };
+    let Ok(mut file) = std::fs::File::open(path) else {
+        return Vec::new();
+    };
     let mut buffer = vec![0u8; max];
     match file.read(&mut buffer) {
         Ok(read) => buffer.truncate(read),
@@ -597,7 +632,9 @@ fn read_head(path: &Path, max: usize) -> Vec<u8> {
 
 /// 原件路径（找不到文件回 `None`）。
 pub fn file_of(state: &AppState, id: &str) -> Result<Option<PathBuf>, ApiError> {
-    let Some(stored) = stored_name(state, id)? else { return Ok(None) };
+    let Some(stored) = stored_name(state, id)? else {
+        return Ok(None);
+    };
     Ok(resolve_attachment(state, &stored))
 }
 
@@ -610,8 +647,12 @@ pub fn file_of(state: &AppState, id: &str) -> Result<Option<PathBuf>, ApiError> 
 /// 解不了就把**原件当预览发出去**（带它自己的 MIME）——断在这里的话用户只会看到文件图标，
 /// 而"图明明在那儿"。
 pub fn thumbnail_of(state: &AppState, id: &str) -> Result<Option<(PathBuf, String)>, ApiError> {
-    let Some(dto) = get(state, id)? else { return Ok(None) };
-    let Some(src) = file_of(state, id)? else { return Ok(None) };
+    let Some(dto) = get(state, id)? else {
+        return Ok(None);
+    };
+    let Some(src) = file_of(state, id)? else {
+        return Ok(None);
+    };
     match dto.kind.as_str() {
         "image" => {
             let dest = thumb_path(state, &dto.id);
@@ -733,7 +774,9 @@ pub fn cache_stats(state: &AppState) -> Result<CacheStats, ApiError> {
         )?;
         let rows = stmt.query_map([], |row| {
             Ok(OriginStats {
-                origin: row.get::<_, Option<String>>(0)?.unwrap_or_else(|| "upload".into()),
+                origin: row
+                    .get::<_, Option<String>>(0)?
+                    .unwrap_or_else(|| "upload".into()),
                 count: row.get(1)?,
                 bytes: row.get(2)?,
             })
@@ -867,7 +910,10 @@ fn sweep_orphan_files(state: &AppState) -> Result<i64, ApiError> {
             if !path.is_file() {
                 continue;
             }
-            let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+            let name = path
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_default();
             if stored.contains(&name) || !old_enough(&path, GC_ORPHAN_MIN_AGE_SECONDS) {
                 continue;
             }
@@ -883,7 +929,10 @@ fn sweep_orphan_files(state: &AppState) -> Result<i64, ApiError> {
             if !path.is_file() {
                 continue;
             }
-            let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+            let name = path
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_default();
             let id = name.strip_suffix(".jpg").unwrap_or(&name);
             if ids.contains(id) || !old_enough(&path, GC_ORPHAN_MIN_AGE_SECONDS) {
                 continue;
@@ -987,7 +1036,14 @@ fn uuid_like() -> String {
     let pid = std::process::id() as u128;
     let mixed = nanos ^ (pid << 64) ^ nanos.rotate_left(23);
     let hex = format!("{mixed:032x}");
-    format!("{}-{}-4{}-a{}-{}", &hex[0..8], &hex[8..12], &hex[13..16], &hex[17..20], &hex[20..32])
+    format!(
+        "{}-{}-4{}-a{}-{}",
+        &hex[0..8],
+        &hex[8..12],
+        &hex[13..16],
+        &hex[17..20],
+        &hex[20..32]
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -1013,8 +1069,14 @@ pub fn router() -> Router<AppState> {
             "/api/ai/attachments/{id}",
             axum::routing::get(get_one).delete(delete_one),
         )
-        .route("/api/ai/attachments/{id}/file", axum::routing::get(get_file))
-        .route("/api/ai/attachments/{id}/thumb", axum::routing::get(get_thumb))
+        .route(
+            "/api/ai/attachments/{id}/file",
+            axum::routing::get(get_file),
+        )
+        .route(
+            "/api/ai/attachments/{id}/thumb",
+            axum::routing::get(get_thumb),
+        )
         // 附件准入预检（AIH-029）：**纯计算**，不产生任何上游请求
         .route("/api/ai/preflight", axum::routing::post(preflight))
         // 上传这一条要放开 axum 的默认 2MB 请求体上限（默认值会让真实照片传不进来，
@@ -1071,7 +1133,10 @@ pub async fn preflight_json(state: &AppState, body: &PreflightRequest) -> Result
         .into_iter()
         .find(|m| m.id == body.model_id)
         .ok_or_else(|| {
-            ApiError::ai("UNKNOWN_MODEL", format!("模型不存在于目录中: {}", body.model_id))
+            ApiError::ai(
+                "UNKNOWN_MODEL",
+                format!("模型不存在于目录中: {}", body.model_id),
+            )
         })?;
 
     // 与 Kotlin `attachmentIds.distinct()` 一样**保序去重**
@@ -1120,7 +1185,11 @@ pub async fn preflight_json(state: &AppState, body: &PreflightRequest) -> Result
                 )));
             }
         }
-        let name = if input.name.trim().is_empty() { "附件" } else { input.name.trim() };
+        let name = if input.name.trim().is_empty() {
+            "附件"
+        } else {
+            input.name.trim()
+        };
         let mime = input
             .mime_type
             .clone()
@@ -1149,7 +1218,8 @@ pub async fn preflight_json(state: &AppState, body: &PreflightRequest) -> Result
             &provider.api,
             item.fact.modality.as_deref().unwrap_or_default(),
         );
-        let admission = crate::media::strict_intake::evaluate(&model, &item.fact, &transports, index as i64);
+        let admission =
+            crate::media::strict_intake::evaluate(&model, &item.fact, &transports, index as i64);
         // 文件头判定失败的阻断理由必须一起带出来（AIH-027/030）
         let mut blockers = item.resolver_blockers.clone();
         blockers.extend(admission.blockers);
@@ -1161,7 +1231,10 @@ pub async fn preflight_json(state: &AppState, body: &PreflightRequest) -> Result
         entry.insert("index".into(), Value::Number((index as i64).into()));
         entry.insert("name".into(), Value::String(item.fact.name.clone()));
         entry.insert("allowed".into(), Value::Bool(blockers.is_empty()));
-        entry.insert("blockers".into(), Value::Array(blockers.into_iter().map(Value::String).collect()));
+        entry.insert(
+            "blockers".into(),
+            Value::Array(blockers.into_iter().map(Value::String).collect()),
+        );
         if let Some(id) = item.attachment_id.as_ref() {
             entry.insert("attachmentId".into(), Value::String(id.clone()));
         }
@@ -1188,7 +1261,10 @@ async fn preflight(
 const FIELD_HINT: &str = "没有收到文件（表单字段名请用 files）";
 
 /// `POST /api/ai/attachments`（multipart，字段名 `files`）。
-async fn upload(State(state): State<AppState>, mut multipart: Multipart) -> Result<Response, ApiError> {
+async fn upload(
+    State(state): State<AppState>,
+    mut multipart: Multipart,
+) -> Result<Response, ApiError> {
     let mut incoming: Vec<(String, PathBuf, Option<String>)> = Vec::new();
     let mut failed: Vec<FailedInfo> = Vec::new();
 
@@ -1201,27 +1277,37 @@ async fn upload(State(state): State<AppState>, mut multipart: Multipart) -> Resu
                     .filter(|n| !n.trim().is_empty())
                     .unwrap_or_else(|| "attachment.bin".to_string());
                 let declared = field.content_type().map(|m| m.to_string());
-                let tmp = temp_file(&state).map_err(|e| ApiError::internal(format!("建临时文件失败：{e}")))?;
+                let tmp = temp_file(&state)
+                    .map_err(|e| ApiError::internal(format!("建临时文件失败：{e}")))?;
                 match field.bytes().await {
                     Ok(bytes) => {
                         if bytes.len() as u64 > MAX_UPLOAD_BYTES {
                             let _ = std::fs::remove_file(&tmp);
                             failed.push(FailedInfo {
                                 file_name: name.clone(),
-                                reason: format!("文件 {name} 超过单附件上限（{} MB）", MAX_UPLOAD_BYTES / 1024 / 1024),
+                                reason: format!(
+                                    "文件 {name} 超过单附件上限（{} MB）",
+                                    MAX_UPLOAD_BYTES / 1024 / 1024
+                                ),
                             });
                             continue;
                         }
                         if let Err(e) = std::fs::write(&tmp, &bytes) {
                             let _ = std::fs::remove_file(&tmp);
-                            failed.push(FailedInfo { file_name: name, reason: format!("写临时文件失败：{e}") });
+                            failed.push(FailedInfo {
+                                file_name: name,
+                                reason: format!("写临时文件失败：{e}"),
+                            });
                             continue;
                         }
                         incoming.push((name, tmp, declared));
                     }
                     Err(e) => {
                         let _ = std::fs::remove_file(&tmp);
-                        failed.push(FailedInfo { file_name: name, reason: format!("读取上传内容失败：{e}") });
+                        failed.push(FailedInfo {
+                            file_name: name,
+                            reason: format!("读取上传内容失败：{e}"),
+                        });
                     }
                 }
             }
@@ -1243,7 +1329,10 @@ async fn upload(State(state): State<AppState>, mut multipart: Multipart) -> Resu
                         ),
                     ));
                 }
-                return Err(ApiError::ai("CONFIG_ERROR", format!("附件上传解析失败：{e}")));
+                return Err(ApiError::ai(
+                    "CONFIG_ERROR",
+                    format!("附件上传解析失败：{e}"),
+                ));
             }
         }
     }
@@ -1323,7 +1412,8 @@ async fn get_thumb(
     State(state): State<AppState>,
     AxumPath(id): AxumPath<String>,
 ) -> Result<Response, ApiError> {
-    let _ = get(&state, &id)?.ok_or_else(|| ApiError::ai("CONFIG_ERROR", format!("附件不存在: {id}")))?;
+    let _ = get(&state, &id)?
+        .ok_or_else(|| ApiError::ai("CONFIG_ERROR", format!("附件不存在: {id}")))?;
     let thumb = tokio::task::spawn_blocking({
         let state = state.clone();
         let id = id.clone();
@@ -1334,12 +1424,17 @@ async fn get_thumb(
     let Some((path, content_type)) = thumb else {
         return Ok(StatusCode::NO_CONTENT.into_response());
     };
-    let mut response = crate::media::media::serve_path(&path, None, &content_type, &format!("thumb-{id}"), &HeaderMap::new())
-        .await?;
-    response.headers_mut().insert(
-        "x-thumbnail",
-        axum::http::HeaderValue::from_static("1"),
-    );
+    let mut response = crate::media::media::serve_path(
+        &path,
+        None,
+        &content_type,
+        &format!("thumb-{id}"),
+        &HeaderMap::new(),
+    )
+    .await?;
+    response
+        .headers_mut()
+        .insert("x-thumbnail", axum::http::HeaderValue::from_static("1"));
     Ok(response)
 }
 
@@ -1356,8 +1451,6 @@ async fn delete_one(
     out.insert("id".into(), Value::String(id));
     Ok(Json(Value::Object(out)))
 }
-
-
 
 // ---------------------------------------------------------------------------
 //  测试

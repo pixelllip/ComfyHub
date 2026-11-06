@@ -29,7 +29,11 @@ fn 冻结副本可读而且不为空() {
     assert!(!parsed.providers.is_empty());
     assert!(!parsed.version.trim().is_empty());
     for provider in &parsed.providers {
-        assert!(!provider.models.is_empty(), "{} 一个模型都没有", provider.id);
+        assert!(
+            !provider.models.is_empty(),
+            "{} 一个模型都没有",
+            provider.id
+        );
         for model in &provider.models {
             assert!(!model.id.trim().is_empty());
             assert!(!model.display_name.trim().is_empty());
@@ -63,13 +67,19 @@ fn 对照结论把缺的_一致的_不一致的分开() {
     c_row.reasoning = false;
     existing.insert("c".to_string(), c_row);
     // 用户自己加的：不属于任何一类
-    existing.insert("user-only".to_string(), row_of(&builtin("user-only", &["text"], true, false), "p"));
+    existing.insert(
+        "user-only".to_string(),
+        row_of(&builtin("user-only", &["text"], true, false), "p"),
+    );
 
     let plan = plan_seed(&catalog, &existing);
     assert_eq!(plan.added, vec!["a"]);
     assert_eq!(plan.kept, vec!["b"]);
     assert_eq!(plan.divergent, vec!["c"]);
-    assert!(!plan.added.contains(&"user-only".to_string()), "用户自己加的不进任何一类");
+    assert!(
+        !plan.added.contains(&"user-only".to_string()),
+        "用户自己加的不进任何一类"
+    );
     assert!(!plan.divergent.contains(&"user-only".to_string()));
 }
 
@@ -101,17 +111,27 @@ fn 只比能力不比用户的地盘() {
     ] {
         let mut changed = base.clone();
         mutate(&mut changed);
-        assert!(capability_differs(&model, &changed), "{changed:?} 应当算不同");
+        assert!(
+            capability_differs(&model, &changed),
+            "{changed:?} 应当算不同"
+        );
     }
 }
 
 /// 模式 → 动作：ADD_MISSING 只插入、REFRESH 只刷新。
 #[test]
 fn 两种模式的动作互不重叠() {
-    let plan = SeedPlan { added: vec!["a".into()], kept: vec!["b".into()], divergent: vec!["c".into()] };
+    let plan = SeedPlan {
+        added: vec!["a".into()],
+        kept: vec!["b".into()],
+        divergent: vec!["c".into()],
+    };
     let (insert, refresh) = decide_actions(SeedMode::AddMissing, &plan);
     assert_eq!(insert, vec!["a"]);
-    assert!(refresh.is_empty(), "补齐模式**绝不对齐**（会冲掉用户改过的能力）");
+    assert!(
+        refresh.is_empty(),
+        "补齐模式**绝不对齐**（会冲掉用户改过的能力）"
+    );
     let (insert, refresh) = decide_actions(SeedMode::RefreshCapabilities, &plan);
     assert!(insert.is_empty(), "对齐模式**绝不新增**");
     assert_eq!(refresh, vec!["c"]);
@@ -122,9 +142,18 @@ fn 两种模式的动作互不重叠() {
 fn 同步模式的取值与_kotlin_一致() {
     assert_eq!(SeedMode::parse(None).unwrap(), SeedMode::AddMissing);
     assert_eq!(SeedMode::parse(Some("")).unwrap(), SeedMode::AddMissing);
-    assert_eq!(SeedMode::parse(Some("add-missing")).unwrap(), SeedMode::AddMissing);
-    assert_eq!(SeedMode::parse(Some("refresh")).unwrap(), SeedMode::RefreshCapabilities);
-    assert_eq!(SeedMode::parse(Some("REFRESH-CAPABILITIES")).unwrap(), SeedMode::RefreshCapabilities);
+    assert_eq!(
+        SeedMode::parse(Some("add-missing")).unwrap(),
+        SeedMode::AddMissing
+    );
+    assert_eq!(
+        SeedMode::parse(Some("refresh")).unwrap(),
+        SeedMode::RefreshCapabilities
+    );
+    assert_eq!(
+        SeedMode::parse(Some("REFRESH-CAPABILITIES")).unwrap(),
+        SeedMode::RefreshCapabilities
+    );
     let err = SeedMode::parse(Some("whatever")).unwrap_err();
     assert_eq!(
         err.human(),
@@ -137,7 +166,10 @@ fn 同步模式的取值与_kotlin_一致() {
 fn 写进库的形状不带假的附件能力() {
     let model = builtin("m", &["text", "image"], true, false);
     let dto = to_model_dto(&model, "p", None);
-    assert!(dto.attachment_transports.is_empty(), "适配器还没实现附件传输");
+    assert!(
+        dto.attachment_transports.is_empty(),
+        "适配器还没实现附件传输"
+    );
     assert!(dto.mime_allowlist.is_empty());
     assert!(dto.max_attachment_bytes.is_none());
     assert_eq!(dto.capability_source, "builtin");

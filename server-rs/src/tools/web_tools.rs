@@ -40,10 +40,10 @@ use std::time::Duration;
 
 use serde_json::{json, Map, Value};
 
-use crate::web::routes::AppState;
 use crate::tools::tools::{
     java_error_name, outbound_error_kind, url_encode, OutboundError, ToolFailure, ToolOutcome,
 };
+use crate::web::routes::AppState;
 
 /// 默认站点（`KEENABLE_API_URL` 可覆盖 —— 这条不只是给测试用的：官方 SDK 也认它）。
 pub const DEFAULT_BASE_URL: &str = "https://api.keenable.ai";
@@ -203,7 +203,12 @@ impl KeenableClient {
         payload.insert("snippet_max_length".into(), json!(SNIPPET_MAX_LENGTH));
 
         let body = self
-            .request("search", "POST", Some(&Value::Object(payload).to_string()), None)
+            .request(
+                "search",
+                "POST",
+                Some(&Value::Object(payload).to_string()),
+                None,
+            )
             .await?;
 
         let results: Vec<WebResult> = body
@@ -232,7 +237,12 @@ impl KeenableClient {
             "query": query_out,
             "keyless": self.key.is_none(),
         });
-        Ok(WebSearchOutcome { query: query_out, results, context, meta })
+        Ok(WebSearchOutcome {
+            query: query_out,
+            results,
+            context,
+            meta,
+        })
     }
 
     // -----------------------------------------------------------------------
@@ -249,11 +259,17 @@ impl KeenableClient {
 
         let limit = max_chars.clamp(1, MAX_FETCH_CHARS) as usize;
         let query_string = format!("url={}", url_encode(raw));
-        let body = self.request("fetch", "GET", None, Some(&query_string)).await?;
+        let body = self
+            .request("fetch", "GET", None, Some(&query_string))
+            .await?;
 
         let content = str_of(&body, "content").unwrap_or_default();
         let truncated = utf16_len(&content) > limit;
-        let text = if truncated { take_utf16(&content, limit) } else { content };
+        let text = if truncated {
+            take_utf16(&content, limit)
+        } else {
+            content
+        };
         Ok(WebPage {
             url: str_of(&body, "url").unwrap_or_else(|| raw.to_string()),
             title: str_of(&body, "title").unwrap_or_default(),
@@ -278,13 +294,19 @@ impl KeenableClient {
         body: Option<&str>,
         query_string: Option<&str>,
     ) -> Result<Map<String, Value>, ToolFailure> {
-        let path = format!("/v1/{endpoint}{}", if self.key.is_none() { "/public" } else { "" });
+        let path = format!(
+            "/v1/{endpoint}{}",
+            if self.key.is_none() { "/public" } else { "" }
+        );
         let full = match query_string {
             Some(q) => format!("{}{path}?{q}", self.base),
             None => format!("{}{path}", self.base),
         };
         let parsed = reqwest::Url::parse(&full).map_err(|_| {
-            ToolFailure::new("SEARCH_FAILED", format!("搜索服务地址无法解析：{}", self.base))
+            ToolFailure::new(
+                "SEARCH_FAILED",
+                format!("搜索服务地址无法解析：{}", self.base),
+            )
         })?;
         if let Some(host) = parsed.host_str() {
             self.guard_base_host(host)?;
@@ -295,8 +317,9 @@ impl KeenableClient {
         let client = self.http_client(&host)?;
         let mut request = client
             .request(
-                reqwest::Method::from_bytes(method.as_bytes())
-                    .map_err(|_| ToolFailure::new("SEARCH_FAILED", format!("不认识的请求方法：{method}")))?,
+                reqwest::Method::from_bytes(method.as_bytes()).map_err(|_| {
+                    ToolFailure::new("SEARCH_FAILED", format!("不认识的请求方法：{method}"))
+                })?,
                 parsed,
             )
             .header("Accept", "application/json")
@@ -307,7 +330,9 @@ impl KeenableClient {
             request = request.header("X-API-Key", key);
         }
         if let Some(body) = body {
-            request = request.header("Content-Type", "application/json").body(body.to_string());
+            request = request
+                .header("Content-Type", "application/json")
+                .body(body.to_string());
         }
 
         let response = request.send().await.map_err(|e| {
@@ -361,20 +386,33 @@ impl KeenableClient {
                             ),
                         )
                     } else {
-                        ("SEARCH_RATE_LIMIT", "该密钥的搜索额度已用尽（429）；稍后再试".to_string())
+                        (
+                            "SEARCH_RATE_LIMIT",
+                            "该密钥的搜索额度已用尽（429）；稍后再试".to_string(),
+                        )
                     }
                 }
-                400 => ("SEARCH_BAD_REQUEST", "请求被拒绝（多数是查询本身不合法）".to_string()),
+                400 => (
+                    "SEARCH_BAD_REQUEST",
+                    "请求被拒绝（多数是查询本身不合法）".to_string(),
+                ),
                 500..=599 => ("SEARCH_FAILED", format!("搜索服务暂时不可用（{status}）")),
                 _ => ("SEARCH_FAILED", format!("搜索服务返回 {status}")),
             };
-            let message = if detail.is_empty() { hint } else { format!("{hint}｜返回：{detail}") };
+            let message = if detail.is_empty() {
+                hint
+            } else {
+                format!("{hint}｜返回：{detail}")
+            };
             return Err(ToolFailure::new(code, message));
         }
 
         match serde_json::from_str::<Value>(&text) {
             Ok(Value::Object(obj)) => Ok(obj),
-            _ => Err(ToolFailure::new("SEARCH_FAILED", "搜索服务返回了无法解析的内容")),
+            _ => Err(ToolFailure::new(
+                "SEARCH_FAILED",
+                "搜索服务返回了无法解析的内容",
+            )),
         }
     }
 
@@ -388,8 +426,9 @@ impl KeenableClient {
             .redirect(reqwest::redirect::Policy::none());
         match crate::infra::outbound::route(host) {
             crate::infra::outbound::Route::Proxy(addr) => {
-                let proxy = reqwest::Proxy::all(format!("http://{addr}"))
-                    .map_err(|e| ToolFailure::new("SEARCH_FAILED", format!("代理地址不合法：{e}")))?;
+                let proxy = reqwest::Proxy::all(format!("http://{addr}")).map_err(|e| {
+                    ToolFailure::new("SEARCH_FAILED", format!("代理地址不合法：{e}"))
+                })?;
                 builder = builder.proxy(proxy);
             }
             crate::infra::outbound::Route::Direct => {
@@ -436,13 +475,25 @@ fn render(results: &[WebResult]) -> String {
     for r in results {
         // 编号按**实际保留的条数**走：中间某条超预算被跳过时不能留下 [1][2][4] 这种空洞，
         // 模型引用的是这里的编号，空洞会让"第 3 条"指向不存在的结果
-        let mut header = format!("[{}] {}", kept.len() + 1, if r.title.trim().is_empty() { "(无标题)" } else { &r.title });
+        let mut header = format!(
+            "[{}] {}",
+            kept.len() + 1,
+            if r.title.trim().is_empty() {
+                "(无标题)"
+            } else {
+                &r.title
+            }
+        );
         header.push_str(&format!(" ({})", r.url));
         if let Some(published) = r.published_at.as_deref() {
             header.push_str(&format!(" - 发布 {published}"));
         }
         let body = crate::tools::tools::collapse_spaces(&r.snippet);
-        let block = if body.is_empty() { header } else { format!("{header}\n{body}") };
+        let block = if body.is_empty() {
+            header
+        } else {
+            format!("{header}\n{body}")
+        };
         let cost = utf16_len(&block) + if kept.is_empty() { 0 } else { 2 };
         if !kept.is_empty() && used + cost > CONTEXT_MAX_CHARS {
             continue;
@@ -497,18 +548,32 @@ fn str_of(obj: &Map<String, Value>, key: &str) -> Option<String> {
 fn split_http_url(raw: &str) -> Result<(String, String), ToolFailure> {
     // Java `URI(String)` 会拒绝空白与控制字符（这里是它的粗粒度对应物）
     if raw.is_empty() || raw.chars().any(|c| c.is_whitespace() || c.is_control()) {
-        return Err(ToolFailure::new("INVALID_ARGUMENT", format!("url 无法解析：{raw}")));
+        return Err(ToolFailure::new(
+            "INVALID_ARGUMENT",
+            format!("url 无法解析：{raw}"),
+        ));
     }
     let Some((scheme, rest)) = raw.split_once(':') else {
-        return Err(ToolFailure::new("INVALID_ARGUMENT", "url 必须是 http/https 链接"));
+        return Err(ToolFailure::new(
+            "INVALID_ARGUMENT",
+            "url 必须是 http/https 链接",
+        ));
     };
     if !scheme.eq_ignore_ascii_case("http") && !scheme.eq_ignore_ascii_case("https") {
-        return Err(ToolFailure::new("INVALID_ARGUMENT", "url 必须是 http/https 链接"));
+        return Err(ToolFailure::new(
+            "INVALID_ARGUMENT",
+            "url 必须是 http/https 链接",
+        ));
     }
     let no_host = || ToolFailure::new("INVALID_ARGUMENT", format!("url 里没有主机名：{raw}"));
     // authority 必须存在（Java `URI.host` 对 `http:/path` 与 `http:///path` 都是 null）
-    let Some(after_slashes) = rest.strip_prefix("//") else { return Err(no_host()) };
-    let authority = after_slashes.split(['/', '?', '#']).next().unwrap_or_default();
+    let Some(after_slashes) = rest.strip_prefix("//") else {
+        return Err(no_host());
+    };
+    let authority = after_slashes
+        .split(['/', '?', '#'])
+        .next()
+        .unwrap_or_default();
     // 去掉 user:pass@（Java 的 `URI.host` 也不含它）
     let host_port = authority.rsplit('@').next().unwrap_or(authority);
     let host = if host_port.starts_with('[') {
@@ -597,7 +662,8 @@ pub async fn tool_fetch(state: &AppState, arguments: &Value) -> Result<ToolOutco
         return Err(ToolFailure::new("INVALID_ARGUMENT", "缺少参数 url"));
     };
     let client = KeenableClient::from_env(state)?;
-    let max_chars = crate::tools::tools::int_arg(arguments, "maxChars").unwrap_or(DEFAULT_FETCH_CHARS);
+    let max_chars =
+        crate::tools::tools::int_arg(arguments, "maxChars").unwrap_or(DEFAULT_FETCH_CHARS);
     let page = client.page(&url, max_chars).await?;
 
     let mut head = String::new();
@@ -605,13 +671,21 @@ pub async fn tool_fetch(state: &AppState, arguments: &Value) -> Result<ToolOutco
     head.push_str("\n\n");
     head.push_str(&format!(
         "# {}\n{}",
-        if page.title.trim().is_empty() { "(无标题)" } else { &page.title },
+        if page.title.trim().is_empty() {
+            "(无标题)"
+        } else {
+            &page.title
+        },
         page.url
     ));
     if let Some(published) = page.published_at.as_deref() {
         head.push_str(&format!("（发布 {published}）"));
     }
-    let tail = if page.truncated { "\n\n…（正文超长已截断）" } else { "" };
+    let tail = if page.truncated {
+        "\n\n…（正文超长已截断）"
+    } else {
+        ""
+    };
     let content = format!("{head}\n\n{}{tail}", page.content);
     let payload = json!({
         "url": page.url,

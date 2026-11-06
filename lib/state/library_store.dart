@@ -31,6 +31,7 @@ class LibraryStore extends ChangeNotifier {
 
   late ApiClient api;
   String _apiBaseUrl = '';
+
   /// 测试注入的客户端不允许被 baseUrl 变化替换掉
   bool _apiInjected = false;
 
@@ -138,7 +139,9 @@ class LibraryStore extends ChangeNotifier {
     _safeNotify();
     try {
       var result = await _listPrompts(page: promptPage);
-      if (result.items.isEmpty && result.total > 0 && promptPage > result.pages) {
+      if (result.items.isEmpty &&
+          result.total > 0 &&
+          promptPage > result.pages) {
         promptPage = result.pages < 1 ? 1 : result.pages;
         result = await _listPrompts(page: promptPage);
       }
@@ -156,16 +159,16 @@ class LibraryStore extends ChangeNotifier {
   }
 
   Future<Paged<Prompt>> _listPrompts({required int page}) => api.listPrompts(
-        q: promptQuery.isEmpty ? null : promptQuery,
-        tags: selectedTags.toList(),
-        tagMode: tagMode,
-        kind: promptKind,
-        favorite: onlyFavorite ? true : null,
-        hasMedia: onlyUnlinked ? false : null,
-        sort: promptSort,
-        page: page,
-        size: _settings.pageSize,
-      );
+    q: promptQuery.isEmpty ? null : promptQuery,
+    tags: selectedTags.toList(),
+    tagMode: tagMode,
+    kind: promptKind,
+    favorite: onlyFavorite ? true : null,
+    hasMedia: onlyUnlinked ? false : null,
+    sort: promptSort,
+    page: page,
+    size: _settings.pageSize,
+  );
 
   /// 未关联产物的提示词条数（一键清除入口要先告诉用户会删掉多少）。
   Future<int> countUnlinkedPrompts() async {
@@ -199,7 +202,9 @@ class LibraryStore extends ChangeNotifier {
     _safeNotify();
     try {
       var result = await _listMedia(page: mediaPage);
-      if (result.items.isEmpty && result.total > 0 && mediaPage > result.pages) {
+      if (result.items.isEmpty &&
+          result.total > 0 &&
+          mediaPage > result.pages) {
         mediaPage = result.pages < 1 ? 1 : result.pages;
         result = await _listMedia(page: mediaPage);
       }
@@ -225,23 +230,23 @@ class LibraryStore extends ChangeNotifier {
   bool get mediaFavoritesFlat => mediaOnlyFavorite;
 
   Future<Paged<MediaAsset>> _listMedia({required int page}) => api.listMedia(
-        q: mediaQuery.isEmpty ? null : mediaQuery,
-        tags: mediaTags.toList(),
-        tagMode: mediaTagMode,
-        kind: mediaKind,
-        favorite: mediaOnlyFavorite ? true : null,
-        untagged: mediaUntagged,
-        sort: mediaSort,
-        // 画廊默认**折叠集合**：同一批微调的产物显示成一个格子（叠放封面 + 角标）。
-        // 详情页/工具要的是"这一个集合的全部成员"，那时传 collectionId 自己列（不走折叠）。
-        //
-        // ⚠ 但「仅收藏」时**不许折叠**：折叠只认每个集合的代表（最早那张），
-        // 代表没被收藏就整组消失、收藏了非代表的那张也永远看不到 ——
-        // 这一档用户要看的是"我收藏过的那几张图"，见 [mediaFavoritesFlat]。
-        collapse: !mediaFavoritesFlat,
-        page: page,
-        size: _settings.pageSize,
-      );
+    q: mediaQuery.isEmpty ? null : mediaQuery,
+    tags: mediaTags.toList(),
+    tagMode: mediaTagMode,
+    kind: mediaKind,
+    favorite: mediaOnlyFavorite ? true : null,
+    untagged: mediaUntagged,
+    sort: mediaSort,
+    // 画廊默认**折叠集合**：同一批微调的产物显示成一个格子（叠放封面 + 角标）。
+    // 详情页/工具要的是"这一个集合的全部成员"，那时传 collectionId 自己列（不走折叠）。
+    //
+    // ⚠ 但「仅收藏」时**不许折叠**：折叠只认每个集合的代表（最早那张），
+    // 代表没被收藏就整组消失、收藏了非代表的那张也永远看不到 ——
+    // 这一档用户要看的是"我收藏过的那几张图"，见 [mediaFavoritesFlat]。
+    collapse: !mediaFavoritesFlat,
+    page: page,
+    size: _settings.pageSize,
+  );
 
   Future<void> refreshTags() async {
     loadingTags = true;

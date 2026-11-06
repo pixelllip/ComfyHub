@@ -5,7 +5,11 @@
 use super::*;
 
 fn object(text: &str) -> Map<String, Value> {
-    serde_json::from_str::<Value>(text).unwrap().as_object().unwrap().clone()
+    serde_json::from_str::<Value>(text)
+        .unwrap()
+        .as_object()
+        .unwrap()
+        .clone()
 }
 
 /// 广播型判据与显示型判据都借 `workflow_audit`（**没有第三份表**）。
@@ -28,14 +32,20 @@ fn 广播设定从_properties_里逐个认键名() {
     assert_eq!(spec.type_name.as_deref(), Some("MODEL"));
     assert_eq!(spec.name_filter.as_deref(), Some("model"));
     // `*` / `anything` = 不限类型 → 当成"未声明"（Kotlin 同）
-    assert!(broadcast_spec(&object(r#"{"properties":{"Input Type":"*"}}"#)).type_name.is_none());
+    assert!(
+        broadcast_spec(&object(r#"{"properties":{"Input Type":"*"}}"#))
+            .type_name
+            .is_none()
+    );
     assert!(
         broadcast_spec(&object(r#"{"properties":{"Input Type":"anything"}}"#))
             .type_name
             .is_none()
     );
     // 键名一种都不认识 → 类型未声明
-    assert!(broadcast_spec(&object(r#"{"properties":{}}"#)).type_name.is_none());
+    assert!(broadcast_spec(&object(r#"{"properties":{}}"#))
+        .type_name
+        .is_none());
 }
 
 #[test]
@@ -47,8 +57,14 @@ fn 名字过滤优先于类型且大小写不敏感() {
         types: vec!["CONDITIONING".into()],
         required: true,
     };
-    assert!(matches(&spec, &target, None), "名字过滤命中时不再要求类型对得上");
-    let other = OpenInput { name: "seed".into(), ..target };
+    assert!(
+        matches(&spec, &target, None),
+        "名字过滤命中时不再要求类型对得上"
+    );
+    let other = OpenInput {
+        name: "seed".into(),
+        ..target
+    };
     assert!(!matches(&spec, &other, None));
 }
 
@@ -72,17 +88,35 @@ fn 新版广播节点按每个插口的类型分路() {
     links.insert(45, ("32".to_string(), 1));
     links.insert(57, ("32".to_string(), 0));
     links.insert(58, ("29".to_string(), 0));
-    let graph = object(r#"{"32":{"class_type":"Lora Loader Stack (rgthree)","inputs":{}},
-                            "29":{"class_type":"VAELoader","inputs":{}}}"#);
+    let graph = object(
+        r#"{"32":{"class_type":"Lora Loader Stack (rgthree)","inputs":{}},
+                            "29":{"class_type":"VAELoader","inputs":{}}}"#,
+    );
     let spec = broadcast_spec(&node);
-    assert!(spec.type_name.is_none() && spec.name_filter.is_none(), "老版本的类型声明一个字都没有");
+    assert!(
+        spec.type_name.is_none() && spec.name_filter.is_none(),
+        "老版本的类型声明一个字都没有"
+    );
     let routes = broadcast_routes(&node, &links, &spec, &graph);
     assert_eq!(routes.len(), 3, "三路（没接线的那个 `*` 不算）");
-    let types: Vec<Option<&str>> = routes.iter().map(|route| route.type_name.as_deref()).collect();
+    let types: Vec<Option<&str>> = routes
+        .iter()
+        .map(|route| route.type_name.as_deref())
+        .collect();
     assert_eq!(types, vec![Some("CLIP"), Some("MODEL"), Some("VAE")]);
     // 每路只填同类型的空输入
-    let clip = OpenInput { node_id: "34".into(), name: "clip".into(), types: vec!["CLIP".into()], required: true };
-    let model = OpenInput { node_id: "41".into(), name: "model".into(), types: vec!["MODEL".into()], required: true };
+    let clip = OpenInput {
+        node_id: "34".into(),
+        name: "clip".into(),
+        types: vec!["CLIP".into()],
+        required: true,
+    };
+    let model = OpenInput {
+        node_id: "41".into(),
+        name: "model".into(),
+        types: vec!["MODEL".into()],
+        required: true,
+    };
     assert!(matches(&spec, &clip, Some("CLIP")));
     assert!(!matches(&spec, &clip, Some("MODEL")));
     assert!(matches(&spec, &model, Some("MODEL")));

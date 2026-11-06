@@ -4,7 +4,6 @@
 
 use super::common::*;
 
-
 #[tokio::test]
 async fn confinement_endpoint_reports_the_judge_not_just_the_verdict() {
     let (status, body) = get_json(app(), "/api/system/confinement").await;
@@ -12,11 +11,21 @@ async fn confinement_endpoint_reports_the_judge_not_just_the_verdict() {
     // ⚠ **只断言"形状"，不断言 restricted 的取值**：真机上那份 ComfyUI 目录到底写不写得进
     //   是环境属性（AGENTS §12 纪律）。要断言的是"判据必须一起给" ——
     //   只回一个布尔，界面与模型就只能猜（2026-09-29 用户 bug 就是这么变成"改 ACL"的）。
-    for key in ["restricted", "serverImage", "imageInsideProjectRoot", "blockedPaths", "checkedPaths", "summary"] {
+    for key in [
+        "restricted",
+        "serverImage",
+        "imageInsideProjectRoot",
+        "blockedPaths",
+        "checkedPaths",
+        "summary",
+    ] {
         assert!(body.get(key).is_some(), "缺了 `{key}`：{body}");
     }
     assert!(body["restricted"].is_boolean());
-    assert!(body["imageInsideProjectRoot"].is_boolean(), "判据（映像在不在自己的运行根目录里）必须给：{body}");
+    assert!(
+        body["imageInsideProjectRoot"].is_boolean(),
+        "判据（映像在不在自己的运行根目录里）必须给：{body}"
+    );
     assert!(body["blockedPaths"].is_array());
     let restricted = body["restricted"].as_bool().unwrap();
     assert_eq!(
@@ -39,7 +48,10 @@ async fn health_reports_engine_and_schema_version() {
     );
     assert_eq!(body["engine"]["fts5"], true, "R14：bundled 引擎必须带 FTS5");
     assert!(
-        body["engine"]["sqliteVersion"].as_str().unwrap().starts_with("3."),
+        body["engine"]["sqliteVersion"]
+            .as_str()
+            .unwrap()
+            .starts_with("3."),
         "engine={}",
         body["engine"]
     );
@@ -47,13 +59,19 @@ async fn health_reports_engine_and_schema_version() {
     //   `backend_launcher.dart:271` 用 `database == "ok"` 判断"后端已就绪"，
     //   缺了它启动流程会以为库坏了；设置页显示 `version` / `storageDir`。
     for key in ["version", "database", "storageDir", "serverTime"] {
-        assert!(body.get(key).is_some(), "缺了 Dart 会读的键 `{key}`：{body}");
+        assert!(
+            body.get(key).is_some(),
+            "缺了 Dart 会读的键 `{key}`：{body}"
+        );
     }
     assert_eq!(body["database"], "ok", "库里真能跑通 SELECT 1 才叫 ok");
     assert_eq!(body["version"], "1.0.0", "Kotlin 的 APP_VERSION");
     // `storageDir` 是 `<storage>`（media 的父目录），不是 media 目录本身
     let storage = body["storageDir"].as_str().unwrap();
-    assert!(!storage.replace('\\', "/").ends_with("/media"), "storageDir 不该指向 media：{storage}");
+    assert!(
+        !storage.replace('\\', "/").ends_with("/media"),
+        "storageDir 不该指向 media：{storage}"
+    );
     // 夹具的 storage 必须落在**测试暂存根**里（`target\.scratch`，见 `testpaths`）——
     // 那既是唯一约定的落盘位置，也顺带钉住"受限会话里用例照样能跑"。
     assert!(
@@ -84,7 +102,10 @@ async fn tags_use_the_same_keys_as_the_kotlin_server() {
         vec!["category", "color", "createdAt", "id", "name", "useCount"],
         "赛博朋克那条有 color，于是正好多这一个键"
     );
-    assert!(!items[0].as_object().unwrap().contains_key("color"), "NULL 不等于 null");
+    assert!(
+        !items[0].as_object().unwrap().contains_key("color"),
+        "NULL 不等于 null"
+    );
     assert_eq!(items[0]["useCount"], 9);
 }
 
@@ -150,8 +171,12 @@ async fn preset_list_hides_captured_prompts_but_ai_can_still_search_them() {
     // 默认（界面）：只剩两条 Manual 的
     let (_, body) = get_json(app.clone(), "/api/prompts?size=50").await;
     assert_eq!(body["total"], 2, "自动捕获那两条不许进预设库：{body}");
-    let titles: Vec<&str> =
-        body["items"].as_array().unwrap().iter().map(|i| i["title"].as_str().unwrap()).collect();
+    let titles: Vec<&str> = body["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| i["title"].as_str().unwrap())
+        .collect();
     assert!(!titles.contains(&"自动捕获 A"), "{titles:?}");
     assert!(!titles.contains(&"导入的文件 B"), "{titles:?}");
 
@@ -207,20 +232,27 @@ async fn preset_media_matches_by_normalized_prompt() {
     assert_eq!(count, 1, "前提：同款产物 900 真的入库了");
     let norm = state
         .with(|conn| {
-            conn
-                .query_row(
-                    "SELECT COUNT(*) FROM media_assets m JOIN prompts p ON p.id = m.prompt_id
+            conn.query_row(
+                "SELECT COUNT(*) FROM media_assets m JOIN prompts p ON p.id = m.prompt_id
                       WHERE m.kind = 'IMAGE'",
-                    [],
-                    |r| r.get::<_, i64>(0),
-                )
+                [],
+                |r| r.get::<_, i64>(0),
+            )
         })
         .unwrap();
-    assert!(norm >= 2, "前提：至少两条 IMAGE 产物进了候选（实际 {norm}）");
+    assert!(
+        norm >= 2,
+        "前提：至少两条 IMAGE 产物进了候选（实际 {norm}）"
+    );
 
     let (status, body) = get_json(app.clone(), "/api/presets/10/media").await;
     assert_eq!(status, StatusCode::OK);
-    let ids: Vec<i64> = body.as_array().unwrap().iter().map(|m| m["id"].as_i64().unwrap()).collect();
+    let ids: Vec<i64> = body
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| m["id"].as_i64().unwrap())
+        .collect();
     assert!(
         ids.contains(&900),
         "写法不同（`(1girl:1.2)` ↔ `1girl`）也要认成同款并关联：{ids:?}"
@@ -247,16 +279,40 @@ async fn prompt_object_has_every_key_dart_reads() {
     assert_eq!(
         keys(&body),
         vec![
-            "cfgScale", "checkpoint", "createdAt", "extraParams", "favorite", "hasWorkflow", "id",
-            "kind", "loras", "mediaCount", "negativeMode", "negativePrompt", "positivePrompt", "seed",
-            "source", "tags", "title", "updatedAt",
+            "cfgScale",
+            "checkpoint",
+            "createdAt",
+            "extraParams",
+            "favorite",
+            "hasWorkflow",
+            "id",
+            "kind",
+            "loras",
+            "mediaCount",
+            "negativeMode",
+            "negativePrompt",
+            "positivePrompt",
+            "seed",
+            "source",
+            "tags",
+            "title",
+            "updatedAt",
         ],
         "少一个键 = 界面上少一块内容；多一个键 = 与 Kotlin 不一致"
     );
     // `negativeMode` 是**必给**的（不是 Option）：界面拿它决定"只发正面"那个开关的位置。
     // 老库补上这一列之后默认是 keep —— 绝不能默认成 positive_only（那会悄悄丢掉用户的负面提示词）。
     assert_eq!(body["negativeMode"], "keep", "没设过就是 keep");
-    for absent in ["sampler", "scheduler", "steps", "width", "height", "batchSize", "notes", "sourceRef"] {
+    for absent in [
+        "sampler",
+        "scheduler",
+        "steps",
+        "width",
+        "height",
+        "batchSize",
+        "notes",
+        "sourceRef",
+    ] {
         assert!(
             !body.as_object().unwrap().contains_key(absent),
             "`{absent}` 在库里是 NULL，Kotlin 那边**整个键都不发**（不是 null）：{body}"
@@ -265,7 +321,10 @@ async fn prompt_object_has_every_key_dart_reads() {
     assert_eq!(body["positivePrompt"], "1girl, cyberpunk");
     assert_eq!(body["cfgScale"], 3.5);
     assert_eq!(body["favorite"], true, "favorite 是布尔（库里是 0/1）");
-    assert_eq!(body["hasWorkflow"], true, "接口只给'有没有'，不给整份 workflow_json");
+    assert_eq!(
+        body["hasWorkflow"], true,
+        "接口只给'有没有'，不给整份 workflow_json"
+    );
     assert_eq!(body["loras"][0]["name"], "anima");
     assert_eq!(body["loras"][0]["weight"], 0.8);
     assert_eq!(body["extraParams"], serde_json::json!({}), "NULL 当空对象");
@@ -278,8 +337,20 @@ async fn prompt_object_has_every_key_dart_reads() {
     assert_eq!(
         keys(&bare),
         vec![
-            "createdAt", "extraParams", "favorite", "hasWorkflow", "id", "kind", "loras",
-            "mediaCount", "negativeMode", "positivePrompt", "source", "sourceRef", "tags", "title",
+            "createdAt",
+            "extraParams",
+            "favorite",
+            "hasWorkflow",
+            "id",
+            "kind",
+            "loras",
+            "mediaCount",
+            "negativeMode",
+            "positivePrompt",
+            "source",
+            "sourceRef",
+            "tags",
+            "title",
             "updatedAt",
         ],
         "全空的那条只剩这些键：{bare}"
@@ -309,29 +380,47 @@ async fn prompt_search_splits_terms_and_covers_five_columns() {
         .unwrap();
 
     // ① 两个词分别命中**不同列**（标题里的「少女」+ 正向里的「cyberpunk」）→ 都要命中
-    let (_, body) = get_json(router_for(state.clone()), "/api/prompts?q=cyberpunk%20%E5%B0%91%E5%A5%B3").await;
+    let (_, body) = get_json(
+        router_for(state.clone()),
+        "/api/prompts?q=cyberpunk%20%E5%B0%91%E5%A5%B3",
+    )
+    .await;
     assert_eq!(body["total"], 1, "两个词是 AND，跨列也要命中：{body}");
     assert_eq!(body["items"][0]["id"], 10);
     // 一个词命中不了 → 整条不命中（整串 LIKE 的实现会把它当成"cyberpunk 少女"一个子串）
-    let (_, body) = get_json(router_for(state.clone()), "/api/prompts?q=cyberpunk%20%E4%B8%8D%E5%AD%98%E5%9C%A8").await;
+    let (_, body) = get_json(
+        router_for(state.clone()),
+        "/api/prompts?q=cyberpunk%20%E4%B8%8D%E5%AD%98%E5%9C%A8",
+    )
+    .await;
     assert_eq!(body["total"], 0, "{body}");
 
     // ② 五列都要能搜到
     for (query, expected) in [
-        ("lowres", 10_i64),           // negative_prompt
-        ("krea2.safetensors", 10),    // checkpoint
-        ("%E5%8F%82%E8%80%83", 12),   // notes（「参考」）
-        ("quiet", 12),                // positive_prompt
-        ("%E5%A4%87%E6%B3%A8", 12),   // title（「备注」）
+        ("lowres", 10_i64),         // negative_prompt
+        ("krea2.safetensors", 10),  // checkpoint
+        ("%E5%8F%82%E8%80%83", 12), // notes（「参考」）
+        ("quiet", 12),              // positive_prompt
+        ("%E5%A4%87%E6%B3%A8", 12), // title（「备注」）
     ] {
-        let (_, body) = get_json(router_for(state.clone()), &format!("/api/prompts?q={query}")).await;
+        let (_, body) = get_json(
+            router_for(state.clone()),
+            &format!("/api/prompts?q={query}"),
+        )
+        .await;
         assert_eq!(body["total"], 1, "q={query} 应该命中：{body}");
-        assert_eq!(body["items"][0]["id"], expected, "q={query} 命中了错的那条：{body}");
+        assert_eq!(
+            body["items"][0]["id"], expected,
+            "q={query} 命中了错的那条：{body}"
+        );
     }
 
     // ③ kind：大小写不敏感 + `ALL` 等于不过滤
     let (_, body) = get_json(router_for(state.clone()), "/api/prompts?kind=image").await;
-    assert_eq!(body["total"], 3, "库里存的是大写 IMAGE，小写也该命中：{body}");
+    assert_eq!(
+        body["total"], 3,
+        "库里存的是大写 IMAGE，小写也该命中：{body}"
+    );
     let (_, body) = get_json(router_for(state.clone()), "/api/prompts?kind=ALL").await;
     assert_eq!(body["total"], 3, "ALL = 不过滤：{body}");
     // `favorite=false` 按 Kotlin 的口径**不过滤**（只有 true 才筛）
@@ -353,7 +442,8 @@ async fn prompt_search_splits_terms_and_covers_five_columns() {
 }
 
 #[tokio::test]
-async fn prompt_search_and_favorite_and_missing() {    let (status, body) = get_json(app(), "/api/prompts?q=cyberpunk").await;
+async fn prompt_search_and_favorite_and_missing() {
+    let (status, body) = get_json(app(), "/api/prompts?q=cyberpunk").await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["total"], 1);
     assert_eq!(body["items"][0]["id"], 10);
@@ -372,7 +462,10 @@ async fn prompt_search_and_favorite_and_missing() {    let (status, body) = get_
     assert_eq!(status, StatusCode::NOT_FOUND);
     // 错误体是 `{error, detail?}`：普通错误**人话就写在 `error` 里**（`detail` 不出现）
     assert_eq!(keys(&body), vec!["error"]);
-    assert!(body["error"].as_str().unwrap().contains("999"), "body={body}");
+    assert!(
+        body["error"].as_str().unwrap().contains("999"),
+        "body={body}"
+    );
 }
 
 #[tokio::test]
@@ -381,7 +474,11 @@ async fn foreign_keys_cascade_is_really_on() {
     let conn = test_conn();
     conn.execute("DELETE FROM tags WHERE id = 1", []).unwrap();
     let left: i64 = conn
-        .query_row("SELECT COUNT(*) FROM prompt_tags WHERE tag_id = 1", [], |r| r.get(0))
+        .query_row(
+            "SELECT COUNT(*) FROM prompt_tags WHERE tag_id = 1",
+            [],
+            |r| r.get(0),
+        )
         .unwrap();
     assert_eq!(left, 0, "R1 没生效：删标签留下了孤儿关联行");
 }
@@ -402,10 +499,20 @@ async fn ordinary_errors_put_the_human_text_in_error() {
     ] {
         let (status, body) = get_json(app(), uri).await;
         assert_eq!(status, expected, "uri={uri} body={body}");
-        assert_eq!(keys(&body), vec!["error"], "普通错误只有 `error` 一个键：{body}");
+        assert_eq!(
+            keys(&body),
+            vec!["error"],
+            "普通错误只有 `error` 一个键：{body}"
+        );
         let text = body["error"].as_str().unwrap();
-        assert!(!looks_like_a_machine_code(text), "`error` 必须是给人看的话：{text}");
-        assert!(!body.to_string().contains("message"), "`message` 这个键不许再出现：{body}");
+        assert!(
+            !looks_like_a_machine_code(text),
+            "`error` 必须是给人看的话：{text}"
+        );
+        assert!(
+            !body.to_string().contains("message"),
+            "`message` 这个键不许再出现：{body}"
+        );
     }
 }
 
@@ -435,8 +542,16 @@ async fn ai_errors_put_the_stable_code_in_error_and_the_human_text_in_detail() {
     assert_eq!(body["detail"], "会话不存在: 999999");
 
     // 没有人类可读说明时 `detail` **整键省略**（Kotlin 那边 `cause.message == null` 就是这个形状）
-    let (_, body) = body_of(comfyhub_server_rs::web::routes::ApiError::ai("CONFIG_ERROR", "   ")).await;
-    assert_eq!(keys(&body), vec!["error"], "`detail` 必须是**不出现**，不是 null：{body}");
+    let (_, body) = body_of(comfyhub_server_rs::web::routes::ApiError::ai(
+        "CONFIG_ERROR",
+        "   ",
+    ))
+    .await;
+    assert_eq!(
+        keys(&body),
+        vec!["error"],
+        "`detail` 必须是**不出现**，不是 null：{body}"
+    );
 }
 
 // ===========================================================================
@@ -467,10 +582,20 @@ async fn post_tags_is_idempotent_by_normalized_name() {
     )
     .await;
     assert_eq!(again.0, StatusCode::CREATED);
-    assert_eq!(again.1["id"].as_i64().unwrap(), id, "同名标签不许建出第二条");
+    assert_eq!(
+        again.1["id"].as_i64().unwrap(),
+        id,
+        "同名标签不许建出第二条"
+    );
 
     let count: i64 = state
-        .with(|conn| conn.query_row("SELECT COUNT(*) FROM tags WHERE normalized = '赛博朋克'", [], |r| r.get(0)))
+        .with(|conn| {
+            conn.query_row(
+                "SELECT COUNT(*) FROM tags WHERE normalized = '赛博朋克'",
+                [],
+                |r| r.get(0),
+            )
+        })
         .unwrap();
     assert_eq!(count, 1);
 }
@@ -485,15 +610,30 @@ async fn post_tags_with_blank_name_is_400() {
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
-    assert!(body["error"].as_str().unwrap().contains("不能为空"), "body={body}");
+    assert!(
+        body["error"].as_str().unwrap().contains("不能为空"),
+        "body={body}"
+    );
 }
 
 /// 改名撞上另一个标签 → 400（**不是**静默合并成一条）。
 #[tokio::test]
 async fn put_tag_conflict_is_400_and_missing_is_404() {
     let state = state();
-    let a = send_json(router_for(state.clone()), "POST", "/api/tags", serde_json::json!({"name": "国风"})).await;
-    let b = send_json(router_for(state.clone()), "POST", "/api/tags", serde_json::json!({"name": "赛博"})).await;
+    let a = send_json(
+        router_for(state.clone()),
+        "POST",
+        "/api/tags",
+        serde_json::json!({"name": "国风"}),
+    )
+    .await;
+    let b = send_json(
+        router_for(state.clone()),
+        "POST",
+        "/api/tags",
+        serde_json::json!({"name": "赛博"}),
+    )
+    .await;
     let (id_a, id_b) = (a.1["id"].as_i64().unwrap(), b.1["id"].as_i64().unwrap());
 
     let clash = send_json(
@@ -504,7 +644,11 @@ async fn put_tag_conflict_is_400_and_missing_is_404() {
     )
     .await;
     assert_eq!(clash.0, StatusCode::BAD_REQUEST);
-    assert!(clash.1["error"].as_str().unwrap().contains("已存在"), "body={}", clash.1);
+    assert!(
+        clash.1["error"].as_str().unwrap().contains("已存在"),
+        "body={}",
+        clash.1
+    );
 
     let renamed = send_json(
         router_for(state.clone()),
@@ -535,12 +679,22 @@ async fn delete_tag_returns_deleted_and_cascades() {
 
     // R1：关联行被级联删掉
     let left: i64 = state
-        .with(|conn| conn.query_row("SELECT COUNT(*) FROM prompt_tags WHERE tag_id = 1", [], |r| r.get(0)))
+        .with(|conn| {
+            conn.query_row(
+                "SELECT COUNT(*) FROM prompt_tags WHERE tag_id = 1",
+                [],
+                |r| r.get(0),
+            )
+        })
         .unwrap();
     assert_eq!(left, 0);
 
     let again = send_empty(router_for(state.clone()), "DELETE", "/api/tags/1").await;
-    assert_eq!(again.0, StatusCode::NOT_FOUND, "删第二次要 404，不许假装成功");
+    assert_eq!(
+        again.0,
+        StatusCode::NOT_FOUND,
+        "删第二次要 404，不许假装成功"
+    );
 }
 
 /// 建提示词：自动起名 + 标签自动创建 + `use_count` 重算 + **同步账本被点亮**。
@@ -575,7 +729,13 @@ async fn post_prompts_creates_with_tags_and_writes_sync_log() {
         .collect();
     assert_eq!(tag_names, vec!["新标签A", "新标签B"]);
     let use_count: i64 = state
-        .with(|conn| conn.query_row("SELECT use_count FROM tags WHERE name = '新标签A'", [], |r| r.get(0)))
+        .with(|conn| {
+            conn.query_row(
+                "SELECT use_count FROM tags WHERE name = '新标签A'",
+                [],
+                |r| r.get(0),
+            )
+        })
         .unwrap();
     assert_eq!(use_count, 1, "use_count 必须重算");
 
@@ -602,7 +762,10 @@ async fn post_prompts_blank_is_400() {
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
-    assert!(body["error"].as_str().unwrap().contains("不能为空"), "body={body}");
+    assert!(
+        body["error"].as_str().unwrap().contains("不能为空"),
+        "body={body}"
+    );
 }
 
 #[tokio::test]
@@ -689,7 +852,10 @@ async fn duplicate_creates_a_copy_and_keeps_tags() {
     assert_eq!(status, StatusCode::CREATED, "body={body}");
     assert_ne!(body["id"].as_i64().unwrap(), 10);
     assert_eq!(body["title"], "赛博朋克少女 副本");
-    assert_eq!(body["favorite"], false, "副本不继承收藏状态（与 Kotlin 一致）");
+    assert_eq!(
+        body["favorite"], false,
+        "副本不继承收藏状态（与 Kotlin 一致）"
+    );
     assert_eq!(body["positivePrompt"], "1girl, cyberpunk");
     assert_eq!(body["loras"][0]["name"], "anima");
     assert_eq!(body["tags"][0]["name"], "赛博朋克");
@@ -722,11 +888,19 @@ async fn add_and_remove_prompt_tags() {
         .iter()
         .map(|t| t["name"].as_str().unwrap().to_string())
         .collect();
-    assert!(names.contains(&"追加的标签".to_string()), "body={}", added.1);
+    assert!(
+        names.contains(&"追加的标签".to_string()),
+        "body={}",
+        added.1
+    );
 
     let tag_id = state
         .with(|conn| {
-            conn.query_row("SELECT id FROM tags WHERE name = '追加的标签'", [], |r| r.get::<_, i64>(0))
+            conn.query_row(
+                "SELECT id FROM tags WHERE name = '追加的标签'",
+                [],
+                |r| r.get::<_, i64>(0),
+            )
         })
         .unwrap();
     let removed = send_empty(
@@ -756,10 +930,17 @@ async fn delete_prompt_keeps_media_and_logs_delete() {
 
     let prompt_id: Option<i64> = state
         .with(|conn| {
-            conn.query_row("SELECT prompt_id FROM media_assets WHERE id = 100", [], |r| r.get(0))
+            conn.query_row(
+                "SELECT prompt_id FROM media_assets WHERE id = 100",
+                [],
+                |r| r.get(0),
+            )
         })
         .unwrap();
-    assert_eq!(prompt_id, None, "产物必须保留、只解除关联（R1 生效才有 ON DELETE SET NULL）");
+    assert_eq!(
+        prompt_id, None,
+        "产物必须保留、只解除关联（R1 生效才有 ON DELETE SET NULL）"
+    );
 
     let deletes: i64 = state
         .with(|conn| {

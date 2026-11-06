@@ -67,7 +67,12 @@ fn object_info() -> Map<String, Value> {
             }),
         );
     };
-    add("CheckpointLoaderSimple", json!({"ckpt_name": [[], {}]}), vec!["MODEL", "CLIP", "VAE"], false);
+    add(
+        "CheckpointLoaderSimple",
+        json!({"ckpt_name": [[], {}]}),
+        vec!["MODEL", "CLIP", "VAE"],
+        false,
+    );
     add(
         "KSampler",
         json!({
@@ -79,7 +84,12 @@ fn object_info() -> Map<String, Value> {
         vec!["LATENT"],
         false,
     );
-    add("VAEDecode", json!({"samples": ["LATENT", {}], "vae": ["VAE", {}]}), vec!["IMAGE"], false);
+    add(
+        "VAEDecode",
+        json!({"samples": ["LATENT", {}], "vae": ["VAE", {}]}),
+        vec!["IMAGE"],
+        false,
+    );
     add(
         "SaveImage",
         json!({"images": ["IMAGE", {}], "filename_prefix": ["STRING", {}]}),
@@ -103,22 +113,38 @@ fn 界面格式能画出真实坐标与分组_前端节点一个都不丢() {
     let blueprint = build(&raw, Some(&object_info()));
 
     assert_eq!(blueprint.format, "ui");
-    assert_eq!(blueprint.nodes.len(), 6, "Note / Reroute 必须还在（蓝图不是转换，不许摘节点）");
+    assert_eq!(
+        blueprint.nodes.len(),
+        6,
+        "Note / Reroute 必须还在（蓝图不是转换，不许摘节点）"
+    );
     assert_eq!(blueprint.edges.len(), 3);
     assert_eq!(blueprint.groups.len(), 1);
     assert_eq!(blueprint.groups[0].title, "主链");
 
-    let note = blueprint.nodes.iter().find(|node| node.class == "Note").unwrap();
+    let note = blueprint
+        .nodes
+        .iter()
+        .find(|node| node.class == "Note")
+        .unwrap();
     assert_eq!(note.kind, "note");
     assert!(note.frontend_only, "`Note` 服务端没有这个类 → 标成纯前端");
     assert_eq!(note.pos, Some((-400.0, 0.0)));
 
-    let reroute = blueprint.nodes.iter().find(|node| node.class == "Reroute").unwrap();
+    let reroute = blueprint
+        .nodes
+        .iter()
+        .find(|node| node.class == "Reroute")
+        .unwrap();
     assert_eq!(reroute.kind, "reroute");
     assert_eq!(reroute.mode, 4, "旁路状态要带出来（界面据此灰显）");
 
     // 控件值贴回名字上（这里走的是 `inputs[].widget.name`）
-    let sampler = blueprint.nodes.iter().find(|node| node.class == "KSampler").unwrap();
+    let sampler = blueprint
+        .nodes
+        .iter()
+        .find(|node| node.class == "KSampler")
+        .unwrap();
     assert_eq!(sampler.widgets[0].name.as_deref(), Some("seed"));
     assert_eq!(sampler.widgets[0].value, json!(12345));
     assert_eq!(sampler.widgets[1].value, json!("randomize"));
@@ -195,7 +221,11 @@ fn 没有object_info时空插口只提醒_不判必填也不判类型() {
     let raw = ui_fixture("备注");
     let blueprint = build(&raw, None);
     assert!(!blueprint.object_info);
-    let issue = blueprint.issues.iter().find(|issue| issue.code == "INPUT_UNCONNECTED").unwrap();
+    let issue = blueprint
+        .issues
+        .iter()
+        .find(|issue| issue.code == "INPUT_UNCONNECTED")
+        .unwrap();
     assert_eq!(issue.severity, SEV_WARN, "判不出必填 → 只提醒");
     // 空着的是哪几个插口要说清楚（界面据此画标记）
     assert!(issue.slots.contains(&"2.positive".to_string()));
@@ -219,7 +249,11 @@ fn 有object_info时空插口归转换那一遍说_且只算必填() {
         "转换能判得更准，这里不再重复报：{:?}",
         codes(&blueprint)
     );
-    let gap = blueprint.issues.iter().find(|issue| issue.code == "CONVERT_GAP").unwrap();
+    let gap = blueprint
+        .issues
+        .iter()
+        .find(|issue| issue.code == "CONVERT_GAP")
+        .unwrap();
     assert!(gap.slots.contains(&"2.positive".to_string()));
     assert!(gap.slots.contains(&"3.vae".to_string()));
     assert!(!gap.slots.iter().any(|slot| slot.ends_with(".seed")));
@@ -232,7 +266,11 @@ fn 接错类型要点到具体插口() {
     // 一个 MODEL 接到 IMAGE 上：这里把 VAEDecode 的 samples 声明改成 IMAGE
     raw["nodes"][2]["inputs"][0]["type"] = json!("IMAGE");
     let blueprint = build(&raw, Some(&object_info()));
-    let issue = blueprint.issues.iter().find(|issue| issue.code == "TYPE_MISMATCH").unwrap();
+    let issue = blueprint
+        .issues
+        .iter()
+        .find(|issue| issue.code == "TYPE_MISMATCH")
+        .unwrap();
     assert_eq!(issue.severity, SEV_ERROR);
     assert_eq!(issue.slots, vec!["3.samples".to_string()]);
     assert_eq!(issue.links, vec![12]);
@@ -255,7 +293,11 @@ fn 环要被抓住() {
         "links": [[1, 1, 0, 2, 0, "X"], [2, 2, 0, 1, 0, "X"]]
     });
     let blueprint = build(&raw, None);
-    let issue = blueprint.issues.iter().find(|issue| issue.code == "CYCLE").unwrap();
+    let issue = blueprint
+        .issues
+        .iter()
+        .find(|issue| issue.code == "CYCLE")
+        .unwrap();
     assert_eq!(issue.severity, SEV_ERROR);
     assert!(issue.nodes.contains(&"1".to_string()) && issue.nodes.contains(&"2".to_string()));
 }
@@ -308,10 +350,21 @@ fn 转换留下的缺口会被交叉核对出来_并指出开模拟用户行为�
     info.insert("EmptyLatentImage".to_string(), json!({"input": {"required": {"width": ["INT", {}], "height": ["INT", {}], "batch_size": ["INT", {}]}}, "output": ["LATENT"], "output_node": false}));
     let blueprint = build(&raw, Some(&info));
     assert!(codes(&blueprint).contains(&"BROADCAST_STUB"));
-    let gap = blueprint.issues.iter().find(|issue| issue.code == "CONVERT_GAP").unwrap();
-    assert_eq!(gap.severity, SEV_WARN, "开 ##模拟用户行为## 之后缺口就没了 → 只提醒");
+    let gap = blueprint
+        .issues
+        .iter()
+        .find(|issue| issue.code == "CONVERT_GAP")
+        .unwrap();
+    assert_eq!(
+        gap.severity, SEV_WARN,
+        "开 ##模拟用户行为## 之后缺口就没了 → 只提醒"
+    );
     assert!(gap.fix.as_deref().unwrap().contains("emulateFrontend"));
-    assert!(gap.slots.contains(&"3.vae".to_string()), "空的是 `vae` 那一路：{:?}", gap.slots);
+    assert!(
+        gap.slots.contains(&"3.vae".to_string()),
+        "空的是 `vae` 那一路：{:?}",
+        gap.slots
+    );
     // 缺口能靠 ##模拟用户行为## 补上 ⇒ 走我们的提交链是过得去的（`clean` 为真），
     // 但**必须**在报告里说清楚"直接交上去会缺输入"
     assert!(blueprint.clean());
@@ -329,7 +382,11 @@ fn 本机没装的节点类要报错() {
         "links": []
     });
     let blueprint = build(&raw, Some(&object_info()));
-    let issue = blueprint.issues.iter().find(|issue| issue.code == "UNKNOWN_CLASS").unwrap();
+    let issue = blueprint
+        .issues
+        .iter()
+        .find(|issue| issue.code == "UNKNOWN_CLASS")
+        .unwrap();
     assert_eq!(issue.severity, SEV_ERROR);
     assert_eq!(issue.nodes, vec!["1".to_string()]);
 }
@@ -350,7 +407,10 @@ fn api格式_边方向要对_位置为空_并如实说布局是排出来的() {
     let blueprint = build(&raw, None);
     assert_eq!(blueprint.format, "api");
     assert!(blueprint.nodes.iter().all(|node| node.pos.is_none()));
-    assert_eq!(blueprint.nodes[1].title, "采样器", "`_meta.title` 优先，缺了才回落到 class_type");
+    assert_eq!(
+        blueprint.nodes[1].title, "采样器",
+        "`_meta.title` 优先，缺了才回落到 class_type"
+    );
     // 边方向：`["1", 0]` 是"我的 model 来自节点 1 的第 0 个输出"
     let edge = blueprint
         .edges
@@ -358,7 +418,10 @@ fn api格式_边方向要对_位置为空_并如实说布局是排出来的() {
         .find(|edge| edge.to.0 == "2" && edge.from.0 == "1")
         .unwrap();
     assert!(edge.implicit);
-    assert!(blueprint.warnings.iter().any(|text| text.contains("自动排")));
+    assert!(blueprint
+        .warnings
+        .iter()
+        .any(|text| text.contains("自动排")));
 }
 
 #[test]
@@ -382,7 +445,11 @@ fn api格式_类型不匹配与必填缺失() {
     });
     let blueprint = build(&raw, Some(&object_info()));
     // `1.1` 是 CLIP，接到 VAEDecode.samples（要 LATENT）上 → 类型不匹配
-    let issue = blueprint.issues.iter().find(|issue| issue.code == "TYPE_MISMATCH").unwrap();
+    let issue = blueprint
+        .issues
+        .iter()
+        .find(|issue| issue.code == "TYPE_MISMATCH")
+        .unwrap();
     assert_eq!(issue.slots, vec!["2.samples".to_string()]);
     assert_eq!(issue.nodes, vec!["1".to_string(), "2".to_string()]);
     assert!(!blueprint.clean());
@@ -411,7 +478,10 @@ fn 组节点实例画成subgraph框并如实说明() {
     });
     let blueprint = build(&raw, None);
     assert_eq!(blueprint.nodes[0].kind, "subgraph");
-    assert!(blueprint.warnings.iter().any(|text| text.contains("组节点")));
+    assert!(blueprint
+        .warnings
+        .iter()
+        .any(|text| text.contains("组节点")));
 }
 
 #[test]

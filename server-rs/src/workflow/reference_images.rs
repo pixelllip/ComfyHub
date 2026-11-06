@@ -99,7 +99,9 @@ pub fn collect_in(
 ) -> Vec<ReferenceImage> {
     let mut out: Vec<ReferenceImage> = Vec::new();
     for (node_id, node) in graph {
-        let Some(object) = node.as_object() else { continue };
+        let Some(object) = node.as_object() else {
+            continue;
+        };
         if object.get("class_type").and_then(Value::as_str) != Some("LoadImage") {
             continue;
         }
@@ -160,7 +162,8 @@ fn resolve_one(
         }
         Some("temp") => {
             // 临时目录不在候选里（它随实例重启就清空）；只留一句说明
-            entry.note = Some("这是 ComfyUI 的临时图（temp / clipspace），磁盘上通常不留档".to_string());
+            entry.note =
+                Some("这是 ComfyUI 的临时图（temp / clipspace），磁盘上通常不留档".to_string());
         }
         _ => {
             dirs.extend(input_dirs.iter());
@@ -178,7 +181,9 @@ fn resolve_one(
             entry.width = dimensions.map(|(w, _)| w);
             entry.height = dimensions.map(|(_, h)| h);
             if dimensions.is_none() {
-                entry.note = Some("文件在，但读不出图片尺寸（可能不是图片，或用了没有解码器的格式）".to_string());
+                entry.note = Some(
+                    "文件在，但读不出图片尺寸（可能不是图片，或用了没有解码器的格式）".to_string(),
+                );
             }
             return entry;
         }
@@ -194,7 +199,11 @@ fn resolve_one(
 /// `image (15).png [input]` → `("image (15).png", Some("input"))`。
 fn split_hint(raw: &str) -> (String, Option<&'static str>) {
     let trimmed = raw.trim();
-    for (suffix, kind) in [(" [input]", "input"), (" [output]", "output"), (" [temp]", "temp")] {
+    for (suffix, kind) in [
+        (" [input]", "input"),
+        (" [output]", "output"),
+        (" [temp]", "temp"),
+    ] {
         if let Some(name) = trimmed.strip_suffix(suffix) {
             return (name.trim().to_string(), Some(kind));
         }
@@ -272,10 +281,10 @@ fn output_dirs_of(state: &AppState, inputs: &[PathBuf]) -> Vec<PathBuf> {
         if !dir.is_dir() {
             continue;
         }
-        if unique
-            .iter()
-            .any(|kept| kept.to_string_lossy().eq_ignore_ascii_case(&dir.to_string_lossy()))
-        {
+        if unique.iter().any(|kept| {
+            kept.to_string_lossy()
+                .eq_ignore_ascii_case(&dir.to_string_lossy())
+        }) {
             continue;
         }
         unique.push(dir);

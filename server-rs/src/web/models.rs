@@ -114,8 +114,18 @@ pub struct Paged<T> {
 
 impl<T> Paged<T> {
     pub fn new(items: Vec<T>, total: i64, page: i64, size: i64) -> Self {
-        let pages = if size <= 0 { 0 } else { (total + size - 1) / size };
-        Self { items, total, page, size, pages }
+        let pages = if size <= 0 {
+            0
+        } else {
+            (total + size - 1) / size
+        };
+        Self {
+            items,
+            total,
+            page,
+            size,
+            pages,
+        }
     }
 }
 
@@ -153,8 +163,12 @@ pub fn prompt_from_row(row: &Row<'_>) -> rusqlite::Result<PromptDto> {
         has_workflow: workflow_text.map(|t| !t.trim().is_empty()).unwrap_or(false),
         // 时间列一律过 `iso_time`：**不是透传**（Kotlin 那边先解析、再按 Java
         // `Instant.toString()` 重排，`.000Z` 会变成不带小数点、坏数据整键不出现，见 iso_time.rs 的头注）
-        created_at: crate::infra::iso_time::iso_time(row.get::<_, Option<String>>("created_at")?.as_deref()),
-        updated_at: crate::infra::iso_time::iso_time(row.get::<_, Option<String>>("updated_at")?.as_deref()),
+        created_at: crate::infra::iso_time::iso_time(
+            row.get::<_, Option<String>>("created_at")?.as_deref(),
+        ),
+        updated_at: crate::infra::iso_time::iso_time(
+            row.get::<_, Option<String>>("updated_at")?.as_deref(),
+        ),
         tags: Vec::new(),
         media_count: 0,
     })
@@ -168,7 +182,9 @@ pub fn tag_from_row(row: &Row<'_>) -> rusqlite::Result<TagDto> {
         color: row.get("color")?,
         description: row.get("description")?,
         use_count: row.get("use_count")?,
-        created_at: crate::infra::iso_time::iso_time(row.get::<_, Option<String>>("created_at")?.as_deref()),
+        created_at: crate::infra::iso_time::iso_time(
+            row.get::<_, Option<String>>("created_at")?.as_deref(),
+        ),
     })
 }
 
@@ -189,7 +205,9 @@ pub fn parse_loras(raw: Option<&str>) -> Vec<LoraRef> {
     let Ok(value) = serde_json::from_str::<serde_json::Value>(text) else {
         return Vec::new();
     };
-    let Some(items) = value.as_array() else { return Vec::new() };
+    let Some(items) = value.as_array() else {
+        return Vec::new();
+    };
     items
         .iter()
         .filter_map(|item| {
@@ -202,7 +220,9 @@ pub fn parse_loras(raw: Option<&str>) -> Vec<LoraRef> {
 
 /// `extra_params` 列是 JSON 对象文本；坏数据当空对象。
 pub fn parse_json_object(raw: Option<&str>) -> serde_json::Value {
-    let Some(text) = raw else { return serde_json::json!({}) };
+    let Some(text) = raw else {
+        return serde_json::json!({});
+    };
     match serde_json::from_str::<serde_json::Value>(text) {
         Ok(value) if value.is_object() => value,
         _ => serde_json::json!({}),
@@ -297,8 +317,12 @@ pub fn media_from_row(row: &Row<'_>) -> rusqlite::Result<MediaDto> {
         favorite: row.get::<_, i64>("favorite").unwrap_or(0) != 0,
         notes: row.get("notes")?,
         nsfw: row.get::<_, i64>("nsfw").unwrap_or(0) != 0,
-        created_at: crate::infra::iso_time::iso_time(row.get::<_, Option<String>>("created_at")?.as_deref()),
-        updated_at: crate::infra::iso_time::iso_time(row.get::<_, Option<String>>("updated_at")?.as_deref()),
+        created_at: crate::infra::iso_time::iso_time(
+            row.get::<_, Option<String>>("created_at")?.as_deref(),
+        ),
+        updated_at: crate::infra::iso_time::iso_time(
+            row.get::<_, Option<String>>("updated_at")?.as_deref(),
+        ),
         has_workflow: row.get::<_, i64>("has_workflow").unwrap_or(0) != 0,
         prompt_title: row.get("prompt_title")?,
         prompt_positive: row.get("prompt_positive")?,
@@ -309,7 +333,10 @@ pub fn media_from_row(row: &Row<'_>) -> rusqlite::Result<MediaDto> {
         // 老调用点（`get` 那条按 id 取单条）也用同一个 COLS，所以这里一定读得到；
         // 万一某个查询没带这一列，退回 1（= 只有它自己，界面按普通格子显示）。
         collection_size: row.get::<_, Option<i64>>("collection_size")?.unwrap_or(1),
-        collection_preview: parse_id_list(row.get::<_, Option<String>>("collection_preview")?.as_deref()),
+        collection_preview: parse_id_list(
+            row.get::<_, Option<String>>("collection_preview")?
+                .as_deref(),
+        ),
         prompt_tags: Vec::new(),
         file_url: format!("/api/media/{id}/file"),
         thumb_url: format!("/api/media/{id}/thumb"),

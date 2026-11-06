@@ -14,7 +14,9 @@ where
         let (reader, mut writer) = tokio::io::split(server_side);
         let mut lines = BufReader::new(reader).lines();
         while let Ok(Some(line)) = lines.next_line().await {
-            let Ok(value) = serde_json::from_str::<Value>(&line) else { continue };
+            let Ok(value) = serde_json::from_str::<Value>(&line) else {
+                continue;
+            };
             if let Some(response) = respond(&value) {
                 let _ = writer.write_all(response.to_string().as_bytes()).await;
                 let _ = writer.write_all(b"\n").await;
@@ -35,7 +37,10 @@ async fn 握手与工具清单() {
     let client = fake_server(|request| {
         let id = request.get("id")?.as_u64()?;
         match request.get("method")?.as_str()? {
-            "initialize" => Some(reply(id, json!({ "capabilities": {}, "instructions": "先看这段" }))),
+            "initialize" => Some(reply(
+                id,
+                json!({ "capabilities": {}, "instructions": "先看这段" }),
+            )),
             "tools/list" => Some(reply(
                 id,
                 json!({ "tools": [
@@ -52,7 +57,10 @@ async fn 握手与工具清单() {
     let tools = client.list_tools().await.unwrap();
     assert_eq!(tools.len(), 2, "缺 name 的那条要被丢掉");
     assert_eq!(tools[0].name, "system_stats");
-    assert_eq!(tools[1].input_schema["properties"]["path"]["type"], "string");
+    assert_eq!(
+        tools[1].input_schema["properties"]["path"]["type"],
+        "string"
+    );
 }
 
 #[tokio::test]
@@ -73,9 +81,16 @@ async fn 调用结果按块拼起来_非文本块留占位() {
     });
     let result = client.call_tool("fetch_outputs", &json!({})).await.unwrap();
     assert!(!result.is_error);
-    assert_eq!(result.text_blocks, vec!["第一段".to_string(), "第二段".to_string()]);
+    assert_eq!(
+        result.text_blocks,
+        vec!["第一段".to_string(), "第二段".to_string()]
+    );
     assert!(result.text.starts_with("第一段"));
-    assert!(result.text.contains("image（ComfyHub 不渲染"), "非文本块不许无声丢弃：{}", result.text);
+    assert!(
+        result.text.contains("image（ComfyHub 不渲染"),
+        "非文本块不许无声丢弃：{}",
+        result.text
+    );
 }
 
 #[tokio::test]
@@ -86,7 +101,10 @@ async fn 服务端_is_error_如实带回来() {
             reply(id, json!({ "content": [{ "type": "text", "text": "Error executing tool xxx" }], "isError": true }))
         })
     });
-    let result = client.call_tool("launch_comfyui", &json!({})).await.unwrap();
+    let result = client
+        .call_tool("launch_comfyui", &json!({}))
+        .await
+        .unwrap();
     assert!(result.is_error);
     assert_eq!(result.text, "Error executing tool xxx");
 }
@@ -118,11 +136,18 @@ fn 权限被拒_不再误导为_comfy_没在运行() {
          'C:\\\\Users\\\\Administrator\\\\AppData\\\\Local\\\\comfy-cli\\\\secrets.json.lock'";
     let human = humanize_mcp_failure("nodes", traceback, "").expect("要翻");
     assert!(human.contains("写文件被系统拒绝"), "{human}");
-    assert!(human.contains("secrets") || human.contains("凭据"), "{human}");
+    assert!(
+        human.contains("secrets") || human.contains("凭据"),
+        "{human}"
+    );
     assert!(!human.contains("先用 server_info"), "{human}");
     // errno 5 / 拒绝访问 的变体也要认得（同一个根因家族）
-    let human = humanize_mcp_failure("nodes", "Error executing tool nodes\nOS Error: 拒绝访问。, errno = 5", "")
-        .expect("errno 5 也要认");
+    let human = humanize_mcp_failure(
+        "nodes",
+        "Error executing tool nodes\nOS Error: 拒绝访问。, errno = 5",
+        "",
+    )
+    .expect("errno 5 也要认");
     assert!(human.contains("写文件被系统拒绝"), "{human}");
 }
 
@@ -155,7 +180,9 @@ async fn 噪音行被跳过而不是打死整条链() {
         let (reader, mut writer) = tokio::io::split(server_side);
         let mut lines = BufReader::new(reader).lines();
         while let Ok(Some(line)) = lines.next_line().await {
-            let Ok(value) = serde_json::from_str::<Value>(&line) else { continue };
+            let Ok(value) = serde_json::from_str::<Value>(&line) else {
+                continue;
+            };
             let id = value.get("id").and_then(|v| v.as_u64());
             // 先吐两行噪音（MCP/依赖库里很常见），再给真正的回包。
             let _ = writer.write_all(b"warning: something noisy\n").await;
@@ -192,9 +219,14 @@ async fn 不回复就是_mcp_timeout() {
 async fn 服务端报错翻成稳定码() {
     let client = fake_server(|request| {
         let id = request.get("id")?.as_u64()?;
-        Some(json!({ "jsonrpc": "2.0", "id": id, "error": { "code": -32602, "message": "未知工具" } }))
+        Some(
+            json!({ "jsonrpc": "2.0", "id": id, "error": { "code": -32602, "message": "未知工具" } }),
+        )
     });
-    let err = client.call_tool("nope", &json!({})).await.expect_err("要报错");
+    let err = client
+        .call_tool("nope", &json!({}))
+        .await
+        .expect_err("要报错");
     assert_eq!(err.code, "MCP_ERROR_-32602");
     assert_eq!(err.message, "未知工具");
 }
@@ -208,7 +240,11 @@ async fn 服务端主动请求会收到方法不支持() {
         let mut lines = BufReader::new(reader).lines();
         // 服务端**主动**发一个请求（带 id、没有 method 的白名单外的东西）
         let _ = writer
-            .write_all(json!({ "jsonrpc": "2.0", "id": 99, "method": "sampling/createMessage" }).to_string().as_bytes())
+            .write_all(
+                json!({ "jsonrpc": "2.0", "id": 99, "method": "sampling/createMessage" })
+                    .to_string()
+                    .as_bytes(),
+            )
             .await;
         let _ = writer.write_all(b"\n").await;
         let _ = writer.flush().await;
@@ -221,7 +257,10 @@ async fn 服务端主动请求会收到方法不支持() {
     });
     let (reader, writer) = tokio::io::split(client_side);
     let _client = McpClient::from_io(reader, writer);
-    let got = tokio::time::timeout(Duration::from_secs(5), rx).await.unwrap().unwrap();
+    let got = tokio::time::timeout(Duration::from_secs(5), rx)
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(got["id"], 99);
     assert_eq!(got["error"]["code"], -32601);
 }
@@ -254,14 +293,23 @@ async fn 读循环结束会让在等的调用当场失败() {
     drop(server_side); // 对端当场关闭
     let (reader, writer) = tokio::io::split(client_side);
     let client = McpClient::from_io(reader, writer);
-    let err = client.request("tools/list", json!({}), 5_000).await.expect_err("对端没了要报错");
+    let err = client
+        .request("tools/list", json!({}), 5_000)
+        .await
+        .expect_err("对端没了要报错");
     assert_eq!(err.code, "MCP_EXITED");
 }
 
 #[test]
 fn 训练引擎的权限档按读写分开() {
     // 读状态 / 列项目 / 看 caption → 不需要批准
-    for name in ["studio_projects", "studio_project", "studio_images", "studio_caption", "studio_status"] {
+    for name in [
+        "studio_projects",
+        "studio_project",
+        "studio_images",
+        "studio_caption",
+        "studio_status",
+    ] {
         assert_eq!(anima_access_for(name), "ALLOW", "{name}");
         assert!(!anima_is_mutating(name), "{name}");
     }
@@ -324,8 +372,14 @@ fn scripts_目录两种布局都认() {
 
 #[test]
 fn extra_args_三种形状都认() {
-    assert_eq!(as_argv(Some(&json!(["--port", "8189"]))), vec!["--port", "8189"]);
-    assert_eq!(as_argv(Some(&json!("[\"--port\", \"8189\"]"))), vec!["--port", "8189"]);
+    assert_eq!(
+        as_argv(Some(&json!(["--port", "8189"]))),
+        vec!["--port", "8189"]
+    );
+    assert_eq!(
+        as_argv(Some(&json!("[\"--port\", \"8189\"]"))),
+        vec!["--port", "8189"]
+    );
     assert_eq!(as_argv(Some(&json!("--port 8189"))), vec!["--port", "8189"]);
     assert!(as_argv(None).is_empty());
 }
@@ -376,7 +430,10 @@ fn 补挂共享模型根的三参数() {
         ]
     );
     let note = plan.note.unwrap();
-    assert!(note.contains("ComfyUI Desktop 的 settings.json 与 shared_model_paths.yaml"), "{note}");
+    assert!(
+        note.contains("ComfyUI Desktop 的 settings.json 与 shared_model_paths.yaml"),
+        "{note}"
+    );
     assert!(note.contains("模型根："), "{note}");
     assert!(note.contains("这些参数是 **ComfyHub 补的**"), "{note}");
     std::fs::remove_dir_all(&tmp).ok();
@@ -387,7 +444,11 @@ fn 模型自己写过的参数一律不覆盖() {
     let tmp = temp_dir("comfyenv-respect");
     let yaml = tmp.join(SHARED_YAML);
     std::fs::write(&yaml, "x: 1\n").unwrap();
-    std::fs::write(tmp.join(SETTINGS_FILE), json!({ "inputDir": "D:\\nope" }).to_string()).unwrap();
+    std::fs::write(
+        tmp.join(SETTINGS_FILE),
+        json!({ "inputDir": "D:\\nope" }).to_string(),
+    )
+    .unwrap();
     let d = desktop(Some(tmp.clone())).unwrap();
 
     // ① 模型自己写了 --extra-model-paths-config
@@ -400,10 +461,19 @@ fn 模型自己写过的参数一律不覆盖() {
     assert!(plan.note.unwrap().contains("尊重模型自己写的"));
 
     // ② 模型自己写了 --base-directory：input/output 都不补
-    let plan = prepare_launch_with(&json!({ "extra_args": "--base-directory D:\\base" }), Some(d));
+    let plan = prepare_launch_with(
+        &json!({ "extra_args": "--base-directory D:\\base" }),
+        Some(d),
+    );
     let argv = as_argv(plan.args.get("extra_args"));
-    assert!(argv.contains(&"--extra-model-paths-config".to_string()), "{argv:?}");
-    assert!(!argv.contains(&FLAG_INPUT.to_string()), "有 --base-directory 时不该补 input：{argv:?}");
+    assert!(
+        argv.contains(&"--extra-model-paths-config".to_string()),
+        "{argv:?}"
+    );
+    assert!(
+        !argv.contains(&FLAG_INPUT.to_string()),
+        "有 --base-directory 时不该补 input：{argv:?}"
+    );
     assert!(!argv.contains(&FLAG_OUTPUT.to_string()));
     std::fs::remove_dir_all(&tmp).ok();
 }
@@ -411,10 +481,16 @@ fn 模型自己写过的参数一律不覆盖() {
 #[test]
 fn 不存在的输入输出目录不补() {
     let tmp = temp_dir("comfyenv-missing");
-    std::fs::write(tmp.join(SETTINGS_FILE), json!({ "inputDir": "D:\\definitely-not-here" }).to_string())
-        .unwrap();
+    std::fs::write(
+        tmp.join(SETTINGS_FILE),
+        json!({ "inputDir": "D:\\definitely-not-here" }).to_string(),
+    )
+    .unwrap();
     let d = desktop(Some(tmp.clone())).unwrap();
-    assert!(d.input_dir.is_none(), "不存在的目录不许进参数（会让启动直接失败）");
+    assert!(
+        d.input_dir.is_none(),
+        "不存在的目录不许进参数（会让启动直接失败）"
+    );
     std::fs::remove_dir_all(&tmp).ok();
 }
 
@@ -433,7 +509,11 @@ fn 调用方写的_input_缩写也算写过不许覆盖() {
     let output = tmp.join("shared-output");
     std::fs::create_dir_all(&input).unwrap();
     std::fs::create_dir_all(&output).unwrap();
-    std::fs::write(tmp.join(SETTINGS_FILE), json!({ "outputDir": output }).to_string()).unwrap();
+    std::fs::write(
+        tmp.join(SETTINGS_FILE),
+        json!({ "outputDir": output }).to_string(),
+    )
+    .unwrap();
     // 注意：Desktop 配置里**没有** inputDir —— 正是发布包那台的形状（少了 outputDir 那一半）
     let d = desktop(Some(tmp.clone())).unwrap();
 
@@ -447,8 +527,16 @@ fn 调用方写的_input_缩写也算写过不许覆盖() {
         !argv.contains(&FLAG_INPUT.to_string()),
         "调用方写过 input 了，ComfyHub 不许再补一条（argparse 后写的会盖住它）：{argv:?}"
     );
-    assert_eq!(mounted_input_dir(&argv), Some(input.clone()), "生效的必须是调用方那一份");
-    assert!(plan.note.unwrap().contains("尊重调用方自己写的"), "{:?}", plan.args);
+    assert_eq!(
+        mounted_input_dir(&argv),
+        Some(input.clone()),
+        "生效的必须是调用方那一份"
+    );
+    assert!(
+        plan.note.unwrap().contains("尊重调用方自己写的"),
+        "{:?}",
+        plan.args
+    );
 
     // ② `--input=<目录>` 这种写法也要认
     let plan = prepare_launch_with(
@@ -462,7 +550,11 @@ fn 调用方写的_input_缩写也算写过不许覆盖() {
     let argv = as_argv(plan.args.get("extra_args"));
     assert!(argv.contains(&FLAG_OUTPUT.to_string()), "{argv:?}");
     assert!(!argv.contains(&FLAG_INPUT.to_string()), "{argv:?}");
-    assert_eq!(mounted_input_dir(&argv), None, "Desktop 没配 inputDir 时我们不编一个");
+    assert_eq!(
+        mounted_input_dir(&argv),
+        None,
+        "Desktop 没配 inputDir 时我们不编一个"
+    );
     std::fs::remove_dir_all(&tmp).ok();
 }
 
@@ -474,12 +566,27 @@ fn 读生效的_input_output_取最后一次() {
         .iter()
         .map(|s| s.to_string())
         .collect();
-    assert_eq!(mounted_input_dir(&argv), Some(PathBuf::from("B")), "后写的赢");
+    assert_eq!(
+        mounted_input_dir(&argv),
+        Some(PathBuf::from("B")),
+        "后写的赢"
+    );
     assert_eq!(mounted_output_dir(&argv), None);
 
-    let argv: Vec<String> = ["--output-directory=C", "--input"].iter().map(|s| s.to_string()).collect();
-    assert_eq!(mounted_output_dir(&argv), Some(PathBuf::from("C")), "`=` 写法也要认");
-    assert_eq!(mounted_input_dir(&argv), None, "参数写漏了值就别把下一个参数名当路径");
+    let argv: Vec<String> = ["--output-directory=C", "--input"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    assert_eq!(
+        mounted_output_dir(&argv),
+        Some(PathBuf::from("C")),
+        "`=` 写法也要认"
+    );
+    assert_eq!(
+        mounted_input_dir(&argv),
+        None,
+        "参数写漏了值就别把下一个参数名当路径"
+    );
 }
 
 /// 受限会话里把 comfy-cli 的"家目录 + config.ini"一并指进项目内（2026-09-28 用户 bug

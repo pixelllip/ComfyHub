@@ -47,7 +47,9 @@ void main() {
 
   test('存 / 读布局库', () async {
     SharedPreferences.setMockInitialValues({});
-    final store = LayoutPresetStore(prefs: await SharedPreferences.getInstance());
+    final store = LayoutPresetStore(
+      prefs: await SharedPreferences.getInstance(),
+    );
     expect(await store.load(), isEmpty);
 
     await store.saveAll([

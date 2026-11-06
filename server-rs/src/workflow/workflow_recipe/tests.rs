@@ -32,7 +32,11 @@ fn graph(pairs: Vec<(&str, Value)>) -> Map<String, Value> {
 }
 
 fn graph_of(text: &str) -> Map<String, Value> {
-    serde_json::from_str::<Value>(text).unwrap().as_object().unwrap().clone()
+    serde_json::from_str::<Value>(text)
+        .unwrap()
+        .as_object()
+        .unwrap()
+        .clone()
 }
 
 fn analyze(graph: &Map<String, Value>) -> Recipe {
@@ -42,12 +46,30 @@ fn analyze(graph: &Map<String, Value>) -> Recipe {
 /// 一份最小的 t2i：底模 + 文本编码 + 空潜空间 + 采样 + 解码 + 存图。
 fn t2i_graph(unet: &str) -> Map<String, Value> {
     graph(vec![
-        ("1", node("CheckpointLoaderSimple", Some("底模"), json!({ "ckpt_name": unet }))),
+        (
+            "1",
+            node(
+                "CheckpointLoaderSimple",
+                Some("底模"),
+                json!({ "ckpt_name": unet }),
+            ),
+        ),
         (
             "6",
-            node("CLIPTextEncode", Some("正面"), json!({ "clip": link("1", 1), "text": "a cat" })),
+            node(
+                "CLIPTextEncode",
+                Some("正面"),
+                json!({ "clip": link("1", 1), "text": "a cat" }),
+            ),
         ),
-        ("7", node("CLIPTextEncode", Some("负面"), json!({ "clip": link("1", 1), "text": "blurry" }))),
+        (
+            "7",
+            node(
+                "CLIPTextEncode",
+                Some("负面"),
+                json!({ "clip": link("1", 1), "text": "blurry" }),
+            ),
+        ),
         (
             "5",
             node(
@@ -68,8 +90,22 @@ fn t2i_graph(unet: &str) -> Map<String, Value> {
                 }),
             ),
         ),
-        ("8", node("VAEDecode", None, json!({ "samples": link("3", 0), "vae": link("1", 2) }))),
-        ("9", node("SaveImage", None, json!({ "images": link("8", 0), "filename_prefix": "x" }))),
+        (
+            "8",
+            node(
+                "VAEDecode",
+                None,
+                json!({ "samples": link("3", 0), "vae": link("1", 2) }),
+            ),
+        ),
+        (
+            "9",
+            node(
+                "SaveImage",
+                None,
+                json!({ "images": link("8", 0), "filename_prefix": "x" }),
+            ),
+        ),
     ])
 }
 
@@ -90,19 +126,44 @@ fn deps(info: Option<Map<String, Value>>) -> Deps<'static> {
 fn 骨架指纹对节点编号_模型名_参数值稳定() {
     let a = analyze(&t2i_graph("a.safetensors"));
     let b = analyze(&t2i_graph("b.safetensors"));
-    assert_eq!(a.skeleton_hash, b.skeleton_hash, "换了底模不该换骨架（这正是'泛用'的定义）");
+    assert_eq!(
+        a.skeleton_hash, b.skeleton_hash,
+        "换了底模不该换骨架（这正是'泛用'的定义）"
+    );
 
     // 重新编号（把 6/7 换成 66/77）+ 改提示词与 seed：形状没变
     let renamed = graph(vec![
-        ("1", node("CheckpointLoaderSimple", None, json!({ "ckpt_name": "c.safetensors" }))),
+        (
+            "1",
+            node(
+                "CheckpointLoaderSimple",
+                None,
+                json!({ "ckpt_name": "c.safetensors" }),
+            ),
+        ),
         (
             "66",
-            node("CLIPTextEncode", None, json!({ "clip": link("1", 1), "text": "完全不同的提示词" })),
+            node(
+                "CLIPTextEncode",
+                None,
+                json!({ "clip": link("1", 1), "text": "完全不同的提示词" }),
+            ),
         ),
-        ("77", node("CLIPTextEncode", None, json!({ "clip": link("1", 1), "text": "nope" }))),
+        (
+            "77",
+            node(
+                "CLIPTextEncode",
+                None,
+                json!({ "clip": link("1", 1), "text": "nope" }),
+            ),
+        ),
         (
             "5",
-            node("EmptyLatentImage", None, json!({ "width": 512, "height": 512, "batch_size": 2 })),
+            node(
+                "EmptyLatentImage",
+                None,
+                json!({ "width": 512, "height": 512, "batch_size": 2 }),
+            ),
         ),
         (
             "3",
@@ -116,8 +177,18 @@ fn 骨架指纹对节点编号_模型名_参数值稳定() {
                 }),
             ),
         ),
-        ("8", node("VAEDecode", None, json!({ "samples": link("3", 0), "vae": link("1", 2) }))),
-        ("9", node("SaveImage", None, json!({ "images": link("8", 0) }))),
+        (
+            "8",
+            node(
+                "VAEDecode",
+                None,
+                json!({ "samples": link("3", 0), "vae": link("1", 2) }),
+            ),
+        ),
+        (
+            "9",
+            node("SaveImage", None, json!({ "images": link("8", 0) })),
+        ),
     ]);
     assert_eq!(a.skeleton_hash, analyze(&renamed).skeleton_hash);
 }
@@ -149,7 +220,11 @@ fn 骨架指纹对结构变化敏感_也认重数() {
             }),
         ),
     );
-    assert_ne!(base.skeleton_hash, analyze(&with_lora).skeleton_hash, "多一个结构节点必须换指纹");
+    assert_ne!(
+        base.skeleton_hash,
+        analyze(&with_lora).skeleton_hash,
+        "多一个结构节点必须换指纹"
+    );
 
     // 两个 LoRA 串起来 ≠ 一个
     let mut two_loras = with_lora.clone();
@@ -187,13 +262,32 @@ fn 界面节点与纯显示节点不进指纹() {
     let mut noisy = t2i_graph("krea2_turbo_nvfp4.safetensors");
     for (id, value) in [
         ("90", node("Note", None, json!({ "text": "我的笔记" }))),
-        ("91", node("MarkdownNote", None, json!({ "text": "# 标题" }))),
-        ("92", node("Reroute", None, json!({ "input": link("9", 0) }))),
+        (
+            "91",
+            node("MarkdownNote", None, json!({ "text": "# 标题" })),
+        ),
+        (
+            "92",
+            node("Reroute", None, json!({ "input": link("9", 0) })),
+        ),
         ("93", node("GetNode", None, json!({ "id": "x" }))),
-        ("94", node("Bookmark (rgthree)", None, json!({ "bookmark": "x" }))),
+        (
+            "94",
+            node("Bookmark (rgthree)", None, json!({ "bookmark": "x" })),
+        ),
         ("95", node("Label (rgthree)", None, json!({ "text": "x" }))),
-        ("96", node("PreviewImage", None, json!({ "images": link("8", 0) }))),
-        ("97", node("Image Comparer (rgthree)", None, json!({ "image_a": link("8", 0) }))),
+        (
+            "96",
+            node("PreviewImage", None, json!({ "images": link("8", 0) })),
+        ),
+        (
+            "97",
+            node(
+                "Image Comparer (rgthree)",
+                None,
+                json!({ "image_a": link("8", 0) }),
+            ),
+        ),
     ] {
         noisy.insert(id.to_string(), value);
     }
@@ -230,7 +324,14 @@ fn 模型槽位按确定表认出角色_且不在旋钮里重复() {
                 json!({ "clip_name": "qwen3vl_4b.safetensors", "type": "krea2", "device": "default" }),
             ),
         ),
-        ("91", node("VAELoader", None, json!({ "vae_name": "qwen_image_vae.safetensors" }))),
+        (
+            "91",
+            node(
+                "VAELoader",
+                None,
+                json!({ "vae_name": "qwen_image_vae.safetensors" }),
+            ),
+        ),
         (
             "71",
             node(
@@ -242,15 +343,32 @@ fn 模型槽位按确定表认出角色_且不在旋钮里重复() {
                 }),
             ),
         ),
-        ("60", node("TextInput_", None, json!({ "text": "把这个人换成正在跑步的姿势" }))),
-        ("72", node("LoadImage", Some("参考图"), json!({ "image": "clipspace/abc.png [input]" }))),
+        (
+            "60",
+            node(
+                "TextInput_",
+                None,
+                json!({ "text": "把这个人换成正在跑步的姿势" }),
+            ),
+        ),
+        (
+            "72",
+            node(
+                "LoadImage",
+                Some("参考图"),
+                json!({ "image": "clipspace/abc.png [input]" }),
+            ),
+        ),
     ]);
     let r = analyze(&g);
 
     // 槽位按**节点号**排（`ComfyModels.requirements` 就是这么给的）：
     // 顺序稳定比"按文件顺序"更重要 —— 同一份图学两次，报告要逐字一样
-    let roles: Vec<(&str, &str)> =
-        r.slots.iter().map(|s| (s.node_id.as_str(), s.role.as_str())).collect();
+    let roles: Vec<(&str, &str)> = r
+        .slots
+        .iter()
+        .map(|s| (s.node_id.as_str(), s.role.as_str()))
+        .collect();
     assert_eq!(
         roles,
         vec![
@@ -264,11 +382,19 @@ fn 模型槽位按确定表认出角色_且不在旋钮里重复() {
     let slot = r.slots.iter().find(|s| s.node_id == "73").unwrap();
     assert_eq!(slot.override_key(), "73.unet_name");
     assert_eq!(slot.file_name, "krea2_turbo_bf16.safetensors");
-    assert_eq!(slot.title.as_deref(), Some("底模"), "节点标题只是可读性，不参与判定");
+    assert_eq!(
+        slot.title.as_deref(),
+        Some("底模"),
+        "节点标题只是可读性，不参与判定"
+    );
     // 槽位键不许在旋钮里再来一份（两边重复会让'对不上'更难查）
     let knob_keys: HashSet<String> = r.knobs.iter().map(|k| k.override_key()).collect();
     for slot in &r.slots {
-        assert!(!knob_keys.contains(&slot.override_key()), "槽位 {} 不该出现在旋钮里", slot.override_key());
+        assert!(
+            !knob_keys.contains(&slot.override_key()),
+            "槽位 {} 不该出现在旋钮里",
+            slot.override_key()
+        );
     }
     // 但加载器上那些**模型族相关**的开关要留下（type=krea2 换模型族时必须改）
     assert!(r
@@ -276,7 +402,10 @@ fn 模型槽位按确定表认出角色_且不在旋钮里重复() {
         .iter()
         .any(|k| k.override_key() == "56.type" && k.kind == KnobKind::Loader));
     // 连线型输入不是旋钮
-    assert!(!knob_keys.contains("71.model"), "连线（数组）不是可覆盖的字面量");
+    assert!(
+        !knob_keys.contains("71.model"),
+        "连线（数组）不是可覆盖的字面量"
+    );
 }
 
 // -----------------------------------------------------------------------
@@ -290,14 +419,25 @@ fn 任务分类_七档各有判据() {
 
     // i2i：有 LoadImage
     let mut i2i = t2i_graph("a.safetensors");
-    i2i.insert("30".into(), node("LoadImage", None, json!({ "image": "a.png" })));
+    i2i.insert(
+        "30".into(),
+        node("LoadImage", None, json!({ "image": "a.png" })),
+    );
     i2i.insert(
         "31".into(),
-        node("VAEEncode", None, json!({ "pixels": link("30", 0), "vae": link("1", 2) })),
+        node(
+            "VAEEncode",
+            None,
+            json!({ "pixels": link("30", 0), "vae": link("1", 2) }),
+        ),
     );
     i2i.insert(
         "3".into(),
-        node("KSampler", None, json!({ "latent_image": link("31", 0), "model": link("1", 0) })),
+        node(
+            "KSampler",
+            None,
+            json!({ "latent_image": link("31", 0), "model": link("1", 0) }),
+        ),
     );
     assert_eq!(analyze(&i2i).task, Task::I2i);
 
@@ -305,7 +445,11 @@ fn 任务分类_七档各有判据() {
     let mut inpaint = i2i.clone();
     inpaint.insert(
         "12".into(),
-        node("LoadImageMask", None, json!({ "image": "m.png", "channel": "red" })),
+        node(
+            "LoadImageMask",
+            None,
+            json!({ "image": "m.png", "channel": "red" }),
+        ),
     );
     inpaint.insert(
         "24".into(),
@@ -317,7 +461,11 @@ fn 任务分类_七档各有判据() {
     );
     inpaint.insert(
         "3".into(),
-        node("KSampler", None, json!({ "latent_image": link("24", 0), "model": link("1", 0) })),
+        node(
+            "KSampler",
+            None,
+            json!({ "latent_image": link("24", 0), "model": link("1", 0) }),
+        ),
     );
     assert_eq!(analyze(&inpaint).task, Task::Inpaint);
     assert!(analyze(&inpaint).has_mask);
@@ -326,11 +474,19 @@ fn 任务分类_七档各有判据() {
     let mut edit = inpaint.clone();
     edit.insert(
         "58".into(),
-        node("Krea2EditModelPatch", None, json!({ "model": link("1", 0), "latent": link("31", 0) })),
+        node(
+            "Krea2EditModelPatch",
+            None,
+            json!({ "model": link("1", 0), "latent": link("31", 0) }),
+        ),
     );
     edit.insert(
         "60".into(),
-        node("TextEncodeKrea2OstrisEdit", None, json!({ "clip": link("1", 1), "text": "换成跑步" })),
+        node(
+            "TextEncodeKrea2OstrisEdit",
+            None,
+            json!({ "clip": link("1", 1), "text": "换成跑步" }),
+        ),
     );
     assert_eq!(
         analyze(&edit).task,
@@ -343,28 +499,54 @@ fn 任务分类_七档各有判据() {
         ("1", node("LoadImage", None, json!({ "image": "a.png" }))),
         (
             "2",
-            node("MiniMaxH3ImageToVideo", None, json!({ "image": link("1", 0), "prompt": "走起来" })),
+            node(
+                "MiniMaxH3ImageToVideo",
+                None,
+                json!({ "image": link("1", 0), "prompt": "走起来" }),
+            ),
         ),
-        ("3", node("SaveVideo", None, json!({ "video": link("2", 0) }))),
+        (
+            "3",
+            node("SaveVideo", None, json!({ "video": link("2", 0) })),
+        ),
     ]);
     assert_eq!(analyze(&video).task, Task::Video);
 
     // 视频模型但**只出一张图**：不许判成 video（光看节点名就会错）
     let video_model_image_out = graph(vec![
-        ("1", node("MiniMaxH3Sampler", None, json!({ "prompt": "一只猫" }))),
-        ("2", node("VAEDecode", None, json!({ "samples": link("1", 0) }))),
-        ("3", node("SaveImage", None, json!({ "images": link("2", 0) }))),
+        (
+            "1",
+            node("MiniMaxH3Sampler", None, json!({ "prompt": "一只猫" })),
+        ),
+        (
+            "2",
+            node("VAEDecode", None, json!({ "samples": link("1", 0) })),
+        ),
+        (
+            "3",
+            node("SaveImage", None, json!({ "images": link("2", 0) })),
+        ),
     ]);
     assert_eq!(analyze(&video_model_image_out).task, Task::T2i);
 
     // audio：音频输出
-    let audio = graph(vec![("1", node("SaveAudioAdvanced", None, json!({ "audio": "x" })))]);
+    let audio = graph(vec![(
+        "1",
+        node("SaveAudioAdvanced", None, json!({ "audio": "x" })),
+    )]);
     assert_eq!(analyze(&audio).task, Task::Audio);
 
     // upscale：只有放大模型、没有采样器
     let upscale = graph(vec![
         ("1", node("LoadImage", None, json!({ "image": "a.png" }))),
-        ("2", node("UpscaleModelLoader", None, json!({ "model_name": "4x.pth" }))),
+        (
+            "2",
+            node(
+                "UpscaleModelLoader",
+                None,
+                json!({ "model_name": "4x.pth" }),
+            ),
+        ),
         (
             "3",
             node(
@@ -373,13 +555,18 @@ fn 任务分类_七档各有判据() {
                 json!({ "upscale_model": link("2", 0), "image": link("1", 0) }),
             ),
         ),
-        ("4", node("SaveImage", None, json!({ "images": link("3", 0) }))),
+        (
+            "4",
+            node("SaveImage", None, json!({ "images": link("3", 0) })),
+        ),
     ]);
     assert_eq!(analyze(&upscale).task, Task::Upscale);
 
     // unknown：认不出（不能硬塞一档）
-    let unknown =
-        graph(vec![("1", node("PrimitiveStringMultiline", None, json!({ "value": "随便" })))]);
+    let unknown = graph(vec![(
+        "1",
+        node("PrimitiveStringMultiline", None, json!({ "value": "随便" })),
+    )]);
     let r = analyze(&unknown);
     assert_eq!(r.task, Task::Unknown);
     assert!(r.warnings.iter().any(|w| w.contains("认不出")));
@@ -391,9 +578,16 @@ fn resize_image_mask_node_里有_mask_但它不是_inpaint() {
         ("1", node("LoadImage", None, json!({ "image": "a.png" }))),
         (
             "2",
-            node("ResizeImageMaskNode", None, json!({ "image": link("1", 0), "width": 512 })),
+            node(
+                "ResizeImageMaskNode",
+                None,
+                json!({ "image": link("1", 0), "width": 512 }),
+            ),
         ),
-        ("3", node("SaveImage", None, json!({ "images": link("2", 0) }))),
+        (
+            "3",
+            node("SaveImage", None, json!({ "images": link("2", 0) })),
+        ),
     ]);
     assert_eq!(analyze(&g).task, Task::I2i);
 }
@@ -406,9 +600,14 @@ fn resize_image_mask_node_里有_mask_但它不是_inpaint() {
 fn 旋钮按种类分组_值可截断_计数如实() {
     let r = analyze(&t2i_graph("a.safetensors"));
     let has = |kind: KnobKind, key: &str| {
-        r.knobs.iter().any(|k| k.kind == kind && k.override_key() == key)
+        r.knobs
+            .iter()
+            .any(|k| k.kind == kind && k.override_key() == key)
     };
-    assert!(has(KnobKind::Prompt, "6.text"), "文本编码的 text 要判成提示词");
+    assert!(
+        has(KnobKind::Prompt, "6.text"),
+        "文本编码的 text 要判成提示词"
+    );
     assert!(has(KnobKind::Sampling, "3.steps"));
     assert!(has(KnobKind::Sampling, "3.sampler_name"));
     assert!(has(KnobKind::Seed, "3.seed"));
@@ -420,9 +619,17 @@ fn 旋钮按种类分组_值可截断_计数如实() {
     let long = "x".repeat(MAX_KNOB_VALUE + 50);
     let huge = analyze(&graph(vec![(
         "1",
-        node("CLIPTextEncode", None, json!({ "clip": link("1", 1), "text": long })),
+        node(
+            "CLIPTextEncode",
+            None,
+            json!({ "clip": link("1", 1), "text": long }),
+        ),
     )]));
-    let knob = huge.knobs.iter().find(|k| k.kind == KnobKind::Prompt).unwrap();
+    let knob = huge
+        .knobs
+        .iter()
+        .find(|k| k.kind == KnobKind::Prompt)
+        .unwrap();
     assert!(knob.value.ends_with('…'), "超长值要带截断标记");
     assert_eq!(knob.value.chars().count(), MAX_KNOB_VALUE + 1);
 }
@@ -436,7 +643,10 @@ fn 拿不到_object_info_与空图都要如实说() {
     );
     // 给了 objectInfo（哪怕是空表）就不再报这条
     let with_info = super::analyze(&t2i_graph("a.safetensors"), Some(&HashMap::new()));
-    assert!(!with_info.warnings.iter().any(|w| w.contains("/object_info")));
+    assert!(!with_info
+        .warnings
+        .iter()
+        .any(|w| w.contains("/object_info")));
 
     let empty = analyze(&Map::new());
     assert_eq!(empty.task, Task::Unknown);
@@ -455,12 +665,20 @@ fn render_里能直接看到改哪个键_to_json_键集合稳定() {
     assert!(text.contains("【工作流配方】krea2_edit"));
     assert!(text.contains("任务：t2i"));
     assert!(text.contains(&format!("骨架：{}", r.skeleton_hash)));
-    assert!(text.contains("1.ckpt_name = krea2_turbo_nvfp4.safetensors"), "{text}");
+    assert!(
+        text.contains("1.ckpt_name = krea2_turbo_nvfp4.safetensors"),
+        "{text}"
+    );
     assert!(text.contains("提示词："), "{text}");
     assert!(text.contains("#9 SaveImage（image）"));
 
     let json = r.to_json();
-    let mut keys: Vec<&str> = json.as_object().unwrap().keys().map(String::as_str).collect();
+    let mut keys: Vec<&str> = json
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
     keys.sort();
     assert_eq!(
         keys,
@@ -495,7 +713,6 @@ fn render_里能直接看到改哪个键_to_json_键集合稳定() {
 // "从真文件学"这条路仍由下面「学一份 inpaint 图能落库并按 hash 幂等」覆盖 ——
 // 它把合成 API 图写到 `testpaths::scratch()`，仍然走磁盘文件那条入口。
 
-
 // -----------------------------------------------------------------------
 //  仓储（`WorkflowRecipeRepoTest.kt`）
 // -----------------------------------------------------------------------
@@ -504,7 +721,8 @@ fn render_里能直接看到改哪个键_to_json_键集合稳定() {
 /// 用测试里另写的一份建表语句就不是在测真库了（`source_ref` 唯一索引这类承重约束会凭空消失）。
 fn conn() -> Connection {
     let conn = crate::infra::db::open_memory().unwrap();
-    conn.execute_batch(crate::infra::db::schema_sql()).expect("建 schema");
+    conn.execute_batch(crate::infra::db::schema_sql())
+        .expect("建 schema");
     crate::infra::db::assert_ready(&conn).unwrap();
     conn
 }
@@ -549,22 +767,37 @@ fn sample_write(
 #[test]
 fn 同一份来源学两次只有一行_且_id_不变() {
     let conn = conn();
-    let (first, created_first) = save_row(&conn, &sample_write("krea2 编辑", Some("file:abc"), None, true, &[])).unwrap();
+    let (first, created_first) = save_row(
+        &conn,
+        &sample_write("krea2 编辑", Some("file:abc"), None, true, &[]),
+    )
+    .unwrap();
     assert!(created_first);
-    let (second, created_second) =
-        save_row(&conn, &sample_write("改了个名字", Some("file:abc"), None, true, &[])).unwrap();
+    let (second, created_second) = save_row(
+        &conn,
+        &sample_write("改了个名字", Some("file:abc"), None, true, &[]),
+    )
+    .unwrap();
     assert_eq!(first, second, "同一份来源必须复用同一行");
     assert!(!created_second);
-    assert_eq!(list(&conn, None, None, None, false, MAX_LIST).unwrap().len(), 1);
+    assert_eq!(
+        list(&conn, None, None, None, false, MAX_LIST)
+            .unwrap()
+            .len(),
+        1
+    );
     assert_eq!(get(&conn, first).unwrap().unwrap().name, "改了个名字");
 }
 
 #[test]
 fn 重新学一份会整行更新_不留旧槽位() {
     let conn = conn();
-    let id = save_row(&conn, &sample_write("krea2 编辑", Some("file:abc"), None, true, &[]))
-        .unwrap()
-        .0;
+    let id = save_row(
+        &conn,
+        &sample_write("krea2 编辑", Some("file:abc"), None, true, &[]),
+    )
+    .unwrap()
+    .0;
     // 第二遍"学到了别的形状"（换了骨架、槽位只剩一个）
     let leaner = Write {
         name: "krea2 编辑".into(),
@@ -584,7 +817,11 @@ fn 重新学一份会整行更新_不留旧槽位() {
     let row = get(&conn, id).unwrap().unwrap();
     assert_eq!(row.skeleton_hash, "ffff000011112222");
     assert_eq!(row.task, "edit");
-    assert_eq!(row.slots.as_array().unwrap().len(), 1, "旧的四个槽位必须被覆盖掉，不许残留");
+    assert_eq!(
+        row.slots.as_array().unwrap().len(),
+        1,
+        "旧的四个槽位必须被覆盖掉，不许残留"
+    );
     assert_eq!(row.slots[0]["overrideKey"], "71.lora_name");
 }
 
@@ -599,30 +836,49 @@ fn 删掉提示词之后配方还在_只是_prompt_id_变空() {
         .unwrap();
         conn.last_insert_rowid()
     };
-    let id = save_row(&conn, &sample_write("配方", Some("file:abc"), Some(prompt_id), true, &[]))
-        .unwrap()
-        .0;
+    let id = save_row(
+        &conn,
+        &sample_write("配方", Some("file:abc"), Some(prompt_id), true, &[]),
+    )
+    .unwrap()
+    .0;
     assert_eq!(get(&conn, id).unwrap().unwrap().prompt_id, Some(prompt_id));
 
-    conn.execute("DELETE FROM prompts WHERE id = ?1", params![prompt_id]).unwrap();
+    conn.execute("DELETE FROM prompts WHERE id = ?1", params![prompt_id])
+        .unwrap();
     let row = get(&conn, id).unwrap().expect("删提示词不该把配方一起删掉");
-    assert_eq!(row.prompt_id, None, "外键 ON DELETE SET NULL（R1：每条连接都要开 foreign_keys）");
+    assert_eq!(
+        row.prompt_id, None,
+        "外键 ON DELETE SET NULL（R1：每条连接都要开 foreign_keys）"
+    );
 }
 
 #[test]
 fn 配方不进同步账本() {
     let conn = conn();
-    let id = save_row(&conn, &sample_write("k1", Some("file:abc"), None, true, &[]))
-        .unwrap()
-        .0;
-    save_row(&conn, &sample_write("又学了一遍", Some("file:abc"), None, true, &[])).unwrap();
+    let id = save_row(
+        &conn,
+        &sample_write("k1", Some("file:abc"), None, true, &[]),
+    )
+    .unwrap()
+    .0;
+    save_row(
+        &conn,
+        &sample_write("又学了一遍", Some("file:abc"), None, true, &[]),
+    )
+    .unwrap();
     delete(&conn, id).unwrap();
     let logged: i64 = conn
-        .query_row("SELECT COUNT(*) FROM _sync_log WHERE tbl = 'workflow_recipes'", [], |r| {
-            r.get(0)
-        })
+        .query_row(
+            "SELECT COUNT(*) FROM _sync_log WHERE tbl = 'workflow_recipes'",
+            [],
+            |r| r.get(0),
+        )
         .unwrap();
-    assert_eq!(logged, 0, "这张表刻意不同步（总纲 §3.3）；要同步必须连触发器与 sync.rs 一起改");
+    assert_eq!(
+        logged, 0,
+        "这张表刻意不同步（总纲 §3.3）；要同步必须连触发器与 sync.rs 一起改"
+    );
     // 白名单本身也钉一下：加进去等于把一份手机跑不了的配方推给手机（R11）
     assert!(!crate::mobile::sync::SYNCED.contains(&"workflow_recipes"));
 }
@@ -630,7 +886,11 @@ fn 配方不进同步账本() {
 #[test]
 fn 缺件的配方照样存_但要能按_complete_过滤出来() {
     let conn = conn();
-    save_row(&conn, &sample_write("完整的", Some("file:ok"), None, true, &[])).unwrap();
+    save_row(
+        &conn,
+        &sample_write("完整的", Some("file:ok"), None, true, &[]),
+    )
+    .unwrap();
     save_row(
         &conn,
         &sample_write(
@@ -643,7 +903,9 @@ fn 缺件的配方照样存_但要能按_complete_过滤出来() {
     )
     .unwrap();
     assert_eq!(
-        list(&conn, None, None, None, false, MAX_LIST).unwrap().len(),
+        list(&conn, None, None, None, false, MAX_LIST)
+            .unwrap()
+            .len(),
         2,
         "默认要能看见缺件的（只是带着标记）"
     );
@@ -659,7 +921,10 @@ fn 缺件的配方照样存_但要能按_complete_过滤出来() {
         .find(|r| r.name == "缺件的")
         .unwrap();
     assert!(!gap.complete);
-    assert_eq!(gap.gaps, vec!["摘掉节点类：Krea2EditModelPatch".to_string()]);
+    assert_eq!(
+        gap.gaps,
+        vec!["摘掉节点类：Krea2EditModelPatch".to_string()]
+    );
 }
 
 #[test]
@@ -684,7 +949,12 @@ fn 列表能按_task_与骨架过滤_关键字能搜到模型文件名() {
     let skeleton = list(&conn, None, Some("edit"), None, false, MAX_LIST).unwrap()[0]
         .skeleton_hash
         .clone();
-    assert_eq!(list(&conn, None, None, Some(&skeleton), false, MAX_LIST).unwrap().len(), 1);
+    assert_eq!(
+        list(&conn, None, None, Some(&skeleton), false, MAX_LIST)
+            .unwrap()
+            .len(),
+        1
+    );
     // 关键字的匹配面要盖住槽位 JSON（"这个模型在哪条配方里"是模型最常问的一件事）
     let by_model: Vec<String> = list(&conn, Some("identity_edit"), None, None, false, MAX_LIST)
         .unwrap()
@@ -698,15 +968,29 @@ fn 列表能按_task_与骨架过滤_关键字能搜到模型文件名() {
 #[test]
 fn 详情能从落库的形状还原出可渲染的配方() {
     let conn = conn();
-    let id = save_row(&conn, &sample_write("krea2 编辑", Some("file:abc"), None, true, &[]))
-        .unwrap()
-        .0;
+    let id = save_row(
+        &conn,
+        &sample_write("krea2 编辑", Some("file:abc"), None, true, &[]),
+    )
+    .unwrap()
+    .0;
     let row = get(&conn, id).unwrap().unwrap();
 
     let recipe = row.to_recipe();
     assert_eq!(recipe.task, Task::T2i);
-    assert_eq!(recipe.skeleton_hash.len(), 16, "指纹是 8 字节 = 16 位十六进制");
-    assert_eq!(recipe.slots.iter().map(|s| s.role.clone()).collect::<Vec<_>>(), vec!["checkpoints"]);
+    assert_eq!(
+        recipe.skeleton_hash.len(),
+        16,
+        "指纹是 8 字节 = 16 位十六进制"
+    );
+    assert_eq!(
+        recipe
+            .slots
+            .iter()
+            .map(|s| s.role.clone())
+            .collect::<Vec<_>>(),
+        vec!["checkpoints"]
+    );
     assert!(recipe.knobs.iter().any(|k| k.override_key() == "6.text"));
     assert!(recipe.outputs.iter().any(|o| o.class_type == "SaveImage"));
 
@@ -714,7 +998,11 @@ fn 详情能从落库的形状还原出可渲染的配方() {
     assert!(text.contains("1.ckpt_name = a.safetensors"), "{text}");
     assert!(text.contains("提示词："), "{text}");
     assert_eq!(
-        text.strip_prefix("【工作流配方】").unwrap().split('\n').next().unwrap(),
+        text.strip_prefix("【工作流配方】")
+            .unwrap()
+            .split('\n')
+            .next()
+            .unwrap(),
         row.name
     );
 }
@@ -723,18 +1011,26 @@ fn 详情能从落库的形状还原出可渲染的配方() {
 fn 写不进去就报错_不静默截断() {
     let conn = conn();
     let long_name = "x".repeat(MAX_NAME_CHARS + 1);
-    let err = save_row(&conn, &sample_write(&long_name, Some("file:abc"), None, true, &[]))
-        .unwrap_err();
+    let err = save_row(
+        &conn,
+        &sample_write(&long_name, Some("file:abc"), None, true, &[]),
+    )
+    .unwrap_err();
     let message = format!("{err:?}");
     assert!(message.contains("太长"), "{message}");
 
     // 指向一条不存在的提示词：报人话，不是 500 + SQL 原文
-    let err = save_row(&conn, &sample_write("配方", Some("file:abc"), Some(999_999), true, &[]))
-        .unwrap_err();
+    let err = save_row(
+        &conn,
+        &sample_write("配方", Some("file:abc"), Some(999_999), true, &[]),
+    )
+    .unwrap_err();
     let message = format!("{err:?}");
     assert!(message.contains("不存在"), "{message}");
     assert!(
-        list(&conn, None, None, None, false, MAX_LIST).unwrap().is_empty(),
+        list(&conn, None, None, None, false, MAX_LIST)
+            .unwrap()
+            .is_empty(),
         "报错的行不许半截写进去"
     );
 
@@ -779,10 +1075,16 @@ fn 学一份_inpaint_图能落库并按_hash_幂等() {
 
     let learned = learn_file(&file, None, false, true, &deps).unwrap();
     assert_eq!(learned.recipe.task, Task::Inpaint);
-    assert!(learned.recipe.has_mask, "有 SetLatentNoiseMask 就该认成带遮罩");
+    assert!(
+        learned.recipe.has_mask,
+        "有 SetLatentNoiseMask 就该认成带遮罩"
+    );
     assert!(learned.complete, "API 格式零转换，不该有缺口");
     let bytes = std::fs::read(&file).unwrap();
-    assert_eq!(learned.source_ref.as_deref(), Some(format!("file:{}", sha256_hex(&bytes)).as_str()));
+    assert_eq!(
+        learned.source_ref.as_deref(),
+        Some(format!("file:{}", sha256_hex(&bytes)).as_str())
+    );
     assert_eq!(learned.format, "api");
 
     let write = write_of(
@@ -803,7 +1105,11 @@ fn 学一份_inpaint_图能落库并按_hash_幂等() {
     let row = get(&conn, id).unwrap().unwrap();
     assert_eq!(row.task, "inpaint");
     assert_eq!(learned.recipe.skeleton_hash, row.skeleton_hash);
-    assert_eq!(row.slots.as_array().unwrap().len(), 3, "底模 + 外挂 CLIP + 外挂 VAE");
+    assert_eq!(
+        row.slots.as_array().unwrap().len(),
+        3,
+        "底模 + 外挂 CLIP + 外挂 VAE"
+    );
 
     // 再学一遍：还是同一行（幂等键是文件 sha）
     let again = learn_file(&file, None, false, true, &deps).unwrap();
@@ -825,7 +1131,9 @@ fn 学一份_inpaint_图能落库并按_hash_幂等() {
     assert_eq!(id, again_id);
     assert!(!created);
     assert_eq!(
-        list(&conn, None, None, None, false, MAX_LIST).unwrap().len(),
+        list(&conn, None, None, None, false, MAX_LIST)
+            .unwrap()
+            .len(),
         1,
         "幂等：同一份文件学两次只有一行"
     );
@@ -845,7 +1153,10 @@ fn 三选一缺参数时报人话_认不出任务时如实说_unknown() {
 
     // graph 不是节点图 → INVALID_ARGUMENT（界面格式要走文件那条路）
     let err = learn(
-        &LearnArgs { graph: Some(graph_of(r#"{"nodes":[],"links":[]}"#)), ..LearnArgs::default() },
+        &LearnArgs {
+            graph: Some(graph_of(r#"{"nodes":[],"links":[]}"#)),
+            ..LearnArgs::default()
+        },
         &deps,
     )
     .unwrap_err();
@@ -858,7 +1169,14 @@ fn 三选一缺参数时报人话_认不出任务时如实说_unknown() {
     }
 
     // 库里没有 API 图 → NO_API_GRAPH（不是硬塞一个空配方）
-    let err = learn(&LearnArgs { prompt_id: Some(7), ..LearnArgs::default() }, &deps).unwrap_err();
+    let err = learn(
+        &LearnArgs {
+            prompt_id: Some(7),
+            ..LearnArgs::default()
+        },
+        &deps,
+    )
+    .unwrap_err();
     match err {
         RecipeFailure::Ai { code, message } => {
             assert_eq!(code, "NO_API_GRAPH");
@@ -930,7 +1248,11 @@ fn local(name: &str, folder: &str, visible: bool) -> LocalModel {
 }
 
 fn request(file_name: &str) -> Request {
-    Request { file_name: file_name.to_string(), role: None, override_key: None }
+    Request {
+        file_name: file_name.to_string(),
+        role: None,
+        override_key: None,
+    }
 }
 
 fn bind_with(
@@ -940,58 +1262,114 @@ fn bind_with(
     complete: bool,
     force: bool,
 ) -> Report {
-    bind(recipe, requests, inv, Some(7), "krea2 编辑", complete, force)
+    bind(
+        recipe,
+        requests,
+        inv,
+        Some(7),
+        "krea2 编辑",
+        complete,
+        force,
+    )
 }
 
 #[test]
 fn 同名且实例能加载才自动写覆盖键() {
     let recipe = edit_recipe();
-    let inv = inventory(vec![local("krea2_turbo_v11.safetensors", "diffusion_models", true)]);
-    let report = bind_with(&recipe, &[request("krea2_turbo_v11.safetensors")], Some(&inv), true, false);
+    let inv = inventory(vec![local(
+        "krea2_turbo_v11.safetensors",
+        "diffusion_models",
+        true,
+    )]);
+    let report = bind_with(
+        &recipe,
+        &[request("krea2_turbo_v11.safetensors")],
+        Some(&inv),
+        true,
+        false,
+    );
     assert_eq!(report.bindings.len(), 1);
     assert_eq!(report.bindings[0].status, Status::Exact);
     assert_eq!(
         report.overrides,
-        vec![("55.unet_name".to_string(), "krea2_turbo_v11.safetensors".to_string())]
+        vec![(
+            "55.unet_name".to_string(),
+            "krea2_turbo_v11.safetensors".to_string()
+        )]
     );
     assert!(report.ready);
     // 角色是**按清单里那个文件所在的目录推**的（不用调用方猜）
     assert_eq!(report.bindings[0].role.as_deref(), Some("diffusion_models"));
     // 没动的槽位照样列出来（用户看得见"还有哪些是原值"）
-    assert!(report.untouched.iter().any(|u| u.starts_with("56.clip_name")));
+    assert!(report
+        .untouched
+        .iter()
+        .any(|u| u.starts_with("56.clip_name")));
     // 旋钮提示里有提示词与采样键（模型据此拼下一次提交）
     assert!(report.knob_hints.contains(&"81.text".to_string()));
     assert!(report.knob_hints.contains(&"82.steps".to_string()));
-    assert!(report.render().contains("可以直接跑"), "{}", report.render());
+    assert!(
+        report.render().contains("可以直接跑"),
+        "{}",
+        report.render()
+    );
     // JSON 形状：applied / status / to 都在，且 overrides 是对象
     let json = report.to_json();
     assert_eq!(json["bindings"][0]["applied"], json!(true));
     assert_eq!(json["bindings"][0]["status"], "exact");
-    assert_eq!(json["overrides"]["55.unet_name"], "krea2_turbo_v11.safetensors");
+    assert_eq!(
+        json["overrides"]["55.unet_name"],
+        "krea2_turbo_v11.safetensors"
+    );
     assert_eq!(json["recipeId"], json!(7));
 }
 
 #[test]
 fn 盘上有但实例看不到_不许写键_也不许让人去下载() {
     let recipe = edit_recipe();
-    let inv = inventory(vec![local("krea2_turbo_bf16.safetensors", "diffusion_models", false)]);
-    let report =
-        bind_with(&recipe, &[request("krea2_turbo_bf16.safetensors")], Some(&inv), true, false);
+    let inv = inventory(vec![local(
+        "krea2_turbo_bf16.safetensors",
+        "diffusion_models",
+        false,
+    )]);
+    let report = bind_with(
+        &recipe,
+        &[request("krea2_turbo_bf16.safetensors")],
+        Some(&inv),
+        true,
+        false,
+    );
     assert_eq!(report.bindings[0].status, Status::OnDiskOnly);
-    assert!(report.overrides.is_empty(), "实例加载不了的文件写进覆盖键 = 下一次提交必然报文件不存在");
+    assert!(
+        report.overrides.is_empty(),
+        "实例加载不了的文件写进覆盖键 = 下一次提交必然报文件不存在"
+    );
     assert!(!report.ready);
     let note = &report.bindings[0].note;
     assert!(note.contains("重启"), "{note}");
     assert!(note.contains("不要下载"), "{note}");
-    assert!(report.warnings.iter().any(|w| w.contains("不要下载")), "{:?}", report.warnings);
+    assert!(
+        report.warnings.iter().any(|w| w.contains("不要下载")),
+        "{:?}",
+        report.warnings
+    );
 }
 
 #[test]
 fn 只有字面相似时给候选但先问用户() {
     let recipe = edit_recipe();
-    let inv = inventory(vec![local("krea2_turbo_v10.safetensors", "diffusion_models", true)]);
-    let report =
-        bind_with(&recipe, &[request("krea2_turbo_v11.safetensors")], Some(&inv), true, false);
+    let inv = inventory(vec![local(
+        "krea2_turbo_v10.safetensors",
+        "diffusion_models",
+        true,
+    )]);
+    let report = bind_with(
+        &recipe,
+        &[request("krea2_turbo_v11.safetensors")],
+        Some(&inv),
+        true,
+        false,
+    );
     let binding = &report.bindings[0];
     assert_eq!(binding.status, Status::Substitute);
     assert!(report.overrides.is_empty());
@@ -1002,21 +1380,45 @@ fn 只有字面相似时给候选但先问用户() {
 #[test]
 fn 本机没有时绝不编文件名_force_才写得进去() {
     let recipe = edit_recipe();
-    let inv = inventory(vec![local("anima-base-v1.0.safetensors", "diffusion_models", true)]);
-    let strict =
-        bind_with(&recipe, &[request("totally_new_model.safetensors")], Some(&inv), true, false);
+    let inv = inventory(vec![local(
+        "anima-base-v1.0.safetensors",
+        "diffusion_models",
+        true,
+    )]);
+    let strict = bind_with(
+        &recipe,
+        &[request("totally_new_model.safetensors")],
+        Some(&inv),
+        true,
+        false,
+    );
     assert_eq!(strict.bindings[0].status, Status::Missing);
     assert!(strict.overrides.is_empty());
     assert!(strict.bindings[0].note.contains("不要自己编"));
 
-    let forced =
-        bind_with(&recipe, &[request("totally_new_model.safetensors")], Some(&inv), true, true);
+    let forced = bind_with(
+        &recipe,
+        &[request("totally_new_model.safetensors")],
+        Some(&inv),
+        true,
+        true,
+    );
     assert_eq!(
         forced.overrides,
-        vec![("55.unet_name".to_string(), "totally_new_model.safetensors".to_string())]
+        vec![(
+            "55.unet_name".to_string(),
+            "totally_new_model.safetensors".to_string()
+        )]
     );
-    assert!(forced.warnings.iter().any(|w| w.contains("没验证过")), "{:?}", forced.warnings);
-    assert!(!forced.ready, "force 写进去不等于 ready（提交前预检还会再拦一次）");
+    assert!(
+        forced.warnings.iter().any(|w| w.contains("没验证过")),
+        "{:?}",
+        forced.warnings
+    );
+    assert!(
+        !forced.ready,
+        "force 写进去不等于 ready（提交前预检还会再拦一次）"
+    );
 }
 
 #[test]
@@ -1047,7 +1449,10 @@ fn 拿不到清单时如实说没验证过() {
         true,
         true,
     );
-    assert_eq!(forced.overrides, vec![("55.unet_name".to_string(), "x.safetensors".to_string())]);
+    assert_eq!(
+        forced.overrides,
+        vec![("55.unet_name".to_string(), "x.safetensors".to_string())]
+    );
 }
 
 #[test]
@@ -1088,16 +1493,28 @@ fn 同角色多槽位要报_ambiguous_不许一个文件写给两个槽位() {
     );
     assert_eq!(
         one.overrides,
-        vec![("71.lora_name".to_string(), "new_lora.safetensors".to_string())]
+        vec![(
+            "71.lora_name".to_string(),
+            "new_lora.safetensors".to_string()
+        )]
     );
 }
 
 #[test]
 fn 整包_checkpoint_接分离式骨架要明说结构上接不上() {
     let recipe = edit_recipe();
-    let inv = inventory(vec![local("anima-base-v1.0.safetensors", "checkpoints", true)]);
-    let report =
-        bind_with(&recipe, &[request("anima-base-v1.0.safetensors")], Some(&inv), true, false);
+    let inv = inventory(vec![local(
+        "anima-base-v1.0.safetensors",
+        "checkpoints",
+        true,
+    )]);
+    let report = bind_with(
+        &recipe,
+        &[request("anima-base-v1.0.safetensors")],
+        Some(&inv),
+        true,
+        false,
+    );
     let binding = &report.bindings[0];
     assert_eq!(binding.status, Status::NotInRecipe);
     assert!(report.overrides.is_empty());
@@ -1157,13 +1574,23 @@ fn 一次绑好几个角色_缺件配方要提醒先补齐() {
     assert_eq!(
         report.overrides,
         vec![
-            ("55.unet_name".to_string(), "new_unet.safetensors".to_string()),
-            ("56.clip_name".to_string(), "new_clip.safetensors".to_string()),
+            (
+                "55.unet_name".to_string(),
+                "new_unet.safetensors".to_string()
+            ),
+            (
+                "56.clip_name".to_string(),
+                "new_clip.safetensors".to_string()
+            ),
             ("57.vae_name".to_string(), "new_vae.safetensors".to_string()),
         ]
     );
     assert!(!report.ready, "complete=false 的配方不许报 ready");
-    assert!(report.hints.iter().any(|h| h.contains("complete=false")), "{:?}", report.hints);
+    assert!(
+        report.hints.iter().any(|h| h.contains("complete=false")),
+        "{:?}",
+        report.hints
+    );
 }
 
 #[test]
@@ -1198,12 +1625,19 @@ fn sidecar_元数据不算模型_也不许混进候选() {
             role: Some("diffusion_models".into()),
             override_key: None,
         }],
-        Some(&inventory(vec![local("anima-base-v1.0.metadata.json", "diffusion_models", true)])),
+        Some(&inventory(vec![local(
+            "anima-base-v1.0.metadata.json",
+            "diffusion_models",
+            true,
+        )])),
         true,
         false,
     );
     assert!(
-        !near.bindings[0].candidates.iter().any(|c| c.contains("metadata.json")),
+        !near.bindings[0]
+            .candidates
+            .iter()
+            .any(|c| c.contains("metadata.json")),
         "候选里不许有 sidecar：{:?}",
         near.bindings[0].candidates
     );
@@ -1214,10 +1648,17 @@ fn 没给_role_时按底模那一格兜底_但要把假设说出来() {
     let recipe = edit_recipe();
     let report = bind_with(&recipe, &[request("x.safetensors")], None, true, false);
     let binding = &report.bindings[0];
-    assert_eq!(binding.role.as_deref(), Some("diffusion_models"), "参数名叫 model，兜底就该落在底模那一格");
+    assert_eq!(
+        binding.role.as_deref(),
+        Some("diffusion_models"),
+        "参数名叫 model，兜底就该落在底模那一格"
+    );
     assert_eq!(binding.status, Status::Unchecked);
     assert!(
-        report.warnings.iter().any(|w| w.contains("按**底模**那一格")),
+        report
+            .warnings
+            .iter()
+            .any(|w| w.contains("按**底模**那一格")),
         "兜底是个假设，必须说出来：{:?}",
         report.warnings
     );
@@ -1234,13 +1675,22 @@ fn 配方连底模槽位都没有时要说清楚要带什么() {
         }"#,
     ));
     let only_loras = Recipe {
-        slots: lora_only.slots.iter().filter(|s| s.role == "loras").cloned().collect(),
+        slots: lora_only
+            .slots
+            .iter()
+            .filter(|s| s.role == "loras")
+            .cloned()
+            .collect(),
         ..lora_only
     };
     let report = bind_with(&only_loras, &[request("x.safetensors")], None, true, false);
     let binding = &report.bindings[0];
     assert_eq!(binding.status, Status::NotInRecipe);
     assert!(binding.note.contains("overrideKey"), "{}", binding.note);
-    assert!(binding.note.contains("71.lora_name"), "要把槽位清单列出来：{}", binding.note);
+    assert!(
+        binding.note.contains("71.lora_name"),
+        "要把槽位清单列出来：{}",
+        binding.note
+    );
     assert!(binding.override_key.is_none());
 }

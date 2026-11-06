@@ -60,17 +60,26 @@ class ConfinementBanner extends StatelessWidget {
                   children: [
                     Text(
                       info.headline,
-                      style: text.titleSmall?.copyWith(color: onError, fontWeight: FontWeight.w600),
+                      style: text.titleSmall?.copyWith(
+                        color: onError,
+                        fontWeight: FontWeight.w600,
+                      ),
                     ),
                     if (detail.isNotEmpty)
                       Padding(
                         padding: const EdgeInsets.only(top: 2),
-                        child: Text(detail, style: text.bodySmall?.copyWith(color: onError)),
+                        child: Text(
+                          detail,
+                          style: text.bodySmall?.copyWith(color: onError),
+                        ),
                       ),
                     if (remedy != null && remedy.isNotEmpty)
                       Padding(
                         padding: const EdgeInsets.only(top: 4),
-                        child: Text(remedy, style: text.bodySmall?.copyWith(color: onError)),
+                        child: Text(
+                          remedy,
+                          style: text.bodySmall?.copyWith(color: onError),
+                        ),
                       ),
                   ],
                 ),

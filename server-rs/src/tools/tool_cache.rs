@@ -123,8 +123,11 @@ pub fn freshness(name: &str) -> Option<Freshness> {
         "comfy_get_status" | "comfy_get_run" => Ttl(secs(10)),
 
         // ---- 纯计算：输入相同，结果必然相同（不碰世界、不读库） ----
-        "comfy_check_inputs" | "comfy_fit_workflow" | "comfy_audit_workflow"
-        | "comfy_prune_workflow" | "comfy_bind_recipe" => Ttl(secs(60)),
+        "comfy_check_inputs"
+        | "comfy_fit_workflow"
+        | "comfy_audit_workflow"
+        | "comfy_prune_workflow"
+        | "comfy_bind_recipe" => Ttl(secs(60)),
 
         // ---- 出网：一次请求就是一次真实的外部调用 ----
         //
@@ -229,12 +232,7 @@ pub fn lookup(policy: &ToolPolicy, name: &str, arguments: &Value) -> Option<Cach
 
 /// 与 [`lookup`] 同一份实现，"现在"作为参数收进来 —— 用例要能把钟往前拨
 /// （TTL 最短的一档也有 10 秒，`thread::sleep` 不该出现在用例里）。
-fn lookup_at(
-    policy: &ToolPolicy,
-    name: &str,
-    arguments: &Value,
-    now: Instant,
-) -> Option<Cached> {
+fn lookup_at(policy: &ToolPolicy, name: &str, arguments: &Value, now: Instant) -> Option<Cached> {
     let fresh = freshness(name)?;
     let probe = probe(policy, name, arguments, fresh)?;
     let mut guard = cache().lock().unwrap_or_else(|e| e.into_inner());
@@ -344,7 +342,10 @@ fn probe(policy: &ToolPolicy, name: &str, arguments: &Value, fresh: Freshness) -
         raw.push_str(&path.display().to_string());
         stamp = Some(stat_of(&path)?);
     }
-    Some(Probe { key: format!("{name}\u{1}{}", fingerprint(&raw)), stamp })
+    Some(Probe {
+        key: format!("{name}\u{1}{}", fingerprint(&raw)),
+        stamp,
+    })
 }
 
 /// `File` 档工具的目标路径（**一律过策略**，不许自己拼）。
@@ -369,7 +370,10 @@ fn target_path(policy: &ToolPolicy, name: &str, arguments: &Value) -> Option<Pat
 
 fn stat_of(path: &Path) -> Option<Stamp> {
     let meta = std::fs::metadata(path).ok()?;
-    Some(Stamp { mtime: meta.modified().ok(), len: meta.len() })
+    Some(Stamp {
+        mtime: meta.modified().ok(),
+        len: meta.len(),
+    })
 }
 
 /// 参数指纹（**规范化之后**再算）：对象键排序，所以 `{"a":1,"b":2}` 与

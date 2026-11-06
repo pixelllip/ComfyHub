@@ -71,8 +71,9 @@ void main() {
     // 而用户的真库一直在项目根下。判据要"往上再找一层源码树"。
     test('产物目录里有 backend\\，但上面有源码树 → 根取源码树', () {
       touch(['server-rs', 'Cargo.toml']); // 项目根
-      final runner = Directory(p([root.path, 'build', 'windows', 'x64', 'runner', 'Debug']))
-        ..createSync(recursive: true);
+      final runner = Directory(
+        p([root.path, 'build', 'windows', 'x64', 'runner', 'Debug']),
+      )..createSync(recursive: true);
       File(p([runner.path, 'backend', kServerExeName]))
         ..createSync(recursive: true)
         ..writeAsStringSync('x');
@@ -80,24 +81,28 @@ void main() {
       // 产物目录**单独看**确实像根（这条判据本身没变）
       expect(looksLikeRoot(runner.path), isTrue);
       // 但从它往上找时，**必须**拿到项目根，而不是它自己
-      expect(detectRoot(from: runner.path), root.path,
-          reason: '源码树在就轮不到 build\\ 里的产物目录当根');
+      expect(
+        detectRoot(from: runner.path),
+        root.path,
+        reason: '源码树在就轮不到 build\\ 里的产物目录当根',
+      );
     });
 
     test('整条链上没有源码树 → 回退到产物根（真正的发布包）', () {
-      final pack = Directory(p([root.path, 'dist', 'ComfyHub']))..createSync(recursive: true);
+      final pack = Directory(p([root.path, 'dist', 'ComfyHub']))
+        ..createSync(recursive: true);
       File(p([pack.path, 'backend', kServerExeName]))
         ..createSync(recursive: true)
         ..writeAsStringSync('x');
-      expect(detectRoot(from: pack.path), pack.path,
-          reason: '发布包里后端就在旁边，它就是根');
+      expect(detectRoot(from: pack.path), pack.path, reason: '发布包里后端就在旁边，它就是根');
     });
   });
 
   group('detectRoot：从子目录往上找', () {
     test('命中带判据的上级', () {
       touch(['server-rs', 'Cargo.toml']);
-      final deep = Directory(p([root.path, 'a', 'b', 'c']))..createSync(recursive: true);
+      final deep = Directory(p([root.path, 'a', 'b', 'c']))
+        ..createSync(recursive: true);
       expect(detectRoot(from: deep.path), root.path);
     });
 
@@ -107,9 +112,11 @@ void main() {
   });
 
   group('serverExeCandidates：顺序即优先级', () {
-    test('COMFYHUB_SERVER_EXE 永远最前，其后是 backend\\ / server\\ / target\\release / target\\debug',
-        () {
-      final list = serverExeCandidates(root.path, env: {'COMFYHUB_SERVER_EXE': 'X:\\custom\\exe'});
+    test('COMFYHUB_SERVER_EXE 永远最前，其后是 backend\\ / server\\ / target\\release / target\\debug', () {
+      final list = serverExeCandidates(
+        root.path,
+        env: {'COMFYHUB_SERVER_EXE': 'X:\\custom\\exe'},
+      );
 
       // 顺序即优先级：覆盖 > App 自带 backend\ > 根下 backend\ > 旧发布包 server\ > 源码树
       expect(list.map((e) => e.key).toList(), [
@@ -123,8 +130,14 @@ void main() {
       expect(list[0].value, 'X:\\custom\\exe');
       // 相对 root 的候选都落在 root 下
       expect(list[2].value, p([root.path, 'backend', kServerExeName]));
-      expect(list[4].value, p([root.path, 'server-rs', 'target', 'release', kServerExeName]));
-      expect(list[5].value, p([root.path, 'server-rs', 'target', 'debug', kServerExeName]));
+      expect(
+        list[4].value,
+        p([root.path, 'server-rs', 'target', 'release', kServerExeName]),
+      );
+      expect(
+        list[5].value,
+        p([root.path, 'server-rs', 'target', 'debug', kServerExeName]),
+      );
     });
 
     test('没设环境变量时第一个候选就是 backend\\', () {
@@ -152,7 +165,10 @@ void main() {
 
       final layout = resolveLayout(projectRoot: root.path, env: const {});
 
-      expect(layout!.exe, p([root.path, 'server-rs', 'target', 'release', kServerExeName]));
+      expect(
+        layout!.exe,
+        p([root.path, 'server-rs', 'target', 'release', kServerExeName]),
+      );
     });
 
     test('COMFYHUB_SERVER_EXE 覆盖一切（把后端映像挪出受限目录的开关）', () {
@@ -161,8 +177,10 @@ void main() {
         ..parent.createSync(recursive: true)
         ..writeAsStringSync('x');
 
-      final layout = resolveLayout(projectRoot: root.path,
-          env: {'COMFYHUB_SERVER_EXE': custom.path});
+      final layout = resolveLayout(
+        projectRoot: root.path,
+        env: {'COMFYHUB_SERVER_EXE': custom.path},
+      );
 
       expect(layout!.exe, custom.path);
       expect(layout.exeSource, 'COMFYHUB_SERVER_EXE');
@@ -171,8 +189,12 @@ void main() {
     test('环境变量指向不存在的路径时当没设，不崩', () {
       touch(['backend', kServerExeName]);
 
-      final layout = resolveLayout(projectRoot: root.path,
-          env: {'COMFYHUB_SERVER_EXE': p([root.path, 'nope.exe'])});
+      final layout = resolveLayout(
+        projectRoot: root.path,
+        env: {
+          'COMFYHUB_SERVER_EXE': p([root.path, 'nope.exe']),
+        },
+      );
 
       expect(layout!.exe, p([root.path, 'backend', kServerExeName]));
     });
@@ -194,8 +216,7 @@ void main() {
     test('没设过 = 运行根目录（默认）', () {
       expect(readDataDirOverride(root.path), isNull);
       expect(dataDirOf(root.path), root.path);
-      expect(dataDbFileOf(root.path),
-          p([root.path, '.db', 'comfyhub.db']));
+      expect(dataDbFileOf(root.path), p([root.path, '.db', 'comfyhub.db']));
       expect(dataStorageDirOf(root.path), p([root.path, 'storage']));
     });
 
@@ -213,21 +234,25 @@ void main() {
     });
 
     test('半截 JSON / 坏值当没设过，绝不抛', () {
-      File(p([root.path, kDataDirFileName])).writeAsStringSync('{"dataDir": "D:\\x"');
+      File(p([root.path, kDataDirFileName]))
+          .writeAsStringSync('{"dataDir": "D:\\x"');
       expect(readDataDirOverride(root.path), isNull);
       expect(dataDirOf(root.path), root.path);
 
-      File(p([root.path, kDataDirFileName])).writeAsStringSync('{"dataDir": ""}');
+      File(p([root.path, kDataDirFileName]))
+          .writeAsStringSync('{"dataDir": ""}');
       expect(readDataDirOverride(root.path), isNull);
     });
   });
 
-  group('readPortFile：启动与退出的关键路径，绝不能抛', () {    test('没有文件回 null', () {
+  group('readPortFile：启动与退出的关键路径，绝不能抛', () {
+    test('没有文件回 null', () {
       expect(readPortFile(root.path), isNull);
     });
 
     test('半截 JSON / 非 JSON 回 null', () {
-      final runDir = Directory(p([root.path, '.run']))..createSync(recursive: true);
+      final runDir = Directory(p([root.path, '.run']))
+        ..createSync(recursive: true);
       File(p([runDir.path, 'api.json'])).writeAsStringSync('{"port": 12');
       expect(readPortFile(root.path), isNull);
       File(p([runDir.path, 'api.json'])).writeAsStringSync('不是 json');
@@ -235,10 +260,12 @@ void main() {
     });
 
     test('正常文件解析出 port / pid', () {
-      final runDir = Directory(p([root.path, '.run']))..createSync(recursive: true);
+      final runDir = Directory(p([root.path, '.run']))
+        ..createSync(recursive: true);
       File(p([runDir.path, 'api.json'])).writeAsStringSync(
-          '{"port":6023,"pid":8884,"host":"0.0.0.0","url":"http://0.0.0.0:6023",'
-          '"requestedPort":0,"fellBack":false}');
+        '{"port":6023,"pid":8884,"host":"0.0.0.0","url":"http://0.0.0.0:6023",'
+        '"requestedPort":0,"fellBack":false}',
+      );
 
       final state = readPortFile(root.path);
       expect(state, isNotNull);

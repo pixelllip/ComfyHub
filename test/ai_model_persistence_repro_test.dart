@@ -20,39 +20,43 @@ class _StatefulBackend {
   List<Map<String, dynamic>> models = [];
 
   MockClient client() => MockClient((request) async {
-        final path = request.url.path;
-        Object body;
+    final path = request.url.path;
+    Object body;
 
-        if (path == '/api/ai/providers' && request.method == 'GET') {
-          body = [
-            {
-              'id': 'local-gw',
-              'displayName': '本机网关',
-              'api': 'openai-completions',
-              'baseURL': 'http://127.0.0.1:11434/v1',
-              'credentialRef': 'LOCAL_KEY',
-              'endpointTrust': 'loopback',
-              'enabled': true,
-              'revision': 3,
-              'credential': {'configured': true, 'source': 'managed', 'writable': true},
-            }
-          ];
-        } else if (path == '/api/ai/providers/local-gw/models') {
-          if (request.method == 'PUT') {
-            final sent = jsonDecode(request.body) as Map<String, dynamic>;
-            models = (sent['models'] as List).cast<Map<String, dynamic>>();
-          }
-          body = models;
-        } else {
-          body = <Object>[];
-        }
+    if (path == '/api/ai/providers' && request.method == 'GET') {
+      body = [
+        {
+          'id': 'local-gw',
+          'displayName': '本机网关',
+          'api': 'openai-completions',
+          'baseURL': 'http://127.0.0.1:11434/v1',
+          'credentialRef': 'LOCAL_KEY',
+          'endpointTrust': 'loopback',
+          'enabled': true,
+          'revision': 3,
+          'credential': {
+            'configured': true,
+            'source': 'managed',
+            'writable': true,
+          },
+        },
+      ];
+    } else if (path == '/api/ai/providers/local-gw/models') {
+      if (request.method == 'PUT') {
+        final sent = jsonDecode(request.body) as Map<String, dynamic>;
+        models = (sent['models'] as List).cast<Map<String, dynamic>>();
+      }
+      body = models;
+    } else {
+      body = <Object>[];
+    }
 
-        return http.Response(
-          jsonEncode(body),
-          200,
-          headers: {'content-type': 'application/json; charset=utf-8'},
-        );
-      });
+    return http.Response(
+      jsonEncode(body),
+      200,
+      headers: {'content-type': 'application/json; charset=utf-8'},
+    );
+  });
 }
 
 Future<Widget> _page(_StatefulBackend backend) async {
@@ -87,8 +91,13 @@ void main() {
     await tester.tap(find.text('手动添加'));
     await tester.pumpAndSettle();
     await tester.enterText(
-        find.widgetWithText(TextField, '模型 ID（请求里用的那个）'), 'deepseek-chat');
-    await tester.enterText(find.widgetWithText(TextField, '显示名'), 'DeepSeek Chat');
+      find.widgetWithText(TextField, '模型 ID（请求里用的那个）'),
+      'deepseek-chat',
+    );
+    await tester.enterText(
+      find.widgetWithText(TextField, '显示名'),
+      'DeepSeek Chat',
+    );
     await tester.pumpAndSettle();
     await tester.tap(find.text('添加'));
     await tester.pumpAndSettle();
@@ -107,8 +116,11 @@ void main() {
     await tester.tap(find.text('本机网关'));
     await tester.pumpAndSettle();
 
-    expect(find.text('还没有模型'), findsNothing,
-        reason: '后端明明有 1 个模型，界面上不该说"还没有模型"');
+    expect(
+      find.text('还没有模型'),
+      findsNothing,
+      reason: '后端明明有 1 个模型，界面上不该说"还没有模型"',
+    );
     expect(find.text('DeepSeek Chat'), findsWidgets);
   });
 }

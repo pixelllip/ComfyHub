@@ -74,7 +74,11 @@ impl ObjectInfoCache {
 
     pub fn put_at(&self, url: &str, value: Arc<Map<String, Value>>, now: Instant) {
         if let Ok(mut guard) = self.entry.lock() {
-            *guard = Some(Entry { url: url.to_string(), at: now, value });
+            *guard = Some(Entry {
+                url: url.to_string(),
+                at: now,
+                value,
+            });
         }
     }
 
@@ -105,11 +109,16 @@ mod tests {
         let value = info(&["KSampler", "CheckpointLoaderSimple"]);
         cache.put("http://127.0.0.1:8188", Arc::clone(&value));
 
-        let hit = cache.get("http://127.0.0.1:8188").expect("刚放进去就该命中");
+        let hit = cache
+            .get("http://127.0.0.1:8188")
+            .expect("刚放进去就该命中");
         assert_eq!(hit.len(), 2);
         assert!(hit.contains_key("KSampler"));
         // Arc 共享：同一个分配，**没有深拷贝**
-        assert!(Arc::ptr_eq(&hit, &value), "缓存必须只加引用计数，不许拷贝整棵树");
+        assert!(
+            Arc::ptr_eq(&hit, &value),
+            "缓存必须只加引用计数，不许拷贝整棵树"
+        );
     }
 
     #[test]
@@ -129,7 +138,9 @@ mod tests {
         let start = Instant::now();
         cache.put_at("http://x", info(&["A"]), start);
 
-        assert!(cache.get_at("http://x", start + TTL - Duration::from_millis(1)).is_some());
+        assert!(cache
+            .get_at("http://x", start + TTL - Duration::from_millis(1))
+            .is_some());
         assert!(
             cache.get_at("http://x", start + TTL).is_none(),
             "到点即失效：边界取 >=，免得 0 秒的缓存被当永久"

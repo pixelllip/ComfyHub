@@ -25,9 +25,14 @@ Rect fittedImageRect(Size intrinsic, Size viewport) {
 @visibleForTesting
 Rect visibleImageFraction(Matrix4 transform, Size viewport, Rect imageRect) {
   final inverse = Matrix4.tryInvert(transform);
-  if (inverse == null || imageRect.isEmpty) return const Rect.fromLTWH(0, 0, 1, 1);
+  if (inverse == null || imageRect.isEmpty) {
+    return const Rect.fromLTWH(0, 0, 1, 1);
+  }
   final a = MatrixUtils.transformPoint(inverse, Offset.zero);
-  final b = MatrixUtils.transformPoint(inverse, Offset(viewport.width, viewport.height));
+  final b = MatrixUtils.transformPoint(
+    inverse,
+    Offset(viewport.width, viewport.height),
+  );
   final visible = Rect.fromPoints(a, b).intersect(imageRect);
   if (visible.isEmpty) return Rect.zero;
   return Rect.fromLTWH(
@@ -104,7 +109,9 @@ class _ZoomableImageViewState extends State<ZoomableImageView> {
   @override
   void didUpdateWidget(covariant ZoomableImageView oldWidget) {
     super.didUpdateWidget(oldWidget);
-    final changed = oldWidget.url != widget.url || oldWidget.imageProvider != widget.imageProvider;
+    final changed =
+        oldWidget.url != widget.url ||
+        oldWidget.imageProvider != widget.imageProvider;
     if (!changed) return;
     _detachStream();
     _provider = widget.imageProvider ?? NetworkImage(widget.url);
@@ -134,15 +141,15 @@ class _ZoomableImageViewState extends State<ZoomableImageView> {
     final stream = provider.resolve(createLocalImageConfiguration(context));
     if (stream.key == _stream?.key) return;
     _detachStream();
-    final listener = ImageStreamListener(
-      (info, _) {
-        if (!mounted) return;
-        setState(() {
-          _intrinsic = Size(info.image.width.toDouble(), info.image.height.toDouble());
-        });
-      },
-      onError: (_, _) {},
-    );
+    final listener = ImageStreamListener((info, _) {
+      if (!mounted) return;
+      setState(() {
+        _intrinsic = Size(
+          info.image.width.toDouble(),
+          info.image.height.toDouble(),
+        );
+      });
+    }, onError: (_, _) {});
     stream.addListener(listener);
     _stream = stream;
     _listener = listener;
@@ -214,7 +221,10 @@ class _ZoomableImageViewState extends State<ZoomableImageView> {
     final target = (scale * factor).clamp(widget.minScale, widget.maxScale);
     if (target == scale) return;
     final center = Offset(viewport.width / 2, viewport.height / 2);
-    final sceneCenter = MatrixUtils.transformPoint(Matrix4.tryInvert(_tc.value)!, center);
+    final sceneCenter = MatrixUtils.transformPoint(
+      Matrix4.tryInvert(_tc.value)!,
+      center,
+    );
     final desired = Offset(
       center.dx - target * sceneCenter.dx,
       center.dy - target * sceneCenter.dy,
@@ -234,7 +244,9 @@ class _ZoomableImageViewState extends State<ZoomableImageView> {
         builder: (context, constraints) {
           final width = constraints.maxWidth;
           // 高度无界时（例如塞进 ListView 且没给高度）退一个 3:2 的默认高度，别让布局崩掉
-          final height = constraints.hasBoundedHeight ? constraints.maxHeight : width * 2 / 3;
+          final height = constraints.hasBoundedHeight
+              ? constraints.maxHeight
+              : width * 2 / 3;
           final viewport = Size(width, height);
           if (viewport != _viewport) {
             // 视口变了（窗口缩放）：缩放系数保留，但平移要重新夹回合法范围。
@@ -243,7 +255,11 @@ class _ZoomableImageViewState extends State<ZoomableImageView> {
             if (_scale > widget.minScale) {
               _afterFrame(() {
                 final t = _tc.value.getTranslation();
-                _tc.value = _clampedTransform(_scale, Offset(t.x, t.y), viewport);
+                _tc.value = _clampedTransform(
+                  _scale,
+                  Offset(t.x, t.y),
+                  viewport,
+                );
               });
             }
           }
@@ -254,7 +270,9 @@ class _ZoomableImageViewState extends State<ZoomableImageView> {
               fit: StackFit.expand,
               children: [
                 MouseRegion(
-                  cursor: _dragging ? SystemMouseCursors.grabbing : SystemMouseCursors.grab,
+                  cursor: _dragging
+                      ? SystemMouseCursors.grabbing
+                      : SystemMouseCursors.grab,
                   child: InteractiveViewer(
                     transformationController: _tc,
                     minScale: widget.minScale,
@@ -276,7 +294,8 @@ class _ZoomableImageViewState extends State<ZoomableImageView> {
                 ValueListenableBuilder<Matrix4>(
                   valueListenable: _tc,
                   builder: (context, matrix, _) {
-                    final zoomed = matrix.getMaxScaleOnAxis() > widget.minScale + 0.001;
+                    final zoomed =
+                        matrix.getMaxScaleOnAxis() > widget.minScale + 0.001;
                     return Stack(
                       fit: StackFit.expand,
                       children: [
@@ -288,7 +307,11 @@ class _ZoomableImageViewState extends State<ZoomableImageView> {
                               key: zoomableMinimapKey,
                               provider: _provider,
                               imageRect: imageRect,
-                              fraction: visibleImageFraction(matrix, viewport, imageRect),
+                              fraction: visibleImageFraction(
+                                matrix,
+                                viewport,
+                                imageRect,
+                              ),
                               intrinsic: _intrinsic,
                               onSeek: (f) => _seekTo(f, imageRect),
                             ),
@@ -332,7 +355,8 @@ class _ZoomableImageViewState extends State<ZoomableImageView> {
               child: CircularProgressIndicator(
                 value: progress.expectedTotalBytes == null
                     ? null
-                    : progress.cumulativeBytesLoaded / progress.expectedTotalBytes!,
+                    : progress.cumulativeBytesLoaded /
+                          progress.expectedTotalBytes!,
               ),
             ),
       errorBuilder: (context, e, s) => const Center(
@@ -396,7 +420,11 @@ class _Minimap extends StatelessWidget {
             fit: StackFit.expand,
             children: [
               if (provider != null)
-                Image(image: provider!, fit: BoxFit.contain, gaplessPlayback: true),
+                Image(
+                  image: provider!,
+                  fit: BoxFit.contain,
+                  gaplessPlayback: true,
+                ),
               CustomPaint(painter: _MinimapPainter(fraction: fraction)),
             ],
           ),
@@ -460,7 +488,10 @@ class _MinimapPainter extends CustomPainter {
       Path()..addRect(Offset.zero & size),
       Path()..addRect(box),
     );
-    canvas.drawPath(outside, Paint()..color = Colors.black.withValues(alpha: 0.45));
+    canvas.drawPath(
+      outside,
+      Paint()..color = Colors.black.withValues(alpha: 0.45),
+    );
     canvas.drawRect(
       box,
       Paint()
@@ -471,7 +502,8 @@ class _MinimapPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(covariant _MinimapPainter oldDelegate) => oldDelegate.fraction != fraction;
+  bool shouldRepaint(covariant _MinimapPainter oldDelegate) =>
+      oldDelegate.fraction != fraction;
 }
 
 // ---------------------------------------------------------------------------
@@ -526,7 +558,8 @@ class _ZoomBar extends StatelessWidget {
     );
   }
 
-  Widget _button(IconData icon, String tooltip, VoidCallback onTap) => IconButton(
+  Widget _button(IconData icon, String tooltip, VoidCallback onTap) =>
+      IconButton(
         tooltip: tooltip,
         onPressed: onTap,
         icon: Icon(icon, size: 16, color: Colors.white),

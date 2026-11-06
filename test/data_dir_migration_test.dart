@@ -53,7 +53,11 @@ void main() {
     // 下面两个**不该搬**：tmp 是 24 小时就清的中转文件；app-support 已经搬到
     // `<根>\app-support`（偏好不跟着数据走）
     write(oldData, ['storage', 'tmp', 'junk.bin'], 'junk');
-    write(oldData, ['storage', 'app-support', 'shared_preferences.json'], 'prefs');
+    write(oldData, [
+      'storage',
+      'app-support',
+      'shared_preferences.json',
+    ], 'prefs');
     // 程序目录里的东西：删旧数据时一个都不许碰
     write(root, ['backups', 'comfyhub-x.db'], 'backup');
     write(root, ['.run', 'api.json'], '{}');
@@ -71,27 +75,42 @@ void main() {
   group('查：什么目标不许用', () {
     test('同一个目录 / 当前目录里面 / 上一级都拒绝', () async {
       seed();
-      expect((await checkDataDirTarget(target: oldData.path, current: oldData.path)).ok,
-          isFalse);
+      expect(
+        (await checkDataDirTarget(
+          target: oldData.path,
+          current: oldData.path,
+        )).ok,
+        isFalse,
+      );
       final inside = p([oldData.path, 'sub']);
-      expect((await checkDataDirTarget(target: inside, current: oldData.path)).ok,
-          isFalse);
+      expect(
+        (await checkDataDirTarget(target: inside, current: oldData.path)).ok,
+        isFalse,
+      );
       final parent = oldData.parent.path;
-      expect((await checkDataDirTarget(target: parent, current: oldData.path)).ok,
-          isFalse);
+      expect(
+        (await checkDataDirTarget(target: parent, current: oldData.path)).ok,
+        isFalse,
+      );
     });
 
     test('目标里已经有一份数据 → 拒绝（那是换库，不是搬家）', () async {
       seed();
       write(newData, ['.db', 'comfyhub.db'], 'another db');
-      final check = await checkDataDirTarget(target: newData.path, current: oldData.path);
+      final check = await checkDataDirTarget(
+        target: newData.path,
+        current: oldData.path,
+      );
       expect(check.ok, isFalse);
       expect(check.message, contains('备份与恢复'));
     });
 
     test('干净的新目录 → 通过（会建出来）', () async {
       seed();
-      final check = await checkDataDirTarget(target: newData.path, current: oldData.path);
+      final check = await checkDataDirTarget(
+        target: newData.path,
+        current: oldData.path,
+      );
       expect(check.ok, isTrue);
       expect(check.source.files, 4);
       expect(Directory(newData.path).existsSync(), isTrue);
@@ -112,11 +131,20 @@ void main() {
       expect(exists(newData, ['.db', 'comfyhub.db']), isTrue);
       expect(exists(newData, ['.db', 'comfyhub.db-wal']), isTrue);
       expect(exists(newData, ['storage', 'media', 'a.png']), isTrue);
-      expect(exists(newData, ['storage', 'ai', 'skills', 'x', 'SKILL.md']), isTrue);
-      expect(exists(newData, ['storage', 'tmp', 'junk.bin']), isFalse,
-          reason: 'tmp 是中转文件，不跟着搬');
-      expect(exists(newData, ['storage', 'app-support', 'shared_preferences.json']),
-          isFalse, reason: '偏好已经搬到 <根>\\app-support，不跟着数据走');
+      expect(
+        exists(newData, ['storage', 'ai', 'skills', 'x', 'SKILL.md']),
+        isTrue,
+      );
+      expect(
+        exists(newData, ['storage', 'tmp', 'junk.bin']),
+        isFalse,
+        reason: 'tmp 是中转文件，不跟着搬',
+      );
+      expect(
+        exists(newData, ['storage', 'app-support', 'shared_preferences.json']),
+        isFalse,
+        reason: '偏好已经搬到 <根>\\app-support，不跟着数据走',
+      );
 
       expect(readDataDirOverride(root.path), newData.path);
       expect(dataDirOf(root.path), newData.path);
@@ -173,8 +201,10 @@ void main() {
       expect(Directory(dataDbParentOf(oldData.path)).existsSync(), isFalse);
       expect(exists(oldData, ['storage', 'media', 'a.png']), isFalse);
       // 偏好文件可能还被"刚升级、没重启"的进程用着 —— 删旧数据必须留着它
-      expect(exists(oldData, ['storage', 'app-support', 'shared_preferences.json']),
-          isTrue);
+      expect(
+        exists(oldData, ['storage', 'app-support', 'shared_preferences.json']),
+        isTrue,
+      );
       // 程序目录里的东西一个都没动
       expect(exists(root, ['backups', 'comfyhub-x.db']), isTrue);
       expect(exists(root, ['.run', 'api.json']), isTrue);

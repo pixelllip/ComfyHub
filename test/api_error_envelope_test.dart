@@ -20,13 +20,21 @@ import 'package:viewer/core/ai_api_client.dart';
 import 'package:viewer/core/api_client.dart';
 
 /// 只回一个固定错误体的假后端。
-MockClient _failing(int status, Map<String, dynamic> body) =>
-    MockClient((_) async => http.Response(jsonEncode(body), status, headers: {'content-type': 'application/json'}));
+MockClient _failing(int status, Map<String, dynamic> body) => MockClient(
+  (_) async => http.Response(
+    jsonEncode(body),
+    status,
+    headers: {'content-type': 'application/json'},
+  ),
+);
 
 void main() {
   group('ApiClient（画廊 / 提示词那套）', () {
     test('普通错误：人话就在 error 里', () async {
-      final api = ApiClient('http://x', client: _failing(404, {'error': '提示词 999 不存在'}));
+      final api = ApiClient(
+        'http://x',
+        client: _failing(404, {'error': '提示词 999 不存在'}),
+      );
       await expectLater(
         api.getPrompt(999),
         throwsA(
@@ -39,7 +47,10 @@ void main() {
     });
 
     test('AI 形状（error 是码、detail 是人话）：两个键都留得住', () async {
-      final api = ApiClient('http://x', client: _failing(400, {'error': 'CONFIG_ERROR', 'detail': '会话不存在: 9'}));
+      final api = ApiClient(
+        'http://x',
+        client: _failing(400, {'error': 'CONFIG_ERROR', 'detail': '会话不存在: 9'}),
+      );
       await expectLater(
         api.getPrompt(9),
         throwsA(
@@ -47,37 +58,58 @@ void main() {
               .having((e) => e.message, 'message', 'CONFIG_ERROR')
               .having((e) => e.detail, 'detail', '会话不存在: 9')
               // 展示串是 "人话（码）" 的顺序：人话在前，用户先看到能懂的那半句
-              .having((e) => e.toString(), 'toString', 'CONFIG_ERROR (会话不存在: 9)'),
+              .having(
+                (e) => e.toString(),
+                'toString',
+                'CONFIG_ERROR (会话不存在: 9)',
+              ),
         ),
       );
     });
 
     test('`message` 这个键已经不在了：只剩它会话界面只能看到兜底文案', () async {
-      final api = ApiClient('http://x', client: _failing(400, {'message': '旧形状'}));
+      final api = ApiClient(
+        'http://x',
+        client: _failing(400, {'message': '旧形状'}),
+      );
       await expectLater(
         api.getPrompt(1),
-        throwsA(isA<ApiException>().having((e) => e.message, 'message', 'HTTP 400')),
+        throwsA(
+          isA<ApiException>().having((e) => e.message, 'message', 'HTTP 400'),
+        ),
       );
     });
   });
 
   group('AiApiClient（AI 工作台那套）', () {
     test('AI 错误：先读 detail —— 用户看到的是人话而不是 CONFIG_ERROR', () async {
-      final api = AiApiClient('http://x',
-          client: _failing(400, {'error': 'CONFIG_ERROR', 'detail': '会话不存在: 999999'}));
+      final api = AiApiClient(
+        'http://x',
+        client: _failing(400, {
+          'error': 'CONFIG_ERROR',
+          'detail': '会话不存在: 999999',
+        }),
+      );
       await expectLater(
         api.listProviders(),
-        throwsA(isA<AiApiException>()
-            .having((e) => e.statusCode, 'statusCode', 400)
-            .having((e) => e.message, 'message', '会话不存在: 999999')),
+        throwsA(
+          isA<AiApiException>()
+              .having((e) => e.statusCode, 'statusCode', 400)
+              .having((e) => e.message, 'message', '会话不存在: 999999'),
+        ),
       );
     });
 
     test('普通错误（没有 detail）：回落到 error，仍然是人话', () async {
-      final api = AiApiClient('http://x', client: _failing(400, {'error': '非法的 id'}));
+      final api = AiApiClient(
+        'http://x',
+        client: _failing(400, {'error': '非法的 id'}),
+      );
       await expectLater(
         api.listProviders(),
-        throwsA(isA<AiApiException>().having((e) => e.message, 'message', '非法的 id')),
+        throwsA(
+          isA<AiApiException>().having((e) => e.message, 'message', '非法的 id'),
+        ),
       );
     });
   });

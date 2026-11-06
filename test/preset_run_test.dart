@@ -23,21 +23,20 @@ Prompt _prompt({
   double? cfg = 4.5,
   int? width = 1024,
   int? height = 1024,
-}) =>
-    Prompt(
-      id: 1,
-      title: title,
-      kind: kind,
-      positivePrompt: positive,
-      negativePrompt: negative,
-      negativeMode: negativeMode,
-      checkpoint: checkpoint,
-      sampler: sampler,
-      steps: steps,
-      cfgScale: cfg,
-      width: width,
-      height: height,
-    );
+}) => Prompt(
+  id: 1,
+  title: title,
+  kind: kind,
+  positivePrompt: positive,
+  negativePrompt: negative,
+  negativeMode: negativeMode,
+  checkpoint: checkpoint,
+  sampler: sampler,
+  steps: steps,
+  cfgScale: cfg,
+  width: width,
+  height: height,
+);
 
 void main() {
   test('提示词正文逐字带上（不改写、不截断）', () {

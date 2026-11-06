@@ -35,7 +35,10 @@ fn 类别与权限档的线上字与_kotlin_一致() {
     assert_eq!(category_of("anima_studio_train"), "train");
     assert!(!is_comfy_query("anima_studio_projects"));
     assert!(is_comfy_query("comfy_find_workflow"));
-    assert_eq!(access_wire(crate::tools::policy::ToolAccess::Allow), "allow");
+    assert_eq!(
+        access_wire(crate::tools::policy::ToolAccess::Allow),
+        "allow"
+    );
     assert_eq!(access_wire(crate::tools::policy::ToolAccess::Ask), "ask");
     assert_eq!(access_wire(crate::tools::policy::ToolAccess::Deny), "deny");
 }
@@ -44,7 +47,12 @@ fn 类别与权限档的线上字与_kotlin_一致() {
 fn policy_dto_的键集合就是_kotlin_那十一个() {
     let policy = ToolPolicy::new(PathBuf::from(r"D:\proj"), ToolPolicyConfig::default());
     let json = policy_dto(&policy, &[]);
-    let mut keys: Vec<&str> = json.as_object().unwrap().keys().map(String::as_str).collect();
+    let mut keys: Vec<&str> = json
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
     keys.sort_unstable();
     assert_eq!(
         keys,

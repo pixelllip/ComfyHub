@@ -48,7 +48,6 @@ pub struct DesktopToolSpec {
 
 /// ⚠ **按 name 升序**：与手机清单合并之后仍要保持有序（系统提示里那两行的顺序要稳定）。
 pub const DESKTOP_TOOLS: &[DesktopToolSpec] = &[
-
     DesktopToolSpec {
         name: "comfy_audit_workflow",
         description: r#"**审一份工作流**：跑之前先看它有没有"跑不起来"或"大概率白跑"的问题。
@@ -68,7 +67,6 @@ pub const DESKTOP_TOOLS: &[DesktopToolSpec] = &[
         access: "ALLOW",
         mutating: false,
     },
-
     DesktopToolSpec {
         name: "comfy_bind_recipe",
         // ⚠ 逐字来自 Kotlin `ToolRegistry.kt` 的 `comfy_bind_recipe`（R12/R13）：
@@ -87,7 +85,6 @@ pub const DESKTOP_TOOLS: &[DesktopToolSpec] = &[
         access: "ALLOW",
         mutating: false,
     },
-
     DesktopToolSpec {
         name: "comfy_check_inputs",
         description: r#"体检一份工作流：**哪些输入还等着外部给**（缺图 / 缺视频 / 空连线 / 没值的参数），每条带 节点id.输入名、节点类、缺什么类型、以及下一步该怎么办。
@@ -179,7 +176,6 @@ pub const DESKTOP_TOOLS: &[DesktopToolSpec] = &[
         access: "ALLOW",
         mutating: true,
     },
-
     DesktopToolSpec {
         name: "comfy_list_recipes",
         // ⚠ 逐字来自 Kotlin `ToolRegistry.kt` 的 `comfy_list_recipes`（R12/R13）。
@@ -192,7 +188,6 @@ pub const DESKTOP_TOOLS: &[DesktopToolSpec] = &[
         access: "ALLOW",
         mutating: false,
     },
-
     DesktopToolSpec {
         name: "comfy_list_workflows",
         description: r#"列出**本机 ComfyUI 里已经保存的工作流文件**（`user\<用户>\workflows\*.json`），带完整路径、格式（ui/api）与是否已经在本项目库里（inLibrary / promptId）。**首次使用、或者 comfy_find_workflow 什么都搜不到时，先看这里** —— 这些工作流不需要在 ComfyUI 里跑过一次才可用：拿到 path 直接 comfy_load_workflow(path=…) 读进库，再用返回的 promptId 提交。只读，不改用户的文件。"#,
@@ -253,7 +248,6 @@ pub const DESKTOP_TOOLS: &[DesktopToolSpec] = &[
         access: "ALLOW",
         mutating: false,
     },
-
     DesktopToolSpec {
         name: "comfy_start",
         description: r#"**把本机 ComfyUI 实例起起来**（ComfyHub 自己起，不走 comfy-cli/comfy-mcp 那条路）。
@@ -278,7 +272,6 @@ pub const DESKTOP_TOOLS: &[DesktopToolSpec] = &[
         access: "ASK",
         mutating: true,
     },
-
     DesktopToolSpec {
         name: "comfy_submit",
         description: r#"**把一个工作流提交给 ComfyUI 真的跑一次**（会消耗显卡时间，默认需要用户批准）。用 promptId 指定库里的工作流（先 comfy_find_workflow 或 comfy_load_workflow），或者直接用 workflowPath 指一份本机工作流文件（等价于先 comfy_load_workflow 再提交）。用 overrides 覆盖参数（键写成 节点id.输入名，例如 "3.steps"、"6.text"）。用 connections 补连线（键一样，值写成 ["上游节点id", 槽位]，例如 {"60.vae":["1",0]}）——comfy_load_workflow 报 runnable=false 时，照它给的 openInputs / unresolvedInputs 补。

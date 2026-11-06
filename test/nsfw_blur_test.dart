@@ -37,7 +37,12 @@ MockClient _nsfwBackend({
       final e = body['enabled'] == true;
       final b = body['blur'] == true;
       return http.Response(
-        jsonEncode({'enabled': e, 'blur': b, 'effectiveBlur': e && b, 'promptVersion': 'nsfw-v1'}),
+        jsonEncode({
+          'enabled': e,
+          'blur': b,
+          'effectiveBlur': e && b,
+          'promptVersion': 'nsfw-v1',
+        }),
         200,
         headers: {'content-type': 'application/json; charset=utf-8'},
       );
@@ -56,7 +61,9 @@ MockClient _nsfwBackend({
 }
 
 Future<NsfwStore> _store(MockClient client) async {
-  final store = NsfwStore(api: AiApiClient('http://127.0.0.1:8080', client: client));
+  final store = NsfwStore(
+    api: AiApiClient('http://127.0.0.1:8080', client: client),
+  );
   addTearDown(store.dispose);
   await store.load(silent: true);
   return store;
@@ -68,26 +75,25 @@ Widget _wrap(
   String key = 'media:1',
   bool nsfw = true,
   VoidCallback? onTap,
-}) =>
-    ChangeNotifierProvider<NsfwStore>.value(
-      value: store,
-      child: MaterialApp(
-        home: Scaffold(
-          body: SizedBox(
-            width: 200,
-            height: 200,
-            child: GestureDetector(
-              onTap: onTap,
-              child: NsfwBlur(
-                nsfw: nsfw,
-                revealKey: key,
-                child: Container(key: const ValueKey('content'), color: Colors.red),
-              ),
-            ),
+}) => ChangeNotifierProvider<NsfwStore>.value(
+  value: store,
+  child: MaterialApp(
+    home: Scaffold(
+      body: SizedBox(
+        width: 200,
+        height: 200,
+        child: GestureDetector(
+          onTap: onTap,
+          child: NsfwBlur(
+            nsfw: nsfw,
+            revealKey: key,
+            child: Container(key: const ValueKey('content'), color: Colors.red),
           ),
         ),
       ),
-    );
+    ),
+  ),
+);
 
 void main() {
   testWidgets('两个开关都关：原图直接显示，没有模糊层', (tester) async {
@@ -117,8 +123,11 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(store.blurEnabled, isTrue, reason: '前提：用户确实开着"预览图模糊"');
-    expect(find.byType(ImageFiltered), findsNothing,
-        reason: '这一条没被标记过 → 一个像素都不该动（风景图 / 音频封面都在这一类里）');
+    expect(
+      find.byType(ImageFiltered),
+      findsNothing,
+      reason: '这一条没被标记过 → 一个像素都不该动（风景图 / 音频封面都在这一类里）',
+    );
     expect(find.text('已模糊 · 点击查看'), findsNothing);
   });
 
@@ -163,13 +172,23 @@ void main() {
             body: Column(
               children: [
                 SizedBox(
-                    width: 120,
-                    height: 120,
-                    child: NsfwBlur(nsfw: true, revealKey: 'media:a', child: const SizedBox())),
+                  width: 120,
+                  height: 120,
+                  child: NsfwBlur(
+                    nsfw: true,
+                    revealKey: 'media:a',
+                    child: const SizedBox(),
+                  ),
+                ),
                 SizedBox(
-                    width: 120,
-                    height: 120,
-                    child: NsfwBlur(nsfw: true, revealKey: 'media:b', child: const SizedBox())),
+                  width: 120,
+                  height: 120,
+                  child: NsfwBlur(
+                    nsfw: true,
+                    revealKey: 'media:b',
+                    child: const SizedBox(),
+                  ),
+                ),
               ],
             ),
           ),
@@ -203,8 +222,11 @@ void main() {
     await store.save(enabled: true, blur: true);
     await tester.pumpAndSettle();
     expect(store.blurEnabled, isTrue);
-    expect(find.byType(ImageFiltered), findsOneWidget,
-        reason: '重新开启后不能还是"看过"的状态');
+    expect(
+      find.byType(ImageFiltered),
+      findsOneWidget,
+      reason: '重新开启后不能还是"看过"的状态',
+    );
   });
 
   testWidgets('两个开关的从属关系：写回后端时能各自独立控制', (tester) async {
@@ -228,7 +250,9 @@ void main() {
 
   testWidgets('后端读不到时按"不打码"处理（不能把应用糊成一片）', (tester) async {
     final client = MockClient((request) async => http.Response('boom', 500));
-    final store = NsfwStore(api: AiApiClient('http://127.0.0.1:8080', client: client));
+    final store = NsfwStore(
+      api: AiApiClient('http://127.0.0.1:8080', client: client),
+    );
     addTearDown(store.dispose);
     await store.load(silent: true);
 

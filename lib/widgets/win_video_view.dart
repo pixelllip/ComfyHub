@@ -50,7 +50,9 @@ class _WinVideoViewState extends State<WinVideoView> {
       setState(() => _error = '当前平台不支持内嵌播放（仅 Windows）');
       return;
     }
-    final controller = WinVideoPlayerController.networkUrl(Uri.parse(widget.url));
+    final controller = WinVideoPlayerController.networkUrl(
+      Uri.parse(widget.url),
+    );
     _controller = controller;
     try {
       await controller.initialize();
@@ -157,7 +159,11 @@ class _WinVideoViewState extends State<WinVideoView> {
         ),
         // 全屏入口只留控制条上这一个。以前右上角还有一个悬浮按钮，
         // 同一个页面出现两个"全屏"图标，用户会以为是两个功能（bug 清单第 1 条）。
-        _Controls(controller: controller, onFullscreen: _openFullscreen, dark: false),
+        _Controls(
+          controller: controller,
+          onFullscreen: _openFullscreen,
+          dark: false,
+        ),
       ],
     );
   }
@@ -201,7 +207,11 @@ class _FullscreenVideo extends StatefulWidget {
   final String? posterUrl;
   final Duration startAt;
 
-  const _FullscreenVideo({required this.url, this.posterUrl, required this.startAt});
+  const _FullscreenVideo({
+    required this.url,
+    this.posterUrl,
+    required this.startAt,
+  });
 
   @override
   State<_FullscreenVideo> createState() => _FullscreenVideoState();
@@ -223,7 +233,9 @@ class _FullscreenVideoState extends State<_FullscreenVideo> {
   }
 
   Future<void> _open() async {
-    final controller = WinVideoPlayerController.networkUrl(Uri.parse(widget.url));
+    final controller = WinVideoPlayerController.networkUrl(
+      Uri.parse(widget.url),
+    );
     _controller = controller;
     try {
       await controller.initialize();
@@ -247,7 +259,8 @@ class _FullscreenVideoState extends State<_FullscreenVideo> {
 
   /// 退出全屏：把当前进度交还给内嵌那一路，避免"退出后从头开始"。
   void _exit() {
-    Navigator.of(context).pop<Duration>(_controller?.value.position ?? Duration.zero);
+    Navigator.of(context)
+        .pop<Duration>(_controller?.value.position ?? Duration.zero);
   }
 
   @override
@@ -280,7 +293,10 @@ class _FullscreenVideoState extends State<_FullscreenVideo> {
               children: [
                 if (_error != null)
                   Center(
-                    child: Text(_error!, style: const TextStyle(color: Colors.white70)),
+                    child: Text(
+                      _error!,
+                      style: const TextStyle(color: Colors.white70),
+                    ),
                   )
                 else if (!_ready)
                   _PosterOrSpinner(url: widget.posterUrl)
@@ -344,7 +360,11 @@ class _OverlayButton extends StatelessWidget {
   final String tooltip;
   final VoidCallback onTap;
 
-  const _OverlayButton({required this.icon, required this.tooltip, required this.onTap});
+  const _OverlayButton({
+    required this.icon,
+    required this.tooltip,
+    required this.onTap,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -375,7 +395,11 @@ class _Controls extends StatefulWidget {
   /// 黑底场景（全屏页）：文字与图标用白色。
   final bool dark;
 
-  const _Controls({required this.controller, this.onFullscreen, this.dark = false});
+  const _Controls({
+    required this.controller,
+    this.onFullscreen,
+    this.dark = false,
+  });
 
   @override
   State<_Controls> createState() => _ControlsState();
@@ -418,8 +442,11 @@ class _ControlsState extends State<_Controls> {
       child: Row(
         children: [
           IconButton(
-            icon: Icon(v.isPlaying ? Icons.pause_circle_filled : Icons.play_circle_fill,
-                size: 34, color: fg),
+            icon: Icon(
+              v.isPlaying ? Icons.pause_circle_filled : Icons.play_circle_fill,
+              size: 34,
+              color: fg,
+            ),
             onPressed: () async {
               if (v.isPlaying) {
                 await widget.controller.pause();
@@ -436,7 +463,9 @@ class _ControlsState extends State<_Controls> {
               max: (total == 0 ? 1 : total).toDouble(),
               onChanged: total == 0
                   ? null
-                  : (value) => widget.controller.seekTo(Duration(milliseconds: value.toInt())),
+                  : (value) => widget.controller.seekTo(
+                      Duration(milliseconds: value.toInt()),
+                    ),
             ),
           ),
           Text(_fmt(v.duration), style: timeStyle),

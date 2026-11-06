@@ -6,8 +6,16 @@ use super::*;
 
 #[test]
 fn mime_and_kind_follow_the_kotlin_table() {
-    assert_eq!(detect_mime("a.PNG", None), "image/png", "扩展名大小写不敏感");
-    assert_eq!(detect_mime("a.bin", Some("image/webp")), "image/webp", "客户端给的优先");
+    assert_eq!(
+        detect_mime("a.PNG", None),
+        "image/png",
+        "扩展名大小写不敏感"
+    );
+    assert_eq!(
+        detect_mime("a.bin", Some("image/webp")),
+        "image/webp",
+        "客户端给的优先"
+    );
     assert_eq!(
         detect_mime("a.bin", Some("application/octet-stream")),
         "application/octet-stream",
@@ -15,8 +23,16 @@ fn mime_and_kind_follow_the_kotlin_table() {
     );
     assert_eq!(kind_of("a.mp4", None), "VIDEO");
     assert_eq!(kind_of("a.mp3", None), "AUDIO");
-    assert_eq!(kind_of("a.unknown", None), "IMAGE", "认不出来按图片处理（与 Kotlin 同）");
-    assert_eq!(kind_of("x.png", Some("video/mp4")), "VIDEO", "客户端说视频就视频");
+    assert_eq!(
+        kind_of("a.unknown", None),
+        "IMAGE",
+        "认不出来按图片处理（与 Kotlin 同）"
+    );
+    assert_eq!(
+        kind_of("x.png", Some("video/mp4")),
+        "VIDEO",
+        "客户端说视频就视频"
+    );
     assert_eq!(extension_of("noext"), "");
     assert_eq!(extension_of("a.JPEG"), "jpeg");
 }

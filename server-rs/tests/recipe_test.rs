@@ -63,7 +63,9 @@ async fn fake_comfyui() -> String {
         "/object_info",
         get(|| async move { Json(object_info_fixture()) }),
     );
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("绑定假 ComfyUI");
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("绑定假 ComfyUI");
     let addr = listener.local_addr().expect("端口");
     let handle = tokio::spawn(async move {
         axum::serve(listener, app).await.expect("假 ComfyUI 服务");
@@ -150,7 +152,8 @@ struct Fixture {
 /// 内存库 + 真 DDL。项目根由 `media_dir` 推出来（`<root>/storage/media` → `<root>`）。
 fn fixture_sync(comfy_url: String) -> Fixture {
     let conn: Connection = comfyhub_server_rs::infra::db::open_memory().unwrap();
-    conn.execute_batch(comfyhub_server_rs::infra::db::schema_sql()).expect("建 schema");
+    conn.execute_batch(comfyhub_server_rs::infra::db::schema_sql())
+        .expect("建 schema");
     comfyhub_server_rs::infra::db::assert_ready(&conn).unwrap();
 
     static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -186,11 +189,22 @@ async fn call_tool(
     state: &AppState,
     name: &str,
     arguments: Value,
-) -> Result<comfyhub_server_rs::tools::tools::ToolOutcome, comfyhub_server_rs::tools::tools::ToolFailure> {
+) -> Result<
+    comfyhub_server_rs::tools::tools::ToolOutcome,
+    comfyhub_server_rs::tools::tools::ToolFailure,
+> {
     let policy = comfyhub_server_rs::tools::policy::ToolPolicy::load(state).unwrap();
     let mut session = comfyhub_server_rs::tools::tools::ToolSession::default();
-    comfyhub_server_rs::tools::tools::execute(state, &policy, "run-x", "conv-x", name, &arguments, &mut session)
-        .await
+    comfyhub_server_rs::tools::tools::execute(
+        state,
+        &policy,
+        "run-x",
+        "conv-x",
+        name,
+        &arguments,
+        &mut session,
+    )
+    .await
 }
 
 async fn get_json(app: Router, uri: &str) -> (StatusCode, Value) {
@@ -200,7 +214,10 @@ async fn get_json(app: Router, uri: &str) -> (StatusCode, Value) {
         .expect("请求");
     let status = response.status();
     let bytes = response.into_body().collect().await.unwrap().to_bytes();
-    (status, serde_json::from_slice(&bytes).unwrap_or(Value::Null))
+    (
+        status,
+        serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+    )
 }
 
 async fn send_json(app: Router, method: &str, uri: &str, body: Value) -> (StatusCode, Value) {
@@ -213,7 +230,10 @@ async fn send_json(app: Router, method: &str, uri: &str, body: Value) -> (Status
     let response = app.oneshot(request).await.expect("请求");
     let status = response.status();
     let bytes = response.into_body().collect().await.unwrap().to_bytes();
-    (status, serde_json::from_slice(&bytes).unwrap_or(Value::Null))
+    (
+        status,
+        serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -227,11 +247,23 @@ async fn 学界面格式工作流时默认拒掉有缺口的骨架() {
     let args = json!({ "path": path.display().to_string() });
 
     // 默认档：**拒学**，而且要说清"是实例缺节点，不是工作流坏了"
-    let failure = call_tool(&f.state, "comfy_learn_workflow", args.clone()).await.unwrap_err();
+    let failure = call_tool(&f.state, "comfy_learn_workflow", args.clone())
+        .await
+        .unwrap_err();
     assert_eq!(failure.code, "UNSUPPORTED_NODES", "{}", failure.message);
-    assert!(failure.message.contains("摘掉节点类：58 Krea2EditModelPatch"), "{}", failure.message);
+    assert!(
+        failure
+            .message
+            .contains("摘掉节点类：58 Krea2EditModelPatch"),
+        "{}",
+        failure.message
+    );
     assert!(failure.message.contains("悬空输入"), "{}", failure.message);
-    assert!(failure.message.contains("本机这个实例"), "{}", failure.message);
+    assert!(
+        failure.message.contains("本机这个实例"),
+        "{}",
+        failure.message
+    );
     assert!(failure.message.contains("四个出口"), "{}", failure.message);
     // 拒了就不许留行（"报错的行不许半截写进去"）
     let rows: i64 = f
@@ -252,12 +284,19 @@ async fn 学界面格式工作流时默认拒掉有缺口的骨架() {
     assert_eq!(out.payload["format"], "ui");
     assert_eq!(out.payload["sourceKind"], "file");
     assert!(
-        out.payload["sourceRef"].as_str().unwrap().starts_with("file:"),
+        out.payload["sourceRef"]
+            .as_str()
+            .unwrap()
+            .starts_with("file:"),
         "幂等键要与 comfy_load_workflow 同一把钥匙：{}",
         out.payload["sourceRef"]
     );
     let gaps = out.payload["gaps"].as_array().unwrap();
-    assert!(gaps.iter().any(|g| g.as_str().unwrap().contains("Krea2EditModelPatch")), "{gaps:?}");
+    assert!(
+        gaps.iter()
+            .any(|g| g.as_str().unwrap().contains("Krea2EditModelPatch")),
+        "{gaps:?}"
+    );
     assert!(out.payload["recipeId"].as_i64().unwrap() > 0);
     assert!(out.content.contains("【工作流配方】"), "{}", out.content);
     // ⚠ **第 68 步之前**这里断言的是"必须补一句『本后端还没实现「模拟用户行为」』"。
@@ -272,7 +311,11 @@ async fn 学界面格式工作流时默认拒掉有缺口的骨架() {
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(detail["recipe"]["complete"], json!(false), "缺件的配方要如实标 complete=false");
+    assert_eq!(
+        detail["recipe"]["complete"],
+        json!(false),
+        "缺件的配方要如实标 complete=false"
+    );
     let warnings: Vec<String> = detail["recipe"]["warnings"]
         .as_array()
         .unwrap()
@@ -289,7 +332,10 @@ async fn 学界面格式工作流时默认拒掉有缺口的骨架() {
         .iter()
         .map(|g| g.as_str().unwrap().to_string())
         .collect();
-    assert!(gaps.iter().any(|g| g.contains("Krea2EditModelPatch")), "{gaps:?}");
+    assert!(
+        gaps.iter().any(|g| g.contains("Krea2EditModelPatch")),
+        "{gaps:?}"
+    );
     // 详情里的 render 与工具当场回的那份**跑的是同一个函数**（`Recipe::render`）。
     // ⚠ 两者**可以**不同，而且这与 Kotlin 一致：工具回的是 `learned.recipe`（只有归纳那几条警告），
     //   而详情是从**落库的行**还原的 —— 那一行的 warnings 里还带着**转换**警告
@@ -298,8 +344,15 @@ async fn 学界面格式工作流时默认拒掉有缺口的骨架() {
     //   见下面那条用例）。
     let tool_text = out.content.as_str();
     let detail_text = detail["render"].as_str().unwrap();
-    assert_eq!(tool_text.lines().next(), detail_text.lines().next(), "同一个渲染函数、同一个标题");
-    assert!(detail_text.contains("55.unet_name = old_unet.safetensors"), "{detail_text}");
+    assert_eq!(
+        tool_text.lines().next(),
+        detail_text.lines().next(),
+        "同一个渲染函数、同一个标题"
+    );
+    assert!(
+        detail_text.contains("55.unet_name = old_unet.safetensors"),
+        "{detail_text}"
+    );
     assert!(
         detail_text.contains("控件值有 6 个"),
         "落库的 warnings 要带出转换那句话：{detail_text}"
@@ -326,17 +379,36 @@ async fn 学界面格式工作流时默认拒掉有缺口的骨架() {
 #[tokio::test]
 async fn 学_api_格式的图零转换_且槽位与旋钮都认得出来() {
     let f = fixture().await;
-    let out = call_tool(&f.state, "comfy_learn_workflow", json!({ "graph": api_graph() }))
-        .await
-        .unwrap();
-    assert_eq!(out.payload["complete"], json!(true), "API 格式零转换，不该有缺口");
+    let out = call_tool(
+        &f.state,
+        "comfy_learn_workflow",
+        json!({ "graph": api_graph() }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        out.payload["complete"],
+        json!(true),
+        "API 格式零转换，不该有缺口"
+    );
     assert_eq!(out.payload["task"], "i2i");
     assert_eq!(out.payload["slotCount"], json!(3));
     assert_eq!(out.payload["sourceKind"], "graph");
-    assert!(out.payload["sourceRef"].as_str().unwrap().starts_with("graph:"));
+    assert!(out.payload["sourceRef"]
+        .as_str()
+        .unwrap()
+        .starts_with("graph:"));
     // 正文里要能直接看到"改哪个键"
-    assert!(out.content.contains("1.unet_name = old_unet.safetensors"), "{}", out.content);
-    assert!(out.content.contains("2.type"), "CLIPLoader.type 是换模型族时要改的加载器参数：{}", out.content);
+    assert!(
+        out.content.contains("1.unet_name = old_unet.safetensors"),
+        "{}",
+        out.content
+    );
+    assert!(
+        out.content.contains("2.type"),
+        "CLIPLoader.type 是换模型族时要改的加载器参数：{}",
+        out.content
+    );
 
     std::fs::remove_dir_all(&f.root).ok();
 }
@@ -349,31 +421,68 @@ async fn 学_api_格式的图零转换_且槽位与旋钮都认得出来() {
 async fn 列配方_空库要指到学习入口_有配方要能按条件搜() {
     let f = fixture().await;
     // 空库：不是回一个空列表，而是 NOT_FOUND + 明确的下一步
-    let failure = call_tool(&f.state, "comfy_list_recipes", json!({})).await.unwrap_err();
+    let failure = call_tool(&f.state, "comfy_list_recipes", json!({}))
+        .await
+        .unwrap_err();
     assert_eq!(failure.code, "NOT_FOUND");
-    assert!(failure.message.contains("comfy_learn_workflow"), "{}", failure.message);
-    assert!(failure.message.contains("comfy_list_workflows"), "{}", failure.message);
+    assert!(
+        failure.message.contains("comfy_learn_workflow"),
+        "{}",
+        failure.message
+    );
+    assert!(
+        failure.message.contains("comfy_list_workflows"),
+        "{}",
+        failure.message
+    );
 
-    call_tool(&f.state, "comfy_learn_workflow", json!({ "graph": api_graph() }))
+    call_tool(
+        &f.state,
+        "comfy_learn_workflow",
+        json!({ "graph": api_graph() }),
+    )
+    .await
+    .unwrap();
+    let out = call_tool(&f.state, "comfy_list_recipes", json!({}))
         .await
         .unwrap();
-    let out = call_tool(&f.state, "comfy_list_recipes", json!({})).await.unwrap();
     assert_eq!(out.payload["count"], json!(1));
     assert!(out.content.contains("配方库：命中 1 条"), "{}", out.content);
-    assert!(out.content.contains("4.unet_name") || out.content.contains("1.unet_name"), "{}", out.content);
+    assert!(
+        out.content.contains("4.unet_name") || out.content.contains("1.unet_name"),
+        "{}",
+        out.content
+    );
     // 槽位要以 `键(角色)=文件` 的紧凑形状给出来（模型据此决定绑哪个）
-    assert!(out.content.contains("1.unet_name(diffusion_models)=old_unet.safetensors"), "{}", out.content);
+    assert!(
+        out.content
+            .contains("1.unet_name(diffusion_models)=old_unet.safetensors"),
+        "{}",
+        out.content
+    );
 
     // 按 task 过滤：命中 → 有；不命中 → 空库那句（带"匹配这些条件的"）
-    assert!(call_tool(&f.state, "comfy_list_recipes", json!({ "task": "i2i" })).await.is_ok());
+    assert!(
+        call_tool(&f.state, "comfy_list_recipes", json!({ "task": "i2i" }))
+            .await
+            .is_ok()
+    );
     let none = call_tool(&f.state, "comfy_list_recipes", json!({ "task": "audio" }))
         .await
         .unwrap_err();
     assert_eq!(none.code, "NOT_FOUND");
     assert!(none.message.contains("匹配这些条件的"), "{}", none.message);
     // 关键字能搜到槽位里的模型文件名（"这个模型配过哪条配方"）
-    assert!(call_tool(&f.state, "comfy_list_recipes", json!({ "q": "old_unet" })).await.is_ok());
-    assert!(call_tool(&f.state, "comfy_list_recipes", json!({ "q": "没有这个" })).await.is_err());
+    assert!(
+        call_tool(&f.state, "comfy_list_recipes", json!({ "q": "old_unet" }))
+            .await
+            .is_ok()
+    );
+    assert!(
+        call_tool(&f.state, "comfy_list_recipes", json!({ "q": "没有这个" }))
+            .await
+            .is_err()
+    );
 
     std::fs::remove_dir_all(&f.root).ok();
 }
@@ -385,9 +494,13 @@ async fn 列配方_空库要指到学习入口_有配方要能按条件搜() {
 #[tokio::test]
 async fn 绑定走本机清单_只报不改() {
     let f = fixture().await;
-    let learned = call_tool(&f.state, "comfy_learn_workflow", json!({ "graph": api_graph() }))
-        .await
-        .unwrap();
+    let learned = call_tool(
+        &f.state,
+        "comfy_learn_workflow",
+        json!({ "graph": api_graph() }),
+    )
+    .await
+    .unwrap();
     let recipe_id = learned.payload["recipeId"].as_i64().unwrap();
 
     // 同名且实例能看到（假 /object_info 的 unet_name 枚举里有它）→ exact，**可以自动绑**
@@ -399,7 +512,10 @@ async fn 绑定走本机清单_只报不改() {
     .await
     .unwrap();
     assert_eq!(out.payload["bindings"][0]["status"], "exact");
-    assert_eq!(out.payload["overrides"]["1.unet_name"], "new_unet.safetensors");
+    assert_eq!(
+        out.payload["overrides"]["1.unet_name"],
+        "new_unet.safetensors"
+    );
     assert_eq!(out.payload["ready"], json!(true));
     assert!(out.content.contains("可以直接跑"), "{}", out.content);
     // 没动的槽位照样列出来
@@ -416,7 +532,11 @@ async fn 绑定走本机清单_只报不改() {
     .unwrap();
     assert_eq!(missing.payload["bindings"][0]["status"], "missing");
     assert!(missing.payload["overrides"].as_object().unwrap().is_empty());
-    assert!(missing.content.contains("不要自己编"), "{}", missing.content);
+    assert!(
+        missing.content.contains("不要自己编"),
+        "{}",
+        missing.content
+    );
 
     // 库里的配方 id 不存在 → NOT_FOUND（不是空报告）
     let absent = call_tool(
@@ -428,11 +548,19 @@ async fn 绑定走本机清单_只报不改() {
     .unwrap_err();
     assert_eq!(absent.code, "NOT_FOUND");
     // 缺参数：稳定码 + 指到下一步
-    let no_id = call_tool(&f.state, "comfy_bind_recipe", json!({ "model": "x.safetensors" }))
-        .await
-        .unwrap_err();
+    let no_id = call_tool(
+        &f.state,
+        "comfy_bind_recipe",
+        json!({ "model": "x.safetensors" }),
+    )
+    .await
+    .unwrap_err();
     assert_eq!(no_id.code, "INVALID_ARGUMENT");
-    assert!(no_id.message.contains("comfy_list_recipes"), "{}", no_id.message);
+    assert!(
+        no_id.message.contains("comfy_list_recipes"),
+        "{}",
+        no_id.message
+    );
     // `extra` 里的值必须是**字符串文件名**（空串 / 对象都不行 —— Kotlin 那条判据是 `contentOrNull`）
     let bad_extra = call_tool(
         &f.state,
@@ -442,7 +570,11 @@ async fn 绑定走本机清单_只报不改() {
     .await
     .unwrap_err();
     assert_eq!(bad_extra.code, "INVALID_ARGUMENT");
-    assert!(bad_extra.message.contains("extra 里的 vae"), "{}", bad_extra.message);
+    assert!(
+        bad_extra.message.contains("extra 里的 vae"),
+        "{}",
+        bad_extra.message
+    );
 
     std::fs::remove_dir_all(&f.root).ok();
 }
@@ -470,7 +602,10 @@ async fn 配方五条端点的形状与状态码() {
     assert_eq!(created["task"], "i2i");
     assert_eq!(created["complete"], json!(true));
     assert_eq!(created["format"], "api");
-    assert!(created["render"].as_str().unwrap().contains("【工作流配方】"));
+    assert!(created["render"]
+        .as_str()
+        .unwrap()
+        .contains("【工作流配方】"));
     assert_eq!(created["recipe"]["skeletonHash"], created["skeletonHash"]);
 
     // GET 列表：直接回数组（Kotlin `call.respond(list)`）
@@ -478,7 +613,12 @@ async fn 配方五条端点的形状与状态码() {
     assert_eq!(status, StatusCode::OK);
     let listed = listed.as_array().unwrap();
     assert_eq!(listed.len(), 1);
-    let mut keys: Vec<&str> = listed[0].as_object().unwrap().keys().map(String::as_str).collect();
+    let mut keys: Vec<&str> = listed[0]
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
     keys.sort();
     assert_eq!(
         keys,
@@ -508,7 +648,8 @@ async fn 配方五条端点的形状与状态码() {
         "少一个键 = 界面上少一块内容；多一个 null 键 = 与 Kotlin 不是同一个形状"
     );
     // 过滤参数照 Kotlin 的口径：`complete=true` 认 1/true/yes（大小写不敏感）
-    let (_, only_complete) = get_json(app(), "/api/ai/workflow-recipes?complete=YES&task=i2i").await;
+    let (_, only_complete) =
+        get_json(app(), "/api/ai/workflow-recipes?complete=YES&task=i2i").await;
     assert_eq!(only_complete.as_array().unwrap().len(), 1);
     let (_, none) = get_json(app(), "/api/ai/workflow-recipes?task=audio").await;
     assert!(none.as_array().unwrap().is_empty());
@@ -518,11 +659,19 @@ async fn 配方五条端点的形状与状态码() {
     // GET 详情：`{recipe, render}`（render 与工具当场回的那份是同一个函数）
     let (status, detail) = get_json(app(), &format!("/api/ai/workflow-recipes/{id}")).await;
     assert_eq!(status, StatusCode::OK);
-    let mut keys: Vec<&str> = detail.as_object().unwrap().keys().map(String::as_str).collect();
+    let mut keys: Vec<&str> = detail
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
     keys.sort();
     assert_eq!(keys, vec!["recipe", "render"]);
     assert_eq!(detail["recipe"]["id"], json!(id));
-    assert!(detail["render"].as_str().unwrap().contains("1.unet_name = old_unet.safetensors"));
+    assert!(detail["render"]
+        .as_str()
+        .unwrap()
+        .contains("1.unet_name = old_unet.safetensors"));
 
     // POST 绑定：`{recipeId, report, render}`，report 与工具同一份
     let (status, bound) = send_json(
@@ -533,13 +682,25 @@ async fn 配方五条端点的形状与状态码() {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{bound}");
-    let mut keys: Vec<&str> = bound.as_object().unwrap().keys().map(String::as_str).collect();
+    let mut keys: Vec<&str> = bound
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
     keys.sort();
     assert_eq!(keys, vec!["recipeId", "render", "report"]);
     assert_eq!(bound["recipeId"], json!(id));
-    assert_eq!(bound["report"]["overrides"]["1.unet_name"], "new_unet.safetensors");
+    assert_eq!(
+        bound["report"]["overrides"]["1.unet_name"],
+        "new_unet.safetensors"
+    );
     assert_eq!(bound["report"]["bindings"][0]["applied"], json!(true));
-    assert!(bound["render"].as_str().unwrap().contains("可以直接跑"), "{}", bound["render"]);
+    assert!(
+        bound["render"].as_str().unwrap().contains("可以直接跑"),
+        "{}",
+        bound["render"]
+    );
 
     // DELETE → `{deleted: id}`；再删一次 **404 + 人话**
     let (status, deleted) = send_json(
@@ -554,7 +715,10 @@ async fn 配方五条端点的形状与状态码() {
     let (status, gone) = get_json(app(), &format!("/api/ai/workflow-recipes/{id}")).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert_eq!(gone["error"], format!("配方 {id} 不存在"));
-    assert!(gone.get("detail").is_none(), "普通错误不带 detail（与 Kotlin 同形）");
+    assert!(
+        gone.get("detail").is_none(),
+        "普通错误不带 detail（与 Kotlin 同形）"
+    );
     let (status, _) = send_json(
         app(),
         "DELETE",
@@ -575,7 +739,12 @@ async fn 配方五条端点的形状与状态码() {
 async fn 端点学界面格式文件_缺口时回_400_unsupported_nodes() {
     let f = fixture().await;
     let app = || comfyhub_server_rs::web::routes::router(f.state.clone());
-    let path = f.root.join("comfyui").join("krea2_edit_ui.json").display().to_string();
+    let path = f
+        .root
+        .join("comfyui")
+        .join("krea2_edit_ui.json")
+        .display()
+        .to_string();
 
     // AI 域的稳定码走 `{error: 码, detail: 人话}`（界面读 detail）
     let (status, body) = send_json(
@@ -587,7 +756,10 @@ async fn 端点学界面格式文件_缺口时回_400_unsupported_nodes() {
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
     assert_eq!(body["error"], "UNSUPPORTED_NODES");
-    assert!(body["detail"].as_str().unwrap().contains("本机这个实例"), "{body}");
+    assert!(
+        body["detail"].as_str().unwrap().contains("本机这个实例"),
+        "{body}"
+    );
 
     // 带 tolerateUnsupported 才学得进去
     let (status, created) = send_json(
@@ -658,14 +830,23 @@ async fn 端点学界面格式文件_缺口时回_400_unsupported_nodes() {
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{denied}");
-    assert_eq!(denied["error"], "PATH_DENIED", "工具层的失败码要翻成 AI 域的口径：{denied}");
-    assert!(denied["detail"].as_str().unwrap().contains("不许读"), "{denied}");
+    assert_eq!(
+        denied["error"], "PATH_DENIED",
+        "工具层的失败码要翻成 AI 域的口径：{denied}"
+    );
+    assert!(
+        denied["detail"].as_str().unwrap().contains("不许读"),
+        "{denied}"
+    );
 
     // 三选一都没给 → INVALID_ARGUMENT + 人话
     let (status, none) = send_json(app(), "POST", "/api/ai/workflow-recipes", json!({})).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_eq!(none["error"], "INVALID_ARGUMENT");
-    assert!(none["detail"].as_str().unwrap().contains("要么给 path"), "{none}");
+    assert!(
+        none["detail"].as_str().unwrap().contains("要么给 path"),
+        "{none}"
+    );
 
     // 界面格式但**连不上** ComfyUI：说清"要 /object_info"（不是 500）
     let offline = fixture_sync("http://127.0.0.1:1".to_string());
@@ -678,7 +859,10 @@ async fn 端点学界面格式文件_缺口时回_400_unsupported_nodes() {
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
     assert_eq!(body["error"], "COMFY_UNREACHABLE");
-    assert!(body["detail"].as_str().unwrap().contains("/object_info"), "{body}");
+    assert!(
+        body["detail"].as_str().unwrap().contains("/object_info"),
+        "{body}"
+    );
 
     std::fs::remove_dir_all(&f.root).ok();
     std::fs::remove_dir_all(&offline.root).ok();
@@ -695,7 +879,11 @@ async fn 配方表不在同步白名单里_端点也不在手机_run_kit_里() {
         "总纲 §3.3：这张表**刻意不同步**（手机提交走 comfy_queue_submit）"
     );
     let f = fixture().await;
-    let (status, kit) = get_json(comfyhub_server_rs::web::routes::router(f.state.clone()), "/api/ai/run-kit").await;
+    let (status, kit) = get_json(
+        comfyhub_server_rs::web::routes::router(f.state.clone()),
+        "/api/ai/run-kit",
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
     let tools: Vec<&str> = kit["tools"]
         .as_array()
@@ -703,8 +891,15 @@ async fn 配方表不在同步白名单里_端点也不在手机_run_kit_里() {
         .iter()
         .map(|t| t["name"].as_str().unwrap())
         .collect();
-    for absent in ["comfy_learn_workflow", "comfy_list_recipes", "comfy_bind_recipe"] {
-        assert!(!tools.contains(&absent), "配方工具漏进了手机 run-kit：{tools:?}");
+    for absent in [
+        "comfy_learn_workflow",
+        "comfy_list_recipes",
+        "comfy_bind_recipe",
+    ] {
+        assert!(
+            !tools.contains(&absent),
+            "配方工具漏进了手机 run-kit：{tools:?}"
+        );
     }
     std::fs::remove_dir_all(&f.root).ok();
 }

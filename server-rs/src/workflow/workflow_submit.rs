@@ -62,8 +62,8 @@ use std::sync::Mutex;
 use serde_json::{json, Map, Value};
 
 use crate::comfy::capture::CaptureConfig;
-use crate::web::routes::AppState;
 use crate::tools::tools::{ToolFailure, ToolOutcome};
+use crate::web::routes::AppState;
 use crate::workflow::workflow_audit;
 
 /// 等一次运行跑完的默认时长（Kotlin `DEFAULT_WAIT_SECONDS`）。
@@ -96,7 +96,11 @@ impl Submissions {
 
     /// 记一条（同一个 `promptId` 就地更新 —— 一次运行只会有一条记录）。
     pub fn record(&self, submission: Value) {
-        let prompt_id = submission.get("promptId").and_then(Value::as_str).unwrap_or_default().to_string();
+        let prompt_id = submission
+            .get("promptId")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
         let mut guard = self.items.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(slot) = guard
             .iter_mut()
@@ -109,15 +113,24 @@ impl Submissions {
         // 只留最近 30 条：按 submittedAt 升序排掉最老的
         if guard.len() > MAX_TRACKED {
             guard.sort_by_key(|item| {
-                item.get("submittedAt").and_then(Value::as_str).unwrap_or_default().to_string()
+                item.get("submittedAt")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string()
             });
             let drop_count = guard.len() - MAX_TRACKED;
             guard.drain(0..drop_count);
         }
         // 新的在前（Kotlin `sortedByDescending { it.submittedAt }`）
         guard.sort_by(|a, b| {
-            let left = b.get("submittedAt").and_then(Value::as_str).unwrap_or_default();
-            let right = a.get("submittedAt").and_then(Value::as_str).unwrap_or_default();
+            let left = b
+                .get("submittedAt")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let right = a
+                .get("submittedAt")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
             left.cmp(right)
         });
     }
@@ -125,7 +138,11 @@ impl Submissions {
     /// 最近的提交记录，新的在前。
     pub fn list(&self, limit: usize) -> Vec<Value> {
         let guard = self.items.lock().unwrap_or_else(|e| e.into_inner());
-        guard.iter().take(limit.clamp(1, MAX_TRACKED)).cloned().collect()
+        guard
+            .iter()
+            .take(limit.clamp(1, MAX_TRACKED))
+            .cloned()
+            .collect()
     }
 
     pub fn find(&self, prompt_id: &str) -> Option<Value> {
@@ -220,7 +237,9 @@ impl WorkflowEdit {
                 format!("参数路径要写成 节点id.输入名（例如 3.steps），收到的是「{path}」")
             })?;
             if dot == 0 || dot + 1 >= path.len() {
-                return Err(format!("参数路径要写成 节点id.输入名（例如 3.steps），收到的是「{path}」"));
+                return Err(format!(
+                    "参数路径要写成 节点id.输入名（例如 3.steps），收到的是「{path}」"
+                ));
             }
             let node_id = &path[..dot];
             let field = &path[dot + 1..];
@@ -271,11 +290,13 @@ impl WorkflowEdit {
             .ok_or_else(|| "工作流不是 API 格式节点图（顶层要是对象）".to_string())?;
         let mut applied: Vec<String> = Vec::new();
         for (path, value) in connections {
-            let dot = path
-                .rfind('.')
-                .ok_or_else(|| format!("连线路径要写成 节点id.输入名（例如 60.vae），收到的是「{path}」"))?;
+            let dot = path.rfind('.').ok_or_else(|| {
+                format!("连线路径要写成 节点id.输入名（例如 60.vae），收到的是「{path}」")
+            })?;
             if dot == 0 || dot + 1 >= path.len() {
-                return Err(format!("连线路径要写成 节点id.输入名（例如 60.vae），收到的是「{path}」"));
+                return Err(format!(
+                    "连线路径要写成 节点id.输入名（例如 60.vae），收到的是「{path}」"
+                ));
             }
             let node_id = &path[..dot];
             let field = &path[dot + 1..];
@@ -288,7 +309,9 @@ impl WorkflowEdit {
                 format!("连线 {path} 的值要写成 [\"上游节点id\", 槽位]，例如 [\"1\", 0]")
             })?;
             if reference.len() != 2 {
-                return Err(format!("连线 {path} 的值要写成 [上游节点id, 槽位]（两个元素）"));
+                return Err(format!(
+                    "连线 {path} 的值要写成 [上游节点id, 槽位]（两个元素）"
+                ));
             }
             let source = primitive_text(&reference[0])
                 .ok_or_else(|| format!("连线 {path} 的上游节点 id 要是文本或数字"))?;
@@ -302,7 +325,11 @@ impl WorkflowEdit {
             let slot = primitive_text(&reference[1])
                 .and_then(|text| text.trim().parse::<i64>().ok())
                 .ok_or_else(|| format!("连线 {path} 的槽位要是整数"))?;
-            let mut inputs = node.get("inputs").and_then(Value::as_object).cloned().unwrap_or_default();
+            let mut inputs = node
+                .get("inputs")
+                .and_then(Value::as_object)
+                .cloned()
+                .unwrap_or_default();
             // ⚠ 引用里的 id **一律写字符串**（`["4", 1]`）：ComfyUI 拿它直接索引 prompt 字典，
             // 写成数字就是 `KeyError('4')`（见 `workflow_convert::ref_of` 的注释）。
             inputs.insert(field.to_string(), json!([source, slot]));
@@ -348,7 +375,9 @@ impl WorkflowEdit {
             .ok_or_else(|| "工作流不是 API 格式节点图（顶层要是对象）".to_string())?;
         let prompt = prompt.trim();
         if prompt.is_empty() {
-            return Err("positivePrompt 是空的：要给最终提示词（不是给用户原话让本地 LLM 扩写）".into());
+            return Err(
+                "positivePrompt 是空的：要给最终提示词（不是给用户原话让本地 LLM 扩写）".into(),
+            );
         }
 
         // ① 所有"正面条件"入口：
@@ -357,7 +386,9 @@ impl WorkflowEdit {
         //      `SamplerCustomAdvanced → BasicGuider → CLIPTextEncode` 就是它）。
         let mut starts: Vec<String> = Vec::new();
         for node in nodes.values() {
-            let Some(inputs) = node.get("inputs").and_then(Value::as_object) else { continue };
+            let Some(inputs) = node.get("inputs").and_then(Value::as_object) else {
+                continue;
+            };
             if let Some((up, _)) = inputs.get("positive").and_then(link_ref) {
                 starts.push(up);
             }
@@ -385,7 +416,9 @@ impl WorkflowEdit {
             if depth > 32 || !seen.insert(id.clone()) {
                 continue;
             }
-            let Some(node) = nodes.get(&id).and_then(Value::as_object) else { continue };
+            let Some(node) = nodes.get(&id).and_then(Value::as_object) else {
+                continue;
+            };
             let class = node.get("class_type").and_then(Value::as_str).unwrap_or("");
             let is_text_encode = class.to_ascii_lowercase().contains("textencode");
             if is_text_encode {
@@ -399,7 +432,9 @@ impl WorkflowEdit {
                 }
                 continue;
             }
-            let Some(inputs) = node.get("inputs").and_then(Value::as_object) else { continue };
+            let Some(inputs) = node.get("inputs").and_then(Value::as_object) else {
+                continue;
+            };
             for (key, value) in inputs {
                 if !follows_positive(key) {
                     continue;
@@ -439,9 +474,13 @@ impl WorkflowEdit {
 
         let mut changed: Vec<String> = Vec::new();
         for (id, _) in &found {
-            let Some(node) = nodes.get_mut(id).and_then(Value::as_object_mut) else { continue };
+            let Some(node) = nodes.get_mut(id).and_then(Value::as_object_mut) else {
+                continue;
+            };
             let entry = node.entry("inputs").or_insert_with(|| json!({}));
-            let Some(inputs) = entry.as_object_mut() else { continue };
+            let Some(inputs) = entry.as_object_mut() else {
+                continue;
+            };
             inputs.insert("text".into(), json!(prompt));
             changed.push(format!("{id}.text"));
         }
@@ -471,12 +510,16 @@ fn collect_text_generate(nodes: &Map<String, Value>, start: &str, out: &mut BTre
         if depth > 16 || !seen.insert(id.clone()) {
             continue;
         }
-        let Some(node) = nodes.get(&id).and_then(Value::as_object) else { continue };
+        let Some(node) = nodes.get(&id).and_then(Value::as_object) else {
+            continue;
+        };
         let class = node.get("class_type").and_then(Value::as_str).unwrap_or("");
         if class.to_ascii_lowercase().contains("textgenerate") {
             out.insert(id.clone());
         }
-        let Some(inputs) = node.get("inputs").and_then(Value::as_object) else { continue };
+        let Some(inputs) = node.get("inputs").and_then(Value::as_object) else {
+            continue;
+        };
         for value in inputs.values() {
             if let Some((up, _)) = link_ref(value) {
                 queue.push_back((up, depth + 1));
@@ -491,7 +534,9 @@ fn node_class(node: &Value) -> Option<&str> {
 
 /// 一个节点上所有连线型输入：`[(上游节点 id, 槽位)]`。
 fn node_input_links(node: &Value) -> Vec<(String, i64)> {
-    let Some(inputs) = node.get("inputs").and_then(Value::as_object) else { return Vec::new() };
+    let Some(inputs) = node.get("inputs").and_then(Value::as_object) else {
+        return Vec::new();
+    };
     inputs.values().filter_map(link_ref).collect()
 }
 
@@ -510,8 +555,7 @@ fn is_output_class(class: &str) -> bool {
 /// 顺着输入往上走，收集这些种子的**全部上游**（含种子自己）。
 fn collect_ancestors(nodes: &Map<String, Value>, seeds: &BTreeSet<String>) -> BTreeSet<String> {
     let mut seen: BTreeSet<String> = BTreeSet::new();
-    let mut queue: VecDeque<(String, usize)> =
-        seeds.iter().map(|s| (s.clone(), 0usize)).collect();
+    let mut queue: VecDeque<(String, usize)> = seeds.iter().map(|s| (s.clone(), 0usize)).collect();
     while let Some((id, depth)) = queue.pop_front() {
         if depth > 32 || !seen.insert(id.clone()) {
             continue;
@@ -724,7 +768,9 @@ pub fn preflight_refusal(graph: &Value, info: &Value) -> Option<String> {
 
     let mut unknown: Vec<String> = Vec::new();
     for (node_id, node) in nodes {
-        let Some(class_type) = node.get("class_type").and_then(Value::as_str) else { continue };
+        let Some(class_type) = node.get("class_type").and_then(Value::as_str) else {
+            continue;
+        };
         if workflow_audit::is_frontend_only(class_type) {
             continue;
         }
@@ -742,7 +788,10 @@ pub fn preflight_refusal(graph: &Value, info: &Value) -> Option<String> {
          硬提交只会白跑一次（ComfyUI 只会回一句节点不存在）。\n",
         unknown.len()
     ));
-    out.push_str(&format!("\n【实例里没有这些节点类】{} 个：\n", unknown.len()));
+    out.push_str(&format!(
+        "\n【实例里没有这些节点类】{} 个：\n",
+        unknown.len()
+    ));
     for item in &unknown {
         out.push_str(&format!("  · {item}\n"));
     }
@@ -760,22 +809,35 @@ pub fn preflight_refusal(graph: &Value, info: &Value) -> Option<String> {
 /// （重启实例/改用带共享模型根的实例就能解决），也可能是名字确实写错了。
 /// 两种情形给的动作都是"先确认、别硬提交"，但**不替用户做决定**。
 pub fn preflight_warnings(graph: &Value, info: &Value) -> Vec<String> {
-    let Some(info) = info.as_object() else { return Vec::new() };
-    let Some(nodes) = graph.as_object() else { return Vec::new() };
+    let Some(info) = info.as_object() else {
+        return Vec::new();
+    };
+    let Some(nodes) = graph.as_object() else {
+        return Vec::new();
+    };
     let mut invisible: Vec<String> = Vec::new();
     for (node_id, node) in nodes {
-        let Some(class_type) = node.get("class_type").and_then(Value::as_str) else { continue };
-        let Some(spec) = info.get(class_type) else { continue };
+        let Some(class_type) = node.get("class_type").and_then(Value::as_str) else {
+            continue;
+        };
+        let Some(spec) = info.get(class_type) else {
+            continue;
+        };
         // 只查**加载器**节点：模型文件（checkpoint / LoRA / VAE / unet / clip）都在这一类上，
         // 而别的节点（采样器/图片输入/文件名前缀）的候选列表是动态的，拿它判会误报。
         if !class_type.to_ascii_lowercase().contains("loader") {
             continue;
         }
-        let Some(required) = spec.get("input").and_then(|v| v.get("required")).and_then(Value::as_object)
+        let Some(required) = spec
+            .get("input")
+            .and_then(|v| v.get("required"))
+            .and_then(Value::as_object)
         else {
             continue;
         };
-        let Some(inputs) = node.get("inputs").and_then(Value::as_object) else { continue };
+        let Some(inputs) = node.get("inputs").and_then(Value::as_object) else {
+            continue;
+        };
         for (name, value) in inputs {
             let Some(text) = value.as_str() else { continue };
             let allowed = required
@@ -784,7 +846,10 @@ pub fn preflight_warnings(graph: &Value, info: &Value) -> Vec<String> {
                 .and_then(Value::as_array)
                 .filter(|list| !list.is_empty() && list.iter().all(Value::is_string));
             let Some(allowed) = allowed else { continue };
-            if !allowed.iter().any(|candidate| candidate.as_str() == Some(text)) {
+            if !allowed
+                .iter()
+                .any(|candidate| candidate.as_str() == Some(text))
+            {
                 invisible.push(format!("{node_id}.{name} 要 {text}"));
             }
         }
@@ -817,8 +882,10 @@ fn model_inventory(
 ) -> crate::comfy::comfy_models::Inventory {
     let project_root = state.project_root();
     let desktop = crate::tools::mcp::desktop(None);
-    let model_dirs: Vec<std::path::PathBuf> =
-        desktop.as_ref().map(|d| d.models_dirs.clone()).unwrap_or_default();
+    let model_dirs: Vec<std::path::PathBuf> = desktop
+        .as_ref()
+        .map(|d| d.models_dirs.clone())
+        .unwrap_or_default();
     crate::comfy::comfy_models::inventory(object_info, Some(&project_root), &model_dirs)
 }
 
@@ -832,8 +899,12 @@ async fn preflight(
     graph: &Value,
     state: &AppState,
 ) -> (Option<String>, Vec<String>, Option<Vec<String>>) {
-    let Some(nodes) = graph.as_object() else { return (None, Vec::new(), None) };
-    let info = crate::comfy::comfy_client::get_json(&format!("{base}/object_info")).await.ok();
+    let Some(nodes) = graph.as_object() else {
+        return (None, Vec::new(), None);
+    };
+    let info = crate::comfy::comfy_client::get_json(&format!("{base}/object_info"))
+        .await
+        .ok();
     let object_info = info.as_ref().and_then(Value::as_object);
     let inventory = model_inventory(state, object_info);
     // 审核（`object_info` 拿不到时照样跑：纯前端节点 / 版本不兼容那两条是静态知识表）
@@ -877,10 +948,16 @@ fn negative_capability(
     let nodes = graph.as_object()?;
     let mut hits: Vec<String> = Vec::new();
     for node in nodes.values() {
-        let Some(node) = node.as_object() else { continue };
+        let Some(node) = node.as_object() else {
+            continue;
+        };
         let class = node.get("class_type").and_then(Value::as_str).unwrap_or("");
-        let Some(spec) = info.get(class).and_then(Value::as_object) else { continue };
-        let Some(inputs) = spec.get("input").and_then(Value::as_object) else { continue };
+        let Some(spec) = info.get(class).and_then(Value::as_object) else {
+            continue;
+        };
+        let Some(inputs) = spec.get("input").and_then(Value::as_object) else {
+            continue;
+        };
         // `required` / `optional` 两处都要看（负面多半是 optional）
         let declares_negative = ["required", "optional"].iter().any(|slot| {
             inputs
@@ -932,7 +1009,12 @@ async fn post_prompt(base: &str, graph: &Value, client_id: &str) -> Result<Strin
         .map(str::trim)
         .filter(|id| !id.is_empty())
         .map(|id| id.to_string())
-        .ok_or_else(|| format!("ComfyUI 没有返回 prompt_id：{}", take(&root.to_string(), 300)))
+        .ok_or_else(|| {
+            format!(
+                "ComfyUI 没有返回 prompt_id：{}",
+                take(&root.to_string(), 300)
+            )
+        })
 }
 
 fn take(text: &str, max: usize) -> String {
@@ -941,16 +1023,22 @@ fn take(text: &str, max: usize) -> String {
 
 /// 查这一次运行在 `/history` 里的条目（还没有就 `None`）。
 async fn history_entry(base: &str, prompt_id: &str) -> Option<Value> {
-    let body = crate::comfy::comfy_client::get_json(&format!("{base}/history/{prompt_id}")).await.ok()?;
+    let body = crate::comfy::comfy_client::get_json(&format!("{base}/history/{prompt_id}"))
+        .await
+        .ok()?;
     body.get(prompt_id).cloned().or_else(|| {
         // 有些实现直接回条目本身
-        body.as_object().filter(|map| map.contains_key("status")).map(|_| body.clone())
+        body.as_object()
+            .filter(|map| map.contains_key("status"))
+            .map(|_| body.clone())
     })
 }
 
 /// 队列里的一次运行在什么位置（给界面一句人话）。
 async fn queue_note(base: &str, prompt_id: &str) -> Option<String> {
-    let body = crate::comfy::comfy_client::get_json(&format!("{base}/queue")).await.ok()?;
+    let body = crate::comfy::comfy_client::get_json(&format!("{base}/queue"))
+        .await
+        .ok()?;
     let running = body.get("queue_running").and_then(Value::as_array);
     let pending = body.get("queue_pending").and_then(Value::as_array);
     if index_of_prompt_id(running, prompt_id) >= 0 {
@@ -973,7 +1061,10 @@ fn index_of_prompt_id(items: Option<&Vec<Value>>, prompt_id: &str) -> i64 {
     let Some(items) = items else { return -1 };
     for (index, item) in items.iter().enumerate() {
         if let Some(row) = item.as_array() {
-            if row.iter().any(|cell| primitive_text(cell).as_deref() == Some(prompt_id)) {
+            if row
+                .iter()
+                .any(|cell| primitive_text(cell).as_deref() == Some(prompt_id))
+            {
                 return index as i64;
             }
         }
@@ -996,14 +1087,16 @@ pub async fn capture_run(
     // `make_title` 会退回保存节点的 `filename_prefix`（用户看到的是 `test · seed …`）。
     title: Option<&str>,
 ) -> Result<crate::comfy::capture_ingest::IngestResult, String> {
-    let claim = crate::comfy::capture_ingest::begin_run(state, run_key, "ComfyUI", Some(entry), false)
-        .map_err(|e| e.human().to_string())?;
+    let claim =
+        crate::comfy::capture_ingest::begin_run(state, run_key, "ComfyUI", Some(entry), false)
+            .map_err(|e| e.human().to_string())?;
     if !claim.claimed {
         let prompt_id = claim.existing_prompt_id;
         let media_ids = match prompt_id {
             Some(id) => state
                 .with(|conn| {
-                    let mut stmt = conn.prepare("SELECT id FROM media_assets WHERE prompt_id = ?1 ORDER BY id")?;
+                    let mut stmt = conn
+                        .prepare("SELECT id FROM media_assets WHERE prompt_id = ?1 ORDER BY id")?;
                     let rows = stmt.query_map(rusqlite::params![id], |row| row.get::<_, i64>(0))?;
                     let mut out = Vec::new();
                     for row in rows {
@@ -1029,7 +1122,8 @@ pub async fn capture_run(
         .and_then(|s| s.get("status_str"))
         .and_then(Value::as_str)
         == Some("error");
-    let mut request = crate::comfy::capture_ingest::build_ingest_request(run_key, entry, config, is_error);
+    let mut request =
+        crate::comfy::capture_ingest::build_ingest_request(run_key, entry, config, is_error);
     request.nsfw = nsfw;
     if let Some(title) = title.map(str::trim).filter(|text| !text.is_empty()) {
         request.title = Some(title.to_string());
@@ -1043,8 +1137,16 @@ pub async fn tool_submit(
     policy: &crate::tools::policy::ToolPolicy,
     arguments: &Value,
 ) -> Result<ToolOutcome, ToolFailure> {
-    let overrides = arguments.get("overrides").and_then(Value::as_object).cloned().unwrap_or_default();
-    let connections = arguments.get("connections").and_then(Value::as_object).cloned().unwrap_or_default();
+    let overrides = arguments
+        .get("overrides")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    let connections = arguments
+        .get("connections")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
     // 最终正面提示词：给了就**由模型自己写完**（通常已经服从了工作流里 TextGenerate 的
     // system prompt），后端只负责把它写进正面编码器并摘掉原来那一路。
     let positive_prompt = match arguments.get("positivePrompt") {
@@ -1066,12 +1168,19 @@ pub async fn tool_submit(
         .map(str::trim)
         .filter(|name| !name.is_empty())
         .map(str::to_string);
-    let wait = arguments.get("wait").and_then(Value::as_bool).unwrap_or(true);    let wait_seconds = arguments
+    let wait = arguments
+        .get("wait")
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
+    let wait_seconds = arguments
         .get("waitSeconds")
         .and_then(arg_i64)
         .unwrap_or(DEFAULT_WAIT_SECONDS)
         .clamp(0, MAX_WAIT_SECONDS);
-    let nsfw = arguments.get("nsfw").and_then(Value::as_bool).unwrap_or(false);
+    let nsfw = arguments
+        .get("nsfw")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     let title = arguments
         .get("title")
         .and_then(Value::as_str)
@@ -1097,12 +1206,22 @@ pub async fn tool_submit(
     if prompt_id.is_none() {
         let raw = path.unwrap();
         let file = policy.resolve_read(raw)?;
-        let loaded = crate::workflow::workflow_load::load_from_file(state, &file, title.as_deref(), false, true, true)
-            .await
-            .map_err(|failure| ToolFailure::new(&failure.code, failure.message))?;
+        let loaded = crate::workflow::workflow_load::load_from_file(
+            state,
+            &file,
+            title.as_deref(),
+            false,
+            true,
+            true,
+        )
+        .await
+        .map_err(|failure| ToolFailure::new(&failure.code, failure.message))?;
         prompt_id = loaded.get("promptId").and_then(arg_i64);
         if prompt_id.is_none() {
-            return Err(ToolFailure::new("COMFY_LOAD_FAILED", "加载了工作流文件，但没拿到 promptId"));
+            return Err(ToolFailure::new(
+                "COMFY_LOAD_FAILED",
+                "加载了工作流文件，但没拿到 promptId",
+            ));
         }
     }
     let prompt_id = prompt_id.unwrap_or_default();
@@ -1191,14 +1310,11 @@ pub async fn tool_submit(
         .or_else(|| prompt_title(state, prompt_id))
         .unwrap_or_else(|| format!("prompt {prompt_id}"));
 
-    let run_key = post_prompt(&base, &patched, state.comfy_progress.client_id()).await.map_err(|message| {
-        ToolFailure::new(
-            "COMFY_SUBMIT_FAILED",
-            format!(
-                "提交失败：{message}。"
-            ),
-        )
-    })?;
+    let run_key = post_prompt(&base, &patched, state.comfy_progress.client_id())
+        .await
+        .map_err(|message| {
+            ToolFailure::new("COMFY_SUBMIT_FAILED", format!("提交失败：{message}。"))
+        })?;
 
     // 提交时手里就有 API 图 → 把 `节点 id → 可读名`（`_meta.title` / `class_type`）记下来。
     // 进度 WS 的 `executing` / `progress` 帧只带节点 id，靠这份映射才能翻成
@@ -1238,7 +1354,9 @@ pub async fn tool_submit(
                 .and_then(|s| s.get("completed"))
                 .and_then(Value::as_bool)
                 .unwrap_or(false);
-            let status_str = status_object.and_then(|s| s.get("status_str")).and_then(Value::as_str);
+            let status_str = status_object
+                .and_then(|s| s.get("status_str"))
+                .and_then(Value::as_str);
             let has_outputs = entry
                 .get("outputs")
                 .and_then(Value::as_object)
@@ -1367,7 +1485,11 @@ pub async fn tool_submit(
     }
     out.insert(
         "nsfwMediaIds".into(),
-        if nsfw { json!(submission.media_ids) } else { json!(Vec::<i64>::new()) },
+        if nsfw {
+            json!(submission.media_ids)
+        } else {
+            json!(Vec::<i64>::new())
+        },
     );
     if submission.status == "timeout" {
         out.insert(
@@ -1412,13 +1534,19 @@ pub fn apply_text_generate_system_prompt(
     let mut targets: Vec<String> = Vec::new();
     let ids: Vec<String> = nodes.keys().cloned().collect();
     for id in ids {
-        let Some(node) = nodes.get(&id).and_then(Value::as_object) else { continue };
+        let Some(node) = nodes.get(&id).and_then(Value::as_object) else {
+            continue;
+        };
         let class = node.get("class_type").and_then(Value::as_str).unwrap_or("");
         if !class.to_ascii_lowercase().contains("textgenerate") {
             continue;
         }
-        let Some(inputs) = node.get("inputs").and_then(Value::as_object) else { continue };
-        let Some(system_prompt) = inputs.get("system_prompt") else { continue };
+        let Some(inputs) = node.get("inputs").and_then(Value::as_object) else {
+            continue;
+        };
+        let Some(system_prompt) = inputs.get("system_prompt") else {
+            continue;
+        };
         if system_prompt.is_string() {
             if let Some(node) = nodes.get_mut(&id).and_then(Value::as_object_mut) {
                 if let Some(inputs) = node.get_mut("inputs").and_then(Value::as_object_mut) {
@@ -1428,8 +1556,12 @@ pub fn apply_text_generate_system_prompt(
             }
             continue;
         }
-        let Some((upstream, _)) = link_ref(system_prompt) else { continue };
-        let Some(upstream_node) = nodes.get_mut(&upstream).and_then(Value::as_object_mut) else { continue };
+        let Some((upstream, _)) = link_ref(system_prompt) else {
+            continue;
+        };
+        let Some(upstream_node) = nodes.get_mut(&upstream).and_then(Value::as_object_mut) else {
+            continue;
+        };
         let is_string_node = upstream_node
             .get("class_type")
             .and_then(Value::as_str)
@@ -1438,7 +1570,10 @@ pub fn apply_text_generate_system_prompt(
         if !is_string_node {
             continue;
         }
-        if let Some(inputs) = upstream_node.get_mut("inputs").and_then(Value::as_object_mut) {
+        if let Some(inputs) = upstream_node
+            .get_mut("inputs")
+            .and_then(Value::as_object_mut)
+        {
             inputs.insert("value".into(), Value::String(body.to_string()));
             targets.push(format!("{upstream}.value"));
         }
@@ -1458,10 +1593,14 @@ pub fn apply_text_generate_system_prompt(
 /// 用途只有一个：`comfy_submit` 结果里的 `promptSource`。没有它，"模型以为走了生成支路、
 /// 其实 switch 还指着纯文本拼接"这种静默失效就查不出来。
 pub fn positive_prompt_is_generated(graph: &Value) -> bool {
-    let Some(nodes) = graph.as_object() else { return false };
+    let Some(nodes) = graph.as_object() else {
+        return false;
+    };
     let mut starts: Vec<String> = Vec::new();
     for node in nodes.values() {
-        let Some(inputs) = node.get("inputs").and_then(Value::as_object) else { continue };
+        let Some(inputs) = node.get("inputs").and_then(Value::as_object) else {
+            continue;
+        };
         if let Some((up, _)) = inputs.get("positive").and_then(link_ref) {
             starts.push(up);
         }
@@ -1479,8 +1618,14 @@ pub fn positive_prompt_is_generated(graph: &Value) -> bool {
         if depth > 32 || !seen.insert(id.clone()) {
             continue;
         }
-        let Some(node) = nodes.get(&id).and_then(Value::as_object) else { continue };
-        let class = node.get("class_type").and_then(Value::as_str).unwrap_or("").to_ascii_lowercase();
+        let Some(node) = nodes.get(&id).and_then(Value::as_object) else {
+            continue;
+        };
+        let class = node
+            .get("class_type")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_ascii_lowercase();
         if class.contains("textencode") {
             encoders.push(id);
             continue;
@@ -1495,15 +1640,29 @@ pub fn positive_prompt_is_generated(graph: &Value) -> bool {
     }
     // 从每个编码器的 text 连线往上找一层（switch / concat / TextGenerate 都在这条链上）
     for encoder in encoders {
-        let Some(node) = nodes.get(&encoder).and_then(Value::as_object) else { continue };
-        let Some(text) = node.get("inputs").and_then(Value::as_object).and_then(|i| i.get("text")) else { continue };
+        let Some(node) = nodes.get(&encoder).and_then(Value::as_object) else {
+            continue;
+        };
+        let Some(text) = node
+            .get("inputs")
+            .and_then(Value::as_object)
+            .and_then(|i| i.get("text"))
+        else {
+            continue;
+        };
         let mut frontier: Vec<String> = link_ref(text).map(|(up, _)| vec![up]).unwrap_or_default();
         let mut hop = 0;
         while !frontier.is_empty() && hop < 8 {
             let mut next: Vec<String> = Vec::new();
             for id in frontier {
-                let Some(node) = nodes.get(&id).and_then(Value::as_object) else { continue };
-                let class = node.get("class_type").and_then(Value::as_str).unwrap_or("").to_ascii_lowercase();
+                let Some(node) = nodes.get(&id).and_then(Value::as_object) else {
+                    continue;
+                };
+                let class = node
+                    .get("class_type")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_ascii_lowercase();
                 if class.contains("textgenerate") {
                     return true;
                 }
@@ -1527,9 +1686,11 @@ fn prompt_title(state: &AppState, id: i64) -> Option<String> {
     state
         .with(|conn| {
             Ok(conn
-                .query_row("SELECT title FROM prompts WHERE id = ?1", rusqlite::params![id], |row| {
-                    row.get::<_, Option<String>>(0)
-                })
+                .query_row(
+                    "SELECT title FROM prompts WHERE id = ?1",
+                    rusqlite::params![id],
+                    |row| row.get::<_, Option<String>>(0),
+                )
                 .ok()
                 .flatten())
         })

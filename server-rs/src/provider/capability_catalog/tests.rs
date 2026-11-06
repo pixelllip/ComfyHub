@@ -42,7 +42,10 @@ fn 内置匹配按包含且先命中先用() {
     assert!(hit.tools && hit.reasoning);
     assert_eq!(hit.thinking_format, None, "claude 系没有特殊方言");
     assert_eq!(hit.matched_by, "内置规则「claude-sonnet-5」");
-    assert!(hit.thinking_efforts.iter().any(|(k, v)| *k == "max" && *v == "max"));
+    assert!(hit
+        .thinking_efforts
+        .iter()
+        .any(|(k, v)| *k == "max" && *v == "max"));
 
     // deepseek-v4.1：带图片 + 思考档位 + deepseek 方言（这一条 reasoning=true，方言留着）
     let deepseek = lookup(&overlays, "deepseek-v4.1").unwrap();
@@ -74,7 +77,10 @@ fn 内置匹配按包含且先命中先用() {
     let chat = lookup(&overlays, "deepseek-chat").unwrap();
     assert_eq!(chat.modalities, vec!["text"]);
     assert!(!chat.reasoning, "deepseek-chat 不声明推理");
-    assert_eq!(chat.thinking_format, None, "不支持推理 → 方言与档位一律清空");
+    assert_eq!(
+        chat.thinking_format, None,
+        "不支持推理 → 方言与档位一律清空"
+    );
     assert!(chat.thinking_efforts.is_empty());
 
     // 目录里没有的模型 → `None`（调用方按 unknown() 兜底）
@@ -104,7 +110,11 @@ fn 覆盖层去前缀只在唯一命中时才认() {
     // 精确命中（大小写不敏感）
     let hit = lookup(&overlays, "Z-AI/GLM-5").unwrap();
     assert!(!hit.tools);
-    assert!(hit.matched_by.contains("手工目录 custom.json"), "{}", hit.matched_by);
+    assert!(
+        hit.matched_by.contains("手工目录 custom.json"),
+        "{}",
+        hit.matched_by
+    );
 
     // 网关 id 不带前缀 → 数据集条目的后缀唯一命中
     assert!(!lookup(&overlays, "glm-5").unwrap().tools);
@@ -119,7 +129,11 @@ fn 覆盖层去前缀只在唯一命中时才认() {
     // 只声明了一个维度：其余维度落回内置
     let plain = lookup(&overlays, "plain").unwrap();
     assert!(plain.reasoning);
-    assert_eq!(plain.modalities, vec!["text"], "覆盖层没说模态 → 落回内置的 TEXT_ONLY");
+    assert_eq!(
+        plain.modalities,
+        vec!["text"],
+        "覆盖层没说模态 → 落回内置的 TEXT_ONLY"
+    );
     let _ = std::fs::remove_dir_all(&d);
 }
 
@@ -139,7 +153,10 @@ fn 不支持推理时档位与方言一律清空() {
     let overlays = load_overlays(&d);
     let hit = lookup(&overlays, "kimi-k2.5").unwrap();
     assert!(!hit.reasoning);
-    assert!(hit.thinking_efforts.is_empty(), "不支持推理就一个档位都不许留");
+    assert!(
+        hit.thinking_efforts.is_empty(),
+        "不支持推理就一个档位都不许留"
+    );
     assert_eq!(hit.thinking_format, None, "不支持推理就不给方言");
     // 而同一层的条目如果**明说**支持推理，档位就保留
     std::fs::write(
@@ -150,7 +167,10 @@ fn 不支持推理时档位与方言一律清空() {
     let hit = lookup(&load_overlays(&d), "kimi-k2.5").unwrap();
     assert!(hit.reasoning);
     assert_eq!(hit.thinking_format.as_deref(), Some("zai"));
-    assert_eq!(hit.thinking_efforts, vec![("high".to_string(), "high".to_string())]);
+    assert_eq!(
+        hit.thinking_efforts,
+        vec![("high".to_string(), "high".to_string())]
+    );
     let _ = std::fs::remove_dir_all(&d);
 }
 
@@ -166,7 +186,11 @@ fn 状态读三层而坏文件不炸() {
     assert!(is_stale(&d, 1_000_000), "没拉过就算过期");
 
     // 两层都在
-    std::fs::write(d.join(CUSTOM_FILE), r#"{"source":"custom","entries":{"a":{},"b":{}}}"#).unwrap();
+    std::fs::write(
+        d.join(CUSTOM_FILE),
+        r#"{"source":"custom","entries":{"a":{},"b":{}}}"#,
+    )
+    .unwrap();
     std::fs::write(
         d.join(REMOTE_FILE),
         r#"{"source":"models.dev","fetchedAt":"2026-09-25T00:00:00Z","entries":{"a":{}}}"#,
@@ -176,7 +200,10 @@ fn 状态读三层而坏文件不炸() {
     assert_eq!(s.custom.as_ref().unwrap().entry_count, 2);
     assert_eq!(s.custom.as_ref().unwrap().source, "custom");
     assert_eq!(s.remote.as_ref().unwrap().source, "models.dev");
-    assert_eq!(s.remote.as_ref().unwrap().fetched_at.as_deref(), Some("2026-09-25T00:00:00Z"));
+    assert_eq!(
+        s.remote.as_ref().unwrap().fetched_at.as_deref(),
+        Some("2026-09-25T00:00:00Z")
+    );
     // 拉取时间 → 年龄 / 过期（7 天 = 168 小时）
     // ⚠ 用**解析出来的**那个时刻做基准，别自己手算 epoch（手算错一位就是一条假红的用例）
     let (fetched, _) = crate::infra::iso_time::parse("2026-09-25T00:00:00Z").unwrap();

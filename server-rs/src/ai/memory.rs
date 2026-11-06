@@ -50,7 +50,10 @@ pub struct MemoryFailure {
 
 impl MemoryFailure {
     fn new(code: &'static str, message: impl Into<String>) -> Self {
-        Self { code, message: message.into() }
+        Self {
+            code,
+            message: message.into(),
+        }
     }
 }
 
@@ -100,7 +103,10 @@ pub fn prompt_text(dir: &Path) -> String {
 /// ⚠ Kotlin 的 `lines()` 会把 `\r\n` 拆开、并且**末尾的换行不产生空行**；
 /// 这里按同样口径处理（`str::lines` 已经这么做了）。
 pub fn count_entries(content: &str) -> i64 {
-    content.lines().filter(|line| !line.trim().is_empty()).count() as i64
+    content
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .count() as i64
 }
 
 /// 按 **UTF-16 码元** 截断 —— Kotlin `String.take(n)` 的单位是 `Char`（UTF-16）。
@@ -138,7 +144,12 @@ pub fn body_of(line: &str) -> String {
     if head.len() == 11 && head[0] == '[' && head[10] == ']' {
         let digits = |from: usize, to: usize| head[from..to].iter().all(|c| c.is_ascii_digit());
         if digits(1, 5) && head[5] == '-' && digits(6, 8) && head[8] == '-' && digits(9, 11) {
-            text = text.chars().skip(11).collect::<String>().trim_start().to_string();
+            text = text
+                .chars()
+                .skip(11)
+                .collect::<String>()
+                .trim_start()
+                .to_string();
         }
     }
     text.trim().to_string()
@@ -177,7 +188,11 @@ pub fn append_user(dir: &Path, entry: &str) -> Result<MemoryDto, MemoryFailure> 
 /// `today`：`Some(日期)` = 给正文加 `[日期] ` 前缀（**只有 AI 那条路**）；
 /// `None` = 用户手敲，原话照存。`Some("")` = 拿不到本机日期 → 报错不写。
 fn push(dir: &Path, entry: &str, today: Option<&str>) -> Result<MemoryDto, MemoryFailure> {
-    let line = entry.replace("\r\n", "\n").replace('\n', " ").trim().to_string();
+    let line = entry
+        .replace("\r\n", "\n")
+        .replace('\n', " ")
+        .trim()
+        .to_string();
     let body = body_of(&line);
     if body.is_empty() {
         return Err(MemoryFailure::new("INVALID_ARGUMENT", "记的内容不能为空"));
@@ -215,7 +230,11 @@ fn push(dir: &Path, entry: &str, today: Option<&str>) -> Result<MemoryDto, Memor
         ));
     }
     let bullet = format!("- {stamped}");
-    let next = if current.is_empty() { bullet } else { format!("{current}\n{bullet}") };
+    let next = if current.is_empty() {
+        bullet
+    } else {
+        format!("{current}\n{bullet}")
+    };
     if next.encode_utf16().count() > MAX_CHARS {
         return Err(MemoryFailure::new(
             "MEMORY_TOO_LARGE",
@@ -298,7 +317,11 @@ fn dto(dir: &Path, content: &str, updated_at_override: Option<String>) -> Memory
             .and_then(|m| m.modified())
             .map(crate::infra::iso_time::from_system_time)
             .ok()
-            .or_else(|| Some(crate::infra::iso_time::from_system_time(std::time::SystemTime::now())))
+            .or_else(|| {
+                Some(crate::infra::iso_time::from_system_time(
+                    std::time::SystemTime::now(),
+                ))
+            })
     });
     MemoryDto {
         content: content.to_string(),

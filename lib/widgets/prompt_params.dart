@@ -42,10 +42,26 @@ class PromptParams extends StatelessWidget {
           children: [
             MetaChip(label: '模型', value: prompt.checkpoint, icon: Icons.memory),
             MetaChip(label: '采样器', value: prompt.sampler, icon: Icons.tune),
-            MetaChip(label: '调度器', value: prompt.scheduler, icon: Icons.schedule),
-            MetaChip(label: '步数', value: prompt.steps?.toString(), icon: Icons.stairs),
-            MetaChip(label: 'CFG', value: prompt.cfgScale?.toString(), icon: Icons.equalizer),
-            MetaChip(label: 'Seed', value: prompt.seed?.toString(), icon: Icons.casino_outlined),
+            MetaChip(
+              label: '调度器',
+              value: prompt.scheduler,
+              icon: Icons.schedule,
+            ),
+            MetaChip(
+              label: '步数',
+              value: prompt.steps?.toString(),
+              icon: Icons.stairs,
+            ),
+            MetaChip(
+              label: 'CFG',
+              value: prompt.cfgScale?.toString(),
+              icon: Icons.equalizer,
+            ),
+            MetaChip(
+              label: 'Seed',
+              value: prompt.seed?.toString(),
+              icon: Icons.casino_outlined,
+            ),
             MetaChip(
               label: '尺寸',
               value: (prompt.width != null && prompt.height != null)
@@ -53,7 +69,11 @@ class PromptParams extends StatelessWidget {
                   : null,
               icon: Icons.aspect_ratio,
             ),
-            MetaChip(label: '批量', value: prompt.batchSize?.toString(), icon: Icons.grid_view),
+            MetaChip(
+              label: '批量',
+              value: prompt.batchSize?.toString(),
+              icon: Icons.grid_view,
+            ),
           ],
         ),
         if (loras.isNotEmpty) ...[
@@ -64,7 +84,9 @@ class PromptParams extends StatelessWidget {
               const SizedBox(width: 4),
               Text(
                 'LoRA (${loras.length})',
-                style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline),
+                style: theme.textTheme.labelSmall?.copyWith(
+                  color: theme.colorScheme.outline,
+                ),
               ),
               const SizedBox(width: 4),
               // 多个 LoRA 时，一次复制出整串标签，省得一个个点
@@ -101,7 +123,8 @@ class LoraChip extends StatelessWidget {
   const LoraChip({super.key, required this.lora});
 
   /// 复制到提示词里的写法（A1111 / ComfyUI 的 LoRA 标签语法）
-  static String tagOf(LoraRef l) => '<lora:${l.name}:${formatWeight(l.weight)}>';
+  static String tagOf(LoraRef l) =>
+      '<lora:${l.name}:${formatWeight(l.weight)}>';
 
   /// 1.0 → 1，0.8 → 0.8；权重是整数时不补 `.0`，看着更像提示词里的写法
   static String formatWeight(double w) =>
@@ -138,7 +161,9 @@ class LoraChip extends StatelessWidget {
                       lora.name,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: theme.textTheme.labelMedium?.copyWith(fontWeight: FontWeight.w600),
+                      style: theme.textTheme.labelMedium?.copyWith(
+                        fontWeight: FontWeight.w600,
+                      ),
                     ),
                   ),
                   const SizedBox(width: 6),

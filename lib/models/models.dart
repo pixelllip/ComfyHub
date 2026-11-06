@@ -606,7 +606,8 @@ class MediaExportReport {
         workflows: (json['workflows'] as num?)?.toInt() ?? 0,
         totalBytes: (json['totalBytes'] as num?)?.toInt() ?? 0,
         byKind: ((json['byKind'] as Map?) ?? const {}).map(
-          (key, value) => MapEntry(key.toString(), (value as num?)?.toInt() ?? 0),
+          (key, value) =>
+              MapEntry(key.toString(), (value as num?)?.toInt() ?? 0),
         ),
         failed: ((json['failed'] as List?) ?? const [])
             .map(

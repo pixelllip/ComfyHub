@@ -106,9 +106,14 @@ class AdaptiveColumnList extends StatelessWidget {
             // 付 IntrinsicHeight 那次固有尺寸查询的钱。
             final single = end - start <= 1;
             return Padding(
-              padding: EdgeInsets.only(bottom: row == rows - 1 ? 0 : runSpacing),
+              padding: EdgeInsets.only(
+                bottom: row == rows - 1 ? 0 : runSpacing,
+              ),
               child: single
-                  ? Row(crossAxisAlignment: CrossAxisAlignment.start, children: items)
+                  ? Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: items,
+                    )
                   : IntrinsicHeight(
                       child: Row(
                         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -246,9 +251,9 @@ class AdaptiveColumns extends StatelessWidget {
   }
 
   List<Widget> _withGaps(List<Widget> items) => [
-        for (var i = 0; i < items.length; i++) ...[
-          if (i > 0) SizedBox(height: runSpacing),
-          items[i],
-        ],
-      ];
+    for (var i = 0; i < items.length; i++) ...[
+      if (i > 0) SizedBox(height: runSpacing),
+      items[i],
+    ],
+  ];
 }

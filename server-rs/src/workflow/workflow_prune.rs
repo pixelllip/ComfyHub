@@ -49,8 +49,8 @@ use std::collections::HashSet;
 
 use serde_json::{json, Map, Value};
 
-use crate::web::routes::AppState;
 use crate::tools::tools::{ToolFailure, ToolOutcome};
+use crate::web::routes::AppState;
 
 /// 输出节点：从这些出发做反向可达性分析。
 ///
@@ -87,7 +87,9 @@ pub struct PruneResult {
 
 impl PruneResult {
     pub fn runnable(&self) -> bool {
-        self.unresolved.is_empty() && self.outputs_alive > 0 && self.outputs_alive == self.outputs_total
+        self.unresolved.is_empty()
+            && self.outputs_alive > 0
+            && self.outputs_alive == self.outputs_total
     }
 
     pub fn summary(&self) -> String {
@@ -162,8 +164,11 @@ pub fn apply(
     }
 
     let mut warnings: Vec<String> = Vec::new();
-    let outputs: Vec<String> =
-        nodes.keys().filter(|id| is_output(id, &nodes)).cloned().collect();
+    let outputs: Vec<String> = nodes
+        .keys()
+        .filter(|id| is_output(id, &nodes))
+        .cloned()
+        .collect();
 
     // ---- 1) 摘除 ------------------------------------------------------
     //
@@ -273,12 +278,17 @@ pub fn apply(
             continue;
         }
         let node = value.as_object().cloned().unwrap_or_default();
-        let mut inputs: Map<String, Value> =
-            node.get("inputs").and_then(Value::as_object).cloned().unwrap_or_default();
+        let mut inputs: Map<String, Value> = node
+            .get("inputs")
+            .and_then(Value::as_object)
+            .cloned()
+            .unwrap_or_default();
         let mut changed = false;
         let names: Vec<String> = inputs.keys().cloned().collect();
         for name in names {
-            let Some(reference) = ref_of(inputs.get(&name)) else { continue };
+            let Some(reference) = ref_of(inputs.get(&name)) else {
+                continue;
+            };
             if !dropped.contains(&reference.0) {
                 continue;
             }
@@ -318,20 +328,32 @@ pub fn apply(
 
     // ---- 3) 拼装：插补丁节点 ------------------------------------------
     let mut injected: Vec<String> = Vec::new();
-    let mut next_id: i64 =
-        patched.keys().filter_map(|id| id.parse::<i64>().ok()).max().unwrap_or(0) + 100;
+    let mut next_id: i64 = patched
+        .keys()
+        .filter_map(|id| id.parse::<i64>().ok())
+        .max()
+        .unwrap_or(0)
+        + 100;
     for inj in injections {
         let Some((host_id, host_input)) = split_path(&inj.at) else {
-            warnings.push(format!("拼装位置要写成 节点id.输入名（收到的是「{}」）", inj.at));
+            warnings.push(format!(
+                "拼装位置要写成 节点id.输入名（收到的是「{}」）",
+                inj.at
+            ));
             continue;
         };
         let Some(host_value) = patched.get(&host_id) else {
-            warnings.push(format!("拼装位置 {host_id} 不在这张图里（可能刚好被摘掉了）"));
+            warnings.push(format!(
+                "拼装位置 {host_id} 不在这张图里（可能刚好被摘掉了）"
+            ));
             continue;
         };
         let host = host_value.as_object().cloned().unwrap_or_default();
-        let mut host_inputs: Map<String, Value> =
-            host.get("inputs").and_then(Value::as_object).cloned().unwrap_or_default();
+        let mut host_inputs: Map<String, Value> = host
+            .get("inputs")
+            .and_then(Value::as_object)
+            .cloned()
+            .unwrap_or_default();
         let upstream = host_inputs.get(&host_input).cloned();
         if ref_of(upstream.as_ref()).is_none() {
             warnings.push(format!(
@@ -410,7 +432,10 @@ pub fn apply(
     // ---- 4) 体检：悬空引用 / 空着的连线型输入 / 输出还通不通 ----------
     let unresolved = dangling(&patched);
     let open_inputs = open_wired_inputs(&patched, object_info);
-    let outputs_alive = outputs.iter().filter(|id| patched.contains_key(*id)).count();
+    let outputs_alive = outputs
+        .iter()
+        .filter(|id| patched.contains_key(*id))
+        .count();
 
     let removed = dropped_order
         .iter()
@@ -482,7 +507,9 @@ pub fn describe(class_type: &str) -> String {
         // 认不出来就照抄类名，别编
         None
     };
-    known.map(str::to_string).unwrap_or_else(|| class_type.to_string())
+    known
+        .map(str::to_string)
+        .unwrap_or_else(|| class_type.to_string())
 }
 
 /// **用不上的分支**分析（用户建议 ④，2026-09-22）。
@@ -506,8 +533,11 @@ pub fn unused_branches(
             nodes.insert(id.clone(), Value::Object(object.clone()));
         }
     }
-    let outputs: Vec<String> =
-        nodes.keys().filter(|id| is_output(id, &nodes)).cloned().collect();
+    let outputs: Vec<String> = nodes
+        .keys()
+        .filter(|id| is_output(id, &nodes))
+        .cloned()
+        .collect();
     let live = live_nodes(&nodes, &outputs);
 
     // "还没接完"的孤立节点：**自己没接任何线，也没人用它**。
@@ -522,7 +552,11 @@ pub fn unused_branches(
         if !consumers_of(id, &nodes, &HashSet::new()).is_empty() {
             return false;
         }
-        match nodes.get(id).and_then(|node| node.get("inputs")).and_then(Value::as_object) {
+        match nodes
+            .get(id)
+            .and_then(|node| node.get("inputs"))
+            .and_then(Value::as_object)
+        {
             Some(inputs) => inputs.values().all(|value| ref_of(Some(value)).is_none()),
             None => true,
         }
@@ -822,9 +856,13 @@ fn consumers_of(
         if id == node_id || ignoring.contains(id) {
             continue;
         }
-        let Some(inputs) = node.get("inputs").and_then(Value::as_object) else { continue };
+        let Some(inputs) = node.get("inputs").and_then(Value::as_object) else {
+            continue;
+        };
         for value in inputs.values() {
-            if ref_of(Some(value)).map(|(source, _)| source == node_id).unwrap_or(false)
+            if ref_of(Some(value))
+                .map(|(source, _)| source == node_id)
+                .unwrap_or(false)
                 && !out.contains(id)
             {
                 out.push(id.clone());
@@ -874,7 +912,8 @@ fn nearest_live_input(
             }
         }
         // 这一层没有可用的：继续往回（它的上游本身也被摘了）
-        cursor = inputs_first_ref(node).filter(|id| nodes.contains_key(id) && !dropped.contains(id));
+        cursor =
+            inputs_first_ref(node).filter(|id| nodes.contains_key(id) && !dropped.contains(id));
     }
     None
 }
@@ -882,7 +921,9 @@ fn nearest_live_input(
 /// 节点第一个连线型输入的**上游节点 id**（Kotlin `firstNotNullOfOrNull`）。
 fn inputs_first_ref(node: &Value) -> Option<String> {
     let inputs = node.get("inputs").and_then(Value::as_object)?;
-    inputs.values().find_map(|value| ref_of(Some(value)).map(|(source, _)| source))
+    inputs
+        .values()
+        .find_map(|value| ref_of(Some(value)).map(|(source, _)| source))
 }
 
 /// 一个输入算不算"接在某个节点上"（值是 `["id", slot]`）。
@@ -893,7 +934,9 @@ fn ref_of(value: Option<&Value>) -> Option<(String, i64)> {
     }
     let id = primitive_text(&items[0])?;
     // Kotlin 的 `contentOrNull?.toIntOrNull() ?: 0`：槽位认不出来就是 0（不是丢弃整条引用）
-    let slot = primitive_text(&items[1]).and_then(|text| text.parse::<i64>().ok()).unwrap_or(0);
+    let slot = primitive_text(&items[1])
+        .and_then(|text| text.parse::<i64>().ok())
+        .unwrap_or(0);
     Some((id, slot))
 }
 
@@ -907,7 +950,9 @@ fn split_path(path: &str) -> Option<(String, String)> {
 
 /// 输出节点：类名带 Save / Preview / VideoCombine / Export。
 fn is_output(id: &str, nodes: &Map<String, Value>) -> bool {
-    let Some(node) = nodes.get(id) else { return false };
+    let Some(node) = nodes.get(id) else {
+        return false;
+    };
     let class = class_of(node).to_lowercase();
     // 静音的输出节点不算（它自己不执行）
     let muted = node.get("mode").and_then(primitive_text).as_deref() == Some("2");
@@ -923,7 +968,9 @@ fn collect(from: &str, nodes: &Map<String, Value>) -> HashSet<String> {
             continue;
         }
         let Some(node) = nodes.get(&id) else { continue };
-        let Some(inputs) = node.get("inputs").and_then(Value::as_object) else { continue };
+        let Some(inputs) = node.get("inputs").and_then(Value::as_object) else {
+            continue;
+        };
         for value in inputs.values() {
             if let Some((source, _)) = ref_of(Some(value)) {
                 if nodes.contains_key(&source) {
@@ -939,9 +986,13 @@ fn collect(from: &str, nodes: &Map<String, Value>) -> HashSet<String> {
 fn dangling(nodes: &Map<String, Value>) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     for (id, node) in nodes {
-        let Some(inputs) = node.get("inputs").and_then(Value::as_object) else { continue };
+        let Some(inputs) = node.get("inputs").and_then(Value::as_object) else {
+            continue;
+        };
         for (name, value) in inputs {
-            let Some((source, _)) = ref_of(Some(value)) else { continue };
+            let Some((source, _)) = ref_of(Some(value)) else {
+                continue;
+            };
             if !nodes.contains_key(&source) {
                 out.push(format!("{id}.{name} ← 节点 {source}（已不在图里）"));
             }
@@ -962,18 +1013,24 @@ fn open_wired_inputs(
         let class = class_of(node);
         // ⚠ 与 Kotlin 同：节点**连 `inputs` 键都没有**时整条跳过（含下面"定义里声明为插口
         //   但图里没有"那一段）—— 它只影响"少报"，不影响任何摘除判据，所以照抄不改。
-        let Some(inputs) = node.get("inputs").and_then(Value::as_object) else { continue };
+        let Some(inputs) = node.get("inputs").and_then(Value::as_object) else {
+            continue;
+        };
         for (name, value) in inputs {
-            let empty = value.is_null()
-                || matches!(value, Value::String(text) if text.trim().is_empty());
+            let empty =
+                value.is_null() || matches!(value, Value::String(text) if text.trim().is_empty());
             if !empty {
                 continue;
             }
             out.push(format!("{id}.{name}（{class}）"));
         }
-        let Some(object_info) = object_info else { continue };
+        let Some(object_info) = object_info else {
+            continue;
+        };
         // 定义里声明为插口、但图里没有的输入也算缺口
-        let Some(spec) = object_info.get(&class).and_then(Value::as_object) else { continue };
+        let Some(spec) = object_info.get(&class).and_then(Value::as_object) else {
+            continue;
+        };
         let Some(required) = spec
             .get("input")
             .and_then(Value::as_object)
@@ -987,7 +1044,9 @@ fn open_wired_inputs(
                 continue;
             }
             let Some(decl) = raw.as_array() else { continue };
-            let Some(kind) = decl.first().and_then(primitive_text) else { continue };
+            let Some(kind) = decl.first().and_then(primitive_text) else {
+                continue;
+            };
             if !is_wired_type(&kind, decl) {
                 continue;
             }
@@ -1001,11 +1060,19 @@ fn open_wired_inputs(
 fn is_wired_type(kind: &str, decl: &[Value]) -> bool {
     if let Some(options) = decl.get(1).and_then(Value::as_object) {
         // Kotlin 是 `contentOrNull == "true"`（JSON 布尔 true 的 content 也是 "true"）
-        if options.get("forceInput").and_then(primitive_text).as_deref() == Some("true") {
+        if options
+            .get("forceInput")
+            .and_then(primitive_text)
+            .as_deref()
+            == Some("true")
+        {
             return true;
         }
     }
-    !matches!(kind.to_uppercase().as_str(), "INT" | "FLOAT" | "STRING" | "BOOLEAN" | "COMBO")
+    !matches!(
+        kind.to_uppercase().as_str(),
+        "INT" | "FLOAT" | "STRING" | "BOOLEAN" | "COMBO"
+    )
 }
 
 /// 补丁节点里"该接上游"的那个输入名。
@@ -1019,7 +1086,8 @@ fn pick_carry_input(
     spec: Option<&Map<String, Value>>,
     already: &Map<String, Value>,
 ) -> Option<String> {
-    if !already.contains_key("model") && (spec.is_none() || spec.and_then(|s| s.get("input")).is_some())
+    if !already.contains_key("model")
+        && (spec.is_none() || spec.and_then(|s| s.get("input")).is_some())
     {
         let required = spec
             .and_then(|s| s.get("input"))
@@ -1044,7 +1112,9 @@ fn pick_carry_input(
             continue;
         }
         let Some(decl) = raw.as_array() else { continue };
-        let Some(kind) = decl.first().and_then(primitive_text) else { continue };
+        let Some(kind) = decl.first().and_then(primitive_text) else {
+            continue;
+        };
         if is_wired_type(&kind, decl) {
             return Some(name.clone());
         }
@@ -1054,7 +1124,9 @@ fn pick_carry_input(
 
 /// 节点的类名（API 格式里是 `class_type`）。
 fn class_of(node: &Value) -> String {
-    node.get("class_type").and_then(primitive_text).unwrap_or_default()
+    node.get("class_type")
+        .and_then(primitive_text)
+        .unwrap_or_default()
 }
 
 /// 取一个**调用前刚确认过存在**的节点（Kotlin 的 `nodes[id]` / `nodes[id]?.cls()`）。
@@ -1093,7 +1165,10 @@ fn bool_arg(value: Option<&Value>) -> Option<bool> {
 
 /// Kotlin `JsonObject.str`：非空白的文本。
 fn obj_str(object: &Map<String, Value>, key: &str) -> Option<String> {
-    object.get(key).and_then(primitive_text).filter(|text| !text.trim().is_empty())
+    object
+        .get(key)
+        .and_then(primitive_text)
+        .filter(|text| !text.trim().is_empty())
 }
 
 /// `comfy_prune_workflow`：给一份工作流做减法（摘节点）/ 加法（拼节点）。
@@ -1107,14 +1182,15 @@ pub async fn tool_prune_workflow(
     state: &AppState,
     arguments: &Value,
 ) -> Result<ToolOutcome, ToolFailure> {
-    let graph = crate::workflow::workflow_fit::api_graph_of(arguments.get("graph")).ok_or_else(|| {
-        ToolFailure::new(
-            "INVALID_ARGUMENT",
-            "graph 不是一份 API 格式节点图（应当形如 \
+    let graph =
+        crate::workflow::workflow_fit::api_graph_of(arguments.get("graph")).ok_or_else(|| {
+            ToolFailure::new(
+                "INVALID_ARGUMENT",
+                "graph 不是一份 API 格式节点图（应当形如 \
              {\"1\":{\"class_type\":\"KSampler\",\"inputs\":{…}}}）。\
              界面格式（nodes/links）请先用 comfy_load_workflow 读进库。",
-        )
-    })?;
+            )
+        })?;
     let remove_from: Vec<String> = arguments
         .get("removeFrom")
         .and_then(Value::as_array)
@@ -1204,7 +1280,13 @@ pub async fn tool_prune_workflow(
         }
     }
 
-    let result = apply(&graph, &remove_from, &keep, &injections, object_info.as_ref());
+    let result = apply(
+        &graph,
+        &remove_from,
+        &keep,
+        &injections,
+        object_info.as_ref(),
+    );
     let runnable = result.runnable();
     let hint = if runnable {
         "改好的图在 `graph`（**内联**的，不是库里的 promptId）。\

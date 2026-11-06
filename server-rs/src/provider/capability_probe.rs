@@ -79,11 +79,19 @@ impl ProbeResponse {
     /// 2xx（用例里的"网关认了"）。
     #[cfg(test)]
     fn ok(status: u16) -> Self {
-        Self { status: Some(status), body: String::new(), detail: String::new() }
+        Self {
+            status: Some(status),
+            body: String::new(),
+            detail: String::new(),
+        }
     }
 
     fn failed(detail: impl Into<String>) -> Self {
-        Self { status: None, body: String::new(), detail: detail.into() }
+        Self {
+            status: None,
+            body: String::new(),
+            detail: detail.into(),
+        }
     }
 }
 
@@ -190,7 +198,9 @@ pub fn probe_body(model_id: &str, effort: Option<&str>, token_field: &str) -> St
     root.insert("model".into(), Value::String(model_id.to_string()));
     root.insert(
         "messages".into(),
-        Value::Array(vec![serde_json::json!({ "role": "user", "content": PROBE_PROMPT })]),
+        Value::Array(vec![
+            serde_json::json!({ "role": "user", "content": PROBE_PROMPT }),
+        ]),
     );
     root.insert(token_field.to_string(), Value::from(PROBE_MAX_TOKENS));
     if let Some(effort) = effort {
@@ -203,7 +213,11 @@ pub fn probe_body(model_id: &str, effort: Option<&str>, token_field: &str) -> St
 pub fn chat_url_candidates(base_url: &str) -> Vec<String> {
     let base = base_url.trim().trim_end_matches('/');
     let has_v1 = base.ends_with("/v1");
-    let stripped = if has_v1 { base.trim_end_matches("/v1").to_string() } else { format!("{base}/v1") };
+    let stripped = if has_v1 {
+        base.trim_end_matches("/v1").to_string()
+    } else {
+        format!("{base}/v1")
+    };
     let mut out = vec![format!("{base}/chat/completions")];
     let alternate = format!("{stripped}/chat/completions");
     if !out.contains(&alternate) {
@@ -277,7 +291,12 @@ pub struct LadderOutcome {
 
 impl LadderOutcome {
     fn failed(message: impl Into<String>, attempts: usize) -> Self {
-        Self { accepted_top: None, ladder: None, message: message.into(), attempts }
+        Self {
+            accepted_top: None,
+            ladder: None,
+            message: message.into(),
+            attempts,
+        }
     }
 }
 
@@ -307,7 +326,14 @@ pub async fn run_ladder<T: Transport>(
     for url in chat_url_candidates(base_url) {
         attempts += 1;
         let response = transport
-            .post(&url, api, secret, trust, &probe_body(model_id, None, token_field), PROBE_TIMEOUT_SECONDS)
+            .post(
+                &url,
+                api,
+                secret,
+                trust,
+                &probe_body(model_id, None, token_field),
+                PROBE_TIMEOUT_SECONDS,
+            )
             .await;
         // 每个探测请求都算一次尝试（连不上也算 —— 用户要看到"我们真发过几次"）；
         // 只有 404 才换下一个候选（那是"地址拼错了"），其余一律认这个端点。
@@ -332,12 +358,22 @@ pub async fn run_ladder<T: Transport>(
         token_field = "max_completion_tokens";
         attempts += 1;
         baseline = transport
-            .post(&endpoint, api, secret, trust, &probe_body(model_id, None, token_field), PROBE_TIMEOUT_SECONDS)
+            .post(
+                &endpoint,
+                api,
+                secret,
+                trust,
+                &probe_body(model_id, None, token_field),
+                PROBE_TIMEOUT_SECONDS,
+            )
             .await;
     }
     if !is_success(&baseline) {
         return LadderOutcome::failed(
-            format!("基准请求（不带思考参数）失败：{}", describe(Some(&baseline), "")),
+            format!(
+                "基准请求（不带思考参数）失败：{}",
+                describe(Some(&baseline), "")
+            ),
             attempts,
         );
     }
@@ -356,7 +392,14 @@ pub async fn run_ladder<T: Transport>(
     for (index, (_level, wire)) in rungs.iter().enumerate() {
         attempts += 1;
         let response = transport
-            .post(&endpoint, api, secret, trust, &probe_body(model_id, Some(wire), token_field), PROBE_TIMEOUT_SECONDS)
+            .post(
+                &endpoint,
+                api,
+                secret,
+                trust,
+                &probe_body(model_id, Some(wire), token_field),
+                PROBE_TIMEOUT_SECONDS,
+            )
             .await;
         if is_success(&response) {
             accepted = Some(index);
@@ -367,14 +410,19 @@ pub async fn run_ladder<T: Transport>(
             Some(code) if (400..500).contains(&code) => {
                 let detail = describe(Some(&response), "");
                 if !mentions_thinking(&detail) {
-                    abort = Some(format!("档位 {wire} 被拒，但错误看起来与思考参数无关：{detail}"));
+                    abort = Some(format!(
+                        "档位 {wire} 被拒，但错误看起来与思考参数无关：{detail}"
+                    ));
                     break;
                 }
                 // 提到 effort/reasoning/thinking → 网关不认这一档，降档再试
             }
             // 非 4xx（5xx / 429 / 连不上）：不是"不认这一档"，如实中止
             _ => {
-                abort = Some(format!("档位 {wire} 请求失败：{}", describe(Some(&response), "")));
+                abort = Some(format!(
+                    "档位 {wire} 请求失败：{}",
+                    describe(Some(&response), "")
+                ));
                 break;
             }
         }
@@ -405,7 +453,9 @@ pub async fn run_ladder<T: Transport>(
 
 /// 一次响应的可读摘要（状态码 + 正文；都没了就回兜底那句话）。
 fn describe(response: Option<&ProbeResponse>, fallback: &str) -> String {
-    let Some(response) = response else { return fallback.to_string() };
+    let Some(response) = response else {
+        return fallback.to_string();
+    };
     match response.status {
         Some(code) => {
             let body = response.body.trim();
@@ -450,7 +500,11 @@ pub fn write_entry(
         }
     };
     // 空文件当"还没建"（0 字节也不是合法 JSON）；已有内容但读坏了 → 下面 upsert 会拒绝
-    let raw = if raw.trim().is_empty() { "{}".to_string() } else { raw };
+    let raw = if raw.trim().is_empty() {
+        "{}".to_string()
+    } else {
+        raw
+    };
     let entry = OverlayEntry {
         modalities: None,
         tools: None,
@@ -470,7 +524,10 @@ pub fn write_entry(
 fn write_atomic(target: &std::path::Path, text: &str) -> Result<(), String> {
     let tmp = target.with_file_name(format!(
         "{}.{}.tmp",
-        target.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "custom.json".into()),
+        target
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| "custom.json".into()),
         std::process::id()
     ));
     std::fs::write(&tmp, text).map_err(|e| format!("写临时文件失败（{}）：{e}", tmp.display()))?;
@@ -500,8 +557,9 @@ pub fn upsert_entry_text(
     if key.is_empty() {
         return Err("模型 id 为空，无法写回".to_string());
     }
-    let parsed: Value = serde_json::from_str(raw)
-        .map_err(|e| format!("手工目录 custom.json 不是合法 JSON（{e}）—— 拒绝覆盖，请先手工修好"))?;
+    let parsed: Value = serde_json::from_str(raw).map_err(|e| {
+        format!("手工目录 custom.json 不是合法 JSON（{e}）—— 拒绝覆盖，请先手工修好")
+    })?;
     let root = parsed.as_object().ok_or_else(|| {
         "手工目录 custom.json 的顶层不是 JSON 对象 —— 拒绝覆盖，请先手工修好".to_string()
     })?;
@@ -511,8 +569,10 @@ pub fn upsert_entry_text(
         None | Some(Value::Null) => Map::new(),
         Some(Value::Object(map)) => map.clone(),
         Some(_) => {
-            return Err("手工目录 custom.json 的 entries 不是 JSON 对象 —— 拒绝覆盖，请先手工修好"
-                .to_string())
+            return Err(
+                "手工目录 custom.json 的 entries 不是 JSON 对象 —— 拒绝覆盖，请先手工修好"
+                    .to_string(),
+            )
         }
     };
 
@@ -575,7 +635,13 @@ fn insert_entry_text(raw: &str, key: &str, value: &Value) -> Option<String> {
     let rendered = pretty
         .split('\n')
         .enumerate()
-        .map(|(index, line)| if index == 0 { line.to_string() } else { format!("{indent}{line}") })
+        .map(|(index, line)| {
+            if index == 0 {
+                line.to_string()
+            } else {
+                format!("{indent}{line}")
+            }
+        })
         .collect::<Vec<_>>()
         .join("\n");
     let mut next = String::with_capacity(raw.len() + rendered.len() + key.len() + 8);
@@ -653,7 +719,10 @@ fn overlay_entry_to_value(entry: &OverlayEntry) -> Value {
 
 /// 原文里那一段文本 → JSON 对象（解析不出来就当"没有旧值"）。
 fn parse_object(text: &str) -> Option<Map<String, Value>> {
-    serde_json::from_str::<Value>(text).ok()?.as_object().cloned()
+    serde_json::from_str::<Value>(text)
+        .ok()?
+        .as_object()
+        .cloned()
 }
 
 /// 把要写的字段**合进**已有条目：旧条目里我们没碰的键一个都不丢。
@@ -661,8 +730,12 @@ fn parse_object(text: &str) -> Option<Map<String, Value>> {
 /// 只有本次真正要改的两个键（`thinkingEfforts` / `thinkingFormat`）是"以新值为准"，
 /// 其余原样保留 —— 这也顺带保住了用户手写的、我们不认识的键。
 fn merge_entry_value(existing: Option<Map<String, Value>>, fresh: &Value) -> Value {
-    let Some(fresh) = fresh.as_object() else { return fresh.clone() };
-    let Some(mut merged) = existing else { return Value::Object(fresh.clone()) };
+    let Some(fresh) = fresh.as_object() else {
+        return fresh.clone();
+    };
+    let Some(mut merged) = existing else {
+        return Value::Object(fresh.clone());
+    };
     for key in ["thinkingEfforts", "thinkingFormat"] {
         match fresh.get(key) {
             Some(value) => {
@@ -749,7 +822,10 @@ fn walk_entries(raw: &str, entries_open: usize, key: &str) -> Option<EntrySpan> 
         let value_start = skip_ws(bytes, colon + 1);
         let (_, value_end) = skip_value(raw, value_start)?;
         if key_text.eq_ignore_ascii_case(key) {
-            return Some(EntrySpan { start: value_start, end: value_end });
+            return Some(EntrySpan {
+                start: value_start,
+                end: value_end,
+            });
         }
         cursor = skip_ws(bytes, value_end);
         if bytes.get(cursor) == Some(&b',') {
@@ -795,7 +871,11 @@ fn skip_value(raw: &str, start: usize) -> Option<(usize, usize)> {
     }
     if first != b'{' && first != b'[' {
         let mut index = start;
-        while index < bytes.len() && !matches!(bytes[index], b',' | b'}' | b']' | b' ' | b'\n' | b'\r' | b'\t')
+        while index < bytes.len()
+            && !matches!(
+                bytes[index],
+                b',' | b'}' | b']' | b' ' | b'\n' | b'\r' | b'\t'
+            )
         {
             index += 1;
         }
@@ -839,7 +919,8 @@ fn skip_ws(bytes: &[u8], start: usize) -> usize {
 fn splice_entry(raw: &str, span: &EntrySpan, value: &Value) -> Result<String, String> {
     // 内联值也要能替换（原文件里 `"m": {"off":"none"}` 是合法的）
     if !raw[span.start..span.end].contains('\n') {
-        let one_line = serde_json::to_string(value).map_err(|e| format!("序列化新条目失败：{e}"))?;
+        let one_line =
+            serde_json::to_string(value).map_err(|e| format!("序列化新条目失败：{e}"))?;
         let mut next = String::with_capacity(raw.len() + one_line.len());
         next.push_str(&raw[..span.start]);
         next.push_str(&one_line);
@@ -847,11 +928,18 @@ fn splice_entry(raw: &str, span: &EntrySpan, value: &Value) -> Result<String, St
         return Ok(next);
     }
     let indent = line_indent(raw, span.start);
-    let pretty = serde_json::to_string_pretty(value).map_err(|e| format!("序列化新条目失败：{e}"))?;
+    let pretty =
+        serde_json::to_string_pretty(value).map_err(|e| format!("序列化新条目失败：{e}"))?;
     let rendered = pretty
         .split('\n')
         .enumerate()
-        .map(|(index, line)| if index == 0 { line.to_string() } else { format!("{indent}{line}") })
+        .map(|(index, line)| {
+            if index == 0 {
+                line.to_string()
+            } else {
+                format!("{indent}{line}")
+            }
+        })
         .collect::<Vec<_>>()
         .join("\n");
     let mut next = String::with_capacity(raw.len() + rendered.len());
@@ -865,7 +953,10 @@ fn splice_entry(raw: &str, span: &EntrySpan, value: &Value) -> Result<String, St
 fn line_indent(raw: &str, position: usize) -> String {
     let head = &raw[..position.min(raw.len())];
     let line_start = head.rfind('\n').map(|index| index + 1).unwrap_or(0);
-    head[line_start..].chars().take_while(|c| *c == ' ' || *c == '\t').collect()
+    head[line_start..]
+        .chars()
+        .take_while(|c| *c == ' ' || *c == '\t')
+        .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -977,24 +1068,44 @@ pub async fn probe<T: Transport>(
         }
     }
 
-    let providers = match request.provider_id.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+    let providers = match request
+        .provider_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
         Some(id) => vec![crate::ai::ai::require_provider_row(state, id)?],
         // 缺省 = 所有**已启用**的 Provider。逐条回查一次是为了拿到行（行里才有 base_url /
         // 凭据引用）；查不到的那种"并发里刚好被删了"按**跳过**处理，不把整批拖死。
         None => crate::ai::ai::list_providers(state)?
             .into_iter()
             .filter(|p| p.enabled)
-            .filter_map(|dto| crate::ai::ai::get_provider_row(state, &dto.id).ok().flatten())
+            .filter_map(|dto| {
+                crate::ai::ai::get_provider_row(state, &dto.id)
+                    .ok()
+                    .flatten()
+            })
             .collect(),
     };
     if providers.is_empty() {
-        return Ok(response_json(false, "没有可校准的 Provider（缺省只校准**已启用**的那些）", &[]));
+        return Ok(response_json(
+            false,
+            "没有可校准的 Provider（缺省只校准**已启用**的那些）",
+            &[],
+        ));
     }
 
     let mut outcomes: Vec<ProbeOutcome> = Vec::new();
     for provider in &providers {
-        probe_provider(state, dir, provider, request.model_id.as_deref(), &mut outcomes, transport)
-            .await?;
+        probe_provider(
+            state,
+            dir,
+            provider,
+            request.model_id.as_deref(),
+            &mut outcomes,
+            transport,
+        )
+        .await?;
     }
 
     let ok_count = outcomes.iter().filter(|o| o.ok).count();
@@ -1039,7 +1150,12 @@ async fn probe_provider<T: Transport>(
         ));
         return Ok(());
     }
-    if provider.credential_ref.as_deref().map(str::trim).filter(|r| !r.is_empty()).is_some()
+    if provider
+        .credential_ref
+        .as_deref()
+        .map(str::trim)
+        .filter(|r| !r.is_empty())
+        .is_some()
         && secret.is_none()
     {
         outcomes.push(ProbeOutcome::skipped(
@@ -1057,10 +1173,12 @@ async fn probe_provider<T: Transport>(
     let models: Vec<crate::ai::ai::AiModelDto> = crate::ai::ai::list_models(state, &provider.id)?
         .into_iter()
         .filter(|m| m.enabled && m.reasoning)
-        .filter(|m| match model_id.map(str::trim).filter(|s| !s.is_empty()) {
-            Some(want) => m.id == want,
-            None => true,
-        })
+        .filter(
+            |m| match model_id.map(str::trim).filter(|s| !s.is_empty()) {
+                Some(want) => m.id == want,
+                None => true,
+            },
+        )
         .take(MAX_MODELS_PER_PROVIDER)
         .collect();
 
@@ -1068,9 +1186,7 @@ async fn probe_provider<T: Transport>(
         .unwrap_or_else(|| crate::web::endpoint_guard::infer_trust(""));
 
     for model in models {
-        outcomes.push(
-            probe_one(provider, &model, secret.as_deref(), trust, dir, transport).await,
-        );
+        outcomes.push(probe_one(provider, &model, secret.as_deref(), trust, dir, transport).await);
     }
     Ok(())
 }
@@ -1115,7 +1231,10 @@ async fn probe_one<T: Transport>(
             ladder: Some(ladder),
             written: true,
             skipped: false,
-            message: format!("{}｜已写回 custom.json（{} 次请求）", outcome.message, outcome.attempts),
+            message: format!(
+                "{}｜已写回 custom.json（{} 次请求）",
+                outcome.message, outcome.attempts
+            ),
         },
         // 探测成功了但写不回去：**ok=false**（用户要的是"档位被写回来"，而且得知道为什么没写成）
         Err(message) => ProbeOutcome::failed(

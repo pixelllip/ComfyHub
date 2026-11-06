@@ -41,7 +41,10 @@ fn title_in(db: &Path) -> String {
 }
 
 fn item_name(body: &serde_json::Value) -> String {
-    body["item"]["name"].as_str().expect("item.name").to_string()
+    body["item"]["name"]
+        .as_str()
+        .expect("item.name")
+        .to_string()
 }
 
 #[tokio::test]
@@ -122,7 +125,9 @@ async fn restoring_only_prepares_a_restart_and_leaves_the_live_database_alone() 
     assert_eq!(title_in(&db), TITLE);
     assert_eq!(backup::pending(&db).as_deref(), Some(name.as_str()));
     assert!(root.join("backups").join(safety).is_file());
-    assert!(PathBuf::from(&state.db_path).with_extension("db.restore-tmp").is_file());
+    assert!(PathBuf::from(&state.db_path)
+        .with_extension("db.restore-tmp")
+        .is_file());
 }
 
 #[tokio::test]
@@ -174,5 +179,9 @@ async fn deleting_a_backup_is_honest_about_missing_ones() {
         &format!("/api/system/backups/{name}"),
     )
     .await;
-    assert_eq!(status, StatusCode::NOT_FOUND, "删第二遍要如实说没有：{body}");
+    assert_eq!(
+        status,
+        StatusCode::NOT_FOUND,
+        "删第二遍要如实说没有：{body}"
+    );
 }

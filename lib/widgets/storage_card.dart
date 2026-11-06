@@ -103,7 +103,9 @@ class _StorageCardState extends State<StorageCard> {
       if (!mounted) return;
       await _load();
       if (!mounted) return;
-      final more = report.remaining > 0 ? '还有 ${report.remaining} 个，再点一次可以继续。' : '';
+      final more = report.remaining > 0
+          ? '还有 ${report.remaining} 个，再点一次可以继续。'
+          : '';
       messenger.showSnackBar(
         SnackBar(
           content: Text(
@@ -123,7 +125,9 @@ class _StorageCardState extends State<StorageCard> {
     final messenger = ScaffoldMessenger.of(context);
     final stats = _usage?.events;
     final rows = stats?.rows ?? 0;
-    final oldest = stats?.oldest == null ? '' : '，最早的一条在 ${_when(stats!.oldest!)}';
+    final oldest = stats?.oldest == null
+        ? ''
+        : '，最早的一条在 ${_when(stats!.oldest!)}';
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -159,13 +163,11 @@ class _StorageCardState extends State<StorageCard> {
         return;
       }
       final name = report.file.split(RegExp(r'[\\/]')).last;
-      final more = report.remaining > 0 ? '还有 ${report.remaining} 条，再点一次可以继续。' : '';
+      final more = report.remaining > 0
+          ? '还有 ${report.remaining} 条，再点一次可以继续。'
+          : '';
       messenger.showSnackBar(
-        SnackBar(
-          content: Text(
-            '归档了 ${report.archived} 条事件，写进 $name。$more',
-          ),
-        ),
+        SnackBar(content: Text('归档了 ${report.archived} 条事件，写进 $name。$more')),
       );
     } catch (e) {
       if (!mounted) return;
@@ -197,22 +199,24 @@ class _StorageCardState extends State<StorageCard> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(
-              '备份、产物和 AI 数据都放在这台机器上。这里只显示占用，点下面的按钮才会删东西。',
-              style: muted,
-            ),
+            Text('备份、产物和 AI 数据都放在这台机器上。这里只显示占用，点下面的按钮才会删东西。', style: muted),
             if (_error != null) ...[
               const SizedBox(height: 10),
               Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Icon(Icons.error_outline, size: 18, color: theme.colorScheme.error),
+                  Icon(
+                    Icons.error_outline,
+                    size: 18,
+                    color: theme.colorScheme.error,
+                  ),
                   const SizedBox(width: 8),
                   Expanded(
                     child: Text(
                       _error!,
-                      style: theme.textTheme.bodySmall
-                          ?.copyWith(color: theme.colorScheme.error),
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.error,
+                      ),
                     ),
                   ),
                   TextButton(
@@ -287,7 +291,10 @@ class _StorageCardState extends State<StorageCard> {
                 if (_canManage) ...[
                   TextButton.icon(
                     onPressed: (_busy || _loading) ? null : _cleanOrphans,
-                    icon: const Icon(Icons.cleaning_services_outlined, size: 18),
+                    icon: const Icon(
+                      Icons.cleaning_services_outlined,
+                      size: 18,
+                    ),
                     label: const Text('清理孤儿文件…'),
                   ),
                   TextButton.icon(
@@ -330,7 +337,9 @@ class _StorageCardState extends State<StorageCard> {
             ),
             const SizedBox(width: 12),
             ConstrainedBox(
-              constraints: BoxConstraints(maxWidth: constraints.maxWidth * 0.62),
+              constraints: BoxConstraints(
+                maxWidth: constraints.maxWidth * 0.62,
+              ),
               child: Text(
                 trailing,
                 textAlign: TextAlign.right,

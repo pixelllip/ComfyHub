@@ -61,7 +61,15 @@ struct Upstream {
 }
 
 /// 起一台假上游：`/models` 与 `/v1/models` 都给同一个答案（两个候选都会被打到）。
-async fn upstream(status: u16, body: Value) -> (String, Arc<Mutex<Vec<String>>>, Arc<Mutex<Vec<String>>>, tokio::task::JoinHandle<()>) {
+async fn upstream(
+    status: u16,
+    body: Value,
+) -> (
+    String,
+    Arc<Mutex<Vec<String>>>,
+    Arc<Mutex<Vec<String>>>,
+    tokio::task::JoinHandle<()>,
+) {
     let shared = Upstream {
         status,
         body: body.to_string(),
@@ -77,7 +85,9 @@ async fn upstream(status: u16, body: Value) -> (String, Arc<Mutex<Vec<String>>>,
             get(
                 |AxumState(s): AxumState<Upstream>,
                  axum::extract::OriginalUri(uri): axum::extract::OriginalUri,
-                 headers: axum::http::HeaderMap| async move { handle(s, uri.path(), headers) },
+                 headers: axum::http::HeaderMap| async move {
+                    handle(s, uri.path(), headers)
+                },
             ),
         )
         .route(
@@ -85,7 +95,9 @@ async fn upstream(status: u16, body: Value) -> (String, Arc<Mutex<Vec<String>>>,
             get(
                 |AxumState(s): AxumState<Upstream>,
                  axum::extract::OriginalUri(uri): axum::extract::OriginalUri,
-                 headers: axum::http::HeaderMap| async move { handle(s, uri.path(), headers) },
+                 headers: axum::http::HeaderMap| async move {
+                    handle(s, uri.path(), headers)
+                },
             ),
         )
         .with_state(shared);
@@ -101,11 +113,13 @@ async fn upstream(status: u16, body: Value) -> (String, Arc<Mutex<Vec<String>>>,
 fn handle(state: Upstream, path: &str, headers: axum::http::HeaderMap) -> axum::response::Response {
     use axum::response::IntoResponse;
     state.seen_paths.lock().unwrap().push(path.to_string());
-    state
-        .seen_auth
-        .lock()
-        .unwrap()
-        .push(headers.get("authorization").and_then(|v| v.to_str().ok()).unwrap_or("").to_string());
+    state.seen_auth.lock().unwrap().push(
+        headers
+            .get("authorization")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("")
+            .to_string(),
+    );
     let status = StatusCode::from_u16(state.status).unwrap();
     (status, state.body.clone()).into_response()
 }
@@ -136,7 +150,10 @@ async fn post(state: &AppState, path: &str) -> (StatusCode, Value) {
     let response = router(state.clone()).oneshot(request).await.unwrap();
     let status = response.status();
     let bytes = response.into_body().collect().await.unwrap().to_bytes();
-    (status, serde_json::from_slice::<Value>(&bytes).unwrap_or(Value::Null))
+    (
+        status,
+        serde_json::from_slice::<Value>(&bytes).unwrap_or(Value::Null),
+    )
 }
 
 #[tokio::test]
@@ -150,7 +167,10 @@ async fn 测试连通_把模型个数的候选与地址都如实回报() {
     assert_eq!(body["ok"], json!(true), "{body}");
     assert_eq!(body["modelCount"], json!(2), "{body}");
     assert_eq!(body["httpStatus"], json!(200));
-    assert!(body["message"].as_str().unwrap().contains("连接正常"), "{body}");
+    assert!(
+        body["message"].as_str().unwrap().contains("连接正常"),
+        "{body}"
+    );
     assert!(!paths.lock().unwrap().is_empty(), "真的打到了假上游");
     // 没有 credentialRef → **一个鉴权头都不该发**
     assert!(
@@ -186,7 +206,10 @@ async fn base_url_带与不带_v1_都要能试通() {
     assert_eq!(body["ok"], json!(true), "回退之后应当连通：{body}");
     assert_eq!(body["modelCount"], json!(2));
     let message = body["message"].as_str().unwrap();
-    assert!(message.contains("实际可用地址"), "要说清实际用的是哪个地址：{message}");
+    assert!(
+        message.contains("实际可用地址"),
+        "要说清实际用的是哪个地址：{message}"
+    );
 
     let _ = std::mem::size_of::<Split>();
     gateway.abort();
@@ -202,7 +225,10 @@ async fn 两个候选都只有_404_时算连通_但不能算鉴权失败() {
     let (status, body) = post(&state, "/api/ai/providers/p1/test").await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["ok"], json!(true), "404 只说明没有列表端点：{body}");
-    assert!(body["message"].as_str().unwrap().contains("不提供模型列表"), "{body}");
+    assert!(
+        body["message"].as_str().unwrap().contains("不提供模型列表"),
+        "{body}"
+    );
 
     gateway.abort();
     let _ = std::fs::remove_dir_all(dir);
@@ -215,7 +241,11 @@ async fn 鉴权失败要报_missing_credential_而不是继续试别的地址() 
     let state = state(&dir, &base, None);
 
     let (status, body) = post(&state, "/api/ai/providers/p1/test").await;
-    assert_eq!(status, StatusCode::OK, "探测结果本身是 200，业务失败在 ok=false：{body}");
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "探测结果本身是 200，业务失败在 ok=false：{body}"
+    );
     assert_eq!(body["ok"], json!(false), "{body}");
     assert_eq!(body["errorCode"], json!("MISSING_CREDENTIAL"), "{body}");
     assert_eq!(body["httpStatus"], json!(401));
@@ -234,7 +264,13 @@ async fn 缺凭据时先报凭据缺失_不发任何请求() {
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["ok"], json!(false), "{body}");
     assert_eq!(body["errorCode"], json!("MISSING_CREDENTIAL"));
-    assert!(body["message"].as_str().unwrap().contains("probe-missing-key"), "{body}");
+    assert!(
+        body["message"]
+            .as_str()
+            .unwrap()
+            .contains("probe-missing-key"),
+        "{body}"
+    );
     assert!(auth.lock().unwrap().is_empty(), "缺凭据时连请求都不该发");
 
     gateway.abort();
@@ -294,7 +330,10 @@ async fn provider_不存在时两条端点都给人话() {
         assert_eq!(status, StatusCode::BAD_REQUEST, "{path} {body}");
         assert!(
             body["error"].as_str().unwrap().contains("Provider 不存在")
-                || body["detail"].as_str().unwrap_or("").contains("Provider 不存在"),
+                || body["detail"]
+                    .as_str()
+                    .unwrap_or("")
+                    .contains("Provider 不存在"),
             "{path} {body}"
         );
     }

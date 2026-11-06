@@ -47,7 +47,10 @@ fn load_image_解析出真实路径与原始分辨率() {
     assert!(entry.exists);
     assert_eq!(entry.path.as_deref(), Some(written.as_path()));
     assert_eq!((entry.width, entry.height), (Some(120), Some(80)));
-    assert_eq!(entry.bytes, Some(std::fs::metadata(&written).unwrap().len()));
+    assert_eq!(
+        entry.bytes,
+        Some(std::fs::metadata(&written).unwrap().len())
+    );
     let wire = entry.to_json();
     assert_eq!(wire["nodeId"], "42");
     assert_eq!(wire["exists"], true);
@@ -73,7 +76,14 @@ fn 路径穿越与盘符一律拒绝() {
     for entry in &refs {
         assert!(!entry.exists, "越界路径不许解析：{entry:?}");
         assert!(entry.path.is_none());
-        assert!(entry.note.as_deref().unwrap_or_default().contains("不受支持"), "{entry:?}");
+        assert!(
+            entry
+                .note
+                .as_deref()
+                .unwrap_or_default()
+                .contains("不受支持"),
+            "{entry:?}"
+        );
     }
     testpaths::cleanup(&root);
 }
@@ -91,7 +101,10 @@ fn 文件不在时如实报_exists_false() {
     assert!(!refs[0].exists);
     assert!(refs[0].path.is_none());
     let note = refs[0].note.as_deref().unwrap_or_default();
-    assert!(note.contains("input") && note.contains("gone.png"), "{note}");
+    assert!(
+        note.contains("input") && note.contains("gone.png"),
+        "{note}"
+    );
     assert_eq!(refs[0].to_json()["exists"], false);
     testpaths::cleanup(&root);
 }
@@ -128,6 +141,9 @@ fn temp_后缀如实说明是临时图() {
     let refs = collect_in(&graph, &[input], &[]);
     assert_eq!(refs.len(), 1);
     assert!(!refs[0].exists);
-    assert!(refs[0].note.as_deref().unwrap_or_default().contains("临时"), "{refs:?}");
+    assert!(
+        refs[0].note.as_deref().unwrap_or_default().contains("临时"),
+        "{refs:?}"
+    );
     testpaths::cleanup(&root);
 }

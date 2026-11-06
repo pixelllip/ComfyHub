@@ -960,10 +960,19 @@ Behavioral rules:
 
 /// 哨兵 → 常量的就地替换（阈值只有一份真源）。
 fn resolve(text: &str) -> String {
-    text.replace("«MAX_COMFY»", &crate::tools::policy::MAX_COMFY_QUERIES_PER_RUN.to_string())
-        .replace("«MAX_WEB»", &crate::tools::policy::MAX_WEB_QUERIES_PER_RUN.to_string())
-        .replace("«MAX_ENTRIES_PER_RUN»", &crate::ai::memory::MAX_ENTRIES_PER_RUN.to_string())
-        .replace("«MAX_ENTRIES»", &crate::ai::memory::MAX_ENTRIES.to_string())
+    text.replace(
+        "«MAX_COMFY»",
+        &crate::tools::policy::MAX_COMFY_QUERIES_PER_RUN.to_string(),
+    )
+    .replace(
+        "«MAX_WEB»",
+        &crate::tools::policy::MAX_WEB_QUERIES_PER_RUN.to_string(),
+    )
+    .replace(
+        "«MAX_ENTRIES_PER_RUN»",
+        &crate::ai::memory::MAX_ENTRIES_PER_RUN.to_string(),
+    )
+    .replace("«MAX_ENTRIES»", &crate::ai::memory::MAX_ENTRIES.to_string())
 }
 
 /// 常驻段（事实纪律 + 表达风格 + 必须遵守）：**两种模式都注入**。

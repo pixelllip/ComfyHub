@@ -64,9 +64,27 @@ class _UploadSheetState extends State<_UploadSheet> {
 
   /// file_picker 12.x 起 `pickFiles` 是静态方法，直接返回 `List<PlatformFile>`。
   static const _allowedExtensions = [
-    'png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp', 'avif', 'tiff',
-    'mp4', 'webm', 'mov', 'mkv', 'avi', 'm4v',
-    'mp3', 'wav', 'flac', 'ogg', 'm4a', 'aac', 'opus',
+    'png',
+    'jpg',
+    'jpeg',
+    'webp',
+    'gif',
+    'bmp',
+    'avif',
+    'tiff',
+    'mp4',
+    'webm',
+    'mov',
+    'mkv',
+    'avi',
+    'm4v',
+    'mp3',
+    'wav',
+    'flac',
+    'ogg',
+    'm4a',
+    'aac',
+    'opus',
   ];
 
   Future<void> _pick() async {
@@ -93,10 +111,7 @@ class _UploadSheetState extends State<_UploadSheet> {
       _status = '正在上传…';
     });
 
-    final paths = _files
-        .map((f) => f.path)
-        .whereType<String>()
-        .toList();
+    final paths = _files.map((f) => f.path).whereType<String>().toList();
     if (paths.isEmpty) {
       setState(() {
         _uploading = false;
@@ -110,19 +125,31 @@ class _UploadSheetState extends State<_UploadSheet> {
         filePaths: paths,
         promptId: _linkPromptId,
         kind: _kindOverride,
-        title: _titleController.text.trim().isEmpty ? null : _titleController.text.trim(),
-        source: _sourceController.text.trim().isEmpty ? null : _sourceController.text.trim(),
-        notes: _notesController.text.trim().isEmpty ? null : _notesController.text.trim(),
+        title: _titleController.text.trim().isEmpty
+            ? null
+            : _titleController.text.trim(),
+        source: _sourceController.text.trim().isEmpty
+            ? null
+            : _sourceController.text.trim(),
+        notes: _notesController.text.trim().isEmpty
+            ? null
+            : _notesController.text.trim(),
         tags: _tags,
       );
 
-      await Future.wait([store.refreshMedia(), store.refreshPrompts(), store.refreshTags(), store.refreshStats()]);
+      await Future.wait([
+        store.refreshMedia(),
+        store.refreshPrompts(),
+        store.refreshTags(),
+        store.refreshStats(),
+      ]);
       if (!mounted) return;
 
       setState(() {
         _uploading = false;
         _progress = 1;
-        _status = '成功 ${result.items.length} 个'
+        _status =
+            '成功 ${result.items.length} 个'
             '${result.duplicates.isNotEmpty ? '，跳过重复 ${result.duplicates.length} 个' : ''}'
             '${result.failed.isNotEmpty ? '，失败 ${result.failed.length} 个' : ''}';
       });
@@ -130,9 +157,8 @@ class _UploadSheetState extends State<_UploadSheet> {
       if (result.items.isNotEmpty || result.duplicates.isNotEmpty) {
         if (!mounted) return;
         Navigator.of(context).pop(true);
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(_status!)),
-        );
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(_status!)));
       }
     } catch (e) {
       if (!mounted) return;
@@ -160,14 +186,18 @@ class _UploadSheetState extends State<_UploadSheet> {
             const SizedBox(height: 4),
             Text(
               '支持图片 / 视频 / 音频，类型会按扩展名自动识别。相同内容的文件不会被重复入库。',
-              style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.outline),
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.outline,
+              ),
             ),
             const SizedBox(height: 16),
 
             OutlinedButton.icon(
               onPressed: _uploading ? null : _pick,
               icon: const Icon(Icons.folder_open),
-              label: Text(_files.isEmpty ? '选择文件…' : '重新选择（已选 ${_files.length} 个）'),
+              label: Text(
+                _files.isEmpty ? '选择文件…' : '重新选择（已选 ${_files.length} 个）',
+              ),
             ),
             if (_files.isNotEmpty) ...[
               const SizedBox(height: 10),
@@ -186,7 +216,11 @@ class _UploadSheetState extends State<_UploadSheet> {
                     return ListTile(
                       dense: true,
                       leading: const Icon(Icons.insert_drive_file_outlined),
-                      title: Text(f.name, maxLines: 1, overflow: TextOverflow.ellipsis),
+                      title: Text(
+                        f.name,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
                       trailing: Text(
                         bytes == null ? '' : formatSize(bytes),
                         style: Theme.of(context).textTheme.labelSmall,
@@ -233,7 +267,9 @@ class _UploadSheetState extends State<_UploadSheet> {
                 Expanded(
                   child: TextField(
                     controller: _titleController,
-                    decoration: const InputDecoration(labelText: '标题（可选，默认用文件名）'),
+                    decoration: const InputDecoration(
+                      labelText: '标题（可选，默认用文件名）',
+                    ),
                   ),
                 ),
                 const SizedBox(width: 12),
@@ -272,7 +308,9 @@ class _UploadSheetState extends State<_UploadSheet> {
             Row(
               children: [
                 TextButton(
-                  onPressed: _uploading ? null : () => Navigator.pop(context, false),
+                  onPressed: _uploading
+                      ? null
+                      : () => Navigator.pop(context, false),
                   child: const Text('取消'),
                 ),
                 const Spacer(),
@@ -288,7 +326,9 @@ class _UploadSheetState extends State<_UploadSheet> {
                 padding: const EdgeInsets.only(top: 8),
                 child: Text(
                   '标签词表还是空的，先去「标签」页创建几个吧。',
-                  style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline),
+                  style: theme.textTheme.labelSmall?.copyWith(
+                    color: theme.colorScheme.outline,
+                  ),
                 ),
               ),
           ],
@@ -320,7 +360,9 @@ class _PromptSelector extends StatelessWidget {
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
             decoration: BoxDecoration(
               borderRadius: BorderRadius.circular(10),
-              color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.4),
+              color: theme.colorScheme.surfaceContainerHighest.withValues(
+                alpha: 0.4,
+              ),
             ),
             child: Text(
               promptId == null
@@ -392,7 +434,10 @@ class _PromptPickerDialogState extends State<_PromptPickerDialog> {
       _error = null;
     });
     try {
-      final page = await api.listPrompts(q: q.trim().isEmpty ? null : q.trim(), size: 30);
+      final page = await api.listPrompts(
+        q: q.trim().isEmpty ? null : q.trim(),
+        size: 30,
+      );
       if (!mounted) return;
       setState(() {
         _results = page.items;
@@ -430,36 +475,41 @@ class _PromptPickerDialogState extends State<_PromptPickerDialog> {
               child: _loading
                   ? const Center(child: CircularProgressIndicator())
                   : _error != null
-                      ? Center(child: Text('加载失败: $_error', textAlign: TextAlign.center))
-                      : _results.isEmpty
-                          ? const Center(child: Text('没有找到提示词'))
-                          : ListView.builder(
-                              itemCount: _results.length,
-                              itemBuilder: (_, i) {
-                                final p = _results[i];
-                                return ListTile(
-                                  dense: true,
-                                  leading: const Icon(Icons.text_snippet_outlined),
-                                  title: Text(
-                                    p.title,
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                  ),
-                                  subtitle: Text(
-                                    p.positivePrompt,
-                                    maxLines: 2,
-                                    overflow: TextOverflow.ellipsis,
-                                  ),
-                                  onTap: () => Navigator.pop(context, p),
-                                );
-                              },
-                            ),
+                  ? Center(
+                      child: Text('加载失败: $_error', textAlign: TextAlign.center),
+                    )
+                  : _results.isEmpty
+                  ? const Center(child: Text('没有找到提示词'))
+                  : ListView.builder(
+                      itemCount: _results.length,
+                      itemBuilder: (_, i) {
+                        final p = _results[i];
+                        return ListTile(
+                          dense: true,
+                          leading: const Icon(Icons.text_snippet_outlined),
+                          title: Text(
+                            p.title,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          subtitle: Text(
+                            p.positivePrompt,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          onTap: () => Navigator.pop(context, p),
+                        );
+                      },
+                    ),
             ),
           ],
         ),
       ),
       actions: [
-        TextButton(onPressed: () => Navigator.pop(context), child: const Text('取消')),
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('取消'),
+        ),
       ],
     );
   }

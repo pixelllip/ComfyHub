@@ -59,7 +59,8 @@ use serde_json::{json, Map, Value};
 
 use crate::workflow::workflow_audit::{is_broadcast, is_display, KNOWN_FRONTEND_ONLY};
 use crate::workflow::workflow_convert::{
-    self as conv, as_int, is_node_graph, is_ui_workflow, node_id, primitive_text, raw_links, ui_class,
+    self as conv, as_int, is_node_graph, is_ui_workflow, node_id, primitive_text, raw_links,
+    ui_class,
 };
 
 /// 严重度：只有 [`SEV_ERROR`] 是"这么交上去一定跑不成"。
@@ -199,7 +200,10 @@ impl Blueprint {
 
     /// 按严重度数的条数。
     pub fn count(&self, severity: &str) -> usize {
-        self.issues.iter().filter(|issue| issue.severity == severity).count()
+        self.issues
+            .iter()
+            .filter(|issue| issue.severity == severity)
+            .count()
     }
 
     /// 能不能直接提交：没有任何 `error` 就算过了**这一关**。
@@ -324,7 +328,9 @@ impl Blueprint {
             self.groups.len()
         ));
         if self.format == "api" {
-            out.push_str("位置是自动排的（API 格式没有保存画布坐标，与 ComfyUI 里看到的那张图不是同一张）\n");
+            out.push_str(
+                "位置是自动排的（API 格式没有保存画布坐标，与 ComfyUI 里看到的那张图不是同一张）\n",
+            );
         }
         if !self.object_info {
             out.push_str("⚠ 这次没拿到 ComfyUI 的 `/object_info`：不判节点类型与「必填输入」，只做结构检查\n");
@@ -344,7 +350,12 @@ impl Blueprint {
                     SEV_WARN => "警告",
                     _ => "提示",
                 };
-                out.push_str(&format!("{}. [{mark}] {} —— {}\n", index + 1, issue.title, issue.detail));
+                out.push_str(&format!(
+                    "{}. [{mark}] {} —— {}\n",
+                    index + 1,
+                    issue.title,
+                    issue.detail
+                ));
                 if let Some(fix) = &issue.fix {
                     out.push_str(&format!("   修法：{fix}\n"));
                 }
@@ -370,7 +381,11 @@ impl Blueprint {
             .find(|issue| issue.severity == SEV_ERROR)
             .or_else(|| self.issues.iter().find(|issue| issue.severity == SEV_WARN));
         if let Some(first) = first {
-            let label = if first.severity == SEV_ERROR { "第一条" } else { "最要紧的一条" };
+            let label = if first.severity == SEV_ERROR {
+                "第一条"
+            } else {
+                "最要紧的一条"
+            };
             out.push_str(&format!("；{label}：{}", first.title));
         }
         Some(out)
@@ -470,13 +485,18 @@ fn build_ui(
             implicit: false,
         });
     }
-    blueprint.edges.sort_by_key(|edge| edge.id.unwrap_or(i64::MAX));
+    blueprint
+        .edges
+        .sort_by_key(|edge| edge.id.unwrap_or(i64::MAX));
 
     // 第三节：分组
     if let Some(list) = ui.get("groups").and_then(Value::as_array) {
         for group in list.iter().filter_map(Value::as_object) {
             blueprint.groups.push(Group {
-                title: group.get("title").and_then(primitive_text).unwrap_or_default(),
+                title: group
+                    .get("title")
+                    .and_then(primitive_text)
+                    .unwrap_or_default(),
                 bounding: group
                     .get("bounding")
                     .and_then(Value::as_array)
@@ -499,7 +519,10 @@ fn build_ui(
             code: "DUPLICATE_ID",
             severity: SEV_ERROR,
             title: format!("有 {} 个节点用了重复的 id", duplicates.len()),
-            detail: format!("重复的 id：{}。后一个会把前一个顶掉（ComfyUI 加载时就这样）", list_ids(&duplicates)),
+            detail: format!(
+                "重复的 id：{}。后一个会把前一个顶掉（ComfyUI 加载时就这样）",
+                list_ids(&duplicates)
+            ),
             fix: Some("在 ComfyUI 里重新保存一次这份工作流，或手工给重复的节点换 id".to_string()),
             nodes: dedup_sorted(&duplicates),
             links: Vec::new(),
@@ -530,14 +553,26 @@ fn subgraph_ids(ui: &Map<String, Value>) -> HashSet<String> {
 
 fn ui_inputs(raw: &Map<String, Value>, widgets: &[Widget]) -> Vec<Port> {
     let mut out = Vec::new();
-    let Some(list) = raw.get("inputs").and_then(Value::as_array) else { return out };
+    let Some(list) = raw.get("inputs").and_then(Value::as_array) else {
+        return out;
+    };
     for (index, entry) in list.iter().enumerate() {
-        let Some(entry) = entry.as_object() else { continue };
-        let name = entry.get("name").and_then(primitive_text).unwrap_or_default();
+        let Some(entry) = entry.as_object() else {
+            continue;
+        };
+        let name = entry
+            .get("name")
+            .and_then(primitive_text)
+            .unwrap_or_default();
         let widget_name = entry
             .get("widget")
             .and_then(Value::as_object)
-            .map(|widget| widget.get("name").and_then(primitive_text).unwrap_or_else(|| name.clone()));
+            .map(|widget| {
+                widget
+                    .get("name")
+                    .and_then(primitive_text)
+                    .unwrap_or_else(|| name.clone())
+            });
         let widget = widget_name.is_some();
         let value = widget_name
             .as_ref()
@@ -547,10 +582,18 @@ fn ui_inputs(raw: &Map<String, Value>, widgets: &[Widget]) -> Vec<Port> {
                     .find(|widget| widget.name.as_deref() == Some(wanted.as_str()))
                     .map(|widget| widget.value.clone())
             })
-            .or_else(|| widgets.get(index).map(|widget| widget.value.clone()).filter(|_| widget));
+            .or_else(|| {
+                widgets
+                    .get(index)
+                    .map(|widget| widget.value.clone())
+                    .filter(|_| widget)
+            });
         out.push(Port {
             name,
-            type_name: entry.get("type").and_then(primitive_text).unwrap_or_default(),
+            type_name: entry
+                .get("type")
+                .and_then(primitive_text)
+                .unwrap_or_default(),
             link: as_int(entry.get("link")),
             links: Vec::new(),
             widget,
@@ -562,12 +605,22 @@ fn ui_inputs(raw: &Map<String, Value>, widgets: &[Widget]) -> Vec<Port> {
 
 fn ui_outputs(raw: &Map<String, Value>) -> Vec<Port> {
     let mut out = Vec::new();
-    let Some(list) = raw.get("outputs").and_then(Value::as_array) else { return out };
+    let Some(list) = raw.get("outputs").and_then(Value::as_array) else {
+        return out;
+    };
     for entry in list.iter() {
-        let Some(entry) = entry.as_object() else { continue };
+        let Some(entry) = entry.as_object() else {
+            continue;
+        };
         out.push(Port {
-            name: entry.get("name").and_then(primitive_text).unwrap_or_default(),
-            type_name: entry.get("type").and_then(primitive_text).unwrap_or_default(),
+            name: entry
+                .get("name")
+                .and_then(primitive_text)
+                .unwrap_or_default(),
+            type_name: entry
+                .get("type")
+                .and_then(primitive_text)
+                .unwrap_or_default(),
             link: None,
             links: entry
                 .get("links")
@@ -586,17 +639,29 @@ fn ui_outputs(raw: &Map<String, Value>) -> Vec<Port> {
 ///
 /// ⚠ 只有位置、没有名字的情形是**真实存在**的（旧存档 + ComfyUI 不在线）：
 /// 那时如实给 `None`，界面显示"参数 #0"，**不猜名字**。
-fn ui_widgets(raw: &Map<String, Value>, class: &str, object_info: Option<&Map<String, Value>>) -> Vec<Widget> {
-    let Some(values) = raw.get("widgets_values") else { return Vec::new() };
+fn ui_widgets(
+    raw: &Map<String, Value>,
+    class: &str,
+    object_info: Option<&Map<String, Value>>,
+) -> Vec<Widget> {
+    let Some(values) = raw.get("widgets_values") else {
+        return Vec::new();
+    };
     // 少数自定义节点把控件存成对象：那时名字是现成的
     if let Value::Object(map) = values {
         return map
             .iter()
             .enumerate()
-            .map(|(index, (name, value))| Widget { index, name: Some(name.clone()), value: value.clone() })
+            .map(|(index, (name, value))| Widget {
+                index,
+                name: Some(name.clone()),
+                value: value.clone(),
+            })
             .collect();
     }
-    let Some(list) = values.as_array() else { return Vec::new() };
+    let Some(list) = values.as_array() else {
+        return Vec::new();
+    };
     let from_inputs: Vec<String> = raw
         .get("inputs")
         .and_then(Value::as_array)
@@ -605,7 +670,12 @@ fn ui_widgets(raw: &Map<String, Value>, class: &str, object_info: Option<&Map<St
                 .iter()
                 .filter_map(Value::as_object)
                 .filter_map(|entry| entry.get("widget").and_then(Value::as_object))
-                .map(|widget| widget.get("name").and_then(primitive_text).unwrap_or_default())
+                .map(|widget| {
+                    widget
+                        .get("name")
+                        .and_then(primitive_text)
+                        .unwrap_or_default()
+                })
                 .collect()
         })
         .unwrap_or_default();
@@ -629,7 +699,12 @@ fn ui_widgets(raw: &Map<String, Value>, class: &str, object_info: Option<&Map<St
     } else {
         list.iter()
             .enumerate()
-            .map(|(index, _)| from_inputs.get(index).cloned().or_else(|| from_object_info.get(index).cloned().flatten()))
+            .map(|(index, _)| {
+                from_inputs
+                    .get(index)
+                    .cloned()
+                    .or_else(|| from_object_info.get(index).cloned().flatten())
+            })
             .collect()
     };
 
@@ -655,8 +730,12 @@ fn diagnose_ui(
     object_info: Option<&Map<String, Value>>,
     table: &HashMap<i64, conv::RawLink>,
 ) {
-    let by_id: HashMap<String, usize> =
-        blueprint.nodes.iter().enumerate().map(|(index, node)| (node.id.clone(), index)).collect();
+    let by_id: HashMap<String, usize> = blueprint
+        .nodes
+        .iter()
+        .enumerate()
+        .map(|(index, node)| (node.id.clone(), index))
+        .collect();
 
     // ① 线的一头指向不存在的节点
     let mut dangling: Vec<String> = Vec::new();
@@ -671,10 +750,24 @@ fn diagnose_ui(
         if !missing.is_empty() {
             dangling.push(format!(
                 "线 {}{}（{} → {}）",
-                edge.id.map(|id| id.to_string()).unwrap_or_else(|| "?".to_string()),
-                if missing.len() > 1 { " 两头都缺" } else { "" },
-                if missing.iter().any(|m| m.starts_with("起点")) { "?" } else { edge.from.0.as_str() },
-                if missing.iter().any(|m| m.starts_with("终点")) { "?" } else { edge.to.0.as_str() },
+                edge.id
+                    .map(|id| id.to_string())
+                    .unwrap_or_else(|| "?".to_string()),
+                if missing.len() > 1 {
+                    " 两头都缺"
+                } else {
+                    ""
+                },
+                if missing.iter().any(|m| m.starts_with("起点")) {
+                    "?"
+                } else {
+                    edge.from.0.as_str()
+                },
+                if missing.iter().any(|m| m.starts_with("终点")) {
+                    "?"
+                } else {
+                    edge.to.0.as_str()
+                },
             ));
         }
     }
@@ -700,14 +793,20 @@ fn diagnose_ui(
         for input in &node.inputs {
             if let Some(id) = input.link {
                 if !table.contains_key(&id) {
-                    missing_links.push(format!("线 {id}（{}．{} 说它接了这条）", node.id, input.name));
+                    missing_links.push(format!(
+                        "线 {id}（{}．{} 说它接了这条）",
+                        node.id, input.name
+                    ));
                 }
             }
         }
         for output in &node.outputs {
             for id in &output.links {
                 if !table.contains_key(id) {
-                    missing_links.push(format!("线 {id}（{} 的 {} 说它连出去了）", node.id, output.name));
+                    missing_links.push(format!(
+                        "线 {id}（{} 的 {} 说它连出去了）",
+                        node.id, output.name
+                    ));
                 }
             }
         }
@@ -728,13 +827,20 @@ fn diagnose_ui(
     // ③ 连线表与插口对不上（改了图但没同步）
     let mut mismatched: Vec<String> = Vec::new();
     for (id, link) in table.iter() {
-        let Some(&target) = by_id.get(&link.target) else { continue };
+        let Some(&target) = by_id.get(&link.target) else {
+            continue;
+        };
         if link.target_slot < 0 {
             continue;
         }
         let node = &blueprint.nodes[target];
         match node.inputs.get(link.target_slot as usize) {
-            None => mismatched.push(format!("线 {id} 说它插在 {} 的第 {} 个输入，但那个节点只有 {} 个输入", node.id, link.target_slot, node.inputs.len())),
+            None => mismatched.push(format!(
+                "线 {id} 说它插在 {} 的第 {} 个输入，但那个节点只有 {} 个输入",
+                node.id,
+                link.target_slot,
+                node.inputs.len()
+            )),
             Some(input) => {
                 if input.link != Some(*id) {
                     mismatched.push(format!(
@@ -761,7 +867,8 @@ fn diagnose_ui(
     // ④ 类型：连线上记的类型 vs 两头声明的类型
     let mut mismatches: Vec<Issue> = Vec::new();
     for edge in &blueprint.edges {
-        let (Some(&target), Some(&source)) = (by_id.get(&edge.to.0), by_id.get(&edge.from.0)) else {
+        let (Some(&target), Some(&source)) = (by_id.get(&edge.to.0), by_id.get(&edge.from.0))
+        else {
             continue;
         };
         let target_node = &blueprint.nodes[target];
@@ -810,7 +917,9 @@ fn diagnose_ui(
                     detail: format!(
                         "线 {} 把 {} 的 {}（{link_type}）接到 {}．{}（要 {declared}）——\
                          ComfyUI 的原话是 `Return type mismatch between linked nodes`",
-                        edge.id.map(|id| id.to_string()).unwrap_or_else(|| "?".to_string()),
+                        edge.id
+                            .map(|id| id.to_string())
+                            .unwrap_or_else(|| "?".to_string()),
                         source_node.id,
                         output.map(|port| port.name.as_str()).unwrap_or("?"),
                         target_node.id,
@@ -868,7 +977,10 @@ fn diagnose_ui(
             ),
             nodes: dedup_sorted(&open.iter().map(|(id, _, _)| id.clone()).collect::<Vec<_>>()),
             links: Vec::new(),
-            slots: open.iter().map(|(id, name, _)| format!("{id}.{name}")).collect(),
+            slots: open
+                .iter()
+                .map(|(id, name, _)| format!("{id}.{name}"))
+                .collect(),
         });
     }
 
@@ -943,7 +1055,9 @@ fn diagnose_classes(blueprint: &mut Blueprint, object_info: Option<&Map<String, 
             // 注册了、但注册成"零输出"：它的语义只在前端（cg-use-everywhere 的
             // `Anything Everywhere` 就是这么注册的）—— 服务端拿到它什么也不产出
             Some(entry) => {
-                if is_broadcast(&node.class) && outputs_of(entry).map(|out| out.is_empty()).unwrap_or(false) {
+                if is_broadcast(&node.class)
+                    && outputs_of(entry).map(|out| out.is_empty()).unwrap_or(false)
+                {
                     stubs.push((node.id.clone(), node.class.clone()));
                 }
             }
@@ -973,7 +1087,10 @@ fn diagnose_classes(blueprint: &mut Blueprint, object_info: Option<&Map<String, 
             code: "UNKNOWN_CLASS",
             severity: SEV_ERROR,
             title: format!("本机 ComfyUI 里没有这 {} 个节点类", unknown.len()),
-            detail: format!("`/object_info` 里查不到：{}。提交一定会被验证拒绝", list_pairs(&unknown)),
+            detail: format!(
+                "`/object_info` 里查不到：{}。提交一定会被验证拒绝",
+                list_pairs(&unknown)
+            ),
             fix: Some("装上对应的自定义节点包（ComfyUI-Manager），或换个装了它的实例".to_string()),
             nodes: dedup_sorted(&unknown.iter().map(|(id, _)| id.clone()).collect::<Vec<_>>()),
             links: Vec::new(),
@@ -1007,10 +1124,16 @@ fn diagnose_classes(blueprint: &mut Blueprint, object_info: Option<&Map<String, 
 ///
 /// 用的是**开 ##模拟用户行为## 之后**的那张图（提交链推荐走的那一份）：广播补的线、
 /// 丢掉的显示节点、自动补的 `SaveImage` 都在里面 —— 判"谁在干活"只能看它。
-fn diagnose_conversion(blueprint: &mut Blueprint, ui: &Map<String, Value>, object_info: &Map<String, Value>) {
+fn diagnose_conversion(
+    blueprint: &mut Blueprint,
+    ui: &Map<String, Value>,
+    object_info: &Map<String, Value>,
+) {
     let plain = conv::to_api_graph(ui, object_info, false);
     let emulated = conv::to_api_graph(ui, object_info, true);
-    let Some(report) = emulated.as_ref().ok().or_else(|| plain.as_ref().ok()) else { return };
+    let Some(report) = emulated.as_ref().ok().or_else(|| plain.as_ref().ok()) else {
+        return;
+    };
     let graph = report.graph.clone();
     for warning in &report.warnings {
         blueprint.warnings.push(warning.clone());
@@ -1021,7 +1144,9 @@ fn diagnose_conversion(blueprint: &mut Blueprint, ui: &Map<String, Value>, objec
             severity: SEV_WARN,
             title: format!("转换时有 {} 处参数对不齐的提醒", report.warnings.len()),
             detail: report.warnings.join("；"),
-            fix: Some("多半是自定义节点的控件与后端声明不一致：跑之前留意 ComfyUI 的报错".to_string()),
+            fix: Some(
+                "多半是自定义节点的控件与后端声明不一致：跑之前留意 ComfyUI 的报错".to_string(),
+            ),
             nodes: Vec::new(),
             links: Vec::new(),
             slots: Vec::new(),
@@ -1041,14 +1166,20 @@ fn diagnose_conversion(blueprint: &mut Blueprint, ui: &Map<String, Value>, objec
     if !plain.unresolved_inputs.is_empty() || !required_open.is_empty() {
         let mut detail = String::new();
         if !plain.unresolved_inputs.is_empty() {
-            detail.push_str(&format!("悬挂引用：{}。", list_ids(&plain.unresolved_inputs)));
+            detail.push_str(&format!(
+                "悬挂引用：{}。",
+                list_ids(&plain.unresolved_inputs)
+            ));
         }
         if !required_open.is_empty() {
             detail.push_str(&format!("空着的必填输入：{}。", list_ids(&required_open)));
         }
         let saved = emulated.as_ref().ok().filter(|report| {
             report.unresolved_inputs.is_empty()
-                && report.open_inputs.iter().all(|text| !required_open.contains(text))
+                && report
+                    .open_inputs
+                    .iter()
+                    .all(|text| !required_open.contains(text))
         });
         let (severity, fix) = match saved {
             Some(_) => (
@@ -1086,12 +1217,20 @@ fn unreachable_issue(
 ) -> Option<Issue> {
     let mut upstream: HashMap<String, Vec<String>> = HashMap::new();
     for (id, value) in graph {
-        let Some(node) = value.as_object() else { continue };
-        let Some(inputs) = node.get("inputs").and_then(Value::as_object) else { continue };
+        let Some(node) = value.as_object() else {
+            continue;
+        };
+        let Some(inputs) = node.get("inputs").and_then(Value::as_object) else {
+            continue;
+        };
         let entry = upstream.entry(id.clone()).or_default();
         for value in inputs.values() {
-            let Some(reference) = value.as_array() else { continue };
-            let Some(source) = reference.first().and_then(primitive_text) else { continue };
+            let Some(reference) = value.as_array() else {
+                continue;
+            };
+            let Some(source) = reference.first().and_then(primitive_text) else {
+                continue;
+            };
             if graph.contains_key(&source) {
                 entry.push(source);
             }
@@ -1155,7 +1294,10 @@ fn unreachable_issue(
 fn find_cycle(edges: &[Edge]) -> Option<Vec<String>> {
     let mut adjacency: HashMap<&str, Vec<&str>> = HashMap::new();
     for edge in edges {
-        adjacency.entry(edge.from.0.as_str()).or_default().push(edge.to.0.as_str());
+        adjacency
+            .entry(edge.from.0.as_str())
+            .or_default()
+            .push(edge.to.0.as_str());
     }
     let mut state: HashMap<&str, u8> = HashMap::new();
     let mut stack: Vec<&str> = Vec::new();
@@ -1183,7 +1325,12 @@ fn find_cycle(edges: &[Edge]) -> Option<Vec<String>> {
                 match state.get(child).copied().unwrap_or(0) {
                     1 => {
                         let start = stack.iter().position(|item| *item == child).unwrap_or(0);
-                        cycle = Some(stack[start..].iter().map(|item| (*item).to_string()).collect());
+                        cycle = Some(
+                            stack[start..]
+                                .iter()
+                                .map(|item| (*item).to_string())
+                                .collect(),
+                        );
                         break;
                     }
                     0 => work.push((child, 0)),
@@ -1229,8 +1376,13 @@ fn build_api(
     };
 
     for (id, value) in graph {
-        let Some(node) = value.as_object() else { continue };
-        let class = node.get("class_type").and_then(primitive_text).unwrap_or_default();
+        let Some(node) = value.as_object() else {
+            continue;
+        };
+        let class = node
+            .get("class_type")
+            .and_then(primitive_text)
+            .unwrap_or_default();
         if class.trim().is_empty() {
             continue;
         }
@@ -1266,16 +1418,30 @@ fn build_api(
 
     let ids: HashSet<String> = blueprint.nodes.iter().map(|node| node.id.clone()).collect();
     for node in &blueprint.nodes {
-        let Some(raw) = graph.get(&node.id).and_then(Value::as_object) else { continue };
-        let Some(inputs) = raw.get("inputs").and_then(Value::as_object) else { continue };
+        let Some(raw) = graph.get(&node.id).and_then(Value::as_object) else {
+            continue;
+        };
+        let Some(inputs) = raw.get("inputs").and_then(Value::as_object) else {
+            continue;
+        };
         for (name, value) in inputs {
-            let Some(reference) = value.as_array() else { continue };
-            let Some(source) = reference.first().and_then(primitive_text) else { continue };
+            let Some(reference) = value.as_array() else {
+                continue;
+            };
+            let Some(source) = reference.first().and_then(primitive_text) else {
+                continue;
+            };
             if ids.contains(&source) {
                 blueprint.edges.push(Edge {
                     id: None,
                     from: (source, as_int(reference.get(1)).unwrap_or(0)),
-                    to: (node.id.clone(), node.inputs.iter().position(|port| &port.name == name).unwrap_or(0) as i64),
+                    to: (
+                        node.id.clone(),
+                        node.inputs
+                            .iter()
+                            .position(|port| &port.name == name)
+                            .unwrap_or(0) as i64,
+                    ),
                     type_name: None,
                     implicit: true,
                 });
@@ -1300,7 +1466,9 @@ fn api_ports(
     if let Some(declared) = entry.get("input").and_then(Value::as_object) {
         let mut widget_index = 0usize;
         for group in ["required", "optional"] {
-            let Some(map) = declared.get(group).and_then(Value::as_object) else { continue };
+            let Some(map) = declared.get(group).and_then(Value::as_object) else {
+                continue;
+            };
             for (name, decl) in map {
                 let value = given.and_then(|map| map.get(name));
                 let widget = conv::is_widget_input(decl);
@@ -1365,17 +1533,29 @@ fn diagnose_api(
     graph: &Map<String, Value>,
     object_info: Option<&Map<String, Value>>,
 ) {
-    let index: HashMap<String, usize> =
-        blueprint.nodes.iter().enumerate().map(|(position, node)| (node.id.clone(), position)).collect();
+    let index: HashMap<String, usize> = blueprint
+        .nodes
+        .iter()
+        .enumerate()
+        .map(|(position, node)| (node.id.clone(), position))
+        .collect();
 
     // ① 指向不存在的节点
     let mut dangling: Vec<String> = Vec::new();
     for (id, value) in graph {
-        let Some(node) = value.as_object() else { continue };
-        let Some(inputs) = node.get("inputs").and_then(Value::as_object) else { continue };
+        let Some(node) = value.as_object() else {
+            continue;
+        };
+        let Some(inputs) = node.get("inputs").and_then(Value::as_object) else {
+            continue;
+        };
         for (name, value) in inputs {
-            let Some(reference) = value.as_array() else { continue };
-            let Some(source) = reference.first().and_then(primitive_text) else { continue };
+            let Some(reference) = value.as_array() else {
+                continue;
+            };
+            let Some(source) = reference.first().and_then(primitive_text) else {
+                continue;
+            };
             if !index.contains_key(&source) {
                 dangling.push(format!("{id}.{name} → 节点 {source}"));
             }
@@ -1420,14 +1600,20 @@ fn diagnose_api(
         let mut missing: Vec<String> = Vec::new();
         let mut mismatches: Vec<Issue> = Vec::new();
         for node in &blueprint.nodes {
-            let Some(entry) = info.get(&node.class).and_then(Value::as_object) else { continue };
+            let Some(entry) = info.get(&node.class).and_then(Value::as_object) else {
+                continue;
+            };
             let given = graph
                 .get(&node.id)
                 .and_then(Value::as_object)
                 .and_then(|body| body.get("inputs"))
                 .and_then(Value::as_object);
-            let Some(declared) = entry.get("input").and_then(Value::as_object) else { continue };
-            let Some(required) = declared.get("required").and_then(Value::as_object) else { continue };
+            let Some(declared) = entry.get("input").and_then(Value::as_object) else {
+                continue;
+            };
+            let Some(required) = declared.get("required").and_then(Value::as_object) else {
+                continue;
+            };
             for (name, decl) in required {
                 let value = given.and_then(|map| map.get(name));
                 let linked = value.map(Value::is_array).unwrap_or(false);
@@ -1438,7 +1624,11 @@ fn diagnose_api(
                 match value {
                     None => missing.push(format!("{}.{name} ({})", node.id, type_text(decl))),
                     Some(reference) if linked => {
-                        let Some(source) = reference.as_array().and_then(|items| items.first()).and_then(primitive_text) else {
+                        let Some(source) = reference
+                            .as_array()
+                            .and_then(|items| items.first())
+                            .and_then(primitive_text)
+                        else {
                             continue;
                         };
                         let source_type = reference
@@ -1447,10 +1637,14 @@ fn diagnose_api(
                             .and_then(|slot| {
                                 index
                                     .get(&source)
-                                    .and_then(|position| blueprint.nodes[*position].outputs.get(slot.max(0) as usize))
+                                    .and_then(|position| {
+                                        blueprint.nodes[*position].outputs.get(slot.max(0) as usize)
+                                    })
                                     .map(|port| port.type_name.clone())
                             });
-                        let Some(source_type) = source_type.filter(|text| !text.is_empty()) else { continue };
+                        let Some(source_type) = source_type.filter(|text| !text.is_empty()) else {
+                            continue;
+                        };
                         if type_compatible(decl_of(decl), &source_type) {
                             continue;
                         }
@@ -1530,8 +1724,15 @@ fn diagnose_api(
                      说明这份图是手拼的，或者是从界面格式直接拷过来的",
                     list_pairs(&frontend)
                 ),
-                fix: Some("用 `comfy_load_workflow` 从界面格式转换（它会照前端行为等价改写）".to_string()),
-                nodes: dedup_sorted(&frontend.iter().map(|(id, _)| id.clone()).collect::<Vec<_>>()),
+                fix: Some(
+                    "用 `comfy_load_workflow` 从界面格式转换（它会照前端行为等价改写）".to_string(),
+                ),
+                nodes: dedup_sorted(
+                    &frontend
+                        .iter()
+                        .map(|(id, _)| id.clone())
+                        .collect::<Vec<_>>(),
+                ),
                 links: Vec::new(),
                 slots: Vec::new(),
             });
@@ -1568,11 +1769,13 @@ enum Decl {
 }
 
 fn decl_of(raw: &Value) -> Decl {
-    let Some(items) = raw.as_array() else { return Decl::Wildcard };
+    let Some(items) = raw.as_array() else {
+        return Decl::Wildcard;
+    };
     match items.first() {
-        Some(Value::Array(choices)) => Decl::Choices(
-            choices.iter().filter_map(primitive_text).collect(),
-        ),
+        Some(Value::Array(choices)) => {
+            Decl::Choices(choices.iter().filter_map(primitive_text).collect())
+        }
         Some(Value::String(text)) if text == "*" => Decl::Wildcard,
         Some(Value::String(text)) => Decl::Name(text.clone()),
         _ => Decl::Wildcard,
@@ -1662,7 +1865,11 @@ fn registered<'a>(object_info: Option<&'a Map<String, Value>>, class: &str) -> O
 
 fn frontend_kind(class: &str) -> &'static str {
     let lower = class.to_ascii_lowercase();
-    if lower.contains("note") || lower.contains("label") || lower.contains("bookmark") || lower.contains("comment") {
+    if lower.contains("note")
+        || lower.contains("label")
+        || lower.contains("bookmark")
+        || lower.contains("comment")
+    {
         "note"
     } else if lower.contains("reroute") {
         "reroute"
@@ -1691,7 +1898,8 @@ fn slot_key(text: &str) -> String {
 }
 
 /// 列表压成一行（**最多 20 项**，多了就报个数 —— 报告不是 dump）。
-fn list_ids(items: &[String]) -> String {    const MAX: usize = 20;
+fn list_ids(items: &[String]) -> String {
+    const MAX: usize = 20;
     if items.len() <= MAX {
         return items.join("、");
     }
@@ -1699,7 +1907,10 @@ fn list_ids(items: &[String]) -> String {    const MAX: usize = 20;
 }
 
 fn list_pairs(items: &[(String, String)]) -> String {
-    let listed: Vec<String> = items.iter().map(|(id, class)| format!("{id} {class}")).collect();
+    let listed: Vec<String> = items
+        .iter()
+        .map(|(id, class)| format!("{id} {class}"))
+        .collect();
     list_ids(&listed)
 }
 
@@ -1732,7 +1943,10 @@ fn dedup_sorted(ids: &[String]) -> Vec<String> {
 /// 错误体是 `{error, detail}`（与其余 `/api/*` 一致；界面的 `ApiClient` 先读 `detail`）。
 pub fn router() -> axum::Router<crate::web::routes::AppState> {
     axum::Router::new()
-        .route("/api/workflow/blueprint", axum::routing::post(post_blueprint))
+        .route(
+            "/api/workflow/blueprint",
+            axum::routing::post(post_blueprint),
+        )
         .route("/api/workflow/save", axum::routing::post(post_save))
 }
 
@@ -1776,7 +1990,9 @@ async fn post_blueprint(
     } else {
         None
     };
-    Ok(axum::Json(build(&raw, object_info.as_deref(), input.diagnose).to_json()))
+    Ok(axum::Json(
+        build(&raw, object_info.as_deref(), input.diagnose).to_json(),
+    ))
 }
 
 /// 存一份（多半是刚在蓝图上改过的）工作流。
@@ -1823,7 +2039,9 @@ async fn post_save(
 fn parse_raw(text: &str) -> Result<Value, crate::web::routes::ApiError> {
     let trimmed = text.trim();
     if trimmed.is_empty() {
-        return Err(crate::web::routes::ApiError::bad_request("工作流原文是空的"));
+        return Err(crate::web::routes::ApiError::bad_request(
+            "工作流原文是空的",
+        ));
     }
     serde_json::from_str(trimmed)
         .map_err(|e| crate::web::routes::ApiError::bad_request(format!("工作流不是合法 JSON：{e}")))
@@ -1886,7 +2104,10 @@ pub async fn tool_diagnose_workflow(
                 .resolve_read(path)
                 .map_err(|failure| ToolFailure::new(&failure.code, failure.message))?;
             let text = std::fs::read_to_string(&resolved).map_err(|e| {
-                ToolFailure::new("IO_ERROR", format!("读不了文件（{}）：{e}", resolved.display()))
+                ToolFailure::new(
+                    "IO_ERROR",
+                    format!("读不了文件（{}）：{e}", resolved.display()),
+                )
             })?;
             serde_json::from_str(&text).map_err(|e| {
                 ToolFailure::new("NOT_A_WORKFLOW", format!("这份文件不是合法 JSON：{e}"))
@@ -1894,7 +2115,9 @@ pub async fn tool_diagnose_workflow(
         }
         (None, Some(id), _) => {
             let text = crate::comfy::capture::prompt_workflow(state, id)
-                .map_err(|e| ToolFailure::new("TOOL_ERROR", format!("读工作流原文出错：{}", e.human())))?
+                .map_err(|e| {
+                    ToolFailure::new("TOOL_ERROR", format!("读工作流原文出错：{}", e.human()))
+                })?
                 .ok_or_else(|| {
                     ToolFailure::new(
                         "NO_WORKFLOW",
@@ -1902,16 +2125,17 @@ pub async fn tool_diagnose_workflow(
                     )
                 })?;
             serde_json::from_str(&text).map_err(|e| {
-                ToolFailure::new("NOT_A_WORKFLOW", format!("库里这份工作流不是合法 JSON：{e}"))
+                ToolFailure::new(
+                    "NOT_A_WORKFLOW",
+                    format!("库里这份工作流不是合法 JSON：{e}"),
+                )
             })?
         }
         (None, None, Some(graph)) => Value::Object(graph),
-        (None, None, None) => {
-            return Err(ToolFailure::new(
-                "INVALID_ARGUMENT",
-                "要给我一份工作流：path（文件路径）/ promptId（库里的）/ graph（API 格式节点图）三选一",
-            ))
-        }
+        (None, None, None) => return Err(ToolFailure::new(
+            "INVALID_ARGUMENT",
+            "要给我一份工作流：path（文件路径）/ promptId（库里的）/ graph（API 格式节点图）三选一",
+        )),
     };
 
     let object_info = crate::workflow::workflow_recipe::object_info_of(state).await;

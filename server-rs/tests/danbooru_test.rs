@@ -137,7 +137,9 @@ async fn fake_danbooru(fake: Fake) -> (String, Arc<Mutex<Vec<Seen>>>) {
         )
         .with_state(fake);
 
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("绑定假 danbooru");
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("绑定假 danbooru");
     let addr = listener.local_addr().expect("端口");
     let handle = tokio::spawn(async move {
         axum::serve(listener, app).await.expect("假 danbooru 服务");
@@ -177,37 +179,89 @@ async fn 查角色要拿齐角色tag别名换装版本与同现tag() {
     let outcome = client(&base).lookup("Shinku (NTE)", 12, 20).await.unwrap();
 
     // 正文：角色 tag / 别名 / 换装版本 / 同现 tag 一个都不能少
-    assert!(outcome.text.contains("归一成 `shinku_(nte)`"), "{}", outcome.text);
-    assert!(outcome.text.contains("★ 角色 tag：`shinku_(nte)`（100 张）"), "{}", outcome.text);
-    assert!(outcome.text.contains("别名（danbooru 记的 other names）：真红、Shinku"), "{}", outcome.text);
-    assert!(outcome.text.contains("换装 / 其他版本 tag"), "{}", outcome.text);
-    assert!(outcome.text.contains("shinku_(dawn_patrol)_(nte)"), "{}", outcome.text);
-    assert!(outcome.text.contains("pink_hair purple_horns"), "同现 tag 要按频率顺序列出：{}", outcome.text);
+    assert!(
+        outcome.text.contains("归一成 `shinku_(nte)`"),
+        "{}",
+        outcome.text
+    );
+    assert!(
+        outcome
+            .text
+            .contains("★ 角色 tag：`shinku_(nte)`（100 张）"),
+        "{}",
+        outcome.text
+    );
+    assert!(
+        outcome
+            .text
+            .contains("别名（danbooru 记的 other names）：真红、Shinku"),
+        "{}",
+        outcome.text
+    );
+    assert!(
+        outcome.text.contains("换装 / 其他版本 tag"),
+        "{}",
+        outcome.text
+    );
+    assert!(
+        outcome.text.contains("shinku_(dawn_patrol)_(nte)"),
+        "{}",
+        outcome.text
+    );
+    assert!(
+        outcome.text.contains("pink_hair purple_horns"),
+        "同现 tag 要按频率顺序列出：{}",
+        outcome.text
+    );
 
     // meta 的键**精确**（少一个键 = 角色卡少一块内容）
     let mut keys: Vec<String> = outcome.meta.as_object().unwrap().keys().cloned().collect();
     keys.sort();
     assert_eq!(
         keys,
-        vec!["character", "exact", "normalizedTag", "provider", "query", "verifiedAt", "wikiUrl"]
+        vec![
+            "character",
+            "exact",
+            "normalizedTag",
+            "provider",
+            "query",
+            "verifiedAt",
+            "wikiUrl"
+        ]
     );
     assert_eq!(outcome.meta["character"]["tag"], "shinku_(nte)");
     assert_eq!(outcome.meta["character"]["postCount"], 100);
     assert_eq!(outcome.meta["character"]["deprecated"], false);
-    assert_eq!(outcome.meta["character"]["variants"], json!(["shinku_(dawn_patrol)_(nte)"]));
-    assert_eq!(outcome.meta["character"]["otherNames"], json!(["真红", "Shinku"]));
+    assert_eq!(
+        outcome.meta["character"]["variants"],
+        json!(["shinku_(dawn_patrol)_(nte)"])
+    );
+    assert_eq!(
+        outcome.meta["character"]["otherNames"],
+        json!(["真红", "Shinku"])
+    );
     assert_eq!(outcome.meta["character"]["wikiMissing"], false);
-    assert_eq!(outcome.meta["character"]["relatedTags"][1]["name"], "purple_horns");
-    assert_eq!(outcome.meta["character"]["relatedTags"][1]["frequency"], 0.31);
+    assert_eq!(
+        outcome.meta["character"]["relatedTags"][1]["name"],
+        "purple_horns"
+    );
+    assert_eq!(
+        outcome.meta["character"]["relatedTags"][1]["frequency"],
+        0.31
+    );
     assert_eq!(outcome.meta["exact"][0]["category"], "character");
-    assert!(outcome.meta["verifiedAt"].as_str().unwrap().ends_with('Z'), "核对时间要可追溯");
+    assert!(
+        outcome.meta["verifiedAt"].as_str().unwrap().ends_with('Z'),
+        "核对时间要可追溯"
+    );
 
     // 请求侧：模糊那一路**必须带通配符**，UA 必须是短的那一种
     let requests = seen.lock().unwrap().clone();
     let tags: Vec<&Seen> = requests.iter().filter(|r| r.path == "/tags.json").collect();
     assert_eq!(tags.len(), 2, "精确 + 模糊两趟都要发");
     assert!(
-        tags.iter().any(|r| r.query.contains("name_matches%5D=*shinku_%28nte%29*")),
+        tags.iter()
+            .any(|r| r.query.contains("name_matches%5D=*shinku_%28nte%29*")),
         "模糊搜索没有带通配符（编码成 %2A 就搜不到换装版本了）：{tags:?}"
     );
     assert!(
@@ -215,7 +269,9 @@ async fn 查角色要拿齐角色tag别名换装版本与同现tag() {
         "UA 必须是短的那一种（长的会被 Cloudflare 拦）：{tags:?}"
     );
     assert!(
-        requests.iter().any(|r| r.path == "/related_tag.json" && r.query.contains("category=General")),
+        requests
+            .iter()
+            .any(|r| r.path == "/related_tag.json" && r.query.contains("category=General")),
         "同现 tag 要限定 General 类：{requests:?}"
     );
 }
@@ -226,16 +282,30 @@ async fn wiki_404_是正常情况不许把已有结果一起丢掉() {
         exact: json!([tag("shinku_(nte)", 4, 100)]),
         fuzzy: json!([tag("shinku_(nte)", 4, 100)]),
         wiki: None, // → 404
-        related: Some(json!({ "related_tags": [{ "tag": tag("pink_hair", 0, 5), "frequency": 0.5 }] })),
+        related: Some(
+            json!({ "related_tags": [{ "tag": tag("pink_hair", 0, 5), "frequency": 0.5 }] }),
+        ),
         ..Fake::default()
     };
     let (base, _) = fake_danbooru(fake).await;
 
     let outcome = client(&base).lookup("shinku", 12, 20).await.unwrap();
-    assert!(outcome.text.contains("★ 角色 tag：`shinku_(nte)`"), "角色 tag 不该因为 wiki 404 丢掉：{}", outcome.text);
-    assert!(outcome.text.contains("这个 tag 没有 wiki 页（正常情况"), "{}", outcome.text);
+    assert!(
+        outcome.text.contains("★ 角色 tag：`shinku_(nte)`"),
+        "角色 tag 不该因为 wiki 404 丢掉：{}",
+        outcome.text
+    );
+    assert!(
+        outcome.text.contains("这个 tag 没有 wiki 页（正常情况"),
+        "{}",
+        outcome.text
+    );
     assert_eq!(outcome.meta["character"]["wikiMissing"], true);
-    assert!(outcome.meta["character"].get("wiki").is_none() || outcome.meta["character"]["wiki"] == "", "{}", outcome.meta);
+    assert!(
+        outcome.meta["character"].get("wiki").is_none() || outcome.meta["character"]["wiki"] == "",
+        "{}",
+        outcome.meta
+    );
     // 同现 tag 照旧拿到了（它就是"规范 tag 栈"的来源）
     assert!(outcome.text.contains("pink_hair"), "{}", outcome.text);
 }
@@ -251,7 +321,11 @@ async fn 同现tag_接口挂了只少一条增值信息不拖垮主结果() {
     };
     let (base, _) = fake_danbooru(fake).await;
     let outcome = client(&base).lookup("shinku", 12, 20).await.unwrap();
-    assert!(outcome.text.contains("同现 tag：没拿到"), "{}", outcome.text);
+    assert!(
+        outcome.text.contains("同现 tag：没拿到"),
+        "{}",
+        outcome.text
+    );
     assert!(outcome.text.contains("★ 角色 tag"), "{}", outcome.text);
 
     // 但 429 / 5xx **仍然要报错** —— 那是"没查成"，与"没有"是两回事
@@ -279,23 +353,42 @@ async fn cloudflare_挑战页必须单列不许说成没有这个角色() {
     let err = client(&base).lookup("shinku", 12, 20).await.unwrap_err();
     assert_eq!(err.code, "DANBOORU_CLOUDFLARE", "{}", err.message);
     assert!(err.message.contains("Cloudflare"), "{}", err.message);
-    assert!(err.message.contains("不要"), "要明确禁止说成没有这个角色：{}", err.message);
-    assert!(err.message.contains("COMFYHUB_DANBOORU_UA"), "要给出换 UA 的那个口子：{}", err.message);
+    assert!(
+        err.message.contains("不要"),
+        "要明确禁止说成没有这个角色：{}",
+        err.message
+    );
+    assert!(
+        err.message.contains("COMFYHUB_DANBOORU_UA"),
+        "要给出换 UA 的那个口子：{}",
+        err.message
+    );
 }
 
 #[tokio::test]
 async fn 限流与_5xx_是没查成_404_是没有这个tag() {
     for (status, expected) in [(429_u16, "DANBOORU_RATE_LIMIT"), (503, "DANBOORU_FAILED")] {
-        let fake = Fake { tags_status: status, tags_body: "upstream down".into(), ..Fake::default() };
+        let fake = Fake {
+            tags_status: status,
+            tags_body: "upstream down".into(),
+            ..Fake::default()
+        };
         let (base, _) = fake_danbooru(fake).await;
         let err = client(&base).lookup("shinku", 12, 20).await.unwrap_err();
         assert_eq!(err.code, expected, "status={status} → {}", err.message);
     }
 
     // 404（tag 不存在）与"服务不可用"必须分开
-    let fake = Fake { tags_status: 404, tags_body: "no such tag".into(), ..Fake::default() };
+    let fake = Fake {
+        tags_status: 404,
+        tags_body: "no such tag".into(),
+        ..Fake::default()
+    };
     let (base, _) = fake_danbooru(fake).await;
-    let err = client(&base).lookup("不存在的东西", 12, 20).await.unwrap_err();
+    let err = client(&base)
+        .lookup("不存在的东西", 12, 20)
+        .await
+        .unwrap_err();
     assert_eq!(err.code, "DANBOORU_NOT_FOUND");
     assert!(err.message.contains("别照这个写法出图"), "{}", err.message);
 }
@@ -310,7 +403,11 @@ async fn 四零三_不是挑战页时报_ua_被拒() {
     let (base, _) = fake_danbooru(fake).await;
     let err = client(&base).lookup("shinku", 12, 20).await.unwrap_err();
     assert_eq!(err.code, "DANBOORU_UA_REJECTED", "{}", err.message);
-    assert!(err.message.contains(USER_AGENT), "要把当前用的 UA 说出来：{}", err.message);
+    assert!(
+        err.message.contains(USER_AGENT),
+        "要把当前用的 UA 说出来：{}",
+        err.message
+    );
 }
 
 #[tokio::test]
@@ -323,12 +420,36 @@ async fn 没有解析出角色tag时要说下一步() {
     };
     let (base, seen) = fake_danbooru(fake).await;
     let outcome = client(&base).lookup("shinku", 12, 20).await.unwrap();
-    assert!(outcome.text.contains("没有解析出角色 tag"), "{}", outcome.text);
-    assert!(outcome.text.contains("问用户这个角色出自哪部作品"), "{}", outcome.text);
-    assert!(outcome.meta.get("character").is_none(), "没解析出角色就不该有 character 键：{}", outcome.meta);
-    assert!(outcome.meta["candidates"].as_array().unwrap().len() == 1, "{}", outcome.meta);
+    assert!(
+        outcome.text.contains("没有解析出角色 tag"),
+        "{}",
+        outcome.text
+    );
+    assert!(
+        outcome.text.contains("问用户这个角色出自哪部作品"),
+        "{}",
+        outcome.text
+    );
+    assert!(
+        outcome.meta.get("character").is_none(),
+        "没解析出角色就不该有 character 键：{}",
+        outcome.meta
+    );
+    assert!(
+        outcome.meta["candidates"].as_array().unwrap().len() == 1,
+        "{}",
+        outcome.meta
+    );
     // 没有角色 tag 时**不发** wiki / related（一次查询最多 4 个请求，别乱发）
-    let paths: Vec<String> = seen.lock().unwrap().iter().map(|r| r.path.clone()).collect();
-    assert!(!paths.iter().any(|p| p.starts_with("/wiki_pages")), "{paths:?}");
+    let paths: Vec<String> = seen
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|r| r.path.clone())
+        .collect();
+    assert!(
+        !paths.iter().any(|p| p.starts_with("/wiki_pages")),
+        "{paths:?}"
+    );
     assert!(!paths.iter().any(|p| p == "/related_tag.json"), "{paths:?}");
 }

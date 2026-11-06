@@ -13,8 +13,14 @@ fn credentials_and_settings_are_never_synced() {
     for dangerous in ["app_settings", "ai_providers", "ai_models", "ai_run_events"] {
         assert!(!SYNCED.contains(&dangerous), "{dangerous} 绝不能被同步");
         let entry = NOT_SYNCED.iter().find(|(n, _)| *n == dangerous);
-        assert!(entry.is_some(), "{dangerous} 必须显式列出并给出理由（不能只是'没提到'）");
-        assert!(!entry.unwrap().1.trim().is_empty(), "{dangerous} 的理由不能是空的");
+        assert!(
+            entry.is_some(),
+            "{dangerous} 必须显式列出并给出理由（不能只是'没提到'）"
+        );
+        assert!(
+            !entry.unwrap().1.trim().is_empty(),
+            "{dangerous} 的理由不能是空的"
+        );
     }
 }
 
@@ -56,7 +62,10 @@ fn synced_scope_matches_the_master_plan() {
 #[test]
 fn every_synced_table_has_a_pk_kind() {
     for name in SYNCED {
-        assert!(pk_kind(name).is_some(), "{name} 在 SYNCED 里，pk_kind 却不认识它");
+        assert!(
+            pk_kind(name).is_some(),
+            "{name} 在 SYNCED 里，pk_kind 却不认识它"
+        );
     }
 }
 
@@ -70,15 +79,28 @@ fn uplink_kinds_cover_the_phone_writable_tables() {
     assert!(PHONE_FORBIDDEN.contains(&"prompts"));
     assert!(PHONE_FORBIDDEN.contains(&"capture_runs"));
     // 两个方向认识的是同一批表名（写错一个字母不会报错，只会"永远收不到"）
-    for kind in ["ai_conversation", "ai_message", "ai_message_part", "ai_attachment", "ai_run"] {
+    for kind in [
+        "ai_conversation",
+        "ai_message",
+        "ai_message_part",
+        "ai_attachment",
+        "ai_run",
+    ] {
         let table = table_of_kind(kind).expect("kind 必须认识");
-        assert!(SYNCED.contains(&table), "{kind} → {table}，但 {table} 不在同步范围里");
+        assert!(
+            SYNCED.contains(&table),
+            "{kind} → {table}，但 {table} 不在同步范围里"
+        );
     }
     // ★ `submit_job` **不是表**（契约 §4.1）：它的分支在 `apply_one` 最前面。
     //   真有谁"顺手"把它加进这张映射表，就会走到按列名 upsert 那条路上 ——
     //   而 payload 的键（queueId / conversationId / …）跟 `submit_jobs` 的列不是一回事，
     //   表现是一律 `SCHEMA_MISMATCH`（永久拒），手机上永远排不上队。
-    assert_eq!(table_of_kind("submit_job"), None, "submit_job 是一条指令，不是一张表");
+    assert_eq!(
+        table_of_kind("submit_job"),
+        None,
+        "submit_job 是一条指令，不是一张表"
+    );
 }
 
 #[test]
@@ -151,7 +173,11 @@ fn pk_shapes_match_the_schema_triggers() {
         //   这不是漏了，别照着"三件套"去补（补了也只是永远不触发的死代码）。
         let suffixes: &[(&str, &str, &str)] = match kind {
             PkKind::Composite { .. } => &[("ai", "upsert", "NEW"), ("ad", "delete", "OLD")],
-            _ => &[("ai", "upsert", "NEW"), ("au", "upsert", "NEW"), ("ad", "delete", "OLD")],
+            _ => &[
+                ("ai", "upsert", "NEW"),
+                ("au", "upsert", "NEW"),
+                ("ad", "delete", "OLD"),
+            ],
         };
         for (suffix, op, prefix) in suffixes {
             let expr = expected_pk_expr(kind, prefix);
@@ -165,7 +191,10 @@ fn pk_shapes_match_the_schema_triggers() {
                 stmt.contains(&expr),
                 "{needle} 的 pk 表达式与 pk_kind 不一致：\n期望包含 {expr}\n实际 {stmt}",
             );
-            assert!(stmt.contains(&format!("'{op}'")), "{needle} 的 op 应当是 {op}：{stmt}");
+            assert!(
+                stmt.contains(&format!("'{op}'")),
+                "{needle} 的 op 应当是 {op}：{stmt}"
+            );
         }
     }
     for (name, _) in NOT_SYNCED {

@@ -34,12 +34,21 @@ use std::sync::{Mutex, OnceLock};
 
 use serde_json::{json, Map, Value};
 
-use crate::web::routes::AppState;
 use crate::tools::tools::{ToolFailure, ToolOutcome};
+use crate::web::routes::AppState;
 
 /// 认的模型文件后缀（ComfyUI 实际能加载的那些；`.pth` / `.bin` / `.ckpt` 是历史格式）。
 pub const MODEL_EXTS: &[&str] = &[
-    "safetensors", "ckpt", "pt", "pth", "bin", "gguf", "sft", "onnx", "yaml", "json",
+    "safetensors",
+    "ckpt",
+    "pt",
+    "pth",
+    "bin",
+    "gguf",
+    "sft",
+    "onnx",
+    "yaml",
+    "json",
 ];
 
 /// 一次最多列多少条（用户的 models 目录上千个文件是常态，不能整个塞进工具结果）。
@@ -81,35 +90,151 @@ struct ModelInput {
 /// 只列**确定**的：判据是"这个类的这个输入，值就是一个模型文件名"。
 /// 认不出来的第三方加载器**不猜**（宁可漏报，也不要把 `model` 这种转发连线当成文件名）。
 const MODEL_INPUTS: &[ModelInput] = &[
-    ModelInput { cls: "CheckpointLoaderSimple", input: "ckpt_name", folder: "checkpoints" },
-    ModelInput { cls: "CheckpointLoader", input: "ckpt_name", folder: "checkpoints" },
-    ModelInput { cls: "unCLIPCheckpointLoader", input: "ckpt_name", folder: "checkpoints" },
-    ModelInput { cls: "ImageOnlyCheckpointLoader", input: "ckpt_name", folder: "checkpoints" },
-    ModelInput { cls: "UNETLoader", input: "unet_name", folder: "diffusion_models" },
-    ModelInput { cls: "UnetLoaderGGUF", input: "unet_name", folder: "diffusion_models" },
-    ModelInput { cls: "UnetLoaderGGUFAdvanced", input: "unet_name", folder: "diffusion_models" },
-    ModelInput { cls: "DiffusionModelLoader", input: "model_name", folder: "diffusion_models" },
-    ModelInput { cls: "LoraLoader", input: "lora_name", folder: "loras" },
-    ModelInput { cls: "LoraLoaderModelOnly", input: "lora_name", folder: "loras" },
-    ModelInput { cls: "LoraModelLoader", input: "lora_name", folder: "loras" },
-    ModelInput { cls: "VAELoader", input: "vae_name", folder: "vae" },
-    ModelInput { cls: "CLIPLoader", input: "clip_name", folder: "text_encoders" },
-    ModelInput { cls: "DualCLIPLoader", input: "clip_name1", folder: "text_encoders" },
-    ModelInput { cls: "DualCLIPLoader", input: "clip_name2", folder: "text_encoders" },
-    ModelInput { cls: "TripleCLIPLoader", input: "clip_name1", folder: "text_encoders" },
-    ModelInput { cls: "TripleCLIPLoader", input: "clip_name2", folder: "text_encoders" },
-    ModelInput { cls: "TripleCLIPLoader", input: "clip_name3", folder: "text_encoders" },
-    ModelInput { cls: "CLIPVisionLoader", input: "clip_name", folder: "clip_vision" },
-    ModelInput { cls: "ControlNetLoader", input: "control_net_name", folder: "controlnet" },
-    ModelInput { cls: "DiffControlNetLoader", input: "control_net_name", folder: "controlnet" },
-    ModelInput { cls: "StyleModelLoader", input: "style_model_name", folder: "style_models" },
-    ModelInput { cls: "UpscaleModelLoader", input: "model_name", folder: "upscale_models" },
-    ModelInput { cls: "GLIGENLoader", input: "gligen_name", folder: "gligen" },
-    ModelInput { cls: "PhotoMakerLoader", input: "photomaker_model_name", folder: "photomaker" },
-    ModelInput { cls: "IPAdapterModelLoader", input: "ipadapter_file", folder: "ipadapter" },
-    ModelInput { cls: "CLIPVisionEncode", input: "clip_vision", folder: "clip_vision" },
-    ModelInput { cls: "InstantIDModelLoader", input: "instantid_file", folder: "instantid" },
-    ModelInput { cls: "IPAdapterUnifiedLoader", input: "preset", folder: "ipadapter" },
+    ModelInput {
+        cls: "CheckpointLoaderSimple",
+        input: "ckpt_name",
+        folder: "checkpoints",
+    },
+    ModelInput {
+        cls: "CheckpointLoader",
+        input: "ckpt_name",
+        folder: "checkpoints",
+    },
+    ModelInput {
+        cls: "unCLIPCheckpointLoader",
+        input: "ckpt_name",
+        folder: "checkpoints",
+    },
+    ModelInput {
+        cls: "ImageOnlyCheckpointLoader",
+        input: "ckpt_name",
+        folder: "checkpoints",
+    },
+    ModelInput {
+        cls: "UNETLoader",
+        input: "unet_name",
+        folder: "diffusion_models",
+    },
+    ModelInput {
+        cls: "UnetLoaderGGUF",
+        input: "unet_name",
+        folder: "diffusion_models",
+    },
+    ModelInput {
+        cls: "UnetLoaderGGUFAdvanced",
+        input: "unet_name",
+        folder: "diffusion_models",
+    },
+    ModelInput {
+        cls: "DiffusionModelLoader",
+        input: "model_name",
+        folder: "diffusion_models",
+    },
+    ModelInput {
+        cls: "LoraLoader",
+        input: "lora_name",
+        folder: "loras",
+    },
+    ModelInput {
+        cls: "LoraLoaderModelOnly",
+        input: "lora_name",
+        folder: "loras",
+    },
+    ModelInput {
+        cls: "LoraModelLoader",
+        input: "lora_name",
+        folder: "loras",
+    },
+    ModelInput {
+        cls: "VAELoader",
+        input: "vae_name",
+        folder: "vae",
+    },
+    ModelInput {
+        cls: "CLIPLoader",
+        input: "clip_name",
+        folder: "text_encoders",
+    },
+    ModelInput {
+        cls: "DualCLIPLoader",
+        input: "clip_name1",
+        folder: "text_encoders",
+    },
+    ModelInput {
+        cls: "DualCLIPLoader",
+        input: "clip_name2",
+        folder: "text_encoders",
+    },
+    ModelInput {
+        cls: "TripleCLIPLoader",
+        input: "clip_name1",
+        folder: "text_encoders",
+    },
+    ModelInput {
+        cls: "TripleCLIPLoader",
+        input: "clip_name2",
+        folder: "text_encoders",
+    },
+    ModelInput {
+        cls: "TripleCLIPLoader",
+        input: "clip_name3",
+        folder: "text_encoders",
+    },
+    ModelInput {
+        cls: "CLIPVisionLoader",
+        input: "clip_name",
+        folder: "clip_vision",
+    },
+    ModelInput {
+        cls: "ControlNetLoader",
+        input: "control_net_name",
+        folder: "controlnet",
+    },
+    ModelInput {
+        cls: "DiffControlNetLoader",
+        input: "control_net_name",
+        folder: "controlnet",
+    },
+    ModelInput {
+        cls: "StyleModelLoader",
+        input: "style_model_name",
+        folder: "style_models",
+    },
+    ModelInput {
+        cls: "UpscaleModelLoader",
+        input: "model_name",
+        folder: "upscale_models",
+    },
+    ModelInput {
+        cls: "GLIGENLoader",
+        input: "gligen_name",
+        folder: "gligen",
+    },
+    ModelInput {
+        cls: "PhotoMakerLoader",
+        input: "photomaker_model_name",
+        folder: "photomaker",
+    },
+    ModelInput {
+        cls: "IPAdapterModelLoader",
+        input: "ipadapter_file",
+        folder: "ipadapter",
+    },
+    ModelInput {
+        cls: "CLIPVisionEncode",
+        input: "clip_vision",
+        folder: "clip_vision",
+    },
+    ModelInput {
+        cls: "InstantIDModelLoader",
+        input: "instantid_file",
+        folder: "instantid",
+    },
+    ModelInput {
+        cls: "IPAdapterUnifiedLoader",
+        input: "preset",
+        folder: "ipadapter",
+    },
 ];
 
 /// 清单的来源 —— 报告里要能看出这一档（"能加载"与"盘上有"不是一回事）。
@@ -194,7 +319,11 @@ impl Inventory {
             if s < MIN_SCORE {
                 return None;
             }
-            Some(Scored { model: local.clone(), score: s, same_folder })
+            Some(Scored {
+                model: local.clone(),
+                score: s,
+                same_folder,
+            })
         };
         let same: Vec<Scored> = self
             .in_folder(folder)
@@ -211,7 +340,11 @@ impl Inventory {
                 .collect()
         };
         let mut all: Vec<Scored> = same.into_iter().chain(cross).collect();
-        all.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        all.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         all.truncate(MAX_CANDIDATES);
         all
     }
@@ -318,8 +451,11 @@ fn merge(instance: &Inventory, disk: &Inventory) -> Inventory {
     let mut all: Vec<LocalModel> = by_key.into_values().collect();
     all.sort_by(|a, b| a.folder.cmp(&b.folder).then_with(|| a.name.cmp(&b.name)));
     let truncated = all.len() > MAX_ENTRIES;
-    let disk_only: Vec<LocalModel> =
-        all.iter().filter(|m| !m.visible_to_instance).cloned().collect();
+    let disk_only: Vec<LocalModel> = all
+        .iter()
+        .filter(|m| !m.visible_to_instance)
+        .cloned()
+        .collect();
     if truncated {
         all.truncate(MAX_ENTRIES);
     }
@@ -335,7 +471,11 @@ fn merge(instance: &Inventory, disk: &Inventory) -> Inventory {
 }
 
 fn key_of(m: &LocalModel) -> String {
-    format!("{}|{}", m.folder.to_lowercase(), m.name.replace('\\', "/").to_lowercase())
+    format!(
+        "{}|{}",
+        m.folder.to_lowercase(),
+        m.name.replace('\\', "/").to_lowercase()
+    )
 }
 
 /// 从 `/object_info` 的**输入枚举**里抠出模型清单。
@@ -527,7 +667,11 @@ pub fn scan(project_root: Option<&Path>, model_dirs: &[PathBuf]) -> Inventory {
                     LocalModel {
                         name,
                         folder: folder.to_string(),
-                        path: Some(crate::comfy::comfy_dirs::plain_path(file.clone()).display().to_string()),
+                        path: Some(
+                            crate::comfy::comfy_dirs::plain_path(file.clone())
+                                .display()
+                                .to_string(),
+                        ),
                         bytes: std::fs::metadata(&file).ok().map(|m| m.len()),
                         visible_to_instance: false,
                     },
@@ -578,7 +722,9 @@ fn walk(dir: &Path, depth: usize, out: &mut Vec<PathBuf>) {
     if depth > MAX_SCAN_DEPTH || out.len() >= MAX_ENTRIES {
         return;
     }
-    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
     for entry in entries.flatten() {
         if out.len() >= MAX_ENTRIES {
             return;
@@ -611,7 +757,10 @@ fn is_model_file(path: &Path) -> bool {
     if lower.ends_with(".metadata.json") {
         return false;
     }
-    let ext = name.rsplit_once('.').map(|(_, e)| e.to_lowercase()).unwrap_or_default();
+    let ext = name
+        .rsplit_once('.')
+        .map(|(_, e)| e.to_lowercase())
+        .unwrap_or_default();
     MODEL_EXTS.contains(&ext.as_str())
 }
 
@@ -652,9 +801,15 @@ pub fn requirements(
 ) -> Vec<Requirement> {
     let mut out: Vec<Requirement> = Vec::new();
     for (node_id, raw) in graph {
-        let Some(node) = raw.as_object() else { continue };
-        let Some(cls) = node.get("class_type").and_then(Value::as_str) else { continue };
-        let Some(inputs) = node.get("inputs").and_then(Value::as_object) else { continue };
+        let Some(node) = raw.as_object() else {
+            continue;
+        };
+        let Some(cls) = node.get("class_type").and_then(Value::as_str) else {
+            continue;
+        };
+        let Some(inputs) = node.get("inputs").and_then(Value::as_object) else {
+            continue;
+        };
         let title = node
             .get("_meta")
             .and_then(Value::as_object)
@@ -667,8 +822,10 @@ pub fn requirements(
             .filter(|s| s.cls == cls)
             .map(|s| (s.input, s.folder))
             .collect();
-        let mut all: Vec<(String, String)> =
-            known.iter().map(|(i, f)| (i.to_string(), f.to_string())).collect();
+        let mut all: Vec<(String, String)> = known
+            .iter()
+            .map(|(i, f)| (i.to_string(), f.to_string()))
+            .collect();
         if let Some(extra) = model_inputs.and_then(|m| m.get(cls)) {
             for input in extra {
                 if !all.iter().any(|(i, _)| i == input) {
@@ -678,7 +835,9 @@ pub fn requirements(
         }
 
         for (input, folder) in all {
-            let Some(value) = inputs.get(&input) else { continue };
+            let Some(value) = inputs.get(&input) else {
+                continue;
+            };
             let Some(name) = value.as_str() else { continue };
             if name.trim().is_empty() {
                 continue;
@@ -734,17 +893,25 @@ pub fn enumerate_model_inputs(
     object_info: Option<&Map<String, Value>>,
 ) -> HashMap<String, HashSet<String>> {
     let mut out: HashMap<String, HashSet<String>> = HashMap::new();
-    let Some(object_info) = object_info else { return out };
+    let Some(object_info) = object_info else {
+        return out;
+    };
     for (cls, raw) in object_info {
-        let Some(node) = raw.as_object() else { continue };
-        let Some(input_section) = node.get("input").and_then(Value::as_object) else { continue };
+        let Some(node) = raw.as_object() else {
+            continue;
+        };
+        let Some(input_section) = node.get("input").and_then(Value::as_object) else {
+            continue;
+        };
         for section_name in ["required", "optional"] {
             let Some(section) = input_section.get(section_name).and_then(Value::as_object) else {
                 continue;
             };
             for (input, decl) in section {
                 let Some(arr) = decl.as_array() else { continue };
-                let Some(enum_values) = arr.first().and_then(Value::as_array) else { continue };
+                let Some(enum_values) = arr.first().and_then(Value::as_array) else {
+                    continue;
+                };
                 let looks_like_files = enum_values.iter().any(|e| {
                     e.as_str()
                         .map(|s| {
@@ -794,7 +961,11 @@ impl ModelName {
         let dice = 2.0 * inter / (a.len() + b.len()) as f64;
         // 一个完整包含另一个（`krea2_turbo` ⊂ `krea2_turbo_int8_v2`）：给一点加权，
         // 免得"更完整的那个"因为分母变大反而被扣分
-        let containment = if a.is_subset(&b) || b.is_subset(&a) { 0.12 } else { 0.0 };
+        let containment = if a.is_subset(&b) || b.is_subset(&a) {
+            0.12
+        } else {
+            0.0
+        };
         (dice + containment).min(1.0)
     }
 
@@ -996,7 +1167,9 @@ pub async fn tool_env_report(
     }
     text.push_str(&format!(
         "· 自动捕获盯着的目录：output = {}",
-        configured_output.clone().unwrap_or_else(|| "（没配）".to_string())
+        configured_output
+            .clone()
+            .unwrap_or_else(|| "（没配）".to_string())
     ));
     if let Some(d) = &desktop {
         if let Some(input) = &d.input_dir {
@@ -1006,10 +1179,20 @@ pub async fn tool_env_report(
     text.push('\n');
     match &desktop {
         Some(env) => {
-            let dirs: Vec<String> =
-                env.models_dirs.iter().map(|d| d.display().to_string()).collect();
-            text.push_str(&format!("· ComfyUI Desktop 的模型根（来源：{}）：", env.source));
-            text.push_str(if dirs.is_empty() { "（没读到）" } else { "" });
+            let dirs: Vec<String> = env
+                .models_dirs
+                .iter()
+                .map(|d| d.display().to_string())
+                .collect();
+            text.push_str(&format!(
+                "· ComfyUI Desktop 的模型根（来源：{}）：",
+                env.source
+            ));
+            text.push_str(if dirs.is_empty() {
+                "（没读到）"
+            } else {
+                ""
+            });
             if !dirs.is_empty() {
                 text.push_str(&dirs.join("、"));
             }
@@ -1051,7 +1234,9 @@ pub async fn tool_env_report(
             text.push('\n');
         }
     } else {
-        text.push_str("\n（要看具体清单就带 folder（比如 checkpoints / loras）或 query 再调一次）\n");
+        text.push_str(
+            "\n（要看具体清单就带 folder（比如 checkpoints / loras）或 query 再调一次）\n",
+        );
     }
 
     let mut payload = Map::new();
@@ -1076,7 +1261,11 @@ pub async fn tool_env_report(
         payload.insert("desktopSource".into(), json!(d.source));
         payload.insert(
             "modelsDirs".into(),
-            json!(d.models_dirs.iter().map(|p| p.display().to_string()).collect::<Vec<_>>()),
+            json!(d
+                .models_dirs
+                .iter()
+                .map(|p| p.display().to_string())
+                .collect::<Vec<_>>()),
         );
         if let Some(cfg) = &d.model_paths_config {
             payload.insert("modelPathsConfig".into(), json!(cfg.display().to_string()));

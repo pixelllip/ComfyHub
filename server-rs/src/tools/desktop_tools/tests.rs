@@ -16,7 +16,11 @@ fn 清单有序且全是桌面专属() {
     names.dedup();
     assert_eq!(names.len(), DESKTOP_TOOLS.len(), "工具名不许重复");
     for tool in DESKTOP_TOOLS {
-        assert_eq!(tool.scope, "DESKTOP", "{} 的 scope 必须是 DESKTOP", tool.name);
+        assert_eq!(
+            tool.scope, "DESKTOP",
+            "{} 的 scope 必须是 DESKTOP",
+            tool.name
+        );
         // R11：手机侧不许复用提交工具名 —— 桌面清单里当然也不能出现别家的名字
         assert!(!tool.name.starts_with("comfy_queue_submit"));
     }
@@ -27,7 +31,11 @@ fn 每个_schema_都是能解析的对象() {
     for tool in DESKTOP_TOOLS {
         let value: serde_json::Value = serde_json::from_str(tool.input_schema)
             .unwrap_or_else(|e| panic!("{} 的 schema 不是 JSON: {e}", tool.name));
-        assert_eq!(value["type"], "object", "{} 的 schema 顶层必须是 object", tool.name);
+        assert_eq!(
+            value["type"], "object",
+            "{} 的 schema 顶层必须是 object",
+            tool.name
+        );
         assert!(!tool.description.is_empty(), "{} 的描述不许为空", tool.name);
     }
 }
@@ -92,12 +100,22 @@ fn 只列真搬过来了的那些() {
     );
     // `BOTH` 档的联网三件不许混进桌面专属清单（混进来 `implemented()` 会把它们收两次）
     for elsewhere in ["web_search", "web_fetch", "civitai_search"] {
-        assert!(!names.contains(&elsewhere), "{elsewhere} 是 BOTH 档，属于 mobile_tools.rs");
+        assert!(
+            !names.contains(&elsewhere),
+            "{elsewhere} 是 BOTH 档，属于 mobile_tools.rs"
+        );
     }
     // 配方三件（P4 第 67 步）已经搬过来了：**必须**在下发清单里
     // （第 65/66 步那两条 `absent` 断言到这里就该反过来 —— 留着它等于把已实现的说成没实现）
-    for present in ["comfy_learn_workflow", "comfy_list_recipes", "comfy_bind_recipe"] {
-        assert!(names.contains(&present), "{present} 已经搬过来了，不许漏：{names:?}");
+    for present in [
+        "comfy_learn_workflow",
+        "comfy_list_recipes",
+        "comfy_bind_recipe",
+    ] {
+        assert!(
+            names.contains(&present),
+            "{present} 已经搬过来了，不许漏：{names:?}"
+        );
     }
 }
 
@@ -109,7 +127,11 @@ fn 只列真搬过来了的那些() {
 /// 档位改成 `ASK` 的后果是"每学一份工作流都要用户点一下"，界面上看不出为什么变卡。
 #[test]
 fn 配方三件的出厂档与_kotlin_一致() {
-    for name in ["comfy_learn_workflow", "comfy_list_recipes", "comfy_bind_recipe"] {
+    for name in [
+        "comfy_learn_workflow",
+        "comfy_list_recipes",
+        "comfy_bind_recipe",
+    ] {
         let tool = DESKTOP_TOOLS.iter().find(|t| t.name == name).expect(name);
         assert_eq!(tool.access, "ALLOW", "{name} 的出厂档");
     }

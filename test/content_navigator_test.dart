@@ -30,65 +30,68 @@ import 'package:viewer/state/library_store.dart';
 import 'package:viewer/state/nsfw_store.dart';
 
 Map<String, dynamic> _mediaJson() => {
-      'id': 1,
-      'kind': 'IMAGE',
-      'title': '海边回眸',
-      'originalName': 'test_00350_.png',
-      'storedName': 'test_00350_.png',
-      'sizeBytes': 100,
-      'width': 1024,
-      'height': 1024,
-      'favorite': false,
-      'nsfw': false,
-      'hasWorkflow': false,
-      'fileUrl': '/api/media/1/file',
-      'thumbUrl': '/api/media/1/thumb',
-      'collectionSize': 1,
-    };
+  'id': 1,
+  'kind': 'IMAGE',
+  'title': '海边回眸',
+  'originalName': 'test_00350_.png',
+  'storedName': 'test_00350_.png',
+  'sizeBytes': 100,
+  'width': 1024,
+  'height': 1024,
+  'favorite': false,
+  'nsfw': false,
+  'hasWorkflow': false,
+  'fileUrl': '/api/media/1/file',
+  'thumbUrl': '/api/media/1/thumb',
+  'collectionSize': 1,
+};
 
 MockClient _backend() => MockClient((request) async {
-      final path = request.url.path;
-      Object body;
-      if (path.startsWith('/api/ai/')) {
-        body = <Object>[];
-      } else if (path == '/api/media/1') {
-        body = _mediaJson();
-      } else if (path == '/api/media') {
-        body = {
-          'items': [_mediaJson()],
-          'total': 1,
-          'page': 1,
-          'size': 24,
-          'pages': 1,
-        };
-      } else if (path == '/api/tags' || path == '/api/tags/categories') {
-        body = <Object>[];
-      } else if (path == '/api/stats') {
-        body = {
-          'prompts': 0,
-          'media': 1,
-          'tags': 0,
-          'favoritePrompts': 0,
-          'favoriteMedia': 0,
-          'byKind': <String, int>{},
-          'byMediaKind': <String, int>{'IMAGE': 1},
-        };
-      } else {
-        body = {'items': <Object>[], 'total': 0, 'page': 1, 'size': 24, 'pages': 0};
-      }
-      return http.Response(
-        jsonEncode(body),
-        200,
-        headers: {'content-type': 'application/json; charset=utf-8'},
-      );
-    });
+  final path = request.url.path;
+  Object body;
+  if (path.startsWith('/api/ai/')) {
+    body = <Object>[];
+  } else if (path == '/api/media/1') {
+    body = _mediaJson();
+  } else if (path == '/api/media') {
+    body = {
+      'items': [_mediaJson()],
+      'total': 1,
+      'page': 1,
+      'size': 24,
+      'pages': 1,
+    };
+  } else if (path == '/api/tags' || path == '/api/tags/categories') {
+    body = <Object>[];
+  } else if (path == '/api/stats') {
+    body = {
+      'prompts': 0,
+      'media': 1,
+      'tags': 0,
+      'favoritePrompts': 0,
+      'favoriteMedia': 0,
+      'byKind': <String, int>{},
+      'byMediaKind': <String, int>{'IMAGE': 1},
+    };
+  } else {
+    body = {'items': <Object>[], 'total': 0, 'page': 1, 'size': 24, 'pages': 0};
+  }
+  return http.Response(
+    jsonEncode(body),
+    200,
+    headers: {'content-type': 'application/json; charset=utf-8'},
+  );
+});
 
 Future<Widget> _shell() async {
   SharedPreferences.setMockInitialValues({});
   final settings = SettingsStore();
   await settings.load();
   final mock = _backend();
-  final library = LibraryStore(settings, api: ApiClient(settings.baseUrl, client: mock));
+  final library = LibraryStore(
+    settings,
+    api: ApiClient(settings.baseUrl, client: mock),
+  );
   await library.refreshAll();
   final ai = AiWorkspaceStore(api: AiApiClient(settings.baseUrl, client: mock));
   return MultiProvider(
@@ -123,23 +126,37 @@ void main() {
     // `Navigator.of(context).push(...)` 走的同一条路。
     final galleryContext = tester.element(find.byType(GalleryPage));
     Navigator.of(galleryContext).push(
-      MaterialPageRoute<void>(builder: (_) => const MediaDetailPage(mediaId: 1)),
+      MaterialPageRoute<void>(
+        builder: (_) => const MediaDetailPage(mediaId: 1),
+      ),
     );
     await tester.pumpAndSettle();
 
     // ① 详情页出来了
     expect(find.byType(MediaDetailPage), findsOneWidget);
     // ② ★ 侧边栏**还在**，而且几何与 State 都没动
-    expect(find.byType(NavigationRail), findsOneWidget,
-        reason: '次级页面不许盖住侧边栏（用户："侧边栏哪去了？"）');
-    expect(tester.getRect(find.byType(NavigationRail)), railRect,
-        reason: '侧边栏位置/尺寸一个字都不该动');
-    expect(identical(tester.state(find.byType(NavigationRail)), railState), isTrue,
-        reason: '侧边栏还是同一个 State');
+    expect(
+      find.byType(NavigationRail),
+      findsOneWidget,
+      reason: '次级页面不许盖住侧边栏（用户："侧边栏哪去了？"）',
+    );
+    expect(
+      tester.getRect(find.byType(NavigationRail)),
+      railRect,
+      reason: '侧边栏位置/尺寸一个字都不该动',
+    );
+    expect(
+      identical(tester.state(find.byType(NavigationRail)), railState),
+      isTrue,
+      reason: '侧边栏还是同一个 State',
+    );
     // ③ 详情页只占**右边**（左边缘在侧边栏右边）
     final detail = tester.getRect(find.byType(MediaDetailPage));
-    expect(detail.left, greaterThanOrEqualTo(railRect.right),
-        reason: '详情页的左边从侧边栏右边开始，不是从窗口左边');
+    expect(
+      detail.left,
+      greaterThanOrEqualTo(railRect.right),
+      reason: '详情页的左边从侧边栏右边开始，不是从窗口左边',
+    );
 
     // ④ 返回之后画廊还在（没被销毁）
     Navigator.of(tester.element(find.byType(MediaDetailPage))).pop();
@@ -160,7 +177,9 @@ void main() {
     await tester.pumpAndSettle();
 
     Navigator.of(tester.element(find.byType(GalleryPage))).push(
-      MaterialPageRoute<void>(builder: (_) => const MediaDetailPage(mediaId: 1)),
+      MaterialPageRoute<void>(
+        builder: (_) => const MediaDetailPage(mediaId: 1),
+      ),
     );
     await tester.pumpAndSettle();
     expect(find.byType(MediaDetailPage), findsOneWidget);
@@ -174,8 +193,11 @@ void main() {
     // 切回画廊：还停在详情页（用户没按返回）
     await tester.tap(find.text('画廊'));
     await tester.pumpAndSettle();
-    expect(find.byType(MediaDetailPage), findsOneWidget,
-        reason: '每页路由栈独立 —— 切回来该还在原来那一层');
+    expect(
+      find.byType(MediaDetailPage),
+      findsOneWidget,
+      reason: '每页路由栈独立 —— 切回来该还在原来那一层',
+    );
     expect(find.byType(NavigationRail), findsOneWidget, reason: '侧边栏始终在');
   });
 
@@ -205,7 +227,9 @@ void main() {
     await tester.pumpAndSettle();
 
     Navigator.of(tester.element(find.byType(GalleryPage))).push(
-      MaterialPageRoute<void>(builder: (_) => const MediaDetailPage(mediaId: 1)),
+      MaterialPageRoute<void>(
+        builder: (_) => const MediaDetailPage(mediaId: 1),
+      ),
     );
     await tester.pumpAndSettle();
 
@@ -215,8 +239,7 @@ void main() {
     expect(detail.left, 0, reason: '窄屏次级页铺满整屏（左边不再是侧边栏右边）');
     expect(detail.top, 0);
     expect(detail.width, 400);
-    expect(detail.height, 800,
-        reason: '底边栏也在它下面被盖住 —— 手机上"进详情"就是整屏换页');
+    expect(detail.height, 800, reason: '底边栏也在它下面被盖住 —— 手机上"进详情"就是整屏换页');
 
     Navigator.of(tester.element(find.byType(MediaDetailPage))).pop();
     await tester.pumpAndSettle();

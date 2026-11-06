@@ -156,7 +156,10 @@ pub async fn probe_get(
             let detail = if error.is_timeout() {
                 format!("连接超时（{timeout_seconds}秒）")
             } else {
-                format!("无法连接：{}", crate::comfy::comfy_client::friendly_error(&error, url))
+                format!(
+                    "无法连接：{}",
+                    crate::comfy::comfy_client::friendly_error(&error, url)
+                )
             };
             return Probe {
                 ok: false,
@@ -253,8 +256,14 @@ async fn get_models(state: &AppState, provider: &AiProviderRow, secret: Option<&
 /// `pub(crate)`：实测校准（`capability_probe.rs`）也要同一把密钥 —— 两处各写一份
 /// "凭据引用怎么解析"迟早会出现"连接测试连得上、校准却说没凭据"。
 pub(crate) fn resolve_secret(state: &AppState, provider: &AiProviderRow) -> Option<String> {
-    let reference = provider.credential_ref.as_deref().map(str::trim).filter(|r| !r.is_empty())?;
-    crate::mobile::auth::resolve_credential(state, reference).ok().filter(|s| !s.is_empty())
+    let reference = provider
+        .credential_ref
+        .as_deref()
+        .map(str::trim)
+        .filter(|r| !r.is_empty())?;
+    crate::mobile::auth::resolve_credential(state, reference)
+        .ok()
+        .filter(|s| !s.is_empty())
 }
 
 /// `POST /api/ai/providers/{id}/test` 的响应（Kotlin `ProviderTestResponse`，5 个键）。
@@ -268,7 +277,12 @@ pub async fn test_connection_json(state: &AppState, provider: &AiProviderRow) ->
     };
     let secret = resolve_secret(state, provider);
     // 先查凭据（便宜、不需要网络）：缺密钥时应该报得比"地址不可信"更准
-    if provider.credential_ref.as_deref().map(str::trim).filter(|r| !r.is_empty()).is_some()
+    if provider
+        .credential_ref
+        .as_deref()
+        .map(str::trim)
+        .filter(|r| !r.is_empty())
+        .is_some()
         && secret.is_none()
     {
         return json!({
@@ -357,9 +371,11 @@ pub async fn discover_models_json(state: &AppState, provider: &AiProviderRow) ->
             "candidates": [],
         });
     }
-    let overlays = crate::provider::capability_catalog::load_overlays(&crate::provider::capability_catalog::dir_of(
-        state.media_dir().parent().unwrap_or(state.media_dir()),
-    ));
+    let overlays = crate::provider::capability_catalog::load_overlays(
+        &crate::provider::capability_catalog::dir_of(
+            state.media_dir().parent().unwrap_or(state.media_dir()),
+        ),
+    );
     let candidates = parse_candidates(response.body.as_deref().unwrap_or(""), &overlays);
     let declared = candidates
         .iter()
@@ -546,7 +562,13 @@ pub fn parse_declared_capabilities(obj: &Map<String, Value>) -> Option<Declared>
     let bool_of = |keys: &[&str]| -> Option<bool> {
         keys.iter().find_map(|key| primitive_bool(obj.get(*key)))
     };
-    if let Some(vision) = bool_of(&["supports_vision", "vision", "supports_image", "multimodal", "image_input"]) {
+    if let Some(vision) = bool_of(&[
+        "supports_vision",
+        "vision",
+        "supports_image",
+        "multimodal",
+        "image_input",
+    ]) {
         let current = declared.modalities.clone().unwrap_or_default();
         declared.modalities = Some(if vision {
             let mut out = current;
@@ -567,9 +589,12 @@ pub fn parse_declared_capabilities(obj: &Map<String, Value>) -> Option<Declared>
     if let Some(tools) = bool_of(&["supports_tools", "function_calling", "tool_call", "tools"]) {
         declared.tools = Some(tools);
     }
-    if let Some(reasoning) =
-        bool_of(&["supports_reasoning", "reasoning", "thinking", "supports_thinking"])
-    {
+    if let Some(reasoning) = bool_of(&[
+        "supports_reasoning",
+        "reasoning",
+        "thinking",
+        "supports_thinking",
+    ]) {
         declared.reasoning = Some(reasoning);
     }
 
@@ -584,7 +609,10 @@ pub fn parse_declared_capabilities(obj: &Map<String, Value>) -> Option<Declared>
             declared.modalities = Some(out);
         }
         if declared.tools.is_none() {
-            if let Some(flag) = flag("function_calling").or_else(|| flag("tools")).or_else(|| flag("tool_call")) {
+            if let Some(flag) = flag("function_calling")
+                .or_else(|| flag("tools"))
+                .or_else(|| flag("tool_call"))
+            {
                 declared.tools = Some(flag);
             }
         }
@@ -602,8 +630,13 @@ pub fn parse_declared_capabilities(obj: &Map<String, Value>) -> Option<Declared>
 }
 
 /// 解析模型列表 → 候选（Kotlin `parseCandidates`，AIH-011 的"逐维度合并、不猜能力"）。
-pub fn parse_candidates(body: &str, overlays: &crate::provider::capability_catalog::Overlays) -> Vec<Value> {
-    let Ok(root) = serde_json::from_str::<Value>(body) else { return Vec::new() };
+pub fn parse_candidates(
+    body: &str,
+    overlays: &crate::provider::capability_catalog::Overlays,
+) -> Vec<Value> {
+    let Ok(root) = serde_json::from_str::<Value>(body) else {
+        return Vec::new();
+    };
     let array = match &root {
         Value::Array(items) => items.clone(),
         Value::Object(map) => map
@@ -617,14 +650,18 @@ pub fn parse_candidates(body: &str, overlays: &crate::provider::capability_catal
 
     let mut out: Vec<Value> = Vec::new();
     for element in array {
-        let Some(obj) = element.as_object() else { continue };
+        let Some(obj) = element.as_object() else {
+            continue;
+        };
         let text = |keys: &[&str]| -> Option<String> {
             keys.iter().find_map(|key| primitive_text(obj.get(*key)))
         };
         let number = |keys: &[&str]| -> Option<i64> {
             keys.iter().find_map(|key| primitive_i64(obj.get(*key)))
         };
-        let Some(id) = text(&["id", "name", "model"]) else { continue };
+        let Some(id) = text(&["id", "name", "model"]) else {
+            continue;
+        };
         let declared = parse_declared_capabilities(obj);
         // 内置目录**始终**查：接口只声明一部分时，剩下的维度由它补
         let from_catalog = crate::provider::capability_catalog::lookup(overlays, &id);
@@ -648,16 +685,27 @@ pub fn parse_candidates(body: &str, overlays: &crate::provider::capability_catal
             .unwrap_or(false);
         // 档位 / 方言只来自内置目录，且必须与"支持推理"一致（否则保存时会被拒绝）
         let thinking_efforts: Vec<(String, String)> = if reasoning {
-            from_catalog.as_ref().map(|c| c.thinking_efforts.clone()).unwrap_or_default()
+            from_catalog
+                .as_ref()
+                .map(|c| c.thinking_efforts.clone())
+                .unwrap_or_default()
         } else {
             Vec::new()
         };
-        let thinking_format =
-            if reasoning { from_catalog.as_ref().and_then(|c| c.thinking_format.clone()) } else { None };
+        let thinking_format = if reasoning {
+            from_catalog
+                .as_ref()
+                .and_then(|c| c.thinking_format.clone())
+        } else {
+            None
+        };
 
         let by_api = declared.is_some();
         let by_catalog = from_catalog.is_some();
-        let matched_by = from_catalog.as_ref().map(|c| c.matched_by.clone()).unwrap_or_default();
+        let matched_by = from_catalog
+            .as_ref()
+            .map(|c| c.matched_by.clone())
+            .unwrap_or_default();
 
         let mut candidate = Map::new();
         candidate.insert("id".into(), json!(id));
@@ -665,7 +713,12 @@ pub fn parse_candidates(body: &str, overlays: &crate::provider::capability_catal
             "displayName".into(),
             json!(text(&["display_name", "displayName", "name"]).unwrap_or_else(|| id.clone())),
         );
-        if let Some(value) = number(&["context_window", "contextWindow", "context_length", "max_context_tokens"]) {
+        if let Some(value) = number(&[
+            "context_window",
+            "contextWindow",
+            "context_length",
+            "max_context_tokens",
+        ]) {
             candidate.insert("contextWindow".into(), json!(value));
         }
         if let Some(value) = number(&["max_output_tokens", "maxOutputTokens", "max_tokens"]) {
@@ -703,12 +756,16 @@ pub fn parse_candidates(body: &str, overlays: &crate::provider::capability_catal
             } else if by_catalog {
                 format!("接口没给能力信息 → 用内置目录规则「{matched_by}」（可能过期，可手工修改）")
             } else {
-                "接口未声明、内置目录也没有 → 仅文本 + 默认给工具；需要图片/思考请手工勾选".to_string()
+                "接口未声明、内置目录也没有 → 仅文本 + 默认给工具；需要图片/思考请手工勾选"
+                    .to_string()
             }),
         );
         let value = Value::Object(candidate);
         // `distinctBy { it.id }`
-        if !out.iter().any(|existing| existing.get("id") == value.get("id")) {
+        if !out
+            .iter()
+            .any(|existing| existing.get("id") == value.get("id"))
+        {
             out.push(value);
         }
     }

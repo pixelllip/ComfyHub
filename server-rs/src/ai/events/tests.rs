@@ -8,7 +8,10 @@ use serde_json::json;
 fn test_state() -> AppState {
     let conn = crate::infra::db::open_memory().unwrap();
     let schema = std::fs::read_to_string(
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("db").join("schema.sqlite.sql"),
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("db")
+            .join("schema.sqlite.sql"),
     )
     .unwrap();
     conn.execute_batch(&schema).unwrap();
@@ -27,13 +30,19 @@ fn seq_is_monotonic_and_never_reused() {
     let bus = RunEventBus::new();
     bus.open("r1");
     for expected in 1..=5 {
-        let event = bus.emit(&state, "r1", event_type::TEXT_DELTA, &json!({"text": "x"})).unwrap().unwrap();
+        let event = bus
+            .emit(&state, "r1", event_type::TEXT_DELTA, &json!({"text": "x"}))
+            .unwrap()
+            .unwrap();
         assert_eq!(event.seq, expected);
     }
     bus.flush(&state, "r1").unwrap();
     // 收尾之后再发：**返回 None**，且号不倒退
     bus.close(&state, "r1").unwrap();
-    assert!(bus.emit(&state, "r1", event_type::TEXT_DELTA, &json!({})).unwrap().is_none());
+    assert!(bus
+        .emit(&state, "r1", event_type::TEXT_DELTA, &json!({}))
+        .unwrap()
+        .is_none());
     assert!(bus.is_closed("r1"));
     assert_eq!(bus.next_seq("r1"), 6, "号停在原处，不许回退");
 }
@@ -47,12 +56,22 @@ fn resume_from_continues_after_the_persisted_max_seq() {
     let state = test_state();
     let bus = RunEventBus::new();
     for seq in 1..=9 {
-        runs::append_event(&state, "r1", seq, event_type::TEXT_DELTA, &json!({"n": seq})).unwrap();
+        runs::append_event(
+            &state,
+            "r1",
+            seq,
+            event_type::TEXT_DELTA,
+            &json!({"n": seq}),
+        )
+        .unwrap();
     }
     let max = max_seq(&state, "r1").unwrap();
     assert_eq!(max, 9);
     bus.resume_from("r1", max);
-    let event = bus.emit(&state, "r1", event_type::RUN_COMPLETED, &json!({})).unwrap().unwrap();
+    let event = bus
+        .emit(&state, "r1", event_type::RUN_COMPLETED, &json!({}))
+        .unwrap()
+        .unwrap();
     assert_eq!(event.seq, 10);
     bus.flush(&state, "r1").unwrap();
     let stored = runs::events(&state, "r1", 0).unwrap();
@@ -67,7 +86,8 @@ fn ring_buffer_drops_the_oldest_only() {
     let bus = RunEventBus::new();
     bus.open("r1");
     for seq in 1..=(MEMORY_KEEP as i64 + 10) {
-        bus.emit(&state, "r1", event_type::TEXT_DELTA, &json!({"n": seq})).unwrap();
+        bus.emit(&state, "r1", event_type::TEXT_DELTA, &json!({"n": seq}))
+            .unwrap();
     }
     let history = bus.history("r1");
     assert_eq!(history.len(), MEMORY_KEEP);
@@ -88,13 +108,22 @@ fn close_flushes_the_partial_batch() {
     let bus = RunEventBus::new();
     bus.open("r1");
     // 故意发得比一批少：只有 flush/close 会把它写下去
-    bus.emit(&state, "r1", event_type::RUN_STARTED, &json!({})).unwrap();
-    bus.emit(&state, "r1", event_type::RUN_COMPLETED, &json!({})).unwrap();
-    assert!(runs::events(&state, "r1", 0).unwrap().is_empty(), "还没到一批，库里是空的");
+    bus.emit(&state, "r1", event_type::RUN_STARTED, &json!({}))
+        .unwrap();
+    bus.emit(&state, "r1", event_type::RUN_COMPLETED, &json!({}))
+        .unwrap();
+    assert!(
+        runs::events(&state, "r1", 0).unwrap().is_empty(),
+        "还没到一批，库里是空的"
+    );
     bus.close(&state, "r1").unwrap();
     let stored = runs::events(&state, "r1", 0).unwrap();
     assert_eq!(stored.len(), 2);
-    assert_eq!(stored[1].r#type, event_type::RUN_COMPLETED, "终态事件落库了（R5）");
+    assert_eq!(
+        stored[1].r#type,
+        event_type::RUN_COMPLETED,
+        "终态事件落库了（R5）"
+    );
 }
 
 /// 18 个事件类型与契约文档逐字一致（两边各一份常量，靠这条比对）。
@@ -131,9 +160,15 @@ fn event_types_match_the_contract() {
     sorted.sort_unstable();
     sorted.dedup();
     assert_eq!(sorted.len(), 18, "不许有重复");
-    assert_eq!(TERMINAL_EVENTS, ["run.completed", "run.failed", "run.cancelled"]);
+    assert_eq!(
+        TERMINAL_EVENTS,
+        ["run.completed", "run.failed", "run.cancelled"]
+    );
     for name in event_type::ALL {
         assert!(!name.is_empty());
-        assert!(name.contains('.') || name == event_type::HEARTBEAT, "只有 heartbeat 没有点：{name}");
+        assert!(
+            name.contains('.') || name == event_type::HEARTBEAT,
+            "只有 heartbeat 没有点：{name}"
+        );
     }
 }

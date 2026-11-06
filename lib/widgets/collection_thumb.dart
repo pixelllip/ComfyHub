@@ -276,11 +276,7 @@ class CollectionThumb extends StatelessWidget {
       ),
     ),
     child: selected
-        ? Icon(
-            Icons.check,
-            size: 14,
-            color: theme.colorScheme.onPrimary,
-          )
+        ? Icon(Icons.check, size: 14, color: theme.colorScheme.onPrimary)
         : null,
   );
 }

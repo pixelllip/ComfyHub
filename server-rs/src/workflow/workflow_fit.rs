@@ -44,8 +44,8 @@ use std::path::PathBuf;
 use serde_json::{json, Map, Value};
 
 use crate::comfy::comfy_models::{Inventory, ModelName, Requirement, Scored, Source};
-use crate::web::routes::AppState;
 use crate::tools::tools::{ToolFailure, ToolOutcome};
+use crate::web::routes::AppState;
 
 // ---------------------------------------------------------------------------
 //  待补输入诊断（`WorkflowInputs.kt`）
@@ -56,12 +56,20 @@ use crate::tools::tools::{ToolFailure, ToolOutcome};
 /// `LoadImage`、`IPAdapter` 的 `image`、`VHS_LoadVideo` 的 `video`、蒙版类都落在这里。
 /// 没被认出来的（第三方自定义节点）照样列进清单，**不静默丢弃** ——
 /// 列表少一条，模型就会以为那份工作流已经齐了。
-const IMAGE_INPUTS: &[&str] = &["image", "images", "mask", "masks", "image1", "image2", "image_b"];
+const IMAGE_INPUTS: &[&str] = &[
+    "image", "images", "mask", "masks", "image1", "image2", "image_b",
+];
 const VIDEO_INPUTS: &[&str] = &["video", "videos", "frames", "frame_load_cap"];
 
 /// 没有真实语义的虚拟节点：它们不该进"待补输入"清单。
-const VIRTUAL_NODES: &[&str] =
-    &["Note", "MarkdownNote", "Reroute", "PrimitiveNode", "GetNode", "SetNode"];
+const VIRTUAL_NODES: &[&str] = &[
+    "Note",
+    "MarkdownNote",
+    "Reroute",
+    "PrimitiveNode",
+    "GetNode",
+    "SetNode",
+];
 
 /// 待补输入的种类 —— 决定"下一步该干什么"，所以单独列出来（`InputKind.wire` 逐字对照）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -136,19 +144,28 @@ impl WorkflowInputReport {
                 o.insert("currentValue".into(), json!(v));
             }
             o.insert("hint".into(), json!(m.hint));
-            o.insert("ref".into(), json!(format!("{}.{}", m.node_id, m.input_name)));
+            o.insert(
+                "ref".into(),
+                json!(format!("{}.{}", m.node_id, m.input_name)),
+            );
             missing.push(Value::Object(o));
         }
         let mut out = Map::new();
         out.insert("nodeCount".into(), json!(self.node_count));
         out.insert("missingCount".into(), json!(self.missing.len()));
-        out.insert("needsExternalAsset".into(), json!(self.has_external_asset_gap()));
+        out.insert(
+            "needsExternalAsset".into(),
+            json!(self.has_external_asset_gap()),
+        );
         out.insert("missing".into(), Value::Array(missing));
         if !self.supplied_by_attachment.is_empty() {
             out.insert(
                 "suppliedByAttachment".into(),
                 Value::Array(
-                    self.supplied_by_attachment.iter().map(|s| json!(s)).collect::<Vec<_>>(),
+                    self.supplied_by_attachment
+                        .iter()
+                        .map(|s| json!(s))
+                        .collect::<Vec<_>>(),
                 ),
             );
         }
@@ -176,7 +193,10 @@ impl WorkflowInputReport {
         } else {
             ""
         };
-        text.push_str(&format!("这份工作流有 {} 处**等着外部输入**：", self.missing.len()));
+        text.push_str(&format!(
+            "这份工作流有 {} 处**等着外部输入**：",
+            self.missing.len()
+        ));
         if !asset.is_empty() {
             text.push_str(asset);
         }
@@ -217,7 +237,9 @@ pub fn scan(graph: &Map<String, Value>, has_image_attachment: bool) -> WorkflowI
     let mut known: Vec<String> = Vec::new();
 
     for (node_id, raw) in graph {
-        let Some(node) = raw.as_object() else { continue };
+        let Some(node) = raw.as_object() else {
+            continue;
+        };
         let class_type = node.get("class_type").and_then(Value::as_str).unwrap_or("");
         if class_type.trim().is_empty() {
             continue;
@@ -225,7 +247,9 @@ pub fn scan(graph: &Map<String, Value>, has_image_attachment: bool) -> WorkflowI
         if VIRTUAL_NODES.contains(&class_type) {
             continue;
         }
-        let Some(inputs) = node.get("inputs").and_then(Value::as_object) else { continue };
+        let Some(inputs) = node.get("inputs").and_then(Value::as_object) else {
+            continue;
+        };
         let title = node
             .get("_meta")
             .and_then(Value::as_object)
@@ -233,7 +257,9 @@ pub fn scan(graph: &Map<String, Value>, has_image_attachment: bool) -> WorkflowI
             .and_then(Value::as_str);
 
         for (name, value) in inputs {
-            let Some(gap) = gap_of(class_type, name, value) else { continue };
+            let Some(gap) = gap_of(class_type, name, value) else {
+                continue;
+            };
             if gap == InputKind::Image && has_image_attachment {
                 // 本次带了图：图片缺口由 `comfy_use_attachment` 投放解决，
                 // 记成"已知道"而不是"要用户补" —— 两条混在一起模型就会去问用户要图。
@@ -269,8 +295,8 @@ fn gap_of(class_type: &str, name: &str, value: &Value) -> Option<InputKind> {
     }
 
     let is_wire = matches!(value, Value::Array(_));
-    let is_empty = matches!(value, Value::Null)
-        || matches!(value, Value::String(s) if s.trim().is_empty());
+    let is_empty =
+        matches!(value, Value::Null) || matches!(value, Value::String(s) if s.trim().is_empty());
 
     // LoadImage 的 image：就算绑着上次捕获的那个 jpg 也是一条"你要自己决定用哪张"的缺口。
     // 这是用户建议 ⑤ 那个现场的核心一条 —— 不报出来，模型就会硬提交一个不存在的文件。
@@ -328,7 +354,11 @@ fn describe_value(value: &Value) -> Option<String> {
             } else {
                 Some(format!(
                     "连线 → {}",
-                    items.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(", ")
+                    items
+                        .iter()
+                        .map(|v| v.to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ")
                 ))
             }
         }
@@ -479,11 +509,9 @@ impl FitItem {
                  也不要改 overrides（改了同样报文件不存在）。"
                     .to_string()
             }
-            FitStatus::Missing => {
-                "本机没有。先去 civitai_search 查它，再用 ask_user_question \
+            FitStatus::Missing => "本机没有。先去 civitai_search 查它，再用 ask_user_question \
                  让用户决定装 / 换工作流 / 放弃。"
-                    .to_string()
-            }
+                .to_string(),
         }
     }
 }
@@ -550,7 +578,10 @@ impl FitReport {
 
     pub fn to_json(&self) -> Value {
         let mut o = Map::new();
-        o.insert("inventorySource".into(), json!(self.inventory_source.wire()));
+        o.insert(
+            "inventorySource".into(),
+            json!(self.inventory_source.wire()),
+        );
         if let Some(d) = &self.models_dir {
             o.insert("modelsDir".into(), json!(d));
         }
@@ -560,13 +591,22 @@ impl FitReport {
         }
         o.insert("required".into(), json!(self.items.len()));
         o.insert("exact".into(), json!(self.count(FitStatus::Exact)));
-        o.insert("substitute".into(), json!(self.count(FitStatus::Substitute)));
+        o.insert(
+            "substitute".into(),
+            json!(self.count(FitStatus::Substitute)),
+        );
         // 盘上有、但这个实例枚举不到（2026-09-22）：单列一档，别混进 missing ——
         // 混进去的后果是模型让用户去下载一个本来就在硬盘上的文件
-        o.insert("onDiskOnly".into(), json!(self.count(FitStatus::OnDiskOnly)));
+        o.insert(
+            "onDiskOnly".into(),
+            json!(self.count(FitStatus::OnDiskOnly)),
+        );
         o.insert("missing".into(), json!(self.count(FitStatus::Missing)));
         if self.inventory_disk_only > 0 {
-            o.insert("invisibleToInstance".into(), json!(self.inventory_disk_only));
+            o.insert(
+                "invisibleToInstance".into(),
+                json!(self.inventory_disk_only),
+            );
         }
         if !self.missing_nodes.is_empty() {
             o.insert("missingNodes".into(), json!(self.missing_nodes));
@@ -610,7 +650,9 @@ impl FitReport {
             text.push_str(&format!("、有可替代的 {sub} 个"));
         }
         if disk_only > 0 {
-            text.push_str(&format!("、**硬盘上有同名但当前实例看不到的 {disk_only} 个**"));
+            text.push_str(&format!(
+                "、**硬盘上有同名但当前实例看不到的 {disk_only} 个**"
+            ));
         }
         if miss > 0 {
             text.push_str(&format!("、**本机没有的 {miss} 个**"));
@@ -833,7 +875,10 @@ fn item_json(item: &FitItem) -> Value {
                         m.insert("sameFolder".into(), json!(c.same_folder));
                         // 这个候选**当前实例能不能加载**：false 的不能拿去 overrides
                         // （ComfyUI 只会回一句文件不存在）
-                        m.insert("visibleToInstance".into(), json!(c.model.visible_to_instance));
+                        m.insert(
+                            "visibleToInstance".into(),
+                            json!(c.model.visible_to_instance),
+                        );
                         if let Some(p) = &c.model.path {
                             m.insert("path".into(), json!(p));
                         }
@@ -905,8 +950,9 @@ pub fn fit(
         let exact_visible = candidates.iter().position(|c| {
             c.model.visible_to_instance && ModelName::same(&req.file_name, &c.model.name)
         });
-        let exact_any =
-            candidates.iter().position(|c| ModelName::same(&req.file_name, &c.model.name));
+        let exact_any = candidates
+            .iter()
+            .position(|c| ModelName::same(&req.file_name, &c.model.name));
         // 同名优先：就算还有别的更高分的候选，"一模一样"永远是最好的答案
         let item = match (exact_visible, exact_any) {
             (Some(index), _) => FitItem {
@@ -969,7 +1015,10 @@ pub fn fit(
 
     FitReport {
         inventory_source: inventory.source,
-        models_dir: inventory.models_dir.as_ref().map(|p| p.display().to_string()),
+        models_dir: inventory
+            .models_dir
+            .as_ref()
+            .map(|p| p.display().to_string()),
         local_count: inventory.models.len(),
         truncated: inventory.truncated,
         missing_nodes,
@@ -1024,9 +1073,15 @@ pub async fn tool_fit_workflow(
     };
     let project_root = state.project_root();
     let desktop = crate::tools::mcp::desktop(None);
-    let model_dirs: Vec<PathBuf> =
-        desktop.as_ref().map(|d| d.models_dirs.clone()).unwrap_or_default();
-    let inv = crate::comfy::comfy_models::inventory(object_info.as_ref(), Some(&project_root), &model_dirs);
+    let model_dirs: Vec<PathBuf> = desktop
+        .as_ref()
+        .map(|d| d.models_dirs.clone())
+        .unwrap_or_default();
+    let inv = crate::comfy::comfy_models::inventory(
+        object_info.as_ref(),
+        Some(&project_root),
+        &model_dirs,
+    );
     if inv.source == Source::None {
         return Err(ToolFailure::new(
             "COMFY_UNREACHABLE",
@@ -1037,8 +1092,7 @@ pub async fn tool_fit_workflow(
         ));
     }
 
-    let known: Option<HashSet<String>> =
-        object_info.as_ref().map(|m| m.keys().cloned().collect());
+    let known: Option<HashSet<String>> = object_info.as_ref().map(|m| m.keys().cloned().collect());
     let model_inputs = crate::comfy::comfy_models::enumerate_model_inputs(object_info.as_ref());
     let report = fit(&graph, &inv, known.as_ref(), Some(&model_inputs));
     Ok(ToolOutcome::new(report.render(), report.to_json()))

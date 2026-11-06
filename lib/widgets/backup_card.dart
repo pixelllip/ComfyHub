@@ -98,8 +98,14 @@ class _BackupCardState extends State<BackupCard> {
         title: const Text('删掉这份备份？'),
         content: Text('删掉之后就不在列表里了，也没法再恢复它。${item.name}'),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
-          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('删掉')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('删掉'),
+          ),
         ],
       ),
     );
@@ -129,7 +135,10 @@ class _BackupCardState extends State<BackupCard> {
           '产物原图不受影响。恢复完成后本地服务会自动重启一次。',
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('取消'),
+          ),
           FilledButton(
             onPressed: () => Navigator.pop(ctx, true),
             child: const Text('恢复'),
@@ -142,7 +151,9 @@ class _BackupCardState extends State<BackupCard> {
     final messenger = ScaffoldMessenger.of(context);
     setState(() => _busy = true);
     try {
-      final prepared = await context.read<LibraryStore>().api.restoreBackup(item.name);
+      final prepared = await context.read<LibraryStore>().api.restoreBackup(
+        item.name,
+      );
       // 标记已经落好：重启一次，后端启动时才会真的换文件
       await _restartService();
       await _reload();
@@ -221,7 +232,8 @@ class _BackupCardState extends State<BackupCard> {
       await launchUrl(Uri.directory(dir));
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('打不开，$e')));
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('打不开，$e')));
     }
   }
 
@@ -261,16 +273,24 @@ class _BackupCardState extends State<BackupCard> {
               Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Icon(Icons.error_outline, size: 18, color: theme.colorScheme.error),
+                  Icon(
+                    Icons.error_outline,
+                    size: 18,
+                    color: theme.colorScheme.error,
+                  ),
                   const SizedBox(width: 8),
                   Expanded(
                     child: Text(
                       _error!,
-                      style: theme.textTheme.bodySmall
-                          ?.copyWith(color: theme.colorScheme.error),
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.error,
+                      ),
                     ),
                   ),
-                  TextButton(onPressed: _loading ? null : _load, child: const Text('重试')),
+                  TextButton(
+                    onPressed: _loading ? null : _load,
+                    child: const Text('重试'),
+                  ),
                 ],
               ),
             ],
@@ -286,7 +306,10 @@ class _BackupCardState extends State<BackupCard> {
                 text: '已准备好恢复到「${_listing!.pending}」，重启本地服务后生效。',
                 action: _busy
                     ? null
-                    : TextButton(onPressed: _finishPending, child: const Text('重启并完成')),
+                    : TextButton(
+                        onPressed: _finishPending,
+                        child: const Text('重启并完成'),
+                      ),
               ),
             ],
             if (_listing?.lastRestore != null) ...[
@@ -357,7 +380,9 @@ class _BackupCardState extends State<BackupCard> {
       child: Row(
         children: [
           Icon(
-            item.isSafety ? Icons.health_and_safety_outlined : Icons.archive_outlined,
+            item.isSafety
+                ? Icons.health_and_safety_outlined
+                : Icons.archive_outlined,
             size: 18,
             color: theme.colorScheme.onSurfaceVariant,
           ),
@@ -433,10 +458,7 @@ class _Banner extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(text, style: theme.textTheme.bodySmall),
-                if (trailing != null) ...[
-                  const SizedBox(height: 2),
-                  trailing!,
-                ],
+                if (trailing != null) ...[const SizedBox(height: 2), trailing!],
               ],
             ),
           ),

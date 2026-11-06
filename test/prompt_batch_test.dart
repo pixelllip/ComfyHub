@@ -20,14 +20,14 @@ import 'package:viewer/state/library_store.dart';
 List<String> _log = [];
 
 Map<String, dynamic> _prompt(int id, String title) => {
-      'id': id,
-      'title': title,
-      'kind': 'IMAGE',
-      'positivePrompt': 'prompt body $id',
-      'favorite': false,
-      'mediaCount': 0,
-      'tags': <Object>[],
-    };
+  'id': id,
+  'title': title,
+  'kind': 'IMAGE',
+  'positivePrompt': 'prompt body $id',
+  'favorite': false,
+  'mediaCount': 0,
+  'tags': <Object>[],
+};
 
 MockClient _mockClient() {
   return MockClient((request) async {
@@ -77,7 +77,10 @@ Future<LibraryStore> _makeStore() async {
   SharedPreferences.setMockInitialValues({});
   final settings = SettingsStore();
   await settings.load();
-  final store = LibraryStore(settings, api: ApiClient(settings.baseUrl, client: _mockClient()));
+  final store = LibraryStore(
+    settings,
+    api: ApiClient(settings.baseUrl, client: _mockClient()),
+  );
   await store.refreshAll();
   return store;
 }

@@ -32,16 +32,16 @@ String _sse(int seq, String type, String dataJson) =>
     'id: $seq\nevent: $type\ndata: $dataJson\n\n';
 
 http.Response _sseResponse(String body) => http.Response.bytes(
-      utf8.encode(body),
-      200,
-      headers: {'content-type': 'text/event-stream; charset=utf-8'},
-    );
+  utf8.encode(body),
+  200,
+  headers: {'content-type': 'text/event-stream; charset=utf-8'},
+);
 
 http.StreamedResponse _jsonResponse(Object? body) => http.StreamedResponse(
-      Stream.value(utf8.encode(jsonEncode(body))),
-      200,
-      headers: {'content-type': 'application/json; charset=utf-8'},
-    );
+  Stream.value(utf8.encode(jsonEncode(body))),
+  200,
+  headers: {'content-type': 'application/json; charset=utf-8'},
+);
 
 /// 假后端的状态与 JSON 路由（SSE 那一路由两个 client 各自处理）。
 class _Fake {
@@ -83,8 +83,12 @@ class _Fake {
           'endpointTrust': 'loopback',
           'enabled': true,
           'revision': 1,
-          'credential': {'configured': true, 'source': 'managed', 'writable': true},
-        }
+          'credential': {
+            'configured': true,
+            'source': 'managed',
+            'writable': true,
+          },
+        },
       ];
     }
     if (path == '/api/ai/providers/local-gw/models') {
@@ -97,7 +101,7 @@ class _Fake {
           'tools': false,
           'reasoning': true,
           'enabled': true,
-        }
+        },
       ];
     }
     if (path == '/api/ai/conversations' && method == 'POST') {
@@ -137,10 +141,12 @@ class _Fake {
         },
       ];
     }
-    if (RegExp(r'^/api/ai/conversations/[^/]+$').hasMatch(path) && method == 'DELETE') {
+    if (RegExp(r'^/api/ai/conversations/[^/]+$').hasMatch(path) &&
+        method == 'DELETE') {
       return {'deleted': true, 'id': path.split('/').last};
     }
-    if (RegExp(r'^/api/ai/conversations/[^/]+$').hasMatch(path) && method == 'PATCH') {
+    if (RegExp(r'^/api/ai/conversations/[^/]+$').hasMatch(path) &&
+        method == 'PATCH') {
       // 重命名 / 归档走这条（后端回的是改完的那一条会话）
       final id = path.split('/').last;
       final patch = jsonDecode(requestBody ?? '{}') as Map<String, dynamic>;
@@ -155,7 +161,11 @@ class _Fake {
     }
     if (RegExp(r'^/api/ai/conversations/[^/]+/runs$').hasMatch(path)) {
       runCount++;
-      return {'runId': 'r$runCount', 'assistantMessageId': 'a1', 'userMessageId': 'u1'};
+      return {
+        'runId': 'r$runCount',
+        'assistantMessageId': 'a1',
+        'userMessageId': 'u1',
+      };
     }
     if (RegExp(r'^/api/ai/conversations/[^/]+/messages$').hasMatch(path)) {
       final convId = path.split('/')[4];
@@ -232,9 +242,10 @@ class _Fake {
     // 与后端 `PUT /api/ai/tools/policy` 同语义，否则切档会静默回落。
     if (path == '/api/ai/tools/policy') {
       if (method == 'PUT') {
-        permissionMode = ((jsonDecode(requestBody ?? '{}') as Map)['permissionMode'] ?? '')
-            .toString()
-            .trim();
+        permissionMode =
+            ((jsonDecode(requestBody ?? '{}') as Map)['permissionMode'] ?? '')
+                .toString()
+                .trim();
         if (permissionMode.isEmpty) permissionMode = 'ask';
       }
       return {
@@ -271,13 +282,26 @@ class _Fake {
     final buffer = StringBuffer(_sse(1, 'run.started', '{"runId":"$runId"}'));
     var seq = 2;
     for (var i = 0; i < deltas; i++) {
-      buffer.write(_sse(seq++, 'text.delta', jsonEncode({'messageId': 'a1', 'text': '段$i，'})));
+      buffer.write(
+        _sse(
+          seq++,
+          'text.delta',
+          jsonEncode({'messageId': 'a1', 'text': '段$i，'}),
+        ),
+      );
     }
-    buffer.write(_sse(
-      seq++,
-      'message.completed',
-      jsonEncode({'messageId': 'a1', 'text': text, 'steps': 0, 'reasoningEffort': 'off'}),
-    ));
+    buffer.write(
+      _sse(
+        seq++,
+        'message.completed',
+        jsonEncode({
+          'messageId': 'a1',
+          'text': text,
+          'steps': 0,
+          'reasoningEffort': 'off',
+        }),
+      ),
+    );
     buffer.write(_sse(seq, 'run.completed', '{"runId":"$runId"}'));
     return buffer.toString();
   }
@@ -289,14 +313,14 @@ class _Fake {
 /// 滚动条跳变（总长估算乱跳）只在"有的气泡一行、有的两屏"时才明显 ——
 /// 用户现场就是这种聊了很久的会话。"总长稳定性"那条用例全靠它量得出东西。
 Map<String, dynamic> _historyMessage(int i) => {
-      'id': 'h$i',
-      'conversationId': _Fake.historyConversationId,
-      'seq': i,
-      'role': i.isOdd ? 'user' : 'assistant',
-      'status': 'complete',
-      'text': _variedText(i),
-      'parts': <Object>[],
-    };
+  'id': 'h$i',
+  'conversationId': _Fake.historyConversationId,
+  'seq': i,
+  'role': i.isOdd ? 'user' : 'assistant',
+  'status': 'complete',
+  'text': _variedText(i),
+  'parts': <Object>[],
+};
 
 String _variedText(int i) {
   if (i % 5 == 0) {
@@ -317,7 +341,8 @@ String _variedText(int i) {
 bool _isSsePath(String path) =>
     path.startsWith('/api/ai/runs/') && path.endsWith('/events');
 
-MockClient _backend(_Fake fake, {int deltas = 1}) => MockClient((request) async {
+MockClient _backend(_Fake fake, {int deltas = 1}) =>
+    MockClient((request) async {
       final path = request.url.path;
       if (_isSsePath(path)) {
         return _sseResponse(fake.textDeltasSse(path.split('/')[4], deltas));
@@ -334,10 +359,15 @@ MockClient _streamingBackend(_Fake fake, Stream<List<int>> events) =>
     MockClient.streaming((request, _) async {
       final path = request.url.path;
       if (_isSsePath(path)) {
-        return http.StreamedResponse(events, 200,
-            headers: {'content-type': 'text/event-stream; charset=utf-8'});
+        return http.StreamedResponse(
+          events,
+          200,
+          headers: {'content-type': 'text/event-stream; charset=utf-8'},
+        );
       }
-      return _jsonResponse(fake.body(request.method, path, requestBody: _requestBody(request)));
+      return _jsonResponse(
+        fake.body(request.method, path, requestBody: _requestBody(request)),
+      );
     });
 
 /// `MockClient.streaming` 给的是 `BaseRequest`（没有 body 字段）——
@@ -347,7 +377,10 @@ String? _requestBody(http.BaseRequest request) =>
 
 AiWorkspaceStore? lastStore;
 
-Future<Widget> _homePage(MockClient client, {ScrollBehavior? scrollBehavior}) async {
+Future<Widget> _homePage(
+  MockClient client, {
+  ScrollBehavior? scrollBehavior,
+}) async {
   SharedPreferences.setMockInitialValues({});
   final settings = SettingsStore();
   await settings.load();
@@ -384,8 +417,11 @@ void main() {
       final hits = markdownParseCacheHits;
       final second = parseMarkdown(source);
 
-      expect(identical(first, second), isTrue,
-          reason: '同一段文本必须复用上一次的解析结果，否则滚动时每次重建都要重解析一遍');
+      expect(
+        identical(first, second),
+        isTrue,
+        reason: '同一段文本必须复用上一次的解析结果，否则滚动时每次重建都要重解析一遍',
+      );
       expect(markdownParseCacheHits, hits + 1);
     });
 
@@ -411,8 +447,11 @@ void main() {
     await tester.tap(find.text('卡顿复现'));
     await tester.pumpAndSettle();
     expect(lastStore!.messages.length, 31, reason: '30 条历史 + 1 条 fixture 助手消息');
-    expect(find.byType(MarkdownText).evaluate().length, greaterThan(1),
-        reason: '一屏里得有不止一条气泡，这个用例才有意义');
+    expect(
+      find.byType(MarkdownText).evaluate().length,
+      greaterThan(1),
+      reason: '一屏里得有不止一条气泡，这个用例才有意义',
+    );
 
     final store = lastStore!;
     final before = aiChatBubbleBuilds;
@@ -424,8 +463,11 @@ void main() {
       await tester.pump();
     }
 
-    expect(aiChatBubbleBuilds, before,
-        reason: '消息没变就不该重建气泡（用户 bug：聊天快速滑动 / 流式输出时卡顿）');
+    expect(
+      aiChatBubbleBuilds,
+      before,
+      reason: '消息没变就不该重建气泡（用户 bug：聊天快速滑动 / 流式输出时卡顿）',
+    );
   });
 
   test('一段回包里的十几个增量只通知个位数次（不是每来一个字就整页刷一次）', () async {
@@ -433,8 +475,10 @@ void main() {
     final text = [for (var i = 0; i < deltas; i++) '段$i，'].join();
     SharedPreferences.setMockInitialValues({});
     final store = AiWorkspaceStore(
-      api: AiApiClient('http://127.0.0.1:8080',
-          client: _backend(_Fake(text: text), deltas: deltas)),
+      api: AiApiClient(
+        'http://127.0.0.1:8080',
+        client: _backend(_Fake(text: text), deltas: deltas),
+      ),
     );
     await store.load();
 
@@ -443,8 +487,7 @@ void main() {
     await store.send('开始流式');
 
     // 修之前：每个 delta 一次 notifyListeners()，12 个增量就是 12+ 次整页重建。
-    expect(notices, lessThan(6),
-        reason: '流式增量必须攒到一帧再通知，不能一个一个字地重建界面');
+    expect(notices, lessThan(6), reason: '流式增量必须攒到一帧再通知，不能一个一个字地重建界面');
     expect(store.messages.last.text, text, reason: '攒着通知不能把内容攒丢');
   });
 
@@ -465,7 +508,9 @@ void main() {
     addTearDown(tester.view.reset);
 
     final events = StreamController<List<int>>();
-    await tester.pumpWidget(await _homePage(_streamingBackend(_Fake(), events.stream)));
+    await tester.pumpWidget(
+      await _homePage(_streamingBackend(_Fake(), events.stream)),
+    );
     await tester.pumpAndSettle();
 
     await tester.enterText(find.byType(TextField).first, '写一份很长的方案');
@@ -473,10 +518,16 @@ void main() {
     await tester.pump();
 
     // 第一批：足够长，列表可滚动且**已经贴底**
-    events.add(utf8.encode(
-      _sse(1, 'run.started', '{"runId":"r1"}') +
-          _sse(2, 'text.delta', jsonEncode({'messageId': 'a1', 'text': _lines(1, 100)})),
-    ));
+    events.add(
+      utf8.encode(
+        _sse(1, 'run.started', '{"runId":"r1"}') +
+            _sse(
+              2,
+              'text.delta',
+              jsonEncode({'messageId': 'a1', 'text': _lines(1, 100)}),
+            ),
+      ),
+    );
     await tester.pump(const Duration(milliseconds: 50));
     // 贴底那一下是 `animateTo`（180ms）：要真的把它跑完再量位置。
     // **不能用 `pumpAndSettle`**：生成期间底部那个"AI 正在生成…"提示里的
@@ -486,12 +537,25 @@ void main() {
       await tester.pump(const Duration(milliseconds: 16));
     }
 
-    final position = tester.state<ScrollableState>(
-      find.descendant(of: find.byKey(const Key('ai-message-list')), matching: find.byType(Scrollable)),
-    ).position;
-    expect(position.maxScrollExtent, greaterThan(200), reason: '得真的能滚，这个用例才有意义');
+    final position = tester
+        .state<ScrollableState>(
+          find.descendant(
+            of: find.byKey(const Key('ai-message-list')),
+            matching: find.byType(Scrollable),
+          ),
+        )
+        .position;
+    expect(
+      position.maxScrollExtent,
+      greaterThan(200),
+      reason: '得真的能滚，这个用例才有意义',
+    );
     final bottom = position.pixels;
-    expect(bottom, closeTo(position.maxScrollExtent, 1.5), reason: '流式输出时本来就该贴底');
+    expect(
+      bottom,
+      closeTo(position.maxScrollExtent, 1.5),
+      reason: '流式输出时本来就该贴底',
+    );
 
     // 用户往上滚**一小段**（30px —— 老判据那个 80px 笼子里的一小步）
     position.jumpTo(bottom - 30);
@@ -500,37 +564,71 @@ void main() {
 
     // AI 还在往外吐字（用户说的"正输出回答的时候"）：每帧都来一段
     for (var i = 0; i < 8; i++) {
-      events.add(utf8.encode(
-        _sse(10 + i, 'text.delta', jsonEncode({'messageId': 'a1', 'text': '\n${_lines(110 + i * 5, 114 + i * 5)}'})),
-      ));
+      events.add(
+        utf8.encode(
+          _sse(
+            10 + i,
+            'text.delta',
+            jsonEncode({
+              'messageId': 'a1',
+              'text': '\n${_lines(110 + i * 5, 114 + i * 5)}',
+            }),
+          ),
+        ),
+      );
       await tester.pump(const Duration(milliseconds: 16));
     }
 
-    expect(position.pixels, closeTo(bottom - 30, 2.0),
-        reason: '用户已经往上翻了，流式的新内容不该把他拽回底部（用户 bug：只滚一小段立即重置到底部）');
-    expect(find.byTooltip('回到最新消息'), findsOneWidget,
-        reason: '翻上去之后右下角要出现"回到最新消息"');
+    expect(
+      position.pixels,
+      closeTo(bottom - 30, 2.0),
+      reason: '用户已经往上翻了，流式的新内容不该把他拽回底部（用户 bug：只滚一小段立即重置到底部）',
+    );
+    expect(
+      find.byTooltip('回到最新消息'),
+      findsOneWidget,
+      reason: '翻上去之后右下角要出现"回到最新消息"',
+    );
 
     // 自己滚回底部：贴底之后必须重新跟随（不然"跟随"就永久失效了）
     position.jumpTo(position.maxScrollExtent);
     await tester.pump();
-    events.add(utf8.encode(
-      _sse(50, 'text.delta', jsonEncode({'messageId': 'a1', 'text': '\n${_lines(200, 204)}'})),
-    ));
+    events.add(
+      utf8.encode(
+        _sse(
+          50,
+          'text.delta',
+          jsonEncode({'messageId': 'a1', 'text': '\n${_lines(200, 204)}'}),
+        ),
+      ),
+    );
     await tester.pump(const Duration(milliseconds: 16));
     // 同样不能用 `pumpAndSettle`：这一轮还没结束，底部提示的转圈动画不会停
     for (var i = 0; i < 20; i++) {
       await tester.pump(const Duration(milliseconds: 16));
     }
-    expect(position.pixels, closeTo(position.maxScrollExtent, 1.5),
-        reason: '滚回底部后要重新贴底（跟随不能永久失效）');
+    expect(
+      position.pixels,
+      closeTo(position.maxScrollExtent, 1.5),
+      reason: '滚回底部后要重新贴底（跟随不能永久失效）',
+    );
 
     // 收尾：正常结束这一轮（免得留下未完成的流 / 定时器）
-    events.add(utf8.encode(
-      _sse(99, 'message.completed',
-          jsonEncode({'messageId': 'a1', 'text': _lines(1, 100), 'steps': 0, 'reasoningEffort': 'off'})) +
-          _sse(100, 'run.completed', '{"runId":"r1"}'),
-    ));
+    events.add(
+      utf8.encode(
+        _sse(
+              99,
+              'message.completed',
+              jsonEncode({
+                'messageId': 'a1',
+                'text': _lines(1, 100),
+                'steps': 0,
+                'reasoningEffort': 'off',
+              }),
+            ) +
+            _sse(100, 'run.completed', '{"runId":"r1"}'),
+      ),
+    );
     unawaited(events.close());
     await tester.pumpAndSettle();
   });
@@ -550,17 +648,25 @@ void main() {
     addTearDown(tester.view.reset);
 
     final events = StreamController<List<int>>();
-    await tester.pumpWidget(await _homePage(_streamingBackend(_Fake(), events.stream)));
+    await tester.pumpWidget(
+      await _homePage(_streamingBackend(_Fake(), events.stream)),
+    );
     await tester.pumpAndSettle();
 
     await tester.enterText(find.byType(TextField).first, '写一份很长的方案');
     await tester.tap(find.text('发送'));
     await tester.pump();
 
-    events.add(utf8.encode(
-      _sse(1, 'run.started', '{"runId":"r1"}') +
-          _sse(2, 'text.delta', jsonEncode({'messageId': 'a1', 'text': _lines(1, 100)})),
-    ));
+    events.add(
+      utf8.encode(
+        _sse(1, 'run.started', '{"runId":"r1"}') +
+            _sse(
+              2,
+              'text.delta',
+              jsonEncode({'messageId': 'a1', 'text': _lines(1, 100)}),
+            ),
+      ),
+    );
     await tester.pump(const Duration(milliseconds: 50));
     // 同样不能用 `pumpAndSettle` —— 这一轮还没结束，底部"AI 正在生成…"那个
     // `CircularProgressIndicator` 是永不停的动画（空转 300ms 足够跑完 180ms 的贴底动画）。
@@ -568,43 +674,84 @@ void main() {
       await tester.pump(const Duration(milliseconds: 16));
     }
 
-    final position = tester.state<ScrollableState>(
-      find.descendant(of: find.byKey(const Key('ai-message-list')), matching: find.byType(Scrollable)).first,
-    ).position;
+    final position = tester
+        .state<ScrollableState>(
+          find
+              .descendant(
+                of: find.byKey(const Key('ai-message-list')),
+                matching: find.byType(Scrollable),
+              )
+              .first,
+        )
+        .position;
     final bottom = position.pixels;
     expect(bottom, closeTo(position.maxScrollExtent, 1.5), reason: '起点是贴底的');
 
     // 拖动期间 AI 还在吐字（这时老代码会不停排跟随动画）
-    events.add(utf8.encode(
-      _sse(3, 'text.delta', jsonEncode({'messageId': 'a1', 'text': '\n${_lines(101, 140)}'})),
-    ));
+    events.add(
+      utf8.encode(
+        _sse(
+          3,
+          'text.delta',
+          jsonEncode({'messageId': 'a1', 'text': '\n${_lines(101, 140)}'}),
+        ),
+      ),
+    );
     await tester.pump(const Duration(milliseconds: 16));
 
-    await tester.drag(find.byKey(const Key('ai-message-list')), const Offset(0, 300));
+    await tester.drag(
+      find.byKey(const Key('ai-message-list')),
+      const Offset(0, 300),
+    );
     await tester.pump();
 
     // 被"拽回底部"的话这里会重新贴到 max；跟手的话应该往上走了 300px 上下。
     // 只钉"确实离开底部"（拖动本身带一点物理摩擦，不写死像素数）。
-    expect(position.pixels, lessThan(bottom - 150),
-        reason: '往上拖了 300px，位置必须真的上去（被动画拽回底部就是这个断言先红）');
+    expect(
+      position.pixels,
+      lessThan(bottom - 150),
+      reason: '往上拖了 300px，位置必须真的上去（被动画拽回底部就是这个断言先红）',
+    );
 
     // 再拖一次：仍然跟手（不是"只有第一次能动"）
-    events.add(utf8.encode(
-      _sse(4, 'text.delta', jsonEncode({'messageId': 'a1', 'text': '\n${_lines(141, 180)}'})),
-    ));
+    events.add(
+      utf8.encode(
+        _sse(
+          4,
+          'text.delta',
+          jsonEncode({'messageId': 'a1', 'text': '\n${_lines(141, 180)}'}),
+        ),
+      ),
+    );
     await tester.pump(const Duration(milliseconds: 16));
     final afterFirst = position.pixels;
-    await tester.drag(find.byKey(const Key('ai-message-list')), const Offset(0, 200));
+    await tester.drag(
+      find.byKey(const Key('ai-message-list')),
+      const Offset(0, 200),
+    );
     await tester.pump();
-    expect(position.pixels, lessThan(afterFirst - 100),
-        reason: '第二次拖动同样要跟手（跟随动画不许把人往回拽）');
+    expect(
+      position.pixels,
+      lessThan(afterFirst - 100),
+      reason: '第二次拖动同样要跟手（跟随动画不许把人往回拽）',
+    );
 
     // 收尾：正常结束这一轮
-    events.add(utf8.encode(
-      _sse(9, 'message.completed',
-          jsonEncode({'messageId': 'a1', 'text': _lines(1, 100), 'steps': 0, 'reasoningEffort': 'off'})) +
-          _sse(10, 'run.completed', '{"runId":"r1"}'),
-    ));
+    events.add(
+      utf8.encode(
+        _sse(
+              9,
+              'message.completed',
+              jsonEncode({
+                'messageId': 'a1',
+                'text': _lines(1, 100),
+                'steps': 0,
+                'reasoningEffort': 'off',
+              }),
+            ) +
+            _sse(10, 'run.completed', '{"runId":"r1"}'),
+      ),
+    );
     unawaited(events.close());
     await tester.pumpAndSettle();
   });
@@ -625,15 +772,24 @@ void main() {
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
 
-    await tester.pumpWidget(await _homePage(_backend(_Fake(text: _lines(1, 60)))));
+    await tester.pumpWidget(
+      await _homePage(_backend(_Fake(text: _lines(1, 60)))),
+    );
     await tester.pumpAndSettle();
 
     // 先在长会话里滚上去（`pixels` 远离底部）
     await tester.tap(find.text('卡顿复现'));
     await tester.pumpAndSettle();
-    final position = tester.state<ScrollableState>(
-      find.descendant(of: find.byKey(const Key('ai-message-list')), matching: find.byType(Scrollable)).first,
-    ).position;
+    final position = tester
+        .state<ScrollableState>(
+          find
+              .descendant(
+                of: find.byKey(const Key('ai-message-list')),
+                matching: find.byType(Scrollable),
+              )
+              .first,
+        )
+        .position;
     expect(position.maxScrollExtent, greaterThan(400), reason: '长会话得真的能滚');
     position.jumpTo(position.maxScrollExtent);
     await tester.pump();
@@ -645,17 +801,24 @@ void main() {
     await tester.tap(find.text('另一个长会话'));
     await tester.pumpAndSettle();
 
-    expect(position.pixels, closeTo(position.maxScrollExtent, 1.5),
-        reason: '换会话要落在最新一条；位置被原样带过去的话会停在半路'
-        '（用户 bug：内容整批换掉后位置还在按旧总长算）');
+    expect(
+      position.pixels,
+      closeTo(position.maxScrollExtent, 1.5),
+      reason:
+          '换会话要落在最新一条；位置被原样带过去的话会停在半路'
+          '（用户 bug：内容整批换掉后位置还在按旧总长算）',
+    );
 
     // 反向再验一次：从半路切回第一条会话，同样要贴底
     position.jumpTo(position.pixels - 800);
     await tester.pump();
     await tester.tap(find.text('卡顿复现'));
     await tester.pumpAndSettle();
-    expect(position.pixels, closeTo(position.maxScrollExtent, 1.5),
-        reason: '两个方向都要重置（不是"只有第一次切才生效"）');
+    expect(
+      position.pixels,
+      closeTo(position.maxScrollExtent, 1.5),
+      reason: '两个方向都要重置（不是"只有第一次切才生效"）',
+    );
 
     // 第三种：切到**内容短得多**的会话。
     // 这是用户实测的那个现场 —— 总长一下子小掉一个数量级，
@@ -665,13 +828,19 @@ void main() {
     expect(position.pixels, greaterThan(1000), reason: '长会话要真的滚得动，这个用例才有意义');
     await tester.tap(find.text('短会话'));
     await tester.pumpAndSettle();
-    expect(position.pixels, closeTo(position.maxScrollExtent, 1.5),
-        reason: '切到短会话同样要落在最新一条（不能被顶到视口外）');
+    expect(
+      position.pixels,
+      closeTo(position.maxScrollExtent, 1.5),
+      reason: '切到短会话同样要落在最新一条（不能被顶到视口外）',
+    );
     final first = find.text('短会话的第一句。');
     expect(first, findsOneWidget, reason: '第一条消息要真的可见');
     final listRect = tester.getRect(find.byKey(const Key('ai-message-list')));
-    expect(tester.getRect(first).top, greaterThanOrEqualTo(listRect.top - 0.5),
-        reason: '第一条消息不能被顶到视口上面去（用户报的"直接消失"）');
+    expect(
+      tester.getRect(first).top,
+      greaterThanOrEqualTo(listRect.top - 0.5),
+      reason: '第一条消息不能被顶到视口上面去（用户报的"直接消失"）',
+    );
   });
 
   // 上面两条证明"总长精确"。这条把结论落到**用户看到的那个滑块**上：
@@ -689,20 +858,30 @@ void main() {
     tester.view.devicePixelRatio = 1.25;
     addTearDown(tester.view.reset);
 
-    await tester.pumpWidget(await _homePage(_backend(_Fake(text: _lines(1, 60)))));
+    await tester.pumpWidget(
+      await _homePage(_backend(_Fake(text: _lines(1, 60)))),
+    );
     await tester.pumpAndSettle();
     await tester.tap(find.text('卡顿复现'));
     await tester.pumpAndSettle();
 
-    final position = tester.state<ScrollableState>(
-      find.descendant(of: find.byKey(const Key('ai-message-list')), matching: find.byType(Scrollable)).first,
-    ).position;
+    final position = tester
+        .state<ScrollableState>(
+          find
+              .descendant(
+                of: find.byKey(const Key('ai-message-list')),
+                matching: find.byType(Scrollable),
+              )
+              .first,
+        )
+        .position;
     position.jumpTo(position.maxScrollExtent);
     await tester.pump();
 
     // 应用用默认的 Material 滚动条：滑块长度与位置就是下面这两个比值。
     double thumbRatio() =>
-        position.viewportDimension / (position.maxScrollExtent + position.viewportDimension);
+        position.viewportDimension /
+        (position.maxScrollExtent + position.viewportDimension);
     double thumbProgress() => position.pixels / position.maxScrollExtent;
 
     final thumbs = <double>{};
@@ -711,19 +890,29 @@ void main() {
       await tester.pump();
       thumbs.add(thumbRatio());
       progress.add(thumbProgress());
-      position.jumpTo((position.pixels - 400).clamp(0.0, position.maxScrollExtent));
+      position.jumpTo(
+        (position.pixels - 400).clamp(0.0, position.maxScrollExtent),
+      );
       await tester.pump();
       if (position.pixels <= 0) break;
     }
 
     // 滑块长度只该随"总长"变；总长精确时它全程一致（旧版估算会一路变短）
-    expect(thumbs.length, 1,
-        reason: '总长精确 → 滑块长度全程不变，实测 ${thumbs.map((t) => t.toStringAsFixed(4)).toSet()}');
+    expect(
+      thumbs.length,
+      1,
+      reason:
+          '总长精确 → 滑块长度全程不变，实测 ${thumbs.map((t) => t.toStringAsFixed(4)).toSet()}',
+    );
     // 位置单调：往上滚，滑块只会越来越靠近顶部，不会往回跳
     for (var i = 1; i < progress.length; i++) {
-      expect(progress[i], lessThanOrEqualTo(progress[i - 1] + 0.001),
-          reason: '往上滚时滑块位置必须单调上移，不能跳回来'
-          '（实测 ${progress.map((t) => t.toStringAsFixed(3)).toList()}）');
+      expect(
+        progress[i],
+        lessThanOrEqualTo(progress[i - 1] + 0.001),
+        reason:
+            '往上滚时滑块位置必须单调上移，不能跳回来'
+            '（实测 ${progress.map((t) => t.toStringAsFixed(3)).toList()}）',
+      );
     }
   });
 
@@ -749,15 +938,28 @@ void main() {
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
 
-    await tester.pumpWidget(await _homePage(_backend(_Fake(text: _lines(1, 60)))));
+    await tester.pumpWidget(
+      await _homePage(_backend(_Fake(text: _lines(1, 60)))),
+    );
     await tester.pumpAndSettle();
     await tester.tap(find.text('卡顿复现'));
     await tester.pumpAndSettle();
 
-    final position = tester.state<ScrollableState>(
-      find.descendant(of: find.byKey(const Key('ai-message-list')), matching: find.byType(Scrollable)).first,
-    ).position;
-    expect(position.maxScrollExtent, greaterThan(400), reason: '得真的能滚，这个用例才有意义');
+    final position = tester
+        .state<ScrollableState>(
+          find
+              .descendant(
+                of: find.byKey(const Key('ai-message-list')),
+                matching: find.byType(Scrollable),
+              )
+              .first,
+        )
+        .position;
+    expect(
+      position.maxScrollExtent,
+      greaterThan(400),
+      reason: '得真的能滚，这个用例才有意义',
+    );
 
     // 往上滚一趟，记录总长的每一次变化（含幅度与方向）
     final values = <double>{position.maxScrollExtent};
@@ -765,7 +967,9 @@ void main() {
     var shrinks = 0;
     var last = position.maxScrollExtent;
     for (var i = 0; i < 60; i++) {
-      position.jumpTo((position.pixels - 120).clamp(0.0, position.maxScrollExtent));
+      position.jumpTo(
+        (position.pixels - 120).clamp(0.0, position.maxScrollExtent),
+      );
       await tester.pump();
       final max = position.maxScrollExtent;
       if ((max - last).abs() > 0.5) {
@@ -779,13 +983,19 @@ void main() {
 
     final lo = values.reduce((a, b) => a < b ? a : b);
     final hi = values.reduce((a, b) => a > b ? a : b);
-    debugPrint('[总长稳定性] 变化=$changes 回缩=$shrinks 范围=${lo.toStringAsFixed(0)}~'
-        '${hi.toStringAsFixed(0)} 摆动=${((hi - lo) / hi * 100).toStringAsFixed(1)}%');
+    debugPrint(
+      '[总长稳定性] 变化=$changes 回缩=$shrinks 范围=${lo.toStringAsFixed(0)}~'
+      '${hi.toStringAsFixed(0)} 摆动=${((hi - lo) / hi * 100).toStringAsFixed(1)}%',
+    );
     // 精确总长下这里必须是 **0 次**：滚动条滑块的长度与位置全程不变。
     // 退回懒构建（`ListView.builder`）实测 13~24 次变化、5~12 次回缩，必红。
-    expect(changes, 0,
-        reason: '总长一变，滚动条滑块的长度/位置就跟着变（用户 bug：跳变 1/3 进度）'
-        '（实测 $lo~$hi，变化 $changes 次，回缩 $shrinks 次）');
+    expect(
+      changes,
+      0,
+      reason:
+          '总长一变，滚动条滑块的长度/位置就跟着变（用户 bug：跳变 1/3 进度）'
+          '（实测 $lo~$hi，变化 $changes 次，回缩 $shrinks 次）',
+    );
   });
 
   // 上一条只证明"滚动时不变"，这条证明**精确**：总长必须等于真实内容高度。
@@ -799,28 +1009,46 @@ void main() {
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
 
-    await tester.pumpWidget(await _homePage(_backend(_Fake(text: _lines(1, 60)))));
+    await tester.pumpWidget(
+      await _homePage(_backend(_Fake(text: _lines(1, 60)))),
+    );
     await tester.pumpAndSettle();
     await tester.tap(find.text('卡顿复现'));
     await tester.pumpAndSettle();
 
-    final position = tester.state<ScrollableState>(
-      find.descendant(of: find.byKey(const Key('ai-message-list')), matching: find.byType(Scrollable)).first,
-    ).position;
+    final position = tester
+        .state<ScrollableState>(
+          find
+              .descendant(
+                of: find.byKey(const Key('ai-message-list')),
+                matching: find.byType(Scrollable),
+              )
+              .first,
+        )
+        .position;
 
     // 滚到底：`pixels` 必须真的等于 `maxScrollExtent`（估算偏高时会被夹住/滚进空白）
     position.jumpTo(position.maxScrollExtent);
     await tester.pump();
-    expect(position.pixels, closeTo(position.maxScrollExtent, 0.5),
-        reason: '精确总长下能真的滚到最底，不会滚进估算多出来的空白');
+    expect(
+      position.pixels,
+      closeTo(position.maxScrollExtent, 0.5),
+      reason: '精确总长下能真的滚到最底，不会滚进估算多出来的空白',
+    );
 
     // 独立参照：最后一条气泡的底边相对视口底部的位置。
     // 贴底时它必须正好落在视口下沿（差的就是最后那段 6px 内边距 + 6px 滚动视图内边距）。
-    final last = tester.getRect(find.byKey(ValueKey(lastStore!.messages.last.id)));
+    final last = tester.getRect(
+      find.byKey(ValueKey(lastStore!.messages.last.id)),
+    );
     final viewport = tester.getRect(find.byKey(const Key('ai-message-list')));
-    expect(last.bottom, closeTo(viewport.bottom - 6, 1.0),
-        reason: '贴底后最后一条气泡的底边要正好落在视口下沿；'
-        '对不上说明总长与真实内容高度不一致（那就是"估算"）');
+    expect(
+      last.bottom,
+      closeTo(viewport.bottom - 6, 1.0),
+      reason:
+          '贴底后最后一条气泡的底边要正好落在视口下沿；'
+          '对不上说明总长与真实内容高度不一致（那就是"估算"）',
+    );
   });
 
   // 用户 bug（2026-09-20）的性能现场：DevTools 抓到一帧 **Build 24.7ms**（UI Jank），
@@ -856,9 +1084,13 @@ void main() {
       await tester.pump();
     }
 
-    expect(sidebarBuilds, before,
-        reason: '侧栏跟消息/进度无关：那些通知不该让它重建'
-        '（修之前每通知一次重建一次，DevTools 上一帧 Build 24.7ms）');
+    expect(
+      sidebarBuilds,
+      before,
+      reason:
+          '侧栏跟消息/进度无关：那些通知不该让它重建'
+          '（修之前每通知一次重建一次，DevTools 上一帧 Build 24.7ms）',
+    );
 
     // 反例：会话列表真的变了（重命名）时，侧栏**必须**跟着更新
     await store.renameConversation('改个名字');
@@ -873,7 +1105,9 @@ void main() {
     addTearDown(tester.view.reset);
 
     final events = StreamController<List<int>>();
-    await tester.pumpWidget(await _homePage(_streamingBackend(_Fake(), events.stream)));
+    await tester.pumpWidget(
+      await _homePage(_streamingBackend(_Fake(), events.stream)),
+    );
     await tester.pumpAndSettle();
 
     await tester.enterText(find.byType(TextField).first, '想一个长方案');
@@ -881,10 +1115,16 @@ void main() {
     await tester.pump();
 
     // 前 8 行思考（正好一块）+ 展开
-    events.add(utf8.encode(
-      _sse(1, 'run.started', '{"runId":"r1"}') +
-          _sse(2, 'reasoning.delta', jsonEncode({'messageId': 'a1', 'text': _lines(1, 8)})),
-    ));
+    events.add(
+      utf8.encode(
+        _sse(1, 'run.started', '{"runId":"r1"}') +
+            _sse(
+              2,
+              'reasoning.delta',
+              jsonEncode({'messageId': 'a1', 'text': _lines(1, 8)}),
+            ),
+      ),
+    );
     await tester.pump(const Duration(milliseconds: 50));
     await tester.tap(find.text('思考过程'));
     await tester.pump();
@@ -896,31 +1136,55 @@ void main() {
     final firstWidget = tester.widget<Text>(firstBlock);
 
     // 再来 32 行：内容比 320px 的视口高得多
-    events.add(utf8.encode(
-      _sse(3, 'reasoning.delta', jsonEncode({'messageId': 'a1', 'text': '\n${_lines(9, 40)}'})),
-    ));
+    events.add(
+      utf8.encode(
+        _sse(
+          3,
+          'reasoning.delta',
+          jsonEncode({'messageId': 'a1', 'text': '\n${_lines(9, 40)}'}),
+        ),
+      ),
+    );
     await tester.pump(const Duration(milliseconds: 50));
     await tester.pump(); // 帧后回调里那次 jumpTo 需要再来一帧
 
     // ① 展开后要能看到最新一行（用户 bug："展开后无法及时刷新"）
     final lastLine = find.textContaining('第 40 行思考内容');
     final viewport = tester.getRect(
-      find.ancestor(of: lastLine, matching: find.byType(SingleChildScrollView)).first,
+      find
+          .ancestor(of: lastLine, matching: find.byType(SingleChildScrollView))
+          .first,
     );
-    expect(tester.getRect(lastLine).bottom, lessThanOrEqualTo(viewport.bottom + 0.5),
-        reason: '贴底时内层视口要跟到最新一行，否则新思考长在可视区外面，看起来像没刷新');
+    expect(
+      tester.getRect(lastLine).bottom,
+      lessThanOrEqualTo(viewport.bottom + 0.5),
+      reason: '贴底时内层视口要跟到最新一行，否则新思考长在可视区外面，看起来像没刷新',
+    );
 
     // ② 没变过的块要复用上一次的 widget（用户 bug："展开后卡顿"）：
     //    复用之后 Flutter 连 RenderParagraph 的布局都不重做，每帧只重排最后一块。
-    expect(identical(tester.widget<Text>(firstBlock), firstWidget), isTrue,
-        reason: '第 1 块没有变化，必须还是同一个 widget 实例（否则每帧都在重排整段思考）');
+    expect(
+      identical(tester.widget<Text>(firstBlock), firstWidget),
+      isTrue,
+      reason: '第 1 块没有变化，必须还是同一个 widget 实例（否则每帧都在重排整段思考）',
+    );
 
     // 收尾：正常结束这一轮（免得留下未完成的流 / 定时器）
-    events.add(utf8.encode(
-      _sse(4, 'message.completed',
-          jsonEncode({'messageId': 'a1', 'text': '想完了。', 'steps': 0, 'reasoningEffort': 'off'})) +
-          _sse(5, 'run.completed', '{"runId":"r1"}'),
-    ));
+    events.add(
+      utf8.encode(
+        _sse(
+              4,
+              'message.completed',
+              jsonEncode({
+                'messageId': 'a1',
+                'text': '想完了。',
+                'steps': 0,
+                'reasoningEffort': 'off',
+              }),
+            ) +
+            _sse(5, 'run.completed', '{"runId":"r1"}'),
+      ),
+    );
     // 注意：**不能 await 这次 close** —— 单订阅 controller 的 done future 要等消费方收尾，
     // `await close()` 会把用例挂死（本机踩过一次，表现为整个 test 进程不动了）。
     unawaited(events.close());
@@ -940,7 +1204,9 @@ void main() {
     addTearDown(tester.view.reset);
 
     final events = StreamController<List<int>>();
-    await tester.pumpWidget(await _homePage(_streamingBackend(_Fake(), events.stream)));
+    await tester.pumpWidget(
+      await _homePage(_streamingBackend(_Fake(), events.stream)),
+    );
     await tester.pumpAndSettle();
 
     // 还没发消息：不该莫名其妙冒出一个"正在生成"
@@ -952,14 +1218,23 @@ void main() {
     await tester.pump();
 
     // 首字还没到：气泡里就该有一个转圈（而不是一片空白）
-    expect(find.byType(CircularProgressIndicator), findsOneWidget,
-        reason: '首字未到时，正在生成的那条气泡里要有一个转圈');
+    expect(
+      find.byType(CircularProgressIndicator),
+      findsOneWidget,
+      reason: '首字未到时，正在生成的那条气泡里要有一个转圈',
+    );
 
     // 已经有正文了：转圈**依然在**（用户要的就是"只要还在生成就一直转"）
-    events.add(utf8.encode(
-      _sse(1, 'run.started', '{"runId":"r1"}') +
-          _sse(2, 'text.delta', jsonEncode({'messageId': 'a1', 'text': _lines(1, 40)})),
-    ));
+    events.add(
+      utf8.encode(
+        _sse(1, 'run.started', '{"runId":"r1"}') +
+            _sse(
+              2,
+              'text.delta',
+              jsonEncode({'messageId': 'a1', 'text': _lines(1, 40)}),
+            ),
+      ),
+    );
     await tester.pump(const Duration(milliseconds: 50));
 
     final spinner = find.byType(CircularProgressIndicator);
@@ -971,22 +1246,41 @@ void main() {
       find.byKey(ValueKey('ai-bubble-a1')).first,
     );
     final spinnerRect = tester.getRect(spinner);
-    expect(bubbleRect.contains(spinnerRect.center), isTrue,
-        reason: '转圈必须在正在生成的那条气泡里，不能飘在页面底部');
+    expect(
+      bubbleRect.contains(spinnerRect.center),
+      isTrue,
+      reason: '转圈必须在正在生成的那条气泡里，不能飘在页面底部',
+    );
     expect(spinnerRect.bottom, lessThanOrEqualTo(bubbleRect.bottom + 0.5));
-    expect(bubbleRect.bottom - spinnerRect.bottom, lessThan(24),
-        reason: '要贴在气泡底部（在末尾内容的下方）');
+    expect(
+      bubbleRect.bottom - spinnerRect.bottom,
+      lessThan(24),
+      reason: '要贴在气泡底部（在末尾内容的下方）',
+    );
 
     // 这一轮结束：转圈必须收掉，不能一直转
-    events.add(utf8.encode(
-      _sse(3, 'message.completed',
-          jsonEncode({'messageId': 'a1', 'text': '写好了。', 'steps': 0, 'reasoningEffort': 'off'})) +
-          _sse(4, 'run.completed', '{"runId":"r1"}'),
-    ));
+    events.add(
+      utf8.encode(
+        _sse(
+              3,
+              'message.completed',
+              jsonEncode({
+                'messageId': 'a1',
+                'text': '写好了。',
+                'steps': 0,
+                'reasoningEffort': 'off',
+              }),
+            ) +
+            _sse(4, 'run.completed', '{"runId":"r1"}'),
+      ),
+    );
     unawaited(events.close());
     await tester.pumpAndSettle();
-    expect(find.byType(CircularProgressIndicator), findsNothing,
-        reason: '这一轮结束后要收掉（否则会一直转下去）');
+    expect(
+      find.byType(CircularProgressIndicator),
+      findsNothing,
+      reason: '这一轮结束后要收掉（否则会一直转下去）',
+    );
   });
 
   // 用户建议（2026-09-20）①：「实时权限切换，并在正在运行的回复气泡中展示相关信息」。
@@ -999,20 +1293,31 @@ void main() {
     addTearDown(tester.view.reset);
 
     final events = StreamController<List<int>>();
-    await tester.pumpWidget(await _homePage(_streamingBackend(_Fake(), events.stream)));
+    await tester.pumpWidget(
+      await _homePage(_streamingBackend(_Fake(), events.stream)),
+    );
     await tester.pumpAndSettle();
 
     await tester.enterText(find.byType(TextField).first, '帮我改一下工作流');
     await tester.tap(find.text('发送'));
     await tester.pump();
-    events.add(utf8.encode(
-      _sse(1, 'run.started', '{"runId":"r1"}') +
-          _sse(2, 'text.delta', jsonEncode({'messageId': 'a1', 'text': _lines(1, 8)})),
-    ));
+    events.add(
+      utf8.encode(
+        _sse(1, 'run.started', '{"runId":"r1"}') +
+            _sse(
+              2,
+              'text.delta',
+              jsonEncode({'messageId': 'a1', 'text': _lines(1, 8)}),
+            ),
+      ),
+    );
     await tester.pump(const Duration(milliseconds: 50));
 
     // 默认档是「询问」，气泡里要写着
-    expect(find.textContaining('本轮权限是 ${AiToolPolicy.modeAskLabel}'), findsOneWidget);
+    expect(
+      find.textContaining('本轮权限是 ${AiToolPolicy.modeAskLabel}'),
+      findsOneWidget,
+    );
 
     // 生成**还没结束**就切档（转圈动画会让 pumpAndSettle 超时，这里只能 pump）
     await tester.tap(find.text(AiToolPolicy.modeAskLabel));
@@ -1023,22 +1328,35 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
     await tester.pump(const Duration(milliseconds: 100));
 
-    expect(find.textContaining('本轮权限是 ${AiToolPolicy.modeFullLabel}'), findsOneWidget,
-        reason: '切档要**当场**反映到正在生成的回复气泡里（用户建议 ①）');
+    expect(
+      find.textContaining('本轮权限是 ${AiToolPolicy.modeFullLabel}'),
+      findsOneWidget,
+      reason: '切档要**当场**反映到正在生成的回复气泡里（用户建议 ①）',
+    );
 
     // 这一轮结束：那个"实时"标记跟着转圈一起收掉（后端没按轮存权限档，
     // 留下来就是一条假的历史记录）
-    events.add(utf8.encode(
-      _sse(3, 'message.completed',
-          jsonEncode({'messageId': 'a1', 'text': '改好了。', 'steps': 0, 'reasoningEffort': 'off'})) +
-          _sse(4, 'run.completed', '{"runId":"r1"}'),
-    ));
+    events.add(
+      utf8.encode(
+        _sse(
+              3,
+              'message.completed',
+              jsonEncode({
+                'messageId': 'a1',
+                'text': '改好了。',
+                'steps': 0,
+                'reasoningEffort': 'off',
+              }),
+            ) +
+            _sse(4, 'run.completed', '{"runId":"r1"}'),
+      ),
+    );
     unawaited(events.close());
     await tester.pumpAndSettle();
-    expect(find.textContaining('本轮权限是 '), findsNothing,
-        reason: '历史气泡上挂"现在的档位"是假的，必须收掉');
+    expect(
+      find.textContaining('本轮权限是 '),
+      findsNothing,
+      reason: '历史气泡上挂"现在的档位"是假的，必须收掉',
+    );
   });
 }
-
-
-

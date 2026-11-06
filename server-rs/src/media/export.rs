@@ -263,11 +263,15 @@ fn load_rows(state: &AppState, req: &ExportRequest) -> Result<Vec<ExportRow>, Ap
             let prompt = match row.get::<_, Option<i64>>("prompt_id_joined")? {
                 Some(id) => Some(PromptInfo {
                     id,
-                    title: row.get::<_, Option<String>>("prompt_title")?.unwrap_or_default(),
+                    title: row
+                        .get::<_, Option<String>>("prompt_title")?
+                        .unwrap_or_default(),
                     kind: row
                         .get::<_, Option<String>>("prompt_kind")?
                         .unwrap_or_else(|| "IMAGE".to_string()),
-                    positive: row.get::<_, Option<String>>("positive_prompt")?.unwrap_or_default(),
+                    positive: row
+                        .get::<_, Option<String>>("positive_prompt")?
+                        .unwrap_or_default(),
                     negative: row.get("negative_prompt")?,
                     checkpoint: row.get("checkpoint")?,
                     loras: row.get("loras")?,
@@ -370,7 +374,9 @@ fn prepare_root(raw: &str, media_dir: &Path) -> Result<PathBuf, ApiError> {
         )));
     }
     let root = fs::canonicalize(&requested).map_err(|e| {
-        ApiError::bad_request(format!("导出目录不可用（不存在或没有访问权限）：{text}（{e}）"))
+        ApiError::bad_request(format!(
+            "导出目录不可用（不存在或没有访问权限）：{text}（{e}）"
+        ))
     })?;
     if !root.is_dir() {
         return Err(ApiError::bad_request(format!("导出目标不是文件夹：{text}")));
@@ -451,7 +457,12 @@ fn sanitize_component(raw: &str, fallback: &str) -> String {
     }
 
     // 保留名只看**主干**（`CON.txt` 同样打不开）。
-    let stem = out.split('.').next().unwrap_or("").trim().to_ascii_uppercase();
+    let stem = out
+        .split('.')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_ascii_uppercase();
     if RESERVED_NAMES.contains(&stem.as_str()) {
         out = format!("_{out}");
     }
@@ -619,10 +630,8 @@ pub fn export(state: &AppState, req: ExportRequest) -> Result<ExportReport, ApiE
                     } else {
                         format!("算法分组-{}", collection.id)
                     };
-                    let base = sanitize_component(
-                        collection.title.as_deref().unwrap_or(""),
-                        &fallback,
-                    );
+                    let base =
+                        sanitize_component(collection.title.as_deref().unwrap_or(""), &fallback);
                     CollectionAccum {
                         id: collection.id,
                         title: collection.title.clone(),
@@ -650,7 +659,10 @@ pub fn export(state: &AppState, req: ExportRequest) -> Result<ExportReport, ApiE
                     folder.folder = claimed;
                     folder.folder_rel = format!("{kind_dir_name}/{}", folder.folder);
                 }
-                (folder.dir.join(&folder.folder), Some(folder.folder_rel.clone()))
+                (
+                    folder.dir.join(&folder.folder),
+                    Some(folder.folder_rel.clone()),
+                )
             }
             None => (kind_path.clone(), None),
         };
@@ -723,23 +735,19 @@ pub fn export(state: &AppState, req: ExportRequest) -> Result<ExportReport, ApiE
                     api_cache.insert(run_key.clone(), api_graph_for(state, &run_key));
                 }
                 if let Some(Some(graph)) = api_cache.get(&run_key) {
-                    let text = serde_json::to_string_pretty(graph)
-                        .unwrap_or_else(|_| graph.to_string());
+                    let text =
+                        serde_json::to_string_pretty(graph).unwrap_or_else(|_| graph.to_string());
                     match workflows.write(&text, "api") {
                         Ok(rel) => api_rel = Some(rel),
-                        Err(e) => warnings.push(format!(
-                            "产物 #{} 的 API 节点图没写出去：{e}",
-                            row.id
-                        )),
+                        Err(e) => {
+                            warnings.push(format!("产物 #{} 的 API 节点图没写出去：{e}", row.id))
+                        }
                     }
                 }
             }
         }
 
-        let rel_file = rel_string(
-            dest.strip_prefix(&root)
-                .unwrap_or(dest.as_path()),
-        );
+        let rel_file = rel_string(dest.strip_prefix(&root).unwrap_or(dest.as_path()));
         let meta_name = book.claim(&dest_dir, &file_name, "json", row.id);
         let meta_rel = match collection_rel.as_deref() {
             Some(dir) => format!("{dir}/{meta_name}"),
@@ -824,8 +832,7 @@ pub fn export(state: &AppState, req: ExportRequest) -> Result<ExportReport, ApiE
             "folder": accum.folder_rel,
             "members": accum.members,
         });
-        let text = serde_json::to_string_pretty(&payload)
-            .unwrap_or_else(|_| payload.to_string());
+        let text = serde_json::to_string_pretty(&payload).unwrap_or_else(|_| payload.to_string());
         if let Err(e) = fs::write(accum.dir.join(&accum.folder).join("collection.json"), text) {
             warnings.push(format!(
                 "集合 #{} 的 collection.json 没写出去：{e}",
@@ -869,8 +876,8 @@ pub fn export(state: &AppState, req: ExportRequest) -> Result<ExportReport, ApiE
         "failed": &failed,
         "warnings": &warnings,
     });
-    let manifest_text =
-        serde_json::to_string_pretty(&manifest).map_err(|e| ApiError::internal(format!("清单序列化失败：{e}")))?;
+    let manifest_text = serde_json::to_string_pretty(&manifest)
+        .map_err(|e| ApiError::internal(format!("清单序列化失败：{e}")))?;
     fs::write(&manifest_path, manifest_text.as_bytes())
         .map_err(|e| ApiError::internal(format!("导出清单写入失败：{e}")))?;
 

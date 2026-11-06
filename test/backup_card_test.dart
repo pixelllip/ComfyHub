@@ -171,7 +171,10 @@ void main() {
     // 取消：一个请求都不该发
     await tester.tap(find.widgetWithText(TextButton, '取消'));
     await tester.pumpAndSettle();
-    expect(backend.calls.where((c) => c.startsWith('POST /api/system/restore')), isEmpty);
+    expect(
+      backend.calls.where((c) => c.startsWith('POST /api/system/restore')),
+      isEmpty,
+    );
     expect(restarted, 0);
 
     await tester.tap(find.widgetWithText(TextButton, '恢复').first);
@@ -202,10 +205,12 @@ void main() {
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
 
-    final backend = _Backend(items: [
-      Map<String, dynamic>.from(_backup),
-      Map<String, dynamic>.from(_safety),
-    ])..pending = 'comfyhub-20261106-131211.db';
+    final backend = _Backend(
+      items: [
+        Map<String, dynamic>.from(_backup),
+        Map<String, dynamic>.from(_safety),
+      ],
+    )..pending = 'comfyhub-20261106-131211.db';
     await _pump(tester, backend);
 
     expect(tester.takeException(), isNull);
@@ -213,10 +218,12 @@ void main() {
   });
 
   testWidgets('删除要确认，删完列表里就没有了', (tester) async {
-    final backend = _Backend(items: [
-      Map<String, dynamic>.from(_backup),
-      Map<String, dynamic>.from(_safety),
-    ]);
+    final backend = _Backend(
+      items: [
+        Map<String, dynamic>.from(_backup),
+        Map<String, dynamic>.from(_safety),
+      ],
+    );
     await _pump(tester, backend);
     expect(find.text(_backup['name'] as String), findsOneWidget);
     expect(find.text(_safety['name'] as String), findsOneWidget);

@@ -93,7 +93,9 @@ class NsfwBlur extends StatelessWidget {
                         color: Colors.white.withValues(alpha: 0.92),
                         fontSize: 11.5,
                         fontWeight: FontWeight.w600,
-                        shadows: const [Shadow(blurRadius: 3, color: Colors.black87)],
+                        shadows: const [
+                          Shadow(blurRadius: 3, color: Colors.black87),
+                        ],
                       ),
                     ),
                   ],

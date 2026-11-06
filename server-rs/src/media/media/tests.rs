@@ -35,6 +35,9 @@ fn inline_disposition_carries_a_utf8_fallback() {
 
 #[test]
 fn tag_param_is_normalized_and_deduped() {
-    assert_eq!(parse_tag_param(Some(" 赛博 , 国风,赛博")), vec!["赛博", "国风"]);
+    assert_eq!(
+        parse_tag_param(Some(" 赛博 , 国风,赛博")),
+        vec!["赛博", "国风"]
+    );
     assert!(parse_tag_param(None).is_empty());
 }

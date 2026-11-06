@@ -38,8 +38,10 @@ class InterfaceSettingsPage extends StatelessWidget {
           estimatedHeight: 150,
           child: Card(
             child: ListTile(
-              contentPadding:
-                  const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              contentPadding: const EdgeInsets.symmetric(
+                horizontal: 16,
+                vertical: 8,
+              ),
               title: const Text('明暗模式'),
               subtitle: const Text('深色 / 浅色 / 跟随系统'),
               trailing: SegmentedButton<AppThemeMode>(
@@ -51,9 +53,7 @@ class InterfaceSettingsPage extends StatelessWidget {
                 onSelectionChanged: (picked) =>
                     settings.setThemeMode(picked.first),
                 showSelectedIcon: false,
-                style: const ButtonStyle(
-                  visualDensity: VisualDensity.compact,
-                ),
+                style: const ButtonStyle(visualDensity: VisualDensity.compact),
               ),
             ),
           ),
@@ -123,8 +123,10 @@ class InterfaceSettingsPage extends StatelessWidget {
           estimatedHeight: 150,
           child: Card(
             child: ListTile(
-              contentPadding:
-                  const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              contentPadding: const EdgeInsets.symmetric(
+                horizontal: 16,
+                vertical: 8,
+              ),
               title: const Text('每页数量'),
               subtitle: Text('当前 ${settings.pageSize} 条'),
               trailing: SizedBox(

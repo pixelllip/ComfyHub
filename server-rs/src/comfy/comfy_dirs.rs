@@ -80,9 +80,15 @@ pub fn looks_like_comfy(dir: &Path) -> (bool, String) {
     } else if has_output && (has_models || has_input) {
         (true, "有 output/ 与 models/ 或 input/".into())
     } else if has_main {
-        (false, "有 main.py 但没有 comfy/（可能不是 ComfyUI 根目录）".into())
+        (
+            false,
+            "有 main.py 但没有 comfy/（可能不是 ComfyUI 根目录）".into(),
+        )
     } else if has_output {
-        (false, "只有 output/，没有 models/ 或 input/（不太像 ComfyUI 根目录）".into())
+        (
+            false,
+            "只有 output/，没有 models/ 或 input/（不太像 ComfyUI 根目录）".into(),
+        )
     } else {
         (false, "没有 main.py / comfy/ / output/".into())
     }
@@ -163,11 +169,20 @@ fn user_workflow_dirs(home: &Path, out: &mut Vec<PathBuf>) {
     if !user.is_dir() {
         return;
     }
-    let Ok(entries) = std::fs::read_dir(&user) else { return };
+    let Ok(entries) = std::fs::read_dir(&user) else {
+        return;
+    };
     let mut users: Vec<PathBuf> = entries.flatten().map(|e| e.path()).collect();
-    users.sort_by_key(|p| p.file_name().map(|n| n.to_string_lossy().to_lowercase()).unwrap_or_default());
+    users.sort_by_key(|p| {
+        p.file_name()
+            .map(|n| n.to_string_lossy().to_lowercase())
+            .unwrap_or_default()
+    });
     for u in users.into_iter().take(MAX_USERS) {
-        if u.symlink_metadata().map(|m| m.file_type().is_symlink()).unwrap_or(false) {
+        if u.symlink_metadata()
+            .map(|m| m.file_type().is_symlink())
+            .unwrap_or(false)
+        {
             continue;
         }
         if !u.is_dir() {
@@ -186,7 +201,11 @@ fn user_workflow_dirs(home: &Path, out: &mut Vec<PathBuf>) {
 
 /// 绝对化 + 规范化 + `canonicalize`（不是目录就返回 None）。
 fn real_dir(p: &Path) -> Option<PathBuf> {
-    let abs = if p.is_absolute() { p.to_path_buf() } else { std::env::current_dir().ok()?.join(p) };
+    let abs = if p.is_absolute() {
+        p.to_path_buf()
+    } else {
+        std::env::current_dir().ok()?.join(p)
+    };
     if !abs.is_dir() {
         return None;
     }
@@ -320,12 +339,22 @@ pub fn locate(project_root: &Path, configured_output: Option<&str>) -> ComfyLoca
     .find_map(|(key, kind)| consider(env_path(key), kind, &mut candidates));
 
     // 3) 项目根下的 comfyui（源码树 / 发布包都能带上这一份）
-    let local = consider(Some(project_root.join("comfyui")), "项目内的 comfyui 目录", &mut candidates);
+    let local = consider(
+        Some(project_root.join("comfyui")),
+        "项目内的 comfyui 目录",
+        &mut candidates,
+    );
 
     // 4) 常见安装位置
     let located = env_home
         .or(local)
-        .or_else(|| consider(Some(PathBuf::from("D:\\ComfyUI")), "常见位置 D:\\ComfyUI", &mut candidates))
+        .or_else(|| {
+            consider(
+                Some(PathBuf::from("D:\\ComfyUI")),
+                "常见位置 D:\\ComfyUI",
+                &mut candidates,
+            )
+        })
         .or_else(|| {
             consider(
                 Some(PathBuf::from("D:\\ComfyUI_windows_portable\\ComfyUI")),
@@ -371,7 +400,9 @@ pub fn locate(project_root: &Path, configured_output: Option<&str>) -> ComfyLoca
 
 /// 按"最可能命中"的顺序找 ComfyUI 的**根目录**（[`locate`] 只要 home 那一半）。
 pub fn find_home(project_root: &Path, configured_output: Option<&str>) -> Option<PathBuf> {
-    locate(project_root, configured_output).home.map(PathBuf::from)
+    locate(project_root, configured_output)
+        .home
+        .map(PathBuf::from)
 }
 
 /// `%USERPROFILE%\Documents\ComfyUI`（ComfyUI Desktop 的默认安装位置）。
@@ -383,9 +414,14 @@ pub(crate) fn search_user_profile() -> Option<PathBuf> {
         base.join("ComfyUI"),
         // ComfyUI Desktop（新版）常把源码检出放在 Documents\comfy\ComfyUI
         base.join("Documents").join("comfy").join("ComfyUI"),
-        base.join("AppData").join("Local").join("Programs").join("@comfyorgcomfyui-electron"),
+        base.join("AppData")
+            .join("Local")
+            .join("Programs")
+            .join("@comfyorgcomfyui-electron"),
     ];
-    tries.into_iter().find(|p| p.is_dir() && looks_like_comfy(p).0)
+    tries
+        .into_iter()
+        .find(|p| p.is_dir() && looks_like_comfy(p).0)
 }
 
 /// ComfyUI **Desktop**（新版 Electron 启动器）的嵌套布局。
@@ -414,7 +450,9 @@ pub(crate) fn search_desktop_installs() -> Option<PathBuf> {
             if !base.is_dir() {
                 continue;
             }
-            let Ok(entries) = std::fs::read_dir(&base) else { continue };
+            let Ok(entries) = std::fs::read_dir(&base) else {
+                continue;
+            };
             let mut children: Vec<PathBuf> = entries.flatten().map(|e| e.path()).collect();
             children.sort();
             for child in children {
@@ -443,14 +481,19 @@ pub(crate) fn search_desktop_packages() -> Option<PathBuf> {
         if !root.is_dir() {
             continue;
         }
-        let Ok(entries) = std::fs::read_dir(&root) else { continue };
+        let Ok(entries) = std::fs::read_dir(&root) else {
+            continue;
+        };
         let mut children: Vec<PathBuf> = entries.flatten().map(|e| e.path()).collect();
         children.sort();
         for child in children {
             if !child.is_dir() {
                 continue;
             }
-            let name = child.file_name().map(|n| n.to_string_lossy().to_lowercase()).unwrap_or_default();
+            let name = child
+                .file_name()
+                .map(|n| n.to_string_lossy().to_lowercase())
+                .unwrap_or_default();
             if name.contains("comfy") && looks_like_comfy(&child).0 {
                 return Some(plain_path(child.canonicalize().unwrap_or(child)));
             }
@@ -493,7 +536,9 @@ pub fn auto_read_roots(project_root: &Path, configured_output: Option<&str>) -> 
     // 只放**一级**，而且**绝不放盘根**（放了就等于整盘只读，那是另一档权限）。
     let snapshot = out.clone();
     for root in snapshot {
-        let Some(parent) = root.parent() else { continue };
+        let Some(parent) = root.parent() else {
+            continue;
+        };
         if parent.parent().is_none() {
             continue;
         }
@@ -519,7 +564,11 @@ fn seed_roots(project_root: &Path, configured_output: Option<&str>) -> Vec<PathB
             .file_name()
             .map(|n| n.to_string_lossy().eq_ignore_ascii_case("output"))
             .unwrap_or(false);
-        let target = if looks_like_output { dir.parent().map(|p| p.to_path_buf()) } else { Some(dir) };
+        let target = if looks_like_output {
+            dir.parent().map(|p| p.to_path_buf())
+        } else {
+            Some(dir)
+        };
         if let Some(t) = target {
             if !out.contains(&t) {
                 out.push(t);
@@ -555,30 +604,44 @@ fn scan_nearby(start: &Path, out: &mut Vec<PathBuf>, depth: usize, budget: &mut 
     if depth > MAX_DEPTH || *budget == 0 {
         return;
     }
-    let Ok(entries) = std::fs::read_dir(start) else { return };
+    let Ok(entries) = std::fs::read_dir(start) else {
+        return;
+    };
     let mut children: Vec<PathBuf> = entries.flatten().map(|e| e.path()).collect();
-    children.sort_by_key(|p| p.file_name().map(|n| n.to_string_lossy().to_lowercase()).unwrap_or_default());
+    children.sort_by_key(|p| {
+        p.file_name()
+            .map(|n| n.to_string_lossy().to_lowercase())
+            .unwrap_or_default()
+    });
 
     for child in children {
         if *budget == 0 {
             return;
         }
         *budget -= 1;
-        if child.symlink_metadata().map(|m| m.file_type().is_symlink()).unwrap_or(false) {
+        if child
+            .symlink_metadata()
+            .map(|m| m.file_type().is_symlink())
+            .unwrap_or(false)
+        {
             continue;
         }
         if !child.is_dir() {
             continue;
         }
-        let Ok(real) = child.canonicalize().map(plain_path) else { continue };
+        let Ok(real) = child.canonicalize().map(plain_path) else {
+            continue;
+        };
         if looks_like_comfy(&real).0 {
             if !out.contains(&real) {
                 out.push(real);
             }
             continue;
         }
-        let name_looks_comfy =
-            real.file_name().map(|n| n.to_string_lossy().to_lowercase().contains("comfy")).unwrap_or(false);
+        let name_looks_comfy = real
+            .file_name()
+            .map(|n| n.to_string_lossy().to_lowercase().contains("comfy"))
+            .unwrap_or(false);
         if depth == 1 || name_looks_comfy {
             scan_nearby(&real, out, depth + 1, budget);
         }
@@ -595,14 +658,20 @@ fn scan_nearby(start: &Path, out: &mut Vec<PathBuf>, depth: usize, budget: &mut 
 /// 只列**真的能用**的：非 `.json` / 空文件 / 坏 JSON / 既不是界面格式也不是 API 格式的
 /// 全部跳过（列出来只会让 AI 白跑一趟 `comfy_load_workflow`）。
 pub fn scan(dirs: &[PathBuf], query: Option<&str>, limit: usize) -> Vec<WorkflowFile> {
-    let q = query.map(|s| s.trim().to_lowercase()).filter(|s| !s.is_empty());
+    let q = query
+        .map(|s| s.trim().to_lowercase())
+        .filter(|s| !s.is_empty());
     let cap = limit.clamp(1, MAX_FILES);
     let mut out: Vec<WorkflowFile> = Vec::new();
     for dir in dirs {
-        let Ok(entries) = std::fs::read_dir(dir) else { continue };
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            continue;
+        };
         for entry in entries.flatten() {
             let path = entry.path();
-            let Some(name) = path.file_name().map(|n| n.to_string_lossy().to_string()) else { continue };
+            let Some(name) = path.file_name().map(|n| n.to_string_lossy().to_string()) else {
+                continue;
+            };
             if name.starts_with('.') {
                 continue;
             }
@@ -617,13 +686,20 @@ pub fn scan(dirs: &[PathBuf], query: Option<&str>, limit: usize) -> Vec<Workflow
             if !path.is_file() {
                 continue;
             }
-            let Ok(meta) = std::fs::metadata(&path) else { continue };
+            let Ok(meta) = std::fs::metadata(&path) else {
+                continue;
+            };
             let size = meta.len();
             if size == 0 || size > MAX_FILE_BYTES {
                 continue;
             }
-            let Ok(bytes) = std::fs::read(&path) else { continue };
-            let modified_at = meta.modified().ok().map(crate::infra::iso_time::from_system_time);
+            let Ok(bytes) = std::fs::read(&path) else {
+                continue;
+            };
+            let modified_at = meta
+                .modified()
+                .ok()
+                .map(crate::infra::iso_time::from_system_time);
             let format = format_of(&bytes);
             // 解析不出来、或者既不是界面格式也不是 API 格式的一律不列：
             // 它们 `comfy_load_workflow` 一定失败（NOT_A_WORKFLOW）
@@ -652,8 +728,11 @@ pub fn scan(dirs: &[PathBuf], query: Option<&str>, limit: usize) -> Vec<Workflow
 /// 与 `WorkflowConvert.isUiWorkflow` / `HistoryEntry.isNodeGraph` 的判据**完全同一份** ——
 /// 两边不一致就会出现"列表说能跑、加载说不是工作流"这种最难查的分歧。
 fn format_of(bytes: &[u8]) -> String {
-    let Ok(text) = std::str::from_utf8(bytes) else { return "unknown".into() };
-    let Ok(serde_json::Value::Object(root)) = serde_json::from_str::<serde_json::Value>(text) else {
+    let Ok(text) = std::str::from_utf8(bytes) else {
+        return "unknown".into();
+    };
+    let Ok(serde_json::Value::Object(root)) = serde_json::from_str::<serde_json::Value>(text)
+    else {
         return "unknown".into();
     };
     if crate::comfy::capture::history::is_node_graph(&root) {
@@ -682,9 +761,13 @@ pub struct WorkflowQuery {
 }
 
 /// `GET /api/capture/locate` 的处理体。
-pub fn locate_json(state: &crate::web::routes::AppState) -> Result<ComfyLocation, crate::web::routes::ApiError> {
+pub fn locate_json(
+    state: &crate::web::routes::AppState,
+) -> Result<ComfyLocation, crate::web::routes::ApiError> {
     // 读配置失败不该让探测整个失败：那只是"有没有配过"这一个输入（Kotlin 用的是 runCatching）
-    let configured = crate::comfy::capture::capture_config(state).unwrap_or_default().output_dir;
+    let configured = crate::comfy::capture::capture_config(state)
+        .unwrap_or_default()
+        .output_dir;
     Ok(locate(&state.project_root(), configured.as_deref()))
 }
 
@@ -748,7 +831,10 @@ pub fn list_json(
     obj.insert("total".into(), serde_json::json!(total));
     obj.insert(
         "dirs".into(),
-        serde_json::json!(dirs.iter().map(|d| d.to_string_lossy().to_string()).collect::<Vec<_>>()),
+        serde_json::json!(dirs
+            .iter()
+            .map(|d| d.to_string_lossy().to_string())
+            .collect::<Vec<_>>()),
     );
     obj.insert(
         "files".into(),
@@ -786,11 +872,16 @@ pub fn list_json(
             ),
         );
     } else if shown.is_empty() {
-        let dirs_text =
-            dirs.iter().map(|d| d.to_string_lossy().to_string()).collect::<Vec<_>>().join(", ");
+        let dirs_text = dirs
+            .iter()
+            .map(|d| d.to_string_lossy().to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
         let message = match query.map(str::trim).filter(|s| !s.is_empty()) {
             None => format!("这些目录里一个 .json 工作流都没有：{dirs_text}"),
-            Some(q) => format!("本机工作流里没有文件名匹配「{q}」的（共 {total} 份，可以不带 query 再列一次）"),
+            Some(q) => format!(
+                "本机工作流里没有文件名匹配「{q}」的（共 {total} 份，可以不带 query 再列一次）"
+            ),
         };
         obj.insert("message".into(), serde_json::json!(message));
     }

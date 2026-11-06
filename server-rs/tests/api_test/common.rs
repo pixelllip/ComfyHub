@@ -156,12 +156,7 @@ pub(crate) async fn get_json(app: axum::Router, uri: &str) -> (StatusCode, Value
 }
 
 pub(crate) fn keys(value: &Value) -> Vec<String> {
-    let mut out: Vec<String> = value
-        .as_object()
-        .expect("对象")
-        .keys()
-        .cloned()
-        .collect();
+    let mut out: Vec<String> = value.as_object().expect("对象").keys().cloned().collect();
     out.sort();
     out
 }
@@ -173,7 +168,9 @@ pub(crate) fn keys(value: &Value) -> Vec<String> {
 /// `error` 是不是一个"机器码"（`NOT_FOUND` / `BAD_REQUEST` / `SCHEMA_MISMATCH` 那种全大写）。
 pub(crate) fn looks_like_a_machine_code(text: &str) -> bool {
     !text.is_empty()
-        && text.chars().all(|c| c.is_ascii_uppercase() || c == '_' || c.is_ascii_digit())
+        && text
+            .chars()
+            .all(|c| c.is_ascii_uppercase() || c == '_' || c.is_ascii_digit())
 }
 // ===========================================================================
 //  本机工作流文件（P4 第 14 步）：GET /api/capture/workflows
@@ -183,7 +180,10 @@ pub(crate) fn looks_like_a_machine_code(text: &str) -> bool {
 ///
 /// 目录布局照**发布包/源码树的真实形状**摆：`<根>\storage\media` 是产物目录，
 /// 于是 `AppState::project_root()` 算出来就是 `<根>`（与脚本传的 `COMFYHUB_PROJECT_ROOT` 等价）。
-pub(crate) fn state_with_workflow_files() -> (comfyhub_server_rs::web::routes::AppState, std::path::PathBuf) {
+pub(crate) fn state_with_workflow_files() -> (
+    comfyhub_server_rs::web::routes::AppState,
+    std::path::PathBuf,
+) {
     let root = comfyhub_server_rs::infra::testpaths::scratch("api-workflows");
 
     // 项目内的 comfyui（三份目录来源里的第 ② 份）
@@ -192,7 +192,11 @@ pub(crate) fn state_with_workflow_files() -> (comfyhub_server_rs::web::routes::A
     std::fs::write(home.join("main.py"), "print(1)").unwrap();
     let workflows = home.join("user").join("default").join("workflows");
     std::fs::create_dir_all(&workflows).unwrap();
-    std::fs::write(workflows.join("krea2_hd.json"), r#"{"nodes":[],"links":[]}"#).unwrap();
+    std::fs::write(
+        workflows.join("krea2_hd.json"),
+        r#"{"nodes":[],"links":[]}"#,
+    )
+    .unwrap();
     std::fs::write(workflows.join("broken.json"), "{ 不是 json").unwrap();
 
     let media = root.join("storage").join("media");
@@ -208,25 +212,35 @@ pub(crate) fn state_with_workflow_files() -> (comfyhub_server_rs::web::routes::A
     )
     .unwrap();
 
-    (comfyhub_server_rs::web::routes::AppState::new(conn, ":memory:", media), home)
+    (
+        comfyhub_server_rs::web::routes::AppState::new(conn, ":memory:", media),
+        home,
+    )
 }
 // ===========================================================================
 //  上传（P4 第 6 步）：multipart 多文件 + sha256 判重
 // ===========================================================================
 
 /// 造一个 multipart 体（省得引第三方 crate：这一小段手工拼就够，且**结构与 curl 一致**）。
-pub(crate) fn multipart_body(boundary: &str, fields: &[(&str, &str)], files: &[(&str, &str, &[u8])]) -> Vec<u8> {
+pub(crate) fn multipart_body(
+    boundary: &str,
+    fields: &[(&str, &str)],
+    files: &[(&str, &str, &[u8])],
+) -> Vec<u8> {
     let mut out = Vec::new();
     for (name, value) in fields {
         out.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
-        out.extend_from_slice(format!("Content-Disposition: form-data; name=\"{name}\"\r\n\r\n").as_bytes());
+        out.extend_from_slice(
+            format!("Content-Disposition: form-data; name=\"{name}\"\r\n\r\n").as_bytes(),
+        );
         out.extend_from_slice(value.as_bytes());
         out.extend_from_slice(b"\r\n");
     }
     for (name, filename, bytes) in files {
         out.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
         out.extend_from_slice(
-            format!("Content-Disposition: form-data; name=\"{name}\"; filename=\"{filename}\"\r\n").as_bytes(),
+            format!("Content-Disposition: form-data; name=\"{name}\"; filename=\"{filename}\"\r\n")
+                .as_bytes(),
         );
         out.extend_from_slice(b"Content-Type: application/octet-stream\r\n\r\n");
         out.extend_from_slice(bytes);
@@ -236,12 +250,19 @@ pub(crate) fn multipart_body(boundary: &str, fields: &[(&str, &str)], files: &[(
     out
 }
 
-pub(crate) async fn post_multipart(app: axum::Router, uri: &str, body: Vec<u8>) -> (StatusCode, Value) {
+pub(crate) async fn post_multipart(
+    app: axum::Router,
+    uri: &str,
+    body: Vec<u8>,
+) -> (StatusCode, Value) {
     let boundary = "----comfyhubtest";
     let request = Request::builder()
         .method("POST")
         .uri(uri)
-        .header("content-type", format!("multipart/form-data; boundary={boundary}"))
+        .header(
+            "content-type",
+            format!("multipart/form-data; boundary={boundary}"),
+        )
         .body(Body::from(body))
         .unwrap();
     let response = app.oneshot(request).await.expect("请求");
@@ -273,7 +294,10 @@ pub(crate) fn push_item(kind: &str, ref_id: &str, payload: serde_json::Value) ->
     serde_json::json!({ "kind": kind, "refId": ref_id, "op": "upsert", "payload": payload })
 }
 
-pub(crate) async fn push(state: &comfyhub_server_rs::web::routes::AppState, batch: Vec<serde_json::Value>) -> (StatusCode, Value) {
+pub(crate) async fn push(
+    state: &comfyhub_server_rs::web::routes::AppState,
+    batch: Vec<serde_json::Value>,
+) -> (StatusCode, Value) {
     send_json(
         router_for(state.clone()),
         "POST",
@@ -326,9 +350,17 @@ pub(crate) fn seed_run_kit(state: &comfyhub_server_rs::web::routes::AppState) {
 
     let storage = state.media_dir().parent().unwrap().to_path_buf();
     std::fs::create_dir_all(storage.join("ai").join("skills").join("demo-skill")).unwrap();
-    std::fs::write(storage.join("ai").join("memory.md"), "- 用户偏好 4:3 画幅\n").unwrap();
     std::fs::write(
-        storage.join("ai").join("skills").join("demo-skill").join("SKILL.md"),
+        storage.join("ai").join("memory.md"),
+        "- 用户偏好 4:3 画幅\n",
+    )
+    .unwrap();
+    std::fs::write(
+        storage
+            .join("ai")
+            .join("skills")
+            .join("demo-skill")
+            .join("SKILL.md"),
         "---\nname: demo-skill\ndescription: 演示用\nwhenToUse: 演示\n---\n正文\n",
     )
     .unwrap();
@@ -370,7 +402,9 @@ pub(crate) async fn send_as(
             None => Body::empty(),
         })
         .unwrap();
-    request.extensions_mut().insert(axum::extract::ConnectInfo(addr));
+    request
+        .extensions_mut()
+        .insert(axum::extract::ConnectInfo(addr));
     let response = app.oneshot(request).await.expect("请求");
     let status = response.status();
     let bytes = response.into_body().collect().await.unwrap().to_bytes();
@@ -379,7 +413,11 @@ pub(crate) async fn send_as(
 }
 
 /// 往 `app_settings` 里写一行（闸门状态就存在那儿：`auth.pairing`）。
-pub(crate) fn put_setting(state: &comfyhub_server_rs::web::routes::AppState, key: &str, value: &str) {
+pub(crate) fn put_setting(
+    state: &comfyhub_server_rs::web::routes::AppState,
+    key: &str,
+    value: &str,
+) {
     state
         .with(|conn| {
             conn.execute(
@@ -392,13 +430,18 @@ pub(crate) fn put_setting(state: &comfyhub_server_rs::web::routes::AppState, key
         .unwrap();
 }
 
-pub(crate) fn read_setting(state: &comfyhub_server_rs::web::routes::AppState, key: &str) -> Option<Value> {
+pub(crate) fn read_setting(
+    state: &comfyhub_server_rs::web::routes::AppState,
+    key: &str,
+) -> Option<Value> {
     state
         .with(|conn| {
             let raw: Option<String> = conn
-                .query_row("SELECT v FROM app_settings WHERE k = ?1", rusqlite::params![key], |r| {
-                    r.get::<_, Option<String>>(0)
-                })
+                .query_row(
+                    "SELECT v FROM app_settings WHERE k = ?1",
+                    rusqlite::params![key],
+                    |r| r.get::<_, Option<String>>(0),
+                )
                 .ok()
                 .flatten();
             Ok(raw)
@@ -408,7 +451,10 @@ pub(crate) fn read_setting(state: &comfyhub_server_rs::web::routes::AppState, ke
 }
 
 /// 闸门开着 + 一台已配对设备 + 一个全局令牌。
-pub(crate) fn seed_auth(state: &comfyhub_server_rs::web::routes::AppState, allow_credentials: bool) {
+pub(crate) fn seed_auth(
+    state: &comfyhub_server_rs::web::routes::AppState,
+    allow_credentials: bool,
+) {
     let file = serde_json::json!({
         "schema": "comfyhub-inbound-auth/2",
         "enabled": true,
@@ -504,7 +550,9 @@ pub(crate) async fn read_request(socket: &mut tokio::net::TcpStream) -> Vec<u8> 
                 Err(_) => break,
             }
             if !headers_done {
-                let Some(pos) = all.windows(4).position(|w| w == b"\r\n\r\n") else { continue };
+                let Some(pos) = all.windows(4).position(|w| w == b"\r\n\r\n") else {
+                    continue;
+                };
                 headers_done = true;
                 complete_at = content_length_of(&all[..pos]).map(|len| pos + 4 + len);
             }
@@ -524,7 +572,11 @@ pub(crate) async fn read_request(socket: &mut tokio::net::TcpStream) -> Vec<u8> 
 
 /// 请求行（第一个 `\n` 之前那一段）—— 假网关的分流判据读的就是它。
 pub(crate) fn request_line_of(raw: &[u8]) -> String {
-    String::from_utf8_lossy(raw).lines().next().unwrap_or_default().to_string()
+    String::from_utf8_lossy(raw)
+        .lines()
+        .next()
+        .unwrap_or_default()
+        .to_string()
 }
 
 /// 从请求头里取 `content-length`（没有 / 认不出 → `None`）。
@@ -560,7 +612,9 @@ pub(crate) async fn fake_gateway() -> (String, tokio::task::JoinHandle<()>) {
     let hits = std::sync::Arc::new(AtomicUsize::new(0));
     let handle = tokio::spawn(async move {
         loop {
-            let Ok((mut socket, _)) = listener.accept().await else { break };
+            let Ok((mut socket, _)) = listener.accept().await else {
+                break;
+            };
             let hits = hits.clone();
             tokio::spawn(async move {
                 // 读干净（含 body）再回 —— 不读就 close 会回 RST，客户端把它读成
@@ -603,7 +657,9 @@ pub(crate) async fn fake_gateway() -> (String, tokio::task::JoinHandle<()>) {
                 } else if truncated {
                     // 第一轮"被输出长度截断"：usage 已给（这轮的账已经发生），但话没说完
                     frames.push(r#"{"choices":[{"finish_reason":"length"}]}"#);
-                    frames.push(r#"{"choices":[],"usage":{"prompt_tokens":7,"completion_tokens":3}}"#);
+                    frames.push(
+                        r#"{"choices":[],"usage":{"prompt_tokens":7,"completion_tokens":3}}"#,
+                    );
                     frames.push("[DONE]");
                 } else {
                     frames.push(r#"{"choices":[{"delta":{"content":"呀"}}]}"#);
@@ -649,7 +705,10 @@ pub(crate) fn point_at_gateway(state: &comfyhub_server_rs::web::routes::AppState
 ///
 /// `tool` 是模型要调的工具名；`arguments` 是它给的参数 JSON。
 /// 第二次请求（带上工具结果的那一轮）回一段正文。
-pub(crate) async fn fake_tool_gateway(tool: &'static str, arguments: &'static str) -> (String, tokio::task::JoinHandle<()>) {
+pub(crate) async fn fake_tool_gateway(
+    tool: &'static str,
+    arguments: &'static str,
+) -> (String, tokio::task::JoinHandle<()>) {
     use tokio::io::AsyncWriteExt;
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -657,7 +716,9 @@ pub(crate) async fn fake_tool_gateway(tool: &'static str, arguments: &'static st
     let handle = tokio::spawn(async move {
         let mut round = 0;
         loop {
-            let Ok((mut socket, _)) = listener.accept().await else { break };
+            let Ok((mut socket, _)) = listener.accept().await else {
+                break;
+            };
             round += 1;
             tokio::spawn(async move {
                 // 读干净再回（理由见 [`read_request`]）—— 这里不看请求内容，只按**轮次**分流。
@@ -683,7 +744,8 @@ pub(crate) async fn fake_tool_gateway(tool: &'static str, arguments: &'static st
                     vec![
                         r#"{"choices":[{"delta":{"content":"工具用完了"}}]}"#.to_string(),
                         r#"{"choices":[{"finish_reason":"stop"}]}"#.to_string(),
-                        r#"{"choices":[],"usage":{"prompt_tokens":11,"completion_tokens":5}}"#.to_string(),
+                        r#"{"choices":[],"usage":{"prompt_tokens":11,"completion_tokens":5}}"#
+                            .to_string(),
                         "[DONE]".to_string(),
                     ]
                 };
@@ -706,7 +768,10 @@ pub(crate) async fn fake_tool_gateway(tool: &'static str, arguments: &'static st
 }
 
 /// 写工具权限策略（与 Kotlin `ToolPolicyConfig` 同一份 JSON）。
-pub(crate) fn set_policy(state: &comfyhub_server_rs::web::routes::AppState, json: serde_json::Value) {
+pub(crate) fn set_policy(
+    state: &comfyhub_server_rs::web::routes::AppState,
+    json: serde_json::Value,
+) {
     state
         .write(|tx| {
             tx.execute(
@@ -737,7 +802,9 @@ pub(crate) async fn scripted_tool_gateway(
     let handle = tokio::spawn(async move {
         let mut round = 0usize;
         loop {
-            let Ok((mut socket, _)) = listener.accept().await else { break };
+            let Ok((mut socket, _)) = listener.accept().await else {
+                break;
+            };
             let calls = script.get(round).cloned();
             let counter = counter.clone();
             round += 1;
@@ -751,7 +818,8 @@ pub(crate) async fn scripted_tool_gateway(
                     Some(calls) if !calls.is_empty() => {
                         let mut out = Vec::new();
                         for (index, (tool, arguments)) in calls.iter().enumerate() {
-                            let call_id = counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+                            let call_id =
+                                counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
                             out.push(format!(
                                 r#"{{"choices":[{{"delta":{{"tool_calls":[{{"index":{index},"id":"call_{call_id}","function":{{"name":"{tool}","arguments":""}}}}]}}}}]}}"#
                             ));
@@ -808,7 +876,9 @@ pub(crate) async fn reasoning_echo_gateway() -> (
     let handle = tokio::spawn(async move {
         let mut round = 0usize;
         loop {
-            let Ok((mut socket, _)) = listener.accept().await else { break };
+            let Ok((mut socket, _)) = listener.accept().await else {
+                break;
+            };
             round += 1;
             let recorder = recorder.clone();
             tokio::spawn(async move {
@@ -848,7 +918,11 @@ pub(crate) async fn reasoning_echo_gateway() -> (
                     ]
                 };
                 for frame in frames {
-                    if socket.write_all(format!("data: {frame}\n\n").as_bytes()).await.is_err() {
+                    if socket
+                        .write_all(format!("data: {frame}\n\n").as_bytes())
+                        .await
+                        .is_err()
+                    {
                         return;
                     }
                     let _ = socket.flush().await;
@@ -879,7 +953,10 @@ pub(crate) async fn start_run_and_wait(
 }
 
 /// 助手那条消息的正文（历史视图里看到的东西）。
-pub(crate) fn assistant_text(state: &comfyhub_server_rs::web::routes::AppState, assistant_id: &str) -> String {
+pub(crate) fn assistant_text(
+    state: &comfyhub_server_rs::web::routes::AppState,
+    assistant_id: &str,
+) -> String {
     let messages = comfyhub_server_rs::ai::conversations::list_messages(state, "conv-0").unwrap();
     messages
         .iter()
@@ -895,7 +972,10 @@ pub(crate) fn assistant_text(state: &comfyhub_server_rs::web::routes::AppState, 
 /// 所以 `wait_for_run` 一返回，事件**可能还没落库** —— 直接查库就是一条偶发红灯
 /// （2026-10 全量并行跑撞到过两次，单跑必绿）。
 /// 生产侧的订阅路径正是这么做的：`SseStream::poll_next` 每轮读库前先 `bus.flush`，同一个理由。
-pub(crate) fn event_types(state: &comfyhub_server_rs::web::routes::AppState, run_id: &str) -> Vec<String> {
+pub(crate) fn event_types(
+    state: &comfyhub_server_rs::web::routes::AppState,
+    run_id: &str,
+) -> Vec<String> {
     let _ = state.bus.flush(state, run_id);
     state
         .with(|conn| {
@@ -922,14 +1002,13 @@ pub(crate) fn event_payload(
     let _ = state.bus.flush(state, run_id);
     let raw: Option<String> = state
         .with(|conn| {
-            conn
-                .query_row(
-                    "SELECT payload_json FROM ai_run_events WHERE run_id = ?1 AND event_type = ?2 \
+            conn.query_row(
+                "SELECT payload_json FROM ai_run_events WHERE run_id = ?1 AND event_type = ?2 \
                      ORDER BY seq LIMIT 1",
-                    rusqlite::params![run_id, kind],
-                    |row| row.get::<_, String>(0),
-                )
-                .optional()
+                rusqlite::params![run_id, kind],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
         })
         .unwrap();
     raw.map(|text| serde_json::from_str(&text).expect("payload_json 必须是合法 JSON"))
@@ -939,7 +1018,10 @@ pub(crate) fn event_payload(
 ///
 /// 上游是 `127.0.0.1:9`（没人监听），所以失败得很快；这里给足 3 秒并在超时后断言失败，
 /// 而不是"睡固定时长碰运气"。
-pub(crate) async fn wait_for_run(state: &comfyhub_server_rs::web::routes::AppState, run_id: &str) -> serde_json::Value {
+pub(crate) async fn wait_for_run(
+    state: &comfyhub_server_rs::web::routes::AppState,
+    run_id: &str,
+) -> serde_json::Value {
     // ⚠ 这个上限是**"卡住了"的判据**，不是性能判据：假网关跑完一轮通常几十毫秒，
     //   但 150 个用例并行（每个都起自己的 axum + tokio 任务）时实测能压到秒级 ——
     //   原来写 60×50ms = 3s，负载高时会**偶发**在这里超（2026-09-30 撞到一次：
@@ -966,7 +1048,9 @@ pub(crate) async fn read_sse_with_headers(
     query: &str,
     headers: &[(&str, &str)],
 ) -> String {
-    let mut builder = Request::builder().uri(format!("{uri}{query}")).header("accept", "text/event-stream");
+    let mut builder = Request::builder()
+        .uri(format!("{uri}{query}"))
+        .header("accept", "text/event-stream");
     for (name, value) in headers {
         builder = builder.header(*name, *value);
     }
@@ -988,9 +1072,14 @@ pub(crate) async fn read_sse_with_headers(
 // ---------------------------------------------------------------------------
 
 /// 夹具里的两个 skill 根：`<root>/skills/builtin`（只读）与 `<root>/ai/skills`（投放口）。
-pub(crate) fn skill_dirs(state: &comfyhub_server_rs::web::routes::AppState) -> (std::path::PathBuf, std::path::PathBuf) {
+pub(crate) fn skill_dirs(
+    state: &comfyhub_server_rs::web::routes::AppState,
+) -> (std::path::PathBuf, std::path::PathBuf) {
     let storage = state.media_dir().parent().unwrap().to_path_buf();
-    (state.project_root().join("skills").join("builtin"), storage.join("ai").join("skills"))
+    (
+        state.project_root().join("skills").join("builtin"),
+        storage.join("ai").join("skills"),
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -1028,7 +1117,11 @@ pub(crate) fn parse_sse(body: &str) -> Vec<(Option<i64>, String, Value)> {
 // ---------------------------------------------------------------------------
 
 /// 往夹具里加一个 provider（凭据端点的三段判定里第一段就是 `requireProvider`）。
-pub(crate) fn add_provider(state: &comfyhub_server_rs::web::routes::AppState, id: &str, reference: Option<&str>) {
+pub(crate) fn add_provider(
+    state: &comfyhub_server_rs::web::routes::AppState,
+    id: &str,
+    reference: Option<&str>,
+) {
     state
         .with(|conn| {
             conn.execute(
@@ -1044,7 +1137,6 @@ pub(crate) fn add_provider(state: &comfyhub_server_rs::web::routes::AppState, id
         .expect("插 provider");
 }
 
-
 // ===========================================================================
 //  桌面文件工具五件（P4 第 40 步）
 //
@@ -1058,11 +1150,22 @@ pub(crate) async fn call_tool(
     state: &comfyhub_server_rs::web::routes::AppState,
     name: &str,
     arguments: serde_json::Value,
-) -> Result<comfyhub_server_rs::tools::tools::ToolOutcome, comfyhub_server_rs::tools::tools::ToolFailure> {
+) -> Result<
+    comfyhub_server_rs::tools::tools::ToolOutcome,
+    comfyhub_server_rs::tools::tools::ToolFailure,
+> {
     let policy = comfyhub_server_rs::tools::policy::ToolPolicy::load(state).unwrap();
     let mut session = comfyhub_server_rs::tools::tools::ToolSession::default();
-    comfyhub_server_rs::tools::tools::execute(state, &policy, "run-x", "conv-x", name, &arguments, &mut session)
-        .await
+    comfyhub_server_rs::tools::tools::execute(
+        state,
+        &policy,
+        "run-x",
+        "conv-x",
+        name,
+        &arguments,
+        &mut session,
+    )
+    .await
 }
 
 // ===========================================================================
@@ -1088,13 +1191,22 @@ pub(crate) fn write_test_png(path: &std::path::Path, w: u32, h: u32) {
 }
 
 /// 往夹具里塞一条附件（盘上那份真图由调用方写）。
-pub(crate) fn seed_attachment(state: &comfyhub_server_rs::web::routes::AppState, id: &str, name: &str, kind: &str) {
+pub(crate) fn seed_attachment(
+    state: &comfyhub_server_rs::web::routes::AppState,
+    id: &str,
+    name: &str,
+    kind: &str,
+) {
     let dto = comfyhub_server_rs::media::attachments::AttachmentDto {
         id: id.to_string(),
         name: name.to_string(),
         kind: kind.to_string(),
         modality: kind.to_string(),
-        mime_type: if kind == "image" { "image/png".into() } else { "video/mp4".into() },
+        mime_type: if kind == "image" {
+            "image/png".into()
+        } else {
+            "video/mp4".into()
+        },
         size_bytes: 1024,
         width: None,
         height: None,
@@ -1108,7 +1220,10 @@ pub(crate) fn seed_attachment(state: &comfyhub_server_rs::web::routes::AppState,
 
 /// 把"当前生效的输出目录"钉到 `<root>/shared/output`（ComfyUI Desktop 那种
 /// 程序与共享数据分家的布局），并在旁边建出 `input`。
-pub(crate) fn configure_shared_output(state: &comfyhub_server_rs::web::routes::AppState, root: &std::path::Path) {
+pub(crate) fn configure_shared_output(
+    state: &comfyhub_server_rs::web::routes::AppState,
+    root: &std::path::Path,
+) {
     let shared = root.join("shared");
     std::fs::create_dir_all(shared.join("input")).unwrap();
     std::fs::create_dir_all(shared.join("output")).unwrap();
@@ -1143,13 +1258,17 @@ pub(crate) fn configure_shared_output(state: &comfyhub_server_rs::web::routes::A
 /// 假 ComfyUI：只认 `/queue`，回一份队列（形状与真 ComfyUI 一致：
 /// `[number, prompt_id, graph, extra_data, outputs]`，标题在
 /// `extra_data.extra_pnginfo.workflow.extra.title`）。
-pub(crate) async fn fake_comfy_queue(queue_json: &'static str) -> (String, tokio::task::JoinHandle<()>) {
+pub(crate) async fn fake_comfy_queue(
+    queue_json: &'static str,
+) -> (String, tokio::task::JoinHandle<()>) {
     use tokio::io::AsyncWriteExt;
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let handle = tokio::spawn(async move {
         loop {
-            let Ok((mut socket, _)) = listener.accept().await else { break };
+            let Ok((mut socket, _)) = listener.accept().await else {
+                break;
+            };
             tokio::spawn(async move {
                 // 读干净再回（理由见 [`read_request`]）；这一档只看轮次/路径，不看内容
                 let _ = read_request(&mut socket).await;
@@ -1205,7 +1324,8 @@ pub(crate) fn tiny_png(width: u32, height: u32) -> Vec<u8> {
     let img: ImageBuffer<Rgb<u8>, Vec<u8>> =
         ImageBuffer::from_pixel(width, height, Rgb([10, 20, 30]));
     let mut out = Vec::new();
-    img.write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png).unwrap();
+    img.write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png)
+        .unwrap();
     out
 }
 
@@ -1228,7 +1348,9 @@ pub(crate) async fn fake_comfy_full(
     let addr = listener.local_addr().unwrap();
     let handle = tokio::spawn(async move {
         loop {
-            let Ok((mut socket, _)) = listener.accept().await else { break };
+            let Ok((mut socket, _)) = listener.accept().await else {
+                break;
+            };
             tokio::spawn(async move {
                 // 读干净再回（理由见 [`read_request`]）—— 下面的分流读的是**请求行**
                 let head = request_line_of(&read_request(&mut socket).await);
@@ -1423,10 +1545,15 @@ pub(crate) async fn call_tool_with_session(
     name: &str,
     arguments: Value,
     session: &mut comfyhub_server_rs::tools::tools::ToolSession,
-) -> Result<comfyhub_server_rs::tools::tools::ToolOutcome, comfyhub_server_rs::tools::tools::ToolFailure> {
+) -> Result<
+    comfyhub_server_rs::tools::tools::ToolOutcome,
+    comfyhub_server_rs::tools::tools::ToolFailure,
+> {
     let policy = comfyhub_server_rs::tools::policy::ToolPolicy::load(state).unwrap();
-    comfyhub_server_rs::tools::tools::execute(state, &policy, "run-x", "conv-x", name, &arguments, session)
-        .await
+    comfyhub_server_rs::tools::tools::execute(
+        state, &policy, "run-x", "conv-x", name, &arguments, session,
+    )
+    .await
 }
 
 /// 一份只有"缺一张参考图"的工作流：`LoadImage.image` 绑着上次捕获的旧文件名
@@ -1451,7 +1578,11 @@ pub(crate) const FIT_OBJECT_INFO: &str = r#"{
 // ---------------------------------------------------------------------------
 
 /// 闸门开着 + 一台已配对设备，两个凭据开关**分开**给（§14.1）。
-pub(crate) fn seed_auth_device(state: &comfyhub_server_rs::web::routes::AppState, allow_read: bool, allow_upload: bool) {
+pub(crate) fn seed_auth_device(
+    state: &comfyhub_server_rs::web::routes::AppState,
+    allow_read: bool,
+    allow_upload: bool,
+) {
     let file = serde_json::json!({
         "schema": "comfyhub-inbound-auth/2",
         "enabled": true,

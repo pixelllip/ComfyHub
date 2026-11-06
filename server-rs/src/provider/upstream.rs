@@ -41,7 +41,9 @@ use std::time::Duration;
 use futures_util::StreamExt;
 use serde_json::{json, Value};
 
-use crate::provider::protocol::{adapter_for, Api, ChatTurn, Frame, ReasoningRequest, SseAccumulator, StreamEvent, ToolSpec};
+use crate::provider::protocol::{
+    adapter_for, Api, ChatTurn, Frame, ReasoningRequest, SseAccumulator, StreamEvent, ToolSpec,
+};
 use crate::web::routes::{ApiError, AppState};
 
 /// 连接超时（Kotlin 那边 `connectTimeout = 5s`）。
@@ -115,7 +117,9 @@ pub fn classify_status(status: u16) -> &'static str {
 pub fn explain(code: &str, status: u16) -> String {
     match code {
         "MISSING_CREDENTIAL" => format!("上游拒绝了这次请求（HTTP {status}）：凭据缺失或无效"),
-        "PROTOCOL_ERROR" => format!("上游说不认识这个端点（HTTP {status}）：检查 Base URL 与协议是否匹配"),
+        "PROTOCOL_ERROR" => {
+            format!("上游说不认识这个端点（HTTP {status}）：检查 Base URL 与协议是否匹配")
+        }
         "PROVIDER_UNREACHABLE" => format!("连不上上游（HTTP {status}）：网络或对方服务的问题"),
         "RATE_LIMIT" => format!("上游限流了（HTTP {status}）：稍后再试，或换一个模型"),
         "QUOTA_EXCEEDED" => format!("上游说额度用完了（HTTP {status}）"),
@@ -180,7 +184,9 @@ pub fn client_for(host: &str) -> Result<reqwest::Client, ApiError> {
             builder = builder.no_proxy();
         }
     }
-    builder.build().map_err(|e| ApiError::internal(format!("HTTP 客户端创建失败：{e}")))
+    builder
+        .build()
+        .map_err(|e| ApiError::internal(format!("HTTP 客户端创建失败：{e}")))
 }
 
 /// 鉴权头（三家不一样；`None` 表示不带）。
@@ -213,11 +219,21 @@ where
 {
     let url = request.api.chat_url(request.base_url);
     let host = host_of(&url).ok_or_else(|| {
-        ApiError::ai("CONFIG_ERROR", format!("Base URL 无法解析出主机名：{}", request.base_url))
+        ApiError::ai(
+            "CONFIG_ERROR",
+            format!("Base URL 无法解析出主机名：{}", request.base_url),
+        )
     })?;
 
-    let secret = match request.credential_ref.map(str::trim).filter(|s| !s.is_empty()) {
-        Some(reference) => Some(crate::mobile::auth::resolve_credential(request.state, reference)?),
+    let secret = match request
+        .credential_ref
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        Some(reference) => Some(crate::mobile::auth::resolve_credential(
+            request.state,
+            reference,
+        )?),
         None => None,
     };
 
@@ -421,7 +437,13 @@ where
                     outcome.finish_reason = Some(reason.clone());
                 }
             }
-            StreamEvent::ToolCallDelta { index, key, call_id, name, arguments_fragment } => {
+            StreamEvent::ToolCallDelta {
+                index,
+                key,
+                call_id,
+                name,
+                arguments_fragment,
+            } => {
                 outcome.tool_calls.push((
                     *index,
                     key.clone(),
@@ -438,7 +460,13 @@ where
 }
 
 /// 一条工具调用分片：`(分片序号, call id, 函数名, 参数片段, 另一个可选 id)`。
-pub type ToolCallDelta = (usize, String, Option<String>, Option<String>, Option<String>);
+pub type ToolCallDelta = (
+    usize,
+    String,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+);
 
 /// 一轮上游的收尾信息（`Idle`）。
 #[derive(Debug, Default, Clone)]
@@ -530,7 +558,10 @@ impl TokenUsage {
     pub fn from_raw(raw: &Value) -> Self {
         let num = |key: &str| -> Option<i64> { raw.get(key).and_then(Value::as_i64) };
         let nested = |parent: &str, key: &str| -> i64 {
-            raw.get(parent).and_then(|child| child.get(key)).and_then(Value::as_i64).unwrap_or(0)
+            raw.get(parent)
+                .and_then(|child| child.get(key))
+                .and_then(Value::as_i64)
+                .unwrap_or(0)
         };
         // 命中：同一件事有好几个来源，取**最大**的那个（有的网关两个都发）。
         // ⚠ 前端 `AiTokenUsage.fromRaw` 用的是同一条规则（取最大）—— 两边别漂。
@@ -571,7 +602,12 @@ impl TokenUsage {
         .max()
         .unwrap_or(0);
 
-        Self { input, output, cached, reasoning }
+        Self {
+            input,
+            output,
+            cached,
+            reasoning,
+        }
     }
 
     /// 逐项相加（AIH-057：多轮工具循环不能只算最后一轮）。
@@ -604,7 +640,9 @@ impl TokenUsage {
 /// 后者正是"缓存命中在桌面上永远是 0"的那次回归：`cached` 与 `reasoning`
 /// 是分开的字段，被丢掉之后**界面看不出来、账单也看不出来**。
 pub fn merge_usage(previous: Option<TokenUsage>, incoming: &Value) -> TokenUsage {
-    previous.unwrap_or_default().merge(TokenUsage::from_raw(incoming))
+    previous
+        .unwrap_or_default()
+        .merge(TokenUsage::from_raw(incoming))
 }
 
 /// 日志里只出现 `scheme://host:port/path`（**不带 query / fragment / userInfo**）。
@@ -612,11 +650,7 @@ pub fn safe_endpoint(url: &str) -> String {
     let Ok(parsed) = url::Url::parse(url) else {
         return "<无法解析的地址>".to_string();
     };
-    let mut out = format!(
-        "{}://{}",
-        parsed.scheme(),
-        parsed.host_str().unwrap_or("?")
-    );
+    let mut out = format!("{}://{}", parsed.scheme(), parsed.host_str().unwrap_or("?"));
     if let Some(port) = parsed.port() {
         out.push_str(&format!(":{port}"));
     }

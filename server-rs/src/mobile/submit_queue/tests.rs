@@ -8,7 +8,8 @@ fn state() -> AppState {
     // 内存库要**灌真 DDL**：`submit_jobs` 的列名 / 约束 / 默认值就是被测对象的一部分
     // （`workflow_recipe.rs` 的用例同一条纪律）。
     let conn = crate::infra::db::open_memory().unwrap();
-    conn.execute_batch(crate::infra::db::schema_sql()).expect("建 schema");
+    conn.execute_batch(crate::infra::db::schema_sql())
+        .expect("建 schema");
     AppState::new(conn, ":memory:", crate::infra::testpaths::scratch("media"))
 }
 
@@ -32,7 +33,11 @@ async fn 缺_conversation_id_是永久性拒绝() {
     let state = state();
     let failure = accept(&state, &item(json!({ "queueId": "q1", "promptId": 1 }))).unwrap_err();
     assert_eq!(failure.code, "MISSING_CONVERSATION");
-    assert!(failure.message.contains("conversationId"), "{}", failure.message);
+    assert!(
+        failure.message.contains("conversationId"),
+        "{}",
+        failure.message
+    );
 }
 
 // ⚠ 一律 `#[tokio::test]`：`accept` 会起后台任务（`tokio::spawn`），
@@ -40,7 +45,11 @@ async fn 缺_conversation_id_是永久性拒绝() {
 #[tokio::test]
 async fn 既没有_prompt_id_也没有_source_ref_是永久性拒绝() {
     let state = state();
-    let failure = accept(&state, &item(json!({ "queueId": "q1", "conversationId": "c1" }))).unwrap_err();
+    let failure = accept(
+        &state,
+        &item(json!({ "queueId": "q1", "conversationId": "c1" })),
+    )
+    .unwrap_err();
     assert_eq!(failure.code, "MISSING_WORKFLOW");
 }
 
@@ -73,8 +82,11 @@ async fn overrides_不是对象要拒() {
 #[tokio::test]
 async fn 受理会落一行并把审批挂成_pending() {
     let state = state();
-    let accepted = accept(&state, &item(json!({ "queueId": "q1", "conversationId": "c1", "promptId": 7 })))
-        .expect("形状是对的");
+    let accepted = accept(
+        &state,
+        &item(json!({ "queueId": "q1", "conversationId": "c1", "promptId": 7 })),
+    )
+    .expect("形状是对的");
     assert_eq!(accepted, Accepted::Fresh);
     let job = load(&state, "q1").expect("要有那一行");
     assert_eq!(job.state, STATE_AWAITING_APPROVAL);
@@ -88,7 +100,10 @@ async fn 受理会落一行并把审批挂成_pending() {
     assert_eq!(listed[0]["callId"], json!("submit:q1"));
     assert_eq!(listed[0]["conversationId"], json!("c1"));
     assert_eq!(listed[0]["name"], json!("comfy_submit"));
-    assert!(listed[0]["askedAt"].is_string(), "askedAt 要按 ISO 文本给：{listed:?}");
+    assert!(
+        listed[0]["askedAt"].is_string(),
+        "askedAt 要按 ISO 文本给：{listed:?}"
+    );
 }
 
 // ⚠ 一律 `#[tokio::test]`：`accept` 会起后台任务（`tokio::spawn`），
@@ -97,7 +112,10 @@ async fn 受理会落一行并把审批挂成_pending() {
 async fn 同一个_queue_id_推两次只受理一次() {
     let state = state();
     let payload = json!({ "queueId": "q1", "conversationId": "c1", "promptId": 7 });
-    assert_eq!(accept(&state, &item(payload.clone())).unwrap(), Accepted::Fresh);
+    assert_eq!(
+        accept(&state, &item(payload.clone())).unwrap(),
+        Accepted::Fresh
+    );
     assert_eq!(accept(&state, &item(payload)).unwrap(), Accepted::Duplicate);
     let count: i64 = state
         .with(|conn| conn.query_row("SELECT COUNT(*) FROM submit_jobs", [], |row| row.get(0)))
@@ -111,7 +129,11 @@ async fn 同一个_queue_id_推两次只受理一次() {
 #[tokio::test]
 async fn 审批决定只能下一次() {
     let state = state();
-    accept(&state, &item(json!({ "queueId": "q1", "conversationId": "c1", "promptId": 7 }))).unwrap();
+    accept(
+        &state,
+        &item(json!({ "queueId": "q1", "conversationId": "c1", "promptId": 7 })),
+    )
+    .unwrap();
     let first = state
         .write(|tx| Ok(resolve_approval_on(tx, "submit:q1", true)?))
         .unwrap();
@@ -127,18 +149,27 @@ async fn 审批决定只能下一次() {
 #[tokio::test]
 async fn 没人批准就按时收尾成被拒() {
     let state = state();
-    accept(&state, &item(json!({ "queueId": "q1", "conversationId": "c1", "promptId": 7 }))).unwrap();
+    accept(
+        &state,
+        &item(json!({ "queueId": "q1", "conversationId": "c1", "promptId": 7 })),
+    )
+    .unwrap();
     let report = run_job(&state, "q1", Duration::from_millis(50)).await;
     assert_eq!(report, JobReport::NotWaiting);
     let job = load(&state, "q1").unwrap();
     assert_eq!(job.state, STATE_DENIED);
-    assert_eq!(job.approval, "denied", "超时也要把 approval 收成 denied，pending 列表才不挂死卡");
+    assert_eq!(
+        job.approval, "denied",
+        "超时也要把 approval 收成 denied，pending 列表才不挂死卡"
+    );
     assert_eq!(job.outcome_code.as_deref(), Some(code::APPROVAL_TIMEOUT));
     // `elapsed_ms` 由库自己按 `created_at` 与 `now` 算（跨进程也不会算错）——
     // 它是回执里给用户看的"卡了多久"。**0 就意味着那段 julianday 算不出来**（返回了 NULL）。
     assert!(job.elapsed_ms > 0, "耗时要按真实读数记，不能是 0：{job:?}");
     assert_eq!(
-        state.with(|conn| Ok(pending_approvals(conn)?.len())).unwrap(),
+        state
+            .with(|conn| Ok(pending_approvals(conn)?.len()))
+            .unwrap(),
         0,
         "收尾之后就不该再出现在待审批列表里"
     );
@@ -150,11 +181,22 @@ async fn 没人批准就按时收尾成被拒() {
 #[tokio::test]
 async fn 启动恢复把残局收成终态() {
     let state = state();
-    accept(&state, &item(json!({ "queueId": "waiting", "conversationId": "c1", "promptId": 7 }))).unwrap();
-    accept(&state, &item(json!({ "queueId": "inflight", "conversationId": "c1", "promptId": 7 }))).unwrap();
+    accept(
+        &state,
+        &item(json!({ "queueId": "waiting", "conversationId": "c1", "promptId": 7 })),
+    )
+    .unwrap();
+    accept(
+        &state,
+        &item(json!({ "queueId": "inflight", "conversationId": "c1", "promptId": 7 })),
+    )
+    .unwrap();
     state
         .write(|tx| {
-            tx.execute("UPDATE submit_jobs SET state='submitting' WHERE queue_id='inflight'", [])?;
+            tx.execute(
+                "UPDATE submit_jobs SET state='submitting' WHERE queue_id='inflight'",
+                [],
+            )?;
             Ok(())
         })
         .unwrap();
@@ -163,10 +205,16 @@ async fn 启动恢复把残局收成终态() {
     assert!(touched >= 2, "两条都该被收尾：{touched}");
     let waiting = load(&state, "waiting").unwrap();
     assert_eq!(waiting.state, STATE_DENIED);
-    assert_eq!(waiting.outcome_code.as_deref(), Some(code::APPROVAL_INTERRUPTED));
+    assert_eq!(
+        waiting.outcome_code.as_deref(),
+        Some(code::APPROVAL_INTERRUPTED)
+    );
     let inflight = load(&state, "inflight").unwrap();
     assert_eq!(inflight.state, STATE_FAILED);
-    assert_eq!(inflight.outcome_code.as_deref(), Some(code::SUBMIT_INTERRUPTED));
+    assert_eq!(
+        inflight.outcome_code.as_deref(),
+        Some(code::SUBMIT_INTERRUPTED)
+    );
     assert!(inflight.outcome_message.unwrap().contains("结果不确定"));
 }
 
@@ -176,7 +224,11 @@ async fn 启动恢复把残局收成终态() {
 #[tokio::test]
 async fn 看门狗按租约收尾不死等() {
     let state = state();
-    accept(&state, &item(json!({ "queueId": "stuck", "conversationId": "c1", "promptId": 7 }))).unwrap();
+    accept(
+        &state,
+        &item(json!({ "queueId": "stuck", "conversationId": "c1", "promptId": 7 })),
+    )
+    .unwrap();
     state
         .write(|tx| {
             // 造一个"worker 早就死了"的现场：状态是提交中、心跳停在两小时前
@@ -202,7 +254,11 @@ async fn 看门狗按租约收尾不死等() {
 #[tokio::test]
 async fn 会话还没同步上来时回执留着等() {
     let state = state();
-    accept(&state, &item(json!({ "queueId": "q1", "conversationId": "late", "promptId": 7 }))).unwrap();
+    accept(
+        &state,
+        &item(json!({ "queueId": "q1", "conversationId": "late", "promptId": 7 })),
+    )
+    .unwrap();
     state
         .write(|tx| {
             tx.execute(
@@ -219,12 +275,18 @@ async fn 会话还没同步上来时回执留着等() {
     assert_eq!(deliver_pending(&state), 0, "会话不在，谁也送不出去");
     let job = load(&state, "q1").unwrap();
     assert_eq!(job.reply_state, "blocked");
-    assert!(job.reply_error.unwrap().contains("还没同步到桌面"), "要说清为什么");
+    assert!(
+        job.reply_error.unwrap().contains("还没同步到桌面"),
+        "要说清为什么"
+    );
 
     // 会话同步上来了（手机把那条会话的行推上来）→ 下一轮清扫补发
     state
         .write(|tx| {
-            tx.execute("INSERT INTO ai_conversations (id, title) VALUES ('late','手机那条')", [])?;
+            tx.execute(
+                "INSERT INTO ai_conversations (id, title) VALUES ('late','手机那条')",
+                [],
+            )?;
             Ok(())
         })
         .unwrap();
@@ -263,12 +325,18 @@ async fn 回执消息是助手消息加一个工具结果块() {
     let state = state();
     state
         .write(|tx| {
-            tx.execute("INSERT INTO ai_conversations (id, title) VALUES ('c1','会话')", [])?;
+            tx.execute(
+                "INSERT INTO ai_conversations (id, title) VALUES ('c1','会话')",
+                [],
+            )?;
             Ok(())
         })
         .unwrap();
-    accept(&state, &item(json!({ "queueId": "q1", "conversationId": "c1", "promptId": 7, "nsfw": true })))
-        .unwrap();
+    accept(
+        &state,
+        &item(json!({ "queueId": "q1", "conversationId": "c1", "promptId": 7, "nsfw": true })),
+    )
+    .unwrap();
     state
         .write(|tx| {
             tx.execute(
@@ -290,7 +358,10 @@ async fn 回执消息是助手消息加一个工具结果块() {
     assert_eq!(message.text, "跑完了，产物已入库（1 个）。");
     let types: Vec<&str> = message.parts.iter().map(|p| p.r#type.as_str()).collect();
     assert_eq!(types, vec!["text", "tool_call", "tool_result"]);
-    let result = message.parts[2].json_payload.as_ref().expect("要有结构化负载");
+    let result = message.parts[2]
+        .json_payload
+        .as_ref()
+        .expect("要有结构化负载");
     assert_eq!(result["ok"], json!(true));
     assert_eq!(result["mediaIds"], json!([42]));
     assert_eq!(result["name"], json!("comfy_submit"));
@@ -298,5 +369,11 @@ async fn 回执消息是助手消息加一个工具结果块() {
     assert!(message.parts[2].tool_call_id.as_deref() == Some("submit:q1"));
     // `nsfw=true` 是受理时存的，工具卡上显示的参数与真正提交的那份同源
     let args = message.parts[1].json_payload.as_ref().unwrap();
-    assert!(args["arguments"].as_str().unwrap().contains("\"nsfw\":true"), "{args}");
+    assert!(
+        args["arguments"]
+            .as_str()
+            .unwrap()
+            .contains("\"nsfw\":true"),
+        "{args}"
+    );
 }

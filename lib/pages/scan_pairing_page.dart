@@ -46,7 +46,9 @@ class _ScanPairingPageState extends State<ScanPairingPage> {
     final parsed = PairingPayload.parse(raw);
     if (!parsed.ok) {
       // 继续扫：用户可能只是把码对歪了、或者桌上还有别的码
-      if (mounted && parsed.error != _problem) setState(() => _problem = parsed.error);
+      if (mounted && parsed.error != _problem) {
+        setState(() => _problem = parsed.error);
+      }
       return;
     }
     _handled = true;
@@ -83,7 +85,10 @@ class _ScanPairingPageState extends State<ScanPairingPage> {
                         children: [
                           const Icon(Icons.no_photography_outlined, size: 42),
                           const SizedBox(height: 10),
-                          Text('相机用不了，${error.errorCode.name}', textAlign: TextAlign.center),
+                          Text(
+                            '相机用不了，${error.errorCode.name}',
+                            textAlign: TextAlign.center,
+                          ),
                           const SizedBox(height: 6),
                           const Text(
                             '可以用右上角「手输地址」走那条路（桌面上的 6 位码照样要敲进来）。',
@@ -116,7 +121,9 @@ class _ScanPairingPageState extends State<ScanPairingPage> {
             child: Text(
               _problem ?? '把桌面上的二维码放进框里。扫到之后，还要把桌面上显示的那 6 位码敲进手机。',
               style: theme.textTheme.bodySmall?.copyWith(
-                color: _problem == null ? theme.colorScheme.outline : theme.colorScheme.error,
+                color: _problem == null
+                    ? theme.colorScheme.outline
+                    : theme.colorScheme.error,
               ),
             ),
           ),

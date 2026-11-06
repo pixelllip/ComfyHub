@@ -29,7 +29,11 @@ fn local_and_private_hosts_are_never_proxied() {
     ] {
         assert!(is_local_host(host), "{host} 应当直连");
         assert_eq!(
-            route_for(host, |_| Some("127.0.0.1:7890".into()), || Some("127.0.0.1:7890".into())),
+            route_for(
+                host,
+                |_| Some("127.0.0.1:7890".into()),
+                || Some("127.0.0.1:7890".into())
+            ),
             Route::Direct,
             "{host} 即使配了代理也必须直连"
         );
@@ -47,17 +51,29 @@ fn local_and_private_hosts_are_never_proxied() {
 fn proxy_priority_and_direct_words() {
     let host = "api.deepseek.com";
     assert_eq!(
-        route_for(host, |n| (n == ENV_PROXY).then(|| "127.0.0.1:7890".into()), || Some("9.9.9.9:1".into())),
+        route_for(
+            host,
+            |n| (n == ENV_PROXY).then(|| "127.0.0.1:7890".into()),
+            || Some("9.9.9.9:1".into())
+        ),
         Route::Proxy("127.0.0.1:7890".into())
     );
     assert_eq!(
-        route_for(host, |n| (n == "HTTPS_PROXY").then(|| "http://127.0.0.1:7890/".into()), || None),
+        route_for(
+            host,
+            |n| (n == "HTTPS_PROXY").then(|| "http://127.0.0.1:7890/".into()),
+            || None
+        ),
         Route::Proxy("127.0.0.1:7890".into()),
         "带 scheme 与尾斜杠的写法也要认"
     );
     // 显式 direct 盖掉系统代理
     assert_eq!(
-        route_for(host, |n| (n == ENV_PROXY).then(|| "direct".into()), || Some("9.9.9.9:1".into())),
+        route_for(
+            host,
+            |n| (n == ENV_PROXY).then(|| "direct".into()),
+            || Some("9.9.9.9:1".into())
+        ),
         Route::Direct
     );
     // 都没配 → 系统代理
@@ -71,14 +87,20 @@ fn proxy_priority_and_direct_words() {
     assert_eq!(parse_proxy("http://"), None);
     assert_eq!(parse_proxy("   "), None);
     assert_eq!(parse_proxy("none"), None);
-    assert_eq!(parse_proxy("http://user:pass@10.0.0.1:8080"), Some("10.0.0.1:8080".into()));
+    assert_eq!(
+        parse_proxy("http://user:pass@10.0.0.1:8080"),
+        Some("10.0.0.1:8080".into())
+    );
 }
 
 /// `Route::describe()` 是**给用户看的那句话**（错误信息里要能判断"是代理的事还是对方的事"）。
 #[test]
 fn route_description_is_human_readable() {
     assert_eq!(Route::Direct.describe(), "直连（DIRECT）");
-    assert_eq!(Route::Proxy("127.0.0.1:7890".into()).describe(), "HTTP 代理 127.0.0.1:7890");
+    assert_eq!(
+        Route::Proxy("127.0.0.1:7890".into()).describe(),
+        "HTTP 代理 127.0.0.1:7890"
+    );
 }
 
 /// 本机的真实配置：`COMFYHUB_HTTPS_PROXY` 没有时按系统代理走（本机系统代理是 7890）。

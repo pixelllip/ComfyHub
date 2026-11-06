@@ -20,16 +20,21 @@ import 'dart:ui' show Rect, Size;
 class SavedWorkflow {
   final String path;
   final int bytes;
+
   /// 下一步该怎么办（后端给的一句人话，界面直接展示）
   final String hint;
 
-  const SavedWorkflow({required this.path, required this.bytes, required this.hint});
+  const SavedWorkflow({
+    required this.path,
+    required this.bytes,
+    required this.hint,
+  });
 
   factory SavedWorkflow.fromJson(Map<String, dynamic> json) => SavedWorkflow(
-        path: (json['path'] ?? '').toString(),
-        bytes: (json['bytes'] as num?)?.toInt() ?? 0,
-        hint: (json['hint'] ?? '').toString(),
-      );
+    path: (json['path'] ?? '').toString(),
+    bytes: (json['bytes'] as num?)?.toInt() ?? 0,
+    hint: (json['hint'] ?? '').toString(),
+  );
 }
 
 /// 节点状态（litegraph）：0 正常 / 2 静音 / 4 旁路。
@@ -41,10 +46,13 @@ const int kNodeModeBypassed = 4;
 class BlueprintPort {
   final String name;
   final String type;
+
   /// 输入：接的是哪条线（null = 空着）
   final int? link;
+
   /// 输出：下游的线
   final List<int> links;
+
   /// 这个输入是控件（下拉框 / 数字框），不是一个插口
   final bool widget;
   final Object? value;
@@ -59,15 +67,15 @@ class BlueprintPort {
   });
 
   factory BlueprintPort.fromJson(Map<String, dynamic> json) => BlueprintPort(
-        name: (json['name'] ?? '').toString(),
-        type: (json['type'] ?? '').toString(),
-        link: (json['link'] as num?)?.toInt(),
-        links: ((json['links'] as List?) ?? const [])
-            .map((item) => (item as num).toInt())
-            .toList(growable: false),
-        widget: json['widget'] == true,
-        value: json['value'],
-      );
+    name: (json['name'] ?? '').toString(),
+    type: (json['type'] ?? '').toString(),
+    link: (json['link'] as num?)?.toInt(),
+    links: ((json['links'] as List?) ?? const [])
+        .map((item) => (item as num).toInt())
+        .toList(growable: false),
+    widget: json['widget'] == true,
+    value: json['value'],
+  );
 
   /// 空着的真插口（不是控件、也没接线）—— 广播节点就是往这些地方灌值的。
   bool get isOpenSocket => !widget && link == null;
@@ -76,13 +84,15 @@ class BlueprintPort {
 /// 一个控件（按 `widgets_values` 的位置）。
 class BlueprintWidget {
   final int index;
+
   /// null = 只有位置、没有名字（旧存档 + ComfyUI 不在线时会出现，那时**不猜名字**）
   final String? name;
   final Object? value;
 
   const BlueprintWidget({required this.index, this.name, this.value});
 
-  factory BlueprintWidget.fromJson(Map<String, dynamic> json) => BlueprintWidget(
+  factory BlueprintWidget.fromJson(Map<String, dynamic> json) =>
+      BlueprintWidget(
         index: (json['index'] as num?)?.toInt() ?? 0,
         name: json['name']?.toString(),
         value: json['value'],
@@ -97,14 +107,17 @@ class BlueprintNode {
   final String id;
   final String className;
   final String title;
+
   /// 界面格式才有；API 格式没有坐标（前端自动排）
   final double? x;
   final double? y;
   final double? width;
   final double? height;
   final int mode;
+
   /// normal / note / reroute / variable / broadcast / display / bypasser / subgraph / unknown
   final String kind;
+
   /// 服务端没有这个类（纯前端节点，或没装的自定义节点包）
   final bool frontendOnly;
   final List<BlueprintPort> inputs;
@@ -150,19 +163,30 @@ class BlueprintNode {
       kind: (json['kind'] ?? 'normal').toString(),
       frontendOnly: json['frontendOnly'] == true,
       inputs: ((json['inputs'] as List?) ?? const [])
-          .map((item) => BlueprintPort.fromJson(Map<String, dynamic>.from(item as Map)))
+          .map(
+            (item) =>
+                BlueprintPort.fromJson(Map<String, dynamic>.from(item as Map)),
+          )
           .toList(growable: false),
       outputs: ((json['outputs'] as List?) ?? const [])
-          .map((item) => BlueprintPort.fromJson(Map<String, dynamic>.from(item as Map)))
+          .map(
+            (item) =>
+                BlueprintPort.fromJson(Map<String, dynamic>.from(item as Map)),
+          )
           .toList(growable: false),
       widgets: ((json['widgets'] as List?) ?? const [])
-          .map((item) => BlueprintWidget.fromJson(Map<String, dynamic>.from(item as Map)))
+          .map(
+            (item) => BlueprintWidget.fromJson(
+              Map<String, dynamic>.from(item as Map),
+            ),
+          )
           .toList(growable: false),
     );
   }
 
   bool get bypassed => mode == kNodeModeBypassed;
   bool get muted => mode == kNodeModeMuted;
+
   /// 不参与执行的那几种（注释框 / 转发点 / 纯前端）
   bool get decorative =>
       kind == 'note' || kind == 'reroute' || kind == 'variable' || frontendOnly;
@@ -179,6 +203,7 @@ class BlueprintEdge {
   final String toNode;
   final int toSlot;
   final String? type;
+
   /// API 格式的边没有 id（是从 `inputs` 反推出来的）
   final bool implicit;
 
@@ -213,15 +238,19 @@ class BlueprintGroup {
   final List<double> bounding;
   final String? color;
 
-  const BlueprintGroup({required this.title, this.bounding = const [], this.color});
+  const BlueprintGroup({
+    required this.title,
+    this.bounding = const [],
+    this.color,
+  });
 
   factory BlueprintGroup.fromJson(Map<String, dynamic> json) => BlueprintGroup(
-        title: (json['title'] ?? '').toString(),
-        bounding: ((json['bounding'] as List?) ?? const [])
-            .map((item) => (item as num).toDouble())
-            .toList(growable: false),
-        color: json['color']?.toString(),
-      );
+    title: (json['title'] ?? '').toString(),
+    bounding: ((json['bounding'] as List?) ?? const [])
+        .map((item) => (item as num).toDouble())
+        .toList(growable: false),
+    color: json['color']?.toString(),
+  );
 
   bool get valid => bounding.length >= 4;
   double get left => bounding[0];
@@ -233,6 +262,7 @@ class BlueprintGroup {
 /// 一条接线体检结论。
 class BlueprintIssue {
   final String code;
+
   /// error / warn / info
   final String severity;
   final String title;
@@ -240,6 +270,7 @@ class BlueprintIssue {
   final String? fix;
   final List<String> nodes;
   final List<int> links;
+
   /// `33.model` 这种"节点.输入名"，界面据此把标记画到具体插口上
   final List<String> slots;
 
@@ -255,17 +286,21 @@ class BlueprintIssue {
   });
 
   factory BlueprintIssue.fromJson(Map<String, dynamic> json) => BlueprintIssue(
-        code: (json['code'] ?? '').toString(),
-        severity: (json['severity'] ?? 'info').toString(),
-        title: (json['title'] ?? '').toString(),
-        detail: (json['detail'] ?? '').toString(),
-        fix: json['fix']?.toString(),
-        nodes: ((json['nodes'] as List?) ?? const []).map((e) => e.toString()).toList(growable: false),
-        links: ((json['links'] as List?) ?? const [])
-            .map((e) => (e as num).toInt())
-            .toList(growable: false),
-        slots: ((json['slots'] as List?) ?? const []).map((e) => e.toString()).toList(growable: false),
-      );
+    code: (json['code'] ?? '').toString(),
+    severity: (json['severity'] ?? 'info').toString(),
+    title: (json['title'] ?? '').toString(),
+    detail: (json['detail'] ?? '').toString(),
+    fix: json['fix']?.toString(),
+    nodes: ((json['nodes'] as List?) ?? const [])
+        .map((e) => e.toString())
+        .toList(growable: false),
+    links: ((json['links'] as List?) ?? const [])
+        .map((e) => (e as num).toInt())
+        .toList(growable: false),
+    slots: ((json['slots'] as List?) ?? const [])
+        .map((e) => e.toString())
+        .toList(growable: false),
+  );
 
   bool get isError => severity == 'error';
   bool get isWarn => severity == 'warn';
@@ -276,6 +311,7 @@ class WorkflowBlueprint {
   /// ui / api / unknown
   final String format;
   final String? title;
+
   /// 后端有没有拿到 ComfyUI 的 `/object_info`（拿不到时体检的覆盖面小一圈）
   final bool objectInfo;
   final List<BlueprintNode> nodes;
@@ -300,22 +336,36 @@ class WorkflowBlueprint {
   });
 
   factory WorkflowBlueprint.fromJson(Map<String, dynamic> json) {
-    final counts = Map<String, dynamic>.from(json['counts'] as Map? ?? const {});
+    final counts = Map<String, dynamic>.from(
+      json['counts'] as Map? ?? const {},
+    );
     return WorkflowBlueprint(
       format: (json['format'] ?? 'unknown').toString(),
       title: json['title']?.toString(),
       objectInfo: json['objectInfo'] == true,
       nodes: ((json['nodes'] as List?) ?? const [])
-          .map((item) => BlueprintNode.fromJson(Map<String, dynamic>.from(item as Map)))
+          .map(
+            (item) =>
+                BlueprintNode.fromJson(Map<String, dynamic>.from(item as Map)),
+          )
           .toList(growable: false),
       edges: ((json['edges'] as List?) ?? const [])
-          .map((item) => BlueprintEdge.fromJson(Map<String, dynamic>.from(item as Map)))
+          .map(
+            (item) =>
+                BlueprintEdge.fromJson(Map<String, dynamic>.from(item as Map)),
+          )
           .toList(growable: false),
       groups: ((json['groups'] as List?) ?? const [])
-          .map((item) => BlueprintGroup.fromJson(Map<String, dynamic>.from(item as Map)))
+          .map(
+            (item) =>
+                BlueprintGroup.fromJson(Map<String, dynamic>.from(item as Map)),
+          )
           .toList(growable: false),
       issues: ((json['issues'] as List?) ?? const [])
-          .map((item) => BlueprintIssue.fromJson(Map<String, dynamic>.from(item as Map)))
+          .map(
+            (item) =>
+                BlueprintIssue.fromJson(Map<String, dynamic>.from(item as Map)),
+          )
           .toList(growable: false),
       warnings: ((json['warnings'] as List?) ?? const [])
           .map((item) => item.toString())
@@ -413,7 +463,10 @@ class BlueprintLayout {
     final upstream = <String, List<String>>{};
     final downstream = <String, List<String>>{};
     for (final edge in blueprint.edges) {
-      if (!order.containsKey(edge.fromNode) || !order.containsKey(edge.toNode)) continue;
+      if (!order.containsKey(edge.fromNode) ||
+          !order.containsKey(edge.toNode)) {
+        continue;
+      }
       upstream.putIfAbsent(edge.toNode, () => []).add(edge.fromNode);
       downstream.putIfAbsent(edge.fromNode, () => []).add(edge.toNode);
     }
@@ -484,10 +537,7 @@ class BlueprintLayout {
       maxY = math.max(maxY, y);
       x += widest + layerGap;
     }
-    return BlueprintLayout(
-      boxes: boxes,
-      bounds: Rect.fromLTRB(0, 0, x, maxY),
-    );
+    return BlueprintLayout(boxes: boxes, bounds: Rect.fromLTRB(0, 0, x, maxY));
   }
 
   static double _barycentre(
@@ -523,7 +573,9 @@ class BlueprintLayout {
     if (height <= 0) {
       // 与画笔的几何常量对齐：标题 28 + 插口 18/行 + 参数 20/行，再留一点边。
       final rows = math.max(node.inputs.length, node.outputs.length);
-      height = (34 + rows * 18 + node.widgets.length * 20).clamp(50.0, 520.0).toDouble();
+      height = (34 + rows * 18 + node.widgets.length * 20)
+          .clamp(50.0, 520.0)
+          .toDouble();
     }
     return Size(width, height);
   }

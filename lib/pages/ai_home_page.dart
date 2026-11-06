@@ -626,8 +626,7 @@ class _Thread extends StatelessWidget {
             focusNode: inputFocus,
             onSubmit: (text) => onSubmitted(store, text),
             // 顶栏精简后，工作流选择从输入框的 `+` 菜单进（功能不丢）。
-            onPickWorkflow:
-                store.isLocal ? null : () => _pickWorkflow(context),
+            onPickWorkflow: store.isLocal ? null : () => _pickWorkflow(context),
           ),
       ],
     );
@@ -902,9 +901,8 @@ class _ConversationAppBar extends StatelessWidget
             if (v == 'context') onShowStatus?.call();
             if (v == 'workflow') onPickWorkflow?.call();
             if (v == 'train') {
-              Navigator.of(context).push(
-                MaterialPageRoute(builder: (_) => const TrainPage()),
-              );
+              Navigator.of(context)
+                  .push(MaterialPageRoute(builder: (_) => const TrainPage()));
             }
           },
           options: [
@@ -1393,8 +1391,7 @@ class _MessageBubble extends StatelessWidget {
                 padding: const EdgeInsets.only(top: 4),
                 child: LayoutResubmitCard(
                   resubmit: resubmit,
-                  onEdit: () =>
-                      _openLayoutEditor(context, resubmit.spec),
+                  onEdit: () => _openLayoutEditor(context, resubmit.spec),
                 ),
               ),
             );
@@ -1498,7 +1495,8 @@ class _MessageBubble extends StatelessWidget {
     await onLayoutResubmit(result.toMessage());
   }
 
-  Widget _toolCard(AiToolCallState call) => Padding(    padding: const EdgeInsets.only(top: 8),
+  Widget _toolCard(AiToolCallState call) => Padding(
+    padding: const EdgeInsets.only(top: 8),
     // 提问（用户建议 ⑥）画的**不是工具卡而是提问卡**：一个是"等你批准"，
     // 一个是"等你回答"，混在一起用户会以为点了就等于批准。
     child: call.allQuestions.isNotEmpty
@@ -1575,10 +1573,7 @@ class _MessageBubble extends StatelessWidget {
           width: m.isUser ? null : double.infinity,
           margin: const EdgeInsets.symmetric(vertical: 6),
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-          decoration: BoxDecoration(
-            color: bg,
-            borderRadius: bubbleShape,
-          ),
+          decoration: BoxDecoration(color: bg, borderRadius: bubbleShape),
           // 整条气泡一个选择域（用户 bug ②："仅能选择 3 行文本"）：
           // 一段回复被解析成很多个块（段落 / 标题 / 列表 / 表格 / 代码块），
           // 每块一个 SelectableText 的话，鼠标拖到当前块末尾就拉不动了。
@@ -2291,7 +2286,8 @@ class _AskQuestionHead extends StatelessWidget {
               url: imageUrl,
               width: compact ? 150 : 220,
               height: compact ? 110 : 150,
-            ),          ],
+            ),
+          ],
         );
       },
     );
@@ -4076,9 +4072,7 @@ class _ComposerState extends State<_Composer> {
   void _chooseCard(CharacterCard card) {
     if ((card.prompt ?? '').trim().isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('这张卡的正面提示词还空着，先去「预设库 → 卡片库」补上再用。'),
-        ),
+        const SnackBar(content: Text('这张卡的正面提示词还空着，先去「预设库 → 卡片库」补上再用。')),
       );
       return;
     }
@@ -4274,7 +4268,8 @@ class _ComposerState extends State<_Composer> {
             ),
           // 卡片面板（角色卡 / 画风卡）：在输入框上方，和 `/` 菜单同一套位置。
           if (_cardsOpen) _cardsPanel(theme),
-          if (_characterCards.isNotEmpty || _styleCard != null) _cardChips(theme),
+          if (_characterCards.isNotEmpty || _styleCard != null)
+            _cardChips(theme),
           // 排版：上一行整宽输入框，下一行 [附件] [模型选择] …… [发送]
           Shortcuts(
             shortcuts: const {
@@ -4805,7 +4800,8 @@ class _ComposerState extends State<_Composer> {
     widget.onSubmit(result.toMessage());
   }
 
-  Future<void> _pickFiles() async {    // file_picker 12.x 起 pickFiles 是静态方法，直接返回 List<PlatformFile>
+  Future<void> _pickFiles() async {
+    // file_picker 12.x 起 pickFiles 是静态方法，直接返回 List<PlatformFile>
     final files = await FilePicker.pickFiles(dialogTitle: '选择要发给 AI 的附件');
     if (files.isEmpty) return;
     // 上传走"路径"：不让几十 MB 的图片进 Dart 堆；类型判定、缩略图与准入都在后端做（M3）
@@ -5138,76 +5134,75 @@ class _PermissionPicker extends StatelessWidget {
     // 用户："sizedbox 不统一"）。
     return AppMenuButton<String>(
       tooltip: full
-            ? '当前是$text，AI 调用工具不会等你批准。可读 / 可写目录范围不变，越界仍会被拒。点一下改回「${AiToolPolicy.modeAskLabel}」。'
-            : '当前是$text，写盘 / 提交任务这类改动操作会先弹批准。点一下切到「${AiToolPolicy.modeFullLabel}」。',
-        onSelected: store.setPermissionMode,
-        options: [
-          MenuOption(
-            value: AiToolPolicy.modeAsk,
-            icon: Icons.how_to_reg_outlined,
-            label: AiToolPolicy.modeAskLabel,
-            subtitle: '改动类工具先等你批准',
-            trailingIcon: full ? null : Icons.check,
-          ),
-          MenuOption(
-            value: AiToolPolicy.modeFull,
-            icon: Icons.gpp_maybe_outlined,
-            label: AiToolPolicy.modeFullLabel,
-            subtitle: 'AI 无需批准，直接动手（目录白名单不变）',
-            trailingIcon: full ? Icons.check : null,
-          ),
-        ],
-        // 两种档位的选择放在菜单里：按钮本身体积小，不会把输入区挤爆
-        button: (context, controller, isOpen) => Opacity(
-          opacity: store.permissionBusy ? 0.5 : 1,
-          child: InkWell(
-            borderRadius: BorderRadius.circular(8),
-            onTap: store.permissionBusy
-                ? null
-                : () => controller.isOpen
-                      ? controller.close()
-                      : controller.open(),
-            child: Container(
-              // 三档都保证 ≥44 高（用户："按钮太小了比较难点"）
-              constraints: const BoxConstraints(minHeight: 44),
-              padding: EdgeInsets.symmetric(
-                horizontal: density == _ComposerLabel.full ? 10 : 12,
-                vertical: 8,
-              ),
-              decoration: BoxDecoration(
-                border: Border.all(color: full ? color : theme.dividerColor),
-                borderRadius: BorderRadius.circular(8),
-                color: full ? color.withValues(alpha: 0.08) : null,
-              ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(
-                    full ? Icons.gpp_maybe_outlined : Icons.how_to_reg_outlined,
-                    size: 18,
-                    color: color,
+          ? '当前是$text，AI 调用工具不会等你批准。可读 / 可写目录范围不变，越界仍会被拒。点一下改回「${AiToolPolicy.modeAskLabel}」。'
+          : '当前是$text，写盘 / 提交任务这类改动操作会先弹批准。点一下切到「${AiToolPolicy.modeFullLabel}」。',
+      onSelected: store.setPermissionMode,
+      options: [
+        MenuOption(
+          value: AiToolPolicy.modeAsk,
+          icon: Icons.how_to_reg_outlined,
+          label: AiToolPolicy.modeAskLabel,
+          subtitle: '改动类工具先等你批准',
+          trailingIcon: full ? null : Icons.check,
+        ),
+        MenuOption(
+          value: AiToolPolicy.modeFull,
+          icon: Icons.gpp_maybe_outlined,
+          label: AiToolPolicy.modeFullLabel,
+          subtitle: 'AI 无需批准，直接动手（目录白名单不变）',
+          trailingIcon: full ? Icons.check : null,
+        ),
+      ],
+      // 两种档位的选择放在菜单里：按钮本身体积小，不会把输入区挤爆
+      button: (context, controller, isOpen) => Opacity(
+        opacity: store.permissionBusy ? 0.5 : 1,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(8),
+          onTap: store.permissionBusy
+              ? null
+              : () =>
+                    controller.isOpen ? controller.close() : controller.open(),
+          child: Container(
+            // 三档都保证 ≥44 高（用户："按钮太小了比较难点"）
+            constraints: const BoxConstraints(minHeight: 44),
+            padding: EdgeInsets.symmetric(
+              horizontal: density == _ComposerLabel.full ? 10 : 12,
+              vertical: 8,
+            ),
+            decoration: BoxDecoration(
+              border: Border.all(color: full ? color : theme.dividerColor),
+              borderRadius: BorderRadius.circular(8),
+              color: full ? color.withValues(alpha: 0.08) : null,
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  full ? Icons.gpp_maybe_outlined : Icons.how_to_reg_outlined,
+                  size: 18,
+                  color: color,
+                ),
+                if (density != _ComposerLabel.icon) ...[
+                  const SizedBox(width: 6),
+                  Text(
+                    density == _ComposerLabel.full ? text : shortText,
+                    style: theme.textTheme.labelMedium?.copyWith(
+                      color: full ? color : null,
+                    ),
                   ),
-                  if (density != _ComposerLabel.icon) ...[
-                    const SizedBox(width: 6),
-                    Text(
-                      density == _ComposerLabel.full ? text : shortText,
-                      style: theme.textTheme.labelMedium?.copyWith(
-                        color: full ? color : null,
-                      ),
-                    ),
-                  ],
-                  // 纯图标档不画箭头（那是展开暗示；图标按钮 + tooltip 已经够）。
-                  if (density != _ComposerLabel.icon)
-                    Icon(
-                      Icons.arrow_drop_down,
-                      size: 18,
-                      color: theme.colorScheme.outline,
-                    ),
                 ],
-              ),
+                // 纯图标档不画箭头（那是展开暗示；图标按钮 + tooltip 已经够）。
+                if (density != _ComposerLabel.icon)
+                  Icon(
+                    Icons.arrow_drop_down,
+                    size: 18,
+                    color: theme.colorScheme.outline,
+                  ),
+              ],
             ),
           ),
         ),
+      ),
     );
   }
 }
