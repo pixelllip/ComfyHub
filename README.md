@@ -299,7 +299,8 @@ pwsh -File scripts\e2e-submit-test.ps1                                # 提交�
 ```
 
 - **push / PR 时 GitHub Actions 会跑前两条**（`.github/workflows/ci.yml`，Windows runner）：
-  `flutter analyze` + `flutter test`，`cargo clippy --lib --bins -- -D warnings` + `cargo test`。
+  `dart format --set-exit-if-changed` + `flutter analyze` + `flutter test`，
+  `cargo fmt --check` + `cargo clippy --all-targets -- -D warnings` + `cargo test`。
   e2e 不进 CI（要本机后端与 ComfyUI 现场）。
 - 纯逻辑改动跑单测就够；**改了 `HarnessRunner` 的上下文拼装要跑三条 e2e**（AGENTS §10.1）。
 - 要**活体**验收（真 ComfyUI）用 `spot_check`：`cargo test --test spot_check -- --ignored`。

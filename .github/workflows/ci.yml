@@ -1,19 +1,19 @@
-# 最小回归门：只守「功能有没有坏」。
+# 回归门：格式、静态检查、用例。
 #
 # 两条必过检查（与 AGENTS §1 / README §10 的验收口径一致）：
-#   · 前端：flutter analyze + flutter test
-#   · 后端：cargo test
+#   · 前端：dart format --set-exit-if-changed + flutter analyze + flutter test
+#   · 后端：cargo fmt --check + cargo clippy --all-targets -D warnings + cargo test
 #
 # 刻意**没有**放进来：
-#   · `dart format` / `cargo fmt`：仓库当前并不干净（一次格式化会动上百个文件），
-#     先清干净再开成必过项，否则第一天就是红的；
 #   · `scripts\e2e-*.ps1`：依赖本机后端与 ComfyUI 现场，不进 CI。
 #
-# `cargo clippy` 只覆盖 `--lib --bins`（生产代码已经零告警）；测试代码里还有一批
-# 风格告警，清完之后再把 `--all-targets` 加进来。
+# 格式门禁的前提是「仓库本身是格式化过的」—— 2026-11-06 用一次只格式化、
+# 不改逻辑的提交把两端都跑了一遍；之后谁提交了没格式化的代码，这里当场红。
+#
+# `cargo clippy` 覆盖 `--all-targets`（生产代码 + 测试代码都已零告警）。
 #
 # 升 Flutter 版本时改 `flutter-version`（与开发机 `flutter --version` 对齐），
-# 然后在本机先跑一遍 analyze / test —— 这两步过了，这里就不会红。
+# 然后在本机先跑一遍 format / analyze / test —— 这几步过了，这里就不会红。
 
 name: CI
 
@@ -33,7 +33,7 @@ permissions:
 
 jobs:
   flutter:
-    name: Flutter (analyze + test)
+    name: Flutter (format + analyze + test)
     runs-on: windows-latest
     timeout-minutes: 30
     env:
@@ -51,6 +51,9 @@ jobs:
       - name: 取依赖
         run: flutter pub get
 
+      - name: 格式检查
+        run: dart format --output=none --set-exit-if-changed lib test
+
       - name: 静态检查
         run: flutter analyze
 
@@ -58,7 +61,7 @@ jobs:
         run: flutter test
 
   rust:
-    name: Rust (cargo test)
+    name: Rust (fmt + clippy + test)
     runs-on: windows-latest
     timeout-minutes: 45
     defaults:
@@ -69,6 +72,8 @@ jobs:
 
       - name: 装 Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
 
       - name: 编译缓存
         uses: Swatinem/rust-cache@v2
@@ -76,10 +81,11 @@ jobs:
           # 工作区在 server-rs/，target 也在它下面
           workspaces: server-rs -> target
 
-      # 生产代码（lib + bin）零告警。**先不覆盖 `--all-targets`**：测试代码里还有一批
-      # 风格告警，等清完再把范围放大，否则这条第一天就是红的。
-      - name: Clippy
-        run: cargo clippy --lib --bins -- -D warnings
+      - name: 格式检查
+        run: cargo fmt --check
+
+      - name: Clippy（生产代码 + 测试代码零告警）
+        run: cargo clippy --all-targets -- -D warnings
 
       # rusqlite 的 bundled 要 C 编译器：windows-latest 自带 MSVC，不用额外装
       - name: 用例
