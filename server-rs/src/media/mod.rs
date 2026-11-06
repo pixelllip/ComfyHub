@@ -6,6 +6,8 @@ pub mod attachments;
 pub mod collection;
 pub mod export;
 pub mod file_kind;
+// 同上：`media::media` 是产物读写那一层的老名字，改名收益抵不上改动面。
+#[allow(clippy::module_inception)]
 pub mod media;
 pub mod media_upload;
 pub mod media_write;

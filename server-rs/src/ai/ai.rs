@@ -849,7 +849,8 @@ pub fn validate_model(model: &AiModelDto) -> Result<(), ApiError> {
                 format!("未知的思考方言: {format}（可选 {}）", all.join(" / ")),
             ));
         }
-    }    if !model.thinking_efforts.is_empty() && !model.reasoning {
+    }
+    if !model.thinking_efforts.is_empty() && !model.reasoning {
         return Err(ApiError::ai(
             "CONFIG_ERROR",
             "声明了思考等级却没勾选「支持推理」，两者必须一致",
@@ -992,7 +993,6 @@ fn unset_orphan_credential(state: &AppState, reference: &str) {
 /// 这里因为反正要用路径参数覆盖它，缺了就按空串收下 —— 结果是**同一件事做得更好**：
 /// 客户端少传一个我们本来就要覆盖的字段，不该变成一句用户看不懂的报错。
 /// 真实客户端（Flutter）永远是把 GET 到的那份原样改几个字段传回来，所以不会走到这条岔路。
-
 pub fn replace_models(
     state: &AppState,
     provider_id: &str,

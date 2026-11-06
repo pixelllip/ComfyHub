@@ -238,7 +238,7 @@ async fn run_once(
     // 附件计划（R9）：哪些图片真的能内联、哪些只能如实说"没发出去"。
     // ⚠ 必须在系统提示之前算出来：提示里那句"本次请求附带图片附件"只有**确实内联了**才说有
     // （否则模型会以为自己看到了图 —— 那正是 AIH-030 要防的"看起来发出去了、其实没有"）。
-    let attachment_plan = attachment_plan_of(state, &history, &model, &provider.api);
+    let attachment_plan = attachment_plan_of(state, &history, model, &provider.api);
     let has_inlined_attachments = !attachment_plan.inline.is_empty();
 
     // 工作流参考图（2026-10-25「载入工作流时自动带图」）：`comfy_load_workflow` 的结果里
@@ -894,10 +894,10 @@ fn conversation_needs_title(state: &AppState, conversation_id: &str) -> bool {
         })
         .ok()
         .flatten();
-    match title.as_deref().map(str::trim) {
-        None | Some("") | Some("新对话") => true,
-        _ => false,
-    }
+    matches!(
+        title.as_deref().map(str::trim),
+        None | Some("") | Some("新对话")
+    )
 }
 
 /// 把模型给的标题写进会话，并**如实广播**给界面（`conversation.updated`）。
@@ -1729,9 +1729,7 @@ fn attachment_plan_of(
     }
 
     // ③ 该协议的适配器实现了哪些传输方式（图片才可能内联）
-    let can_inline_image = crate::media::strict_intake::adapter_transports(api, "image")
-        .iter()
-        .any(|t| *t == "inline_base64");
+    let can_inline_image = crate::media::strict_intake::adapter_transports(api, "image").contains(&"inline_base64");
     let model_takes_image = model.input_modalities.iter().any(|m| m == "image");
 
     // ④ 预算：只有"图片 + 适配器实现 + 模型声明了图片"的才参与
@@ -1852,7 +1850,7 @@ fn turns_of(message: &AiMessageDto, plan: &AttachmentPlan) -> Vec<ChatTurn> {
         }
         text.push_str("（以下附件未随本次请求发送：");
         text.push_str(&unsent.join("、"));
-        text.push_str("）");
+        text.push('）');
         text
     };
     // 附件 id 对照（用户 bug 2026-09-28「系统给不出可投放的附件 ID」）：工具描述让模型
@@ -1879,7 +1877,7 @@ fn turns_of(message: &AiMessageDto, plan: &AttachmentPlan) -> Vec<ChatTurn> {
              用 comfy_use_attachment 投它对应的 id：",
         );
         text.push_str(&inlined_ids.join("；"));
-        text.push_str("）");
+        text.push('）');
         text
     };
     if !body.trim().is_empty() || !images.is_empty() {

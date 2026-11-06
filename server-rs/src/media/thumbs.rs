@@ -74,7 +74,7 @@ pub fn write_thumbnail(source: &Path, dest: &Path) -> std::io::Result<bool> {
     let mut encoder = JpegEncoder::new_with_quality(&mut file, QUALITY);
     encoder
         .encode_image(&DynamicImage::ImageRgb8(canvas))
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+        .map_err(|e| std::io::Error::other(e.to_string()))?;
     Ok(true)
 }
 

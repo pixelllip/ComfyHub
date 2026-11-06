@@ -7,8 +7,10 @@
 # 刻意**没有**放进来：
 #   · `dart format` / `cargo fmt`：仓库当前并不干净（一次格式化会动上百个文件），
 #     先清干净再开成必过项，否则第一天就是红的；
-#   · `cargo clippy -D warnings`：还有一批风格告警，同上；
 #   · `scripts\e2e-*.ps1`：依赖本机后端与 ComfyUI 现场，不进 CI。
+#
+# `cargo clippy` 只覆盖 `--lib --bins`（生产代码已经零告警）；测试代码里还有一批
+# 风格告警，清完之后再把 `--all-targets` 加进来。
 #
 # 升 Flutter 版本时改 `flutter-version`（与开发机 `flutter --version` 对齐），
 # 然后在本机先跑一遍 analyze / test —— 这两步过了，这里就不会红。
@@ -73,6 +75,11 @@ jobs:
         with:
           # 工作区在 server-rs/，target 也在它下面
           workspaces: server-rs -> target
+
+      # 生产代码（lib + bin）零告警。**先不覆盖 `--all-targets`**：测试代码里还有一批
+      # 风格告警，等清完再把范围放大，否则这条第一天就是红的。
+      - name: Clippy
+        run: cargo clippy --lib --bins -- -D warnings
 
       # rusqlite 的 bundled 要 C 编译器：windows-latest 自带 MSVC，不用额外装
       - name: 用例

@@ -816,9 +816,11 @@ fn fill_widgets(
                 if inputs.contains_key(name) || value.is_null() {
                     continue;
                 }
-                if specs.iter().any(|spec| &spec.name == name) {
-                    inputs.insert(name.clone(), value.clone());
-                } else if specs.iter().any(|spec| spec.dynamic && is_dynamic_child(&spec.name, name)) {
+                let known = specs.iter().any(|spec| &spec.name == name)
+                    || specs
+                        .iter()
+                        .any(|spec| spec.dynamic && is_dynamic_child(&spec.name, name));
+                if known {
                     inputs.insert(name.clone(), value.clone());
                 } else {
                     warnings.push(format!(

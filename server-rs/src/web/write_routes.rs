@@ -150,7 +150,7 @@ impl From<WriteError> for ApiError {
 fn read_tag(state: &AppState, id: i64) -> Result<Json<TagDto>, ApiError> {
     state
         .with(|conn| {
-            conn.query_row("SELECT * FROM tags WHERE id = ?1", params![id], |row| tag_from_row(row))
+            conn.query_row("SELECT * FROM tags WHERE id = ?1", params![id], tag_from_row)
                 .optional()
         })?
         .map(Json)
@@ -161,7 +161,7 @@ fn read_prompt(state: &AppState, id: i64) -> Result<Json<PromptDto>, ApiError> {
     state
         .with(|conn| {
             let prompt = conn
-                .query_row("SELECT * FROM prompts WHERE id = ?1", params![id], |row| prompt_from_row(row))
+                .query_row("SELECT * FROM prompts WHERE id = ?1", params![id], prompt_from_row)
                 .optional()?;
             match prompt {
                 Some(mut p) => {
@@ -275,7 +275,7 @@ async fn duplicate(
     // 先把源读齐（DTO + 标签），再在**一个写事务里**建副本
     let source = state.with(|conn| {
         let prompt = conn
-            .query_row("SELECT * FROM prompts WHERE id = ?1", params![id], |row| prompt_from_row(row))
+            .query_row("SELECT * FROM prompts WHERE id = ?1", params![id], prompt_from_row)
             .optional()?;
         let Some(mut p) = prompt else { return Ok(None) };
         p.tags = crate::web::routes::tags_of(conn, p.id)?;

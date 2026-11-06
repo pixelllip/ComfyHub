@@ -249,7 +249,7 @@ pub fn thinking_effort(m: &ModelRow, requested: Option<&str>) -> Result<(String,
             format!("模型 {} 未声明推理能力，不能设置思考强度（可在「设置 → AI 模型」里声明）", m.id),
         ));
     }
-    let declared: Vec<String> = m.thinking_efforts.keys().cloned().filter(|k| k != "off").collect();
+    let declared: Vec<String> = m.thinking_efforts.keys().filter(|&k| k != "off").cloned().collect();
     if declared.is_empty() {
         // 只声明了"能思考"、没列档位：等级名就是线上值（老行为，网关多半直接认）
         return Ok((requested.to_string(), Some(requested.to_string())));

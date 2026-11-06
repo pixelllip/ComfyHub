@@ -323,9 +323,9 @@ pub fn get(state: &AppState, id: &str) -> Result<Option<AttachmentDto>, ApiError
     // 非法 id 与"库里没有"一样回 None（见 `safe_path_id` 的注释）
     let Some(id) = safe_path_id(id) else { return Ok(None) };
     state.with(|conn| {
-        Ok(conn
+        conn
             .query_row("SELECT * FROM ai_attachments WHERE id = ?1", params![id], row_to_dto)
-            .optional()?)
+            .optional()
     })
 }
 
@@ -923,7 +923,7 @@ pub fn inline_base64(state: &AppState, dto: &AttachmentDto) -> Option<String> {
 /// 标准 base64（不引额外依赖：附件内联只用它一处，20 行足够）。
 pub fn base64_encode(bytes: &[u8]) -> String {
     const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut out = String::with_capacity((bytes.len() + 2) / 3 * 4);
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
     for chunk in bytes.chunks(3) {
         let b0 = chunk[0] as u32;
         let b1 = *chunk.get(1).unwrap_or(&0) as u32;
@@ -947,7 +947,7 @@ pub fn base64_encode(bytes: &[u8]) -> String {
 
 pub fn base64_decode(text: &str) -> Option<Vec<u8>> {
     let cleaned: Vec<u8> = text.bytes().filter(|b| !b.is_ascii_whitespace()).collect();
-    if cleaned.len() % 4 != 0 {
+    if !cleaned.len().is_multiple_of(4) {
         return None;
     }
     let value_of = |byte: u8| -> Option<u32> {

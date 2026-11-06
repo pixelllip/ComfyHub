@@ -2007,12 +2007,12 @@ async fn health(State(state): State<AppState>) -> Result<Json<serde_json::Value>
     let (engine, schema) = state.with(|conn| Ok((db::engine_info(conn)?, db::schema_version(conn)?)))?;
 
     // `database` 就是 Kotlin 那句 "SELECT 1" 的结果（ok / error: …），不是常量
-    let database = match state.with(|conn| Ok(conn.query_row("SELECT 1", [], |r| r.get::<_, i64>(0))?)) {
+    let database = match state.with(|conn| conn.query_row("SELECT 1", [], |r| r.get::<_, i64>(0))) {
         Ok(_) => "ok".to_string(),
         Err(e) => format!("error: {}", e.human()),
     };
     let server_time: String =
-        state.with(|conn| Ok(conn.query_row("SELECT strftime('%Y-%m-%dT%H:%M:%fZ','now')", [], |r| r.get(0))?))?;
+        state.with(|conn| conn.query_row("SELECT strftime('%Y-%m-%dT%H:%M:%fZ','now')", [], |r| r.get(0)))?;
 
     Ok(Json(json!({
         "status": if database == "ok" { "ok" } else { "degraded" },
@@ -2099,7 +2099,7 @@ async fn list_tags(
               ORDER BY {order} LIMIT ?3"
         );
         let mut stmt = conn.prepare(&sql)?;
-        let rows = stmt.query_map(rusqlite::params![keyword, q.category, limit], |row| tag_from_row(row))?;
+        let rows = stmt.query_map(rusqlite::params![keyword, q.category, limit], tag_from_row)?;
         rows.collect::<rusqlite::Result<Vec<_>>>()
     })?;
     Ok(Json(tags))
@@ -2239,9 +2239,9 @@ pub(crate) fn query_prompts(state: &AppState, q: &PromptQuery) -> Result<Paged<P
         .map(|raw| crate::media::media::bool_param(Some(raw)));
     let with_media = match media_filter {
         Some(_) => Some(state.with(|conn| {
-            Ok(crate::media::collection::prompt_ids_with_media(conn).map_err(|e| {
+            crate::media::collection::prompt_ids_with_media(conn).map_err(|e| {
                 rusqlite::Error::ToSqlConversionFailure(Box::new(std::io::Error::other(e.to_string())))
-            })?)
+            })
         })?),
         None => None,
     };
@@ -2278,7 +2278,7 @@ pub(crate) fn query_prompts(state: &AppState, q: &PromptQuery) -> Result<Paged<P
         list_params.push(rusqlite::types::Value::Integer(offset));
         let mut stmt = conn.prepare(&sql)?;
         let mut items = stmt
-            .query_map(rusqlite::params_from_iter(list_params.iter()), |row| prompt_from_row(row))?
+            .query_map(rusqlite::params_from_iter(list_params.iter()), prompt_from_row)?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         for item in items.iter_mut() {
             item.tags = tags_of(conn, item.id)?;
@@ -2308,7 +2308,7 @@ pub(crate) fn query_prompts(state: &AppState, q: &PromptQuery) -> Result<Paged<P
 pub(crate) fn get_prompt_dto(state: &AppState, id: i64) -> Result<PromptDto, ApiError> {
     let prompt = state.with(|conn| {
         let mut stmt = conn.prepare("SELECT * FROM prompts WHERE id = ?1")?;
-        let mut rows = stmt.query_map(rusqlite::params![id], |row| prompt_from_row(row))?;
+        let mut rows = stmt.query_map(rusqlite::params![id], prompt_from_row)?;
         match rows.next() {
             Some(row) => {
                 let mut prompt = row?;
@@ -2337,7 +2337,7 @@ pub(crate) fn tags_of(conn: &Connection, prompt_id: i64) -> rusqlite::Result<Vec
           WHERE pt.prompt_id = ?1
           ORDER BY t.name COLLATE NOCASE ASC",
     )?;
-    let rows = stmt.query_map(rusqlite::params![prompt_id], |row| tag_from_row(row))?;
+    let rows = stmt.query_map(rusqlite::params![prompt_id], tag_from_row)?;
     rows.collect()
 }
 

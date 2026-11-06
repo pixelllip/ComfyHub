@@ -123,10 +123,10 @@ impl MediaQuery {
 /// `pub(crate)`：`PromptQuery`（提示词 / 预设列表）也吃同一份判据 ——
 /// 两处各写一遍的话，"产物列表收 1、提示词列表不收"这种漂移不会有用例变红。
 pub(crate) fn bool_param(raw: Option<&str>) -> bool {
-    match raw.map(|s| s.trim().to_ascii_lowercase()).as_deref() {
-        Some("1") | Some("true") | Some("yes") | Some("on") => true,
-        _ => false,
-    }
+    matches!(
+        raw.map(|s| s.trim().to_ascii_lowercase()).as_deref(),
+        Some("1") | Some("true") | Some("yes") | Some("on")
+    )
 }
 
 /// 列表 / 搜索（`GET /api/media`）。
@@ -270,11 +270,11 @@ pub fn search(state: &AppState, q: &MediaQuery) -> Result<Paged<MediaDto>, ApiEr
         let mut stmt = conn.prepare(&sql)?;
         {
             let mut all: Vec<&dyn rusqlite::ToSql> = args.iter().map(|a| a.as_ref()).collect();
-            let size_box = size as i64;
+            let size_box = size;
             let offset_box = offset;
             all.push(&size_box);
             all.push(&offset_box);
-            let rows = stmt.query_map(all.as_slice(), |row| media_from_row(row))?;
+            let rows = stmt.query_map(all.as_slice(), media_from_row)?;
             let mut items = rows.collect::<rusqlite::Result<Vec<_>>>()?;
             for item in items.iter_mut() {
                 item.prompt_tags = merged_tags(conn, item)?;
@@ -312,8 +312,8 @@ fn merged_tags(conn: &rusqlite::Connection, media: &MediaDto) -> rusqlite::Resul
               WHERE mt.media_id = ?1 ORDER BY t.name",
         )?;
         let rows = stmt.query_map(params![media.id], |row| row.get::<_, String>(0))?;
-        let collected = rows.collect::<rusqlite::Result<Vec<_>>>()?;
-        collected
+        
+        rows.collect::<rusqlite::Result<Vec<_>>>()?
     };
     if let Some(prompt_id) = media.prompt_id {
         let mut stmt = conn.prepare(
@@ -623,7 +623,7 @@ pub fn list_by_ids(state: &AppState, ids: &[i64]) -> Result<Vec<MediaDto>, ApiEr
         let mut stmt = conn.prepare(&sql)?;
         let params: Vec<&dyn rusqlite::ToSql> =
             ids.iter().map(|id| id as &dyn rusqlite::ToSql).collect();
-        let rows = stmt.query_map(params.as_slice(), |row| media_from_row(row))?;
+        let rows = stmt.query_map(params.as_slice(), media_from_row)?;
         let mut found = rows.collect::<rusqlite::Result<Vec<_>>>()?;
         for item in found.iter_mut() {
             item.prompt_tags = merged_tags(conn, item)?;
@@ -648,7 +648,7 @@ pub fn list_by_prompt(state: &AppState, prompt_id: i64) -> Result<Vec<MediaDto>,
         let mut stmt = conn.prepare(&format!(
             "SELECT {COLS} {FROM} WHERE m.prompt_id = ?1 ORDER BY m.created_at DESC"
         ))?;
-        let rows = stmt.query_map(params![prompt_id], |row| media_from_row(row))?;
+        let rows = stmt.query_map(params![prompt_id], media_from_row)?;
         let mut items = rows.collect::<rusqlite::Result<Vec<_>>>()?;
         for item in items.iter_mut() {
             item.prompt_tags = merged_tags(conn, item)?;
@@ -680,7 +680,7 @@ pub fn prompt_of_media(state: &AppState, media_id: i64) -> Result<Option<crate::
                 .query_row(
                     "SELECT * FROM prompts WHERE id = ?1",
                     params![prompt_id],
-                    |row| crate::web::models::prompt_from_row(row),
+                    crate::web::models::prompt_from_row,
                 )
                 .optional()?;
             match prompt {

@@ -435,7 +435,9 @@ pub fn append_message(
     let text = req.text.clone();
     let provider_id = req.provider_id.clone();
     let model_id = req.model_id.clone();
-    let parts: Vec<(String, Option<String>, Option<String>, Option<String>, Option<String>)> = req
+    // 一块有序内容：`(type, text, attachment_id, tool_call_id, json_payload)`
+    type PartRow = (String, Option<String>, Option<String>, Option<String>, Option<String>);
+    let parts: Vec<PartRow> = req
         .parts
         .iter()
         .map(|p| {

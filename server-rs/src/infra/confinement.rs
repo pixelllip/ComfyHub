@@ -114,9 +114,8 @@ pub fn probe_dir(dir: &Path) -> std::io::Result<()> {
         .write(true)
         .open(&probe)
         .map(|_| ())
-        .and_then(|()| {
+        .map(|()| {
             let _ = std::fs::remove_file(&probe);
-            Ok(())
         })
 }
 
@@ -269,7 +268,7 @@ pub fn apply(project_root: &Path, report: &Report, pid: u32) -> Option<PathBuf> 
 pub fn read(project_root: &Path) -> Option<Report> {
     let text = std::fs::read_to_string(path(project_root)).ok()?;
     let value: serde_json::Value = serde_json::from_str(&text).ok()?;
-    if value.get("restricted")?.as_bool()? != true {
+    if !value.get("restricted")?.as_bool()? {
         return None;
     }
     let list = |key: &str| -> Vec<String> {

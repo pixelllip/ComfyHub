@@ -238,7 +238,7 @@ pub fn apply(
         for id in ids {
             if dropped.contains(&id)
                 || keep.contains(&id)
-                || outputs.iter().any(|output| *output == id)
+                || outputs.contains(&id)
                 || live.contains(&id)
             {
                 continue;

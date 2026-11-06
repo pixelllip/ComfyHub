@@ -383,7 +383,7 @@ pub(crate) fn tags_to_natural_language(raw: &str) -> String {
     let mut clothes: Vec<String> = Vec::new();
     let mut other: Vec<String> = Vec::new();
 
-    for raw_tag in raw.split(|c: char| matches!(c, ',' | '，' | ';' | '；' | '\n')) {
+    for raw_tag in raw.split([',', '，', ';', '；', '\n']) {
         let tag = raw_tag.replace('_', " ");
         let tag = tag.split_whitespace().collect::<Vec<_>>().join(" ");
         if tag.is_empty() {

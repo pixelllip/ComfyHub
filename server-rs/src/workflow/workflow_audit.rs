@@ -799,7 +799,7 @@ fn check_params(graph: &Map<String, Value>) -> Vec<Finding> {
             }
         }
         if let Some(sampler) = sampler {
-            if !profile.samplers.iter().any(|s| *s == sampler.as_str()) {
+            if !profile.samplers.contains(&sampler.as_str()) {
                 bad.push(format!(
                     "sampler = {sampler}（常用 {}）",
                     profile.samplers.join("/")

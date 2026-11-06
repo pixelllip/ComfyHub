@@ -661,7 +661,7 @@ fn kill_tree(pid: u32) -> Result<String, ToolFailure> {
             String::from_utf8_lossy(&out.stdout),
             String::from_utf8_lossy(&out.stderr)
         );
-        return Ok(text.trim().replace('\n', " / "));
+        Ok(text.trim().replace('\n', " / "))
     }
     #[cfg(not(windows))]
     {

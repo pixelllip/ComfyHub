@@ -376,13 +376,13 @@ fn parse_payload(item: &PushItem) -> Result<ParsedPayload, Reject> {
 fn resolve_source_ref(state: &AppState, source_ref: &str) -> Result<Option<i64>, Reject> {
     state
         .with(|conn| {
-            Ok(conn
+            conn
                 .query_row(
                     "SELECT id FROM prompts WHERE source_ref = ?1 ORDER BY id LIMIT 1",
                     rusqlite::params![source_ref],
                     |row| row.get::<_, i64>(0),
                 )
-                .optional()?)
+                .optional()
         })
         .map_err(|e| Reject { code: "DB_ERROR".to_string(), message: format!("查工作流失败：{}", e.human()) })
 }
@@ -846,7 +846,7 @@ fn job_elapsed_ms(job: &Job) -> i64 {
 
 /// 读一行（不存在 → `None`）。
 pub fn load(state: &AppState, queue_id: &str) -> Option<Job> {
-    state.with(|conn| Ok(read_job(conn, queue_id)?)).ok().flatten()
+    state.with(|conn| read_job(conn, queue_id)).ok().flatten()
 }
 
 fn read_job(conn: &Connection, queue_id: &str) -> rusqlite::Result<Option<Job>> {
@@ -892,13 +892,13 @@ fn read_job(conn: &Connection, queue_id: &str) -> rusqlite::Result<Option<Job>> 
 /// `(state, approval)` —— 审批闸门读的就是这两个字段。
 fn approval_of(state: &AppState, queue_id: &str) -> Result<Option<(String, String)>, ApiError> {
     state.with(|conn| {
-        Ok(conn
+        conn
             .query_row(
                 "SELECT state, approval FROM submit_jobs WHERE queue_id = ?1",
                 rusqlite::params![queue_id],
                 |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
             )
-            .optional()?)
+            .optional()
     })
 }
 

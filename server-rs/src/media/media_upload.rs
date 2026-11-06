@@ -229,9 +229,9 @@ pub async fn upload(state: AppState, mut multipart: Multipart) -> Result<(axum::
     // promptId 校验放在**动库之前**；不通过就把临时文件清掉（别留一地垃圾）
     if let Some(pid) = prompt_id {
         let exists = state.with(|conn| {
-            Ok(conn
+            conn
                 .query_row("SELECT id FROM prompts WHERE id = ?1", params![pid], |row| row.get::<_, i64>(0))
-                .optional_present()?)
+                .optional_present()
         })?;
         if exists.is_none() {
             incoming.iter().for_each(|i| {
@@ -261,11 +261,11 @@ pub async fn upload(state: AppState, mut multipart: Multipart) -> Result<(axum::
             // 判重：内容相同就**不入库**（与 Kotlin 一致）
             let existing: Option<i64> = state
                 .with(|conn| {
-                    Ok(conn
+                    conn
                         .query_row("SELECT id FROM media_assets WHERE sha256 = ?1 LIMIT 1", params![sha], |row| {
                             row.get::<_, i64>(0)
                         })
-                        .optional_present()?)
+                        .optional_present()
                 })
                 .map_err(|e| e.human().to_string())?;
             if let Some(existing_id) = existing {

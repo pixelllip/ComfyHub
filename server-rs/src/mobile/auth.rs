@@ -435,7 +435,7 @@ const B64URL: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz
 const B64STD: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
 fn base64_with(alphabet: &[u8; 64], bytes: &[u8], pad: bool) -> String {
-    let mut out = String::with_capacity((bytes.len() + 2) / 3 * 4);
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
     for chunk in bytes.chunks(3) {
         let b = [chunk[0], *chunk.get(1).unwrap_or(&0), *chunk.get(2).unwrap_or(&0)];
         let n = ((b[0] as u32) << 16) | ((b[1] as u32) << 8) | b[2] as u32;
@@ -1050,6 +1050,7 @@ async fn set_device_credentials(
 /// 3. `urls` 来自 [`crate::mobile::net_urls`]（**我们实际监听的**端口），一条都没有就回空数组、
 ///    让界面如实说"手填地址"——**绝不编一个连不上的地址**；
 /// 4. 会话 TTL 与 `pair/request` 同值（120 秒）：二维码被拍走后的可用窗口越短越好。
+///
 /// 造一条配对会话 —— **两条入口共用这一份**（桌面出二维码 / 手机举手）。
 ///
 /// 2026-09-30 抽出来：原来两处各写一遍"加锁 → 清理过期 → 挤掉最老的 → push"，
@@ -1273,7 +1274,7 @@ async fn pair_claim(
     }
 
     let token = random_token()?;
-    let schema_version = state.with(|conn| Ok(crate::infra::db::schema_version(conn)?))?;
+    let schema_version = state.with(crate::infra::db::schema_version)?;
     let ip = session_ip.or_else(|| remote.map(|v| v.to_string()));
     state.with(|conn| {
         let mut file = load(conn);

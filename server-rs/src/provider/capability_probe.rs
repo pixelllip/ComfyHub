@@ -238,7 +238,7 @@ pub fn rungs_for(declared: &BTreeMap<String, String>) -> Vec<(String, String)> {
         fallback.reverse();
         return fallback;
     }
-    rungs.sort_by(|a, b| effort_rank(&b.0).cmp(&effort_rank(&a.0)));
+    rungs.sort_by_key(|rung| std::cmp::Reverse(effort_rank(&rung.0)));
     rungs
 }
 

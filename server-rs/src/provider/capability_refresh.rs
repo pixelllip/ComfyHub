@@ -81,9 +81,7 @@ pub fn no_download() -> bool {
 /// 返回 `Some(人话)` = 跳过（并把这句如实回给界面）。
 pub fn skip_reason(force: bool, no_download: bool, stale: bool) -> Option<String> {
     if no_download {
-        return Some(format!(
-            "COMFYHUB_NO_DOWNLOAD=1 已关闭在线更新（目录仍用内置表 + 已有 remote.json）"
-        ));
+        return Some("COMFYHUB_NO_DOWNLOAD=1 已关闭在线更新（目录仍用内置表 + 已有 remote.json）".to_string());
     }
     if !force && !stale {
         return Some(format!(

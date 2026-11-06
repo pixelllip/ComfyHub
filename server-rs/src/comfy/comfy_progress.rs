@@ -576,7 +576,8 @@ fn clear_current(inner: &mut Inner, prompt_id: &str) {
 
 /// `value / max * 100` 的整数；`max <= 0` 或非有限值时 **`None`**（进度未知）。
 fn percent_of(value: f64, max: f64) -> Option<i64> {
-    if !(max > 0.0) || !value.is_finite() || !max.is_finite() {
+    // 先判 max 有限，再判正：NaN 走 `is_finite` 这一条（用 `!(max > 0.0)` 读着别扭）
+    if !max.is_finite() || max <= 0.0 || !value.is_finite() {
         return None;
     }
     let percent = (value / max * 100.0).round();

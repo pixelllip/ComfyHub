@@ -1383,11 +1383,7 @@ fn keep_largest_blob_raw(mask: &mut [u8], w: usize, h: usize) {
             best = blob;
         }
     }
-    for index in 0..w * h {
-        if mask[index] > 0 {
-            mask[index] = 0;
-        }
-    }
+    mask.fill(0);
     for index in best {
         mask[index] = 255;
     }
@@ -1399,10 +1395,10 @@ fn resize_mask(src: &[u8], w: usize, h: usize, out_w: usize, out_h: usize) -> Ve
     let mut out = vec![0u8; out_w * out_h];
     for oy in 0..out_h {
         let y0 = oy * h / out_h;
-        let y1 = (((oy + 1) * h + out_h - 1) / out_h).min(h).max(y0 + 1);
+        let y1 = ((oy + 1) * h).div_ceil(out_h).min(h).max(y0 + 1);
         for ox in 0..out_w {
             let x0 = ox * w / out_w;
-            let x1 = (((ox + 1) * w + out_w - 1) / out_w).min(w).max(x0 + 1);
+            let x1 = ((ox + 1) * w).div_ceil(out_w).min(w).max(x0 + 1);
             let mut sum = 0u32;
             let mut count = 0u32;
             for y in y0..y1 {
@@ -1423,6 +1419,8 @@ fn resize_mask(src: &[u8], w: usize, h: usize, out_w: usize, out_h: usize) -> Ve
 ///
 /// 返回 `(canvas 大小的新图, canvas 大小的新遮罩)`；`bbox` 之外的像素一律给黑 / 0
 /// （合成只看遮罩白的地方，图其余部分是死重，但一并搬到同一位置才对齐）。
+// 几何参数（bbox / scale / 三个中心点）天然是一组，包成结构体只会在调用点再拆一次。
+#[allow(clippy::too_many_arguments)]
 pub fn place_patch(
     image: &image::RgbImage,
     mask: &[u8],
@@ -1640,8 +1638,8 @@ fn draw_mask(w: usize, h: usize, region: &[f64; 4], shape: &str) -> Vec<u8> {
 /// 两次一维均值模糊（可分离），半径 = `feather / 2`（与 Kotlin `boxBlur` 逐行同义，
 /// 含**边缘钳位**：越界的取样用边界像素，所以遮罩边缘不会变暗）。
 fn box_blur(src: &[u8], w: usize, h: usize, feather: i64) -> Vec<u8> {
-    let radius = (feather / 2).max(1) as i64;
-    let window = (2 * radius + 1) as i64;
+    let radius = (feather / 2).max(1);
+    let window = 2 * radius + 1;
     let idx = |x: i64, y: i64| -> usize {
         y.clamp(0, h as i64 - 1) as usize * w + x.clamp(0, w as i64 - 1) as usize
     };

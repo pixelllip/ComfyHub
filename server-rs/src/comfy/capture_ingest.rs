@@ -195,11 +195,11 @@ pub fn import_file(
     // 内容去重：同一份文件重复导入时直接复用已有记录
     let existing: Result<Option<i64>, ApiError> = state.with(|conn| {
         use rusqlite::OptionalExtension;
-        Ok(conn
+        conn
             .query_row("SELECT id FROM media_assets WHERE sha256 = ?1 LIMIT 1", params![sha], |row| {
                 row.get::<_, i64>(0)
             })
-            .optional()?)
+            .optional()
     });
     match existing {
         Ok(Some(existing_id)) => {
@@ -300,6 +300,8 @@ pub fn import_file(
 /// ⚠ 两个**空集合的写法**必须与 Kotlin 一致：`loras` 空写 **`[]`**、`extra_params` 空写
 /// **`{}`**（Kotlin 走的是序列化器，永远给合法 JSON；写真 NULL 会让"库里这一列是什么形状"
 /// 两端分叉 —— 真库实测 ComfyUI 来源的行全是 `[]` / `{}`）。
+// 一条捕获记录要往同一行里写十几个字段，拆成结构体只会让调用点多一层包装。
+#[allow(clippy::too_many_arguments)]
 pub fn create_captured_prompt(
     tx: &rusqlite::Connection,
     parsed: &crate::workflow::graph_parse::Parsed,

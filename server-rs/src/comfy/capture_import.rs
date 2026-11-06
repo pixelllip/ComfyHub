@@ -276,13 +276,13 @@ async fn import_one(
     // ① 内容已经在库里 → 重复（把已有的 promptId 带回去，界面能显示"已关联哪条提示词"）
     let existing: Option<(i64, Option<i64>)> = state.with(|conn| {
         use rusqlite::OptionalExtension;
-        Ok(conn
+        conn
             .query_row(
                 "SELECT id, prompt_id FROM media_assets WHERE sha256 = ?1 LIMIT 1",
                 rusqlite::params![sha],
                 |row| Ok((row.get::<_, i64>(0)?, row.get::<_, Option<i64>>(1)?)),
             )
-            .optional()?)
+            .optional()
     })?;
     if let Some((_, prompt_id)) = existing {
         let _ = prompt_id;
@@ -426,7 +426,7 @@ fn collect_files(
                 continue;
             }
             if path.is_dir() {
-                if recursive && !skip_dirs.iter().any(|skip| path == *skip) {
+                if recursive && !skip_dirs.contains(&path) {
                     stack.push(path);
                 }
                 continue;

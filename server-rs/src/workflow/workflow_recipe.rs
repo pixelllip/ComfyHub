@@ -1690,11 +1690,16 @@ impl RecipeFailure {
 /// 而 Kotlin 的每一次 `analyze` 也只取一次 —— 行为一致，少一层闭包。
 /// 「拿到 / 拿不到」这件事本身就是 `Option`，`None` 的语义与 Kotlin 的 `null` 逐字相同：
 /// 内置那张表仍然用，并在 `warnings` 里如实说"自定义加载器的槽位可能漏报"。
+/// 三个回调的签名（字段一多，`Box<dyn Fn…>` 直接写在字段里读不动）。
+type ApiGraphOf<'a> = Box<dyn Fn(i64) -> Option<Map<String, Value>> + Send + Sync + 'a>;
+type PromptNameOf<'a> = Box<dyn Fn(i64) -> Option<String> + Send + Sync + 'a>;
+type PromptIdByRunKey<'a> = Box<dyn Fn(&str) -> Option<i64> + Send + Sync + 'a>;
+
 pub struct Deps<'a> {
     pub object_info: Option<Map<String, Value>>,
-    pub api_graph_of: Box<dyn Fn(i64) -> Option<Map<String, Value>> + Send + Sync + 'a>,
-    pub prompt_name: Box<dyn Fn(i64) -> Option<String> + Send + Sync + 'a>,
-    pub find_prompt_id_by_run_key: Box<dyn Fn(&str) -> Option<i64> + Send + Sync + 'a>,
+    pub api_graph_of: ApiGraphOf<'a>,
+    pub prompt_name: PromptNameOf<'a>,
+    pub find_prompt_id_by_run_key: PromptIdByRunKey<'a>,
 }
 
 impl<'a> Deps<'a> {

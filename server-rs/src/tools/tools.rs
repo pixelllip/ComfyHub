@@ -226,11 +226,10 @@ impl ToolSession {
             "web" => self.web_queries_in_window += 1,
             // ⚠ `comfy_submit` 不算"查询"（见 `ai_settings::is_comfy_query` 的注释：
             //   把它算进去会让"AI 自己搭工作流"那条路走不通）
-            "comfy" => {
-                if crate::ai::ai_settings::is_comfy_query(name) {
+            "comfy"
+                if crate::ai::ai_settings::is_comfy_query(name) => {
                     self.comfy_queries_in_window += 1;
                 }
-            }
             _ => {}
         }
     }
@@ -462,27 +461,27 @@ pub fn implemented() -> Vec<ToolView<'static>> {
 /// 当前四十三个：手机那四个只碰本机的（Skills 两个 + 长期记忆 + 提问）+ 桌面文件工具五件
 /// （`list_dir` / `read_file` / `write_file` / `register_skill` / `delete_skill`，P4 第 40 步）
 /// + 联网三件（`web_search` / `web_fetch` / `civitai_search`，见 [`crate::tools::web_tools`] 与
-/// [`crate::tools::civitai`]，P4 第 64 步；它们本来就是 `BOTH` 档，只是**实现**在这一步才落地）
+///   [`crate::tools::civitai`]，P4 第 64 步；它们本来就是 `BOTH` 档，只是**实现**在这一步才落地）
 /// + comfy 查询三件（`comfy_get_run` / `comfy_list_workflows` / `comfy_get_status`）
 /// + `comfy_load_workflow` / `comfy_submit` / `comfy_sync_history`
 /// + **看产物**（`comfy_view_outputs`，2026-10-29 用户："能不能让 AI 看我直接在 comfy
-/// 运行的产物"：读画廊最近的图片并交给执行器自动附图，见 [`crate::comfy::media_view`]）
+///   运行的产物"：读画廊最近的图片并交给执行器自动附图，见 [`crate::comfy::media_view`]）
 /// + 资料库四件（角色卡 + 画风卡：`search/save_character_card`、`search/save_style_card`）
 /// + **图像编辑三件**（`comfy_use_media` / `comfy_use_attachment` /
-/// `comfy_make_mask`，见 [`crate::comfy::image_edit`]）
+///   `comfy_make_mask`，见 [`crate::comfy::image_edit`]）
 /// + **体检两件**（`comfy_check_inputs` / `comfy_fit_workflow`，见 [`crate::workflow::workflow_fit`]，
-/// P4 第 62 步）
+///   P4 第 62 步）
 /// + **审核 + 摘拼两件**（`comfy_audit_workflow` / `comfy_prune_workflow`，见
-/// [`crate::workflow::workflow_audit`] 与 [`crate::workflow::workflow_prune`]，P4 第 63 步）
+///   [`crate::workflow::workflow_audit`] 与 [`crate::workflow::workflow_prune`]，P4 第 63 步）
 /// + **定向查询**（`find_model`，见 [`crate::tools::find_model`]，P4 第 64 步）
 /// + **接线体检**（`comfy_diagnose_workflow`，见 [`crate::workflow::workflow_blueprint`]，
-/// 2026-10-17：与界面上「看蓝图」共用一份判据）
+///   2026-10-17：与界面上「看蓝图」共用一份判据）
 /// + **配方三件**（`comfy_learn_workflow` / `comfy_list_recipes` / `comfy_bind_recipe`，
-/// 见 [`crate::workflow::workflow_recipe`]，P4 第 67 步；学与绑都与
-/// `POST /api/ai/workflow-recipes*` 共用一份实现）。
+///   见 [`crate::workflow::workflow_recipe`]，P4 第 67 步；学与绑都与
+///   `POST /api/ai/workflow-recipes*` 共用一份实现）。
 /// + **2D 布局模板**（`layout_propose`，见 [`crate::ai::layout_proposal`]，2026-11-03：
-/// 写提示词的同一轮把构图草稿交给用户预览 / 修改，改完再提交回来 —— 只出草稿，
-/// 不生成图片、不写库）。
+///   写提示词的同一轮把构图草稿交给用户预览 / 修改，改完再提交回来 —— 只出草稿，
+///   不生成图片、不写库）。
 pub const IMPLEMENTED: [&str; 43] = [
     "ask_user_question",
     "civitai_search",
@@ -933,9 +932,8 @@ pub(crate) fn java_error_name(error: &reqwest::Error) -> &'static str {
         "ConnectException"
     } else if error.is_timeout() {
         "HttpTimeoutException"
-    } else if error.is_body() || error.is_decode() {
-        "IOException"
     } else {
+        // 读流 / 解码 / 别的都算 IOException（Kotlin 那边也是三分，没有再细分）
         "IOException"
     }
 }
@@ -1525,10 +1523,6 @@ fn search_prompts(state: &AppState, arguments: &Value) -> Result<ToolOutcome, To
     Ok(ToolOutcome::new(text, payload))
 }
 
-/// 单条提示词（按 id 取，含标签与产物数）—— 与 `GET /api/prompts/{id}` 同一条路。
-
-
-///
 /// 与 `GET /api/capture/workflows` **同一个实现**（[`crate::comfy::comfy_dirs::workflows_json`]）——
 /// 三份目录来源、`file:<sha256>` 那把幂等钥匙、`inLibrary` 判定全都不另写一份。
 /// 各写一份的后果是"界面里列得出来、AI 却说没有"（用户 bug ⑤ 的复发形态）。

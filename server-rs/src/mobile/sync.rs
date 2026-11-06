@@ -796,7 +796,7 @@ pub fn bootstrap(state: &AppState, table: &str, page: i64, page_size: i64) -> Re
         let sql = format!("SELECT * FROM {table} ORDER BY rowid ASC LIMIT ?1 OFFSET ?2");
         let mut stmt = conn.prepare(&sql)?;
         let rows = stmt
-            .query_map([page_size, (page - 1) * page_size], |row| row_to_json(row))?
+            .query_map([page_size, (page - 1) * page_size], row_to_json)?
             .collect::<rusqlite::Result<Vec<serde_json::Value>>>()?;
         Ok(BootstrapPage { table: table.to_string(), page, page_size, total_pages, rows })
     })

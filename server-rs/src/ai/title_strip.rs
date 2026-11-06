@@ -194,7 +194,7 @@ fn clean_title(raw: &str) -> Option<String> {
     let trim_chars = ['：', ':', '"', '\'', '“', '”', '‘', '’', '《', '》', '【', '】', '「', '」', '[', ']', '#', '*'];
     let mut text = collapsed.trim().trim_matches(|c| trim_chars.contains(&c)).to_string();
     if let Some(rest) = text.strip_prefix("标题") {
-        text = rest.trim_start_matches(|c| c == '：' || c == ':' || c == ' ' || c == '\t').to_string();
+        text = rest.trim_start_matches(['：', ':', ' ', '\t']).to_string();
     }
     text = text.trim_matches(|c| trim_chars.contains(&c)).to_string();
     if text.chars().count() > MAX_TITLE_CHARS {

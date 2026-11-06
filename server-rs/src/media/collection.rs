@@ -391,9 +391,7 @@ fn endpoint_for(
     positive: Option<String>,
     negative: Option<String>,
 ) -> Option<Endpoint> {
-    if prompt_id.is_none() {
-        return None;
-    }
+    prompt_id?;
     let ep = Endpoint::new(
         kind,
         positive.unwrap_or_default(),
@@ -501,7 +499,9 @@ pub fn assign(conn: &Connection, media_id: i64) -> Result<Assigned, WriteError> 
 ///
 /// 返回 `(端点, 成员 id)`；桶内按读入顺序排，且**桶可以只有一条**（独苗，见 [`backfill`]）。
 fn pending_buckets(conn: &Connection) -> Result<Vec<(Endpoint, Vec<i64>)>, WriteError> {
-    let rows: Vec<(i64, Option<i64>, String, Option<String>, Option<String>)> = {
+    // `(id, prompt_id, kind, 正面提示词, 负面提示词)`
+    type PendingRow = (i64, Option<i64>, String, Option<String>, Option<String>);
+    let rows: Vec<PendingRow> = {
         let mut stmt = conn.prepare(
             "SELECT m.id, m.prompt_id, m.kind, p.positive_prompt, p.negative_prompt
                FROM media_assets m LEFT JOIN prompts p ON p.id = m.prompt_id

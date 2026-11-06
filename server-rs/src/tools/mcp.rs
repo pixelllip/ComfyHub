@@ -168,6 +168,9 @@ pub struct McpCallResult {
 //  客户端
 // ---------------------------------------------------------------------------
 
+/// 等在回包上的请求：`id → 把结果发回去的那一端`。
+type PendingMap = Arc<StdMutex<HashMap<u64, oneshot::Sender<Result<Value, McpError>>>>>;
+
 /// MCP stdio 客户端。
 ///
 /// 传输层做成"读一半 / 写一半"的泛型（[`McpClient::from_io`]）：
@@ -175,7 +178,7 @@ pub struct McpCallResult {
 /// 于是协议层每一处（噪音行、通知、超时、`isError`）都能在不起 Python 的前提下测到。
 pub struct McpClient {
     tx: mpsc::UnboundedSender<String>,
-    pending: Arc<StdMutex<HashMap<u64, oneshot::Sender<Result<Value, McpError>>>>>,
+    pending: PendingMap,
     next_id: AtomicU64,
     stderr_tail: Arc<StdMutex<VecDeque<String>>>,
     notifications: Arc<StdMutex<VecDeque<Value>>>,
@@ -206,7 +209,7 @@ impl McpClient {
         E: AsyncRead + Unpin + Send + 'static,
     {
         let (tx, mut rx) = mpsc::unbounded_channel::<String>();
-        let pending: Arc<StdMutex<HashMap<u64, oneshot::Sender<Result<Value, McpError>>>>> =
+        let pending: PendingMap =
             Arc::new(StdMutex::new(HashMap::new()));
         let stderr_tail: Arc<StdMutex<VecDeque<String>>> =
             Arc::new(StdMutex::new(VecDeque::new()));
@@ -544,7 +547,7 @@ impl McpClient {
 /// 收一条服务端消息：回包给等在 `pending` 里的那个；通知记下来；服务端**主动请求**要回"不支持"。
 fn dispatch(
     obj: &Value,
-    pending: &Arc<StdMutex<HashMap<u64, oneshot::Sender<Result<Value, McpError>>>>>,
+    pending: &PendingMap,
     notifications: &Arc<StdMutex<VecDeque<Value>>>,
     tx: &mpsc::UnboundedSender<String>,
 ) {
@@ -600,7 +603,7 @@ fn dispatch(
 }
 
 fn fail_all_pending(
-    pending: &Arc<StdMutex<HashMap<u64, oneshot::Sender<Result<Value, McpError>>>>>,
+    pending: &PendingMap,
     code: &str,
     message: &str,
 ) {
@@ -1064,7 +1067,7 @@ const FLAG_OUTPUT_ALIASES: &[&str] = &[FLAG_OUTPUT, "--output"];
 fn specified_flag<'a>(argv: &'a [String], aliases: &[&str]) -> Option<&'a str> {
     argv.iter().find_map(|token| {
         let name = token.split('=').next().unwrap_or(token);
-        aliases.iter().any(|alias| *alias == name).then_some(name)
+        aliases.contains(&name).then_some(name)
     })
 }
 
@@ -1090,7 +1093,7 @@ fn flag_value_last(argv: &[String], aliases: &[&str]) -> Option<PathBuf> {
             Some((name, value)) => (name, Some(value.to_string())),
             None => (token.as_str(), None),
         };
-        if !aliases.iter().any(|alias| *alias == name) {
+        if !aliases.contains(&name) {
             continue;
         }
         let value = inline.or_else(|| {
@@ -1768,6 +1771,7 @@ pub async fn warmup(registry: &Arc<McpRegistry>, project_root: &Path) {
 /// - `PermissionError [Errno 13]`（写凭据锁 / 缓存被拒）—— 受限会话里这是**最常见**的
 ///   （见 [`apply_comfy_cli_write_redirection`] 的文件头），跟 ComfyUI 在不在线无关；
 /// - 连不上 ComfyUI —— 节点查询要先连上 ComfyUI 拿 object_info。
+///
 /// 只把 traceback 原样丢给模型等于没说；要给它"下一步做什么"。
 /// 认不出的形状回 `None`（照旧原样透传，不编）。
 fn humanize_mcp_failure(name: &str, content: &str, stderr: &str) -> Option<String> {

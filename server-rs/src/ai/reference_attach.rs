@@ -75,9 +75,7 @@ pub struct Batch {
 /// 这个模型 + 这个协议能不能收图（与 [`crate::ai::executor`] 的附件计划同一条判据）。
 pub fn supports_images(model_takes_image: bool, api: &str) -> bool {
     model_takes_image
-        && crate::media::strict_intake::adapter_transports(api, "image")
-            .iter()
-            .any(|transport| *transport == "inline_base64")
+        && crate::media::strict_intake::adapter_transports(api, "image").contains(&"inline_base64")
 }
 
 /// 从一次工具结果里取 `referenceImages`，把能发的那几张做成一批。

@@ -327,11 +327,11 @@ impl WorkflowEdit {
     /// 1. 从每个采样器的 `positive` 输入往上找**最近的** `CLIPTextEncode`（不碰 negative）；
     /// 2. 把它的 `text` 改成字面量 —— 原来那条线**就此断开**；
     /// 3. **再把 TextGenerate 这一支从提交图里删掉**（2026-10-24 用户口径：摘线 ≠ 绕过）：
-    ///    · 只断线，节点还在提交图里，而 ComfyUI 的 `validate_prompt` 校验的是**整张 prompt**
-    ///      （不只可达节点）—— 本机没装 TextGenerate 节点包、或它的动态下拉框值不合法时，
-    ///      整份报错（`Node type not found: TextGenerate`），哪怕一个输出都没接；
-    ///    · 只删节点不清引用，留下 `39.on_true → [32,0]` 又会 `Node 32 not found`
-    ///      （用户看到的"有节点没接入"）。
+    ///    只断线不够，节点还在提交图里，而 ComfyUI 的 `validate_prompt` 校验的是**整张 prompt**
+    ///    （不只可达节点）—— 本机没装 TextGenerate 节点包、或它的动态下拉框值不合法时，
+    ///    整份报错（`Node type not found: TextGenerate`），哪怕一个输出都没接。
+    ///    只删节点不清引用也不行，留下 `39.on_true → [32,0]` 又会 `Node 32 not found`
+    ///    （用户看到的"有节点没接入"）。
     ///    所以这里**成对做**：删 TextGenerate 这一支 + 把指向它的下游一并摘掉 / 把只喂它的
     ///    上游一并清掉，删完校验"没有悬挂引用、至少还剩一个输出"；校验不过就退回只断线。
     /// 4. 用户自己的文件**一个字节都不动**：改的只是这一次提交的图。
@@ -717,7 +717,7 @@ fn primitive_text(value: &Value) -> Option<String> {
 /// [`crate::workflow::workflow_audit::CHECK_FRONTEND`] 那条结论说（它的修法才对）。
 pub fn preflight_refusal(graph: &Value, info: &Value) -> Option<String> {
     let info = info.as_object()?;
-    let Some(nodes) = graph.as_object() else { return None };
+    let nodes = graph.as_object()?;
     if nodes.is_empty() {
         return None;
     }

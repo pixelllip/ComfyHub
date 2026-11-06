@@ -337,9 +337,11 @@ where
     };
 
     let mut accumulator = SseAccumulator::new();
-    let mut outcome = Outcome::default();
-    outcome.thinking_forced_off = thinking_forced_off;
-    outcome.echo_forced = echo_forced;
+    let mut outcome = Outcome {
+        thinking_forced_off,
+        echo_forced,
+        ..Default::default()
+    };
     let mut stream = response.bytes_stream();
     let mut buffer = String::new();
     let mut seen_done = false;
@@ -435,6 +437,9 @@ where
     Ok(())
 }
 
+/// 一条工具调用分片：`(分片序号, call id, 函数名, 参数片段, 另一个可选 id)`。
+pub type ToolCallDelta = (usize, String, Option<String>, Option<String>, Option<String>);
+
 /// 一轮上游的收尾信息（`Idle`）。
 #[derive(Debug, Default, Clone)]
 pub struct Outcome {
@@ -445,7 +450,7 @@ pub struct Outcome {
     /// `finish_reason` / `stop_reason`
     pub finish_reason: Option<String>,
     /// 工具调用分片（**原样**转交给 [`crate::provider::protocol::ToolCallAccumulator`] 拼装）
-    pub tool_calls: Vec<(usize, String, Option<String>, Option<String>, Option<String>)>,
+    pub tool_calls: Vec<ToolCallDelta>,
     /// 这一次请求是不是**补了空 `reasoning` 项**才成功的（执行器据此让余下的轮次也补）。
     ///
     /// 与 [`Self::thinking_forced_off`] 分开：补回传**不动思考强度**，

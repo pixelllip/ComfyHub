@@ -274,11 +274,11 @@ pub mod event_type {
 /// 从库里取号：接上 `max(seq)`（崩溃恢复用）。
 pub fn max_seq(state: &AppState, run_id: &str) -> Result<i64, ApiError> {
     state.with(|conn| {
-        Ok(conn.query_row(
+        conn.query_row(
             "SELECT COALESCE(MAX(seq), 0) FROM ai_run_events WHERE run_id = ?1",
             rusqlite::params![run_id],
             |row| row.get(0),
-        )?)
+        )
     })
 }
 

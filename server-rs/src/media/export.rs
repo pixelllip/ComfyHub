@@ -811,7 +811,7 @@ pub fn export(state: &AppState, req: ExportRequest) -> Result<ExportReport, ApiE
 
     // 集合清单：一个集合一份，成员顺序就是文件的导出顺序。
     let mut collections_written = 0i64;
-    for (_, accum) in &collections {
+    for accum in collections.values() {
         if accum.members.is_empty() {
             continue;
         }
@@ -941,6 +941,8 @@ fn api_graph_for(state: &AppState, run_key: &str) -> Option<Value> {
     crate::workflow::workflow_fit::api_graph_of(Some(&graph)).map(Value::Object)
 }
 
+// 侧车 JSON 的字段来自导出的四五个上下文，包一层只会让调用点更长。
+#[allow(clippy::too_many_arguments)]
 fn media_meta_json(
     row: &ExportRow,
     exported_at: &str,
