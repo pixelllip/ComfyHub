@@ -71,6 +71,24 @@ function Resolve-ProjectRootForBackend {
 $ProjectRoot = Resolve-ProjectRootForBackend
 $ExeName = 'comfyhub-server-rs.exe'
 
+<#  数据目录（库 + storage）在哪。**与 lib\core\backend_paths.dart 同一份约定**：
+    `<根>\data-dir.json`（`{"dataDir":"D:\..."}`）存在就用它，否则就是运行根目录。
+    `.run\` / `backups\` / `comfyui\` 永远按运行根目录算，不跟着数据走。 #>
+function Resolve-DataDir {
+    param([string]$ProjectRoot = $ProjectRoot)
+    $file = Join-Path $ProjectRoot 'data-dir.json'
+    if (Test-Path -LiteralPath $file) {
+        try {
+            $raw = Get-Content -LiteralPath $file -Raw -Encoding UTF8 | ConvertFrom-Json
+            $dir = if ($raw.dataDir) { "$($raw.dataDir)".Trim() } else { '' }
+            if ($dir) { return $dir }
+        } catch {
+            Write-Host "data-dir.json 读不了（$file），按运行根目录走" -ForegroundColor Yellow
+        }
+    }
+    return $ProjectRoot
+}
+
 <#  后端 exe 在哪。**顺序即优先级**，与 `lib\core\backend_paths.dart` 一字不差：
       ① $env:COMFYHUB_SERVER_EXE  —— 显式覆盖（把后端映像挪出受限目录也是用这个）
       ② <根>\backend\             —— release 产物：后端是 App 自己的资产
@@ -288,8 +306,9 @@ function Do-Start {
         Do-Stop
     }
 
-    New-Item -ItemType Directory -Force -Path (Join-Path $ProjectRoot '.db') | Out-Null
-    New-Item -ItemType Directory -Force -Path (Join-Path $ProjectRoot 'storage') | Out-Null
+    $DataDir = Resolve-DataDir -ProjectRoot $ProjectRoot
+    New-Item -ItemType Directory -Force -Path (Join-Path $DataDir '.db') | Out-Null
+    New-Item -ItemType Directory -Force -Path (Join-Path $DataDir 'storage') | Out-Null
     New-Item -ItemType Directory -Force -Path (Join-Path $ProjectRoot '.run') | Out-Null
 
     # 起之前先把 Low 完整性标签修回 Medium（只动标签，不动位置；详见 Repair-LaunchImages）
@@ -297,8 +316,8 @@ function Do-Start {
 
     # 端口状态与工具权限的基准：后端认这个环境变量（App 起它时也是这么传的）
     $env:COMFYHUB_PROJECT_ROOT = $ProjectRoot
-    $argLine = "--db `"$(Join-Path $ProjectRoot '.db\comfyhub.db')`" " +
-        "--storage `"$(Join-Path $ProjectRoot 'storage')`" " +
+    $argLine = "--db `"$(Join-Path $DataDir '.db\comfyhub.db')`" " +
+        "--storage `"$(Join-Path $DataDir 'storage')`" " +
         "--host $BindHost --port 0"
 
     Write-Host "==> 启动后端（$BindHost，端口自动）exe=$exe" -ForegroundColor Cyan
@@ -342,7 +361,8 @@ function Do-Stop {
 }
 
 function Do-Status {
-    $dbFile = Join-Path $ProjectRoot '.db\comfyhub.db'
+    $DataDir = Resolve-DataDir -ProjectRoot $ProjectRoot
+    $dbFile = Join-Path $DataDir '.db\comfyhub.db'
     if (Test-Path $dbFile) {
         Write-Host "数据库:    SQLite $dbFile（$([math]::Round((Get-Item $dbFile).Length / 1MB, 2)) MB）"
     } else {

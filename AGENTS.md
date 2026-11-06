@@ -145,6 +145,7 @@
 
 - **后端 exe 的候选顺序只有一个真源**：`serverExeCandidates()` = `$env:COMFYHUB_SERVER_EXE` > `<exe 同级>\backend\` > `<根>\backend\` > `<根>\server\`（旧布局） > `server-rs\target\{release,debug}\`。`COMFYHUB_SERVER_EXE` **永远最高优先**，它是"把后端映像挪出受限区"的唯一开关（§12）。
 - **根目录判据必须同时认两种布局**（三种判据任一命中即可），否则发布包里会出现"文件明明在，它却说找不到"。
+- **数据目录可以被用户搬走（2026-11-06）**：库（`.db\comfyhub.db`）与 `storage\` 的落点由 `<根>\data-dir.json`（`{"dataDir":"D:\..."}`）决定，没有它就是运行根目录。`--db` / `--storage` 跟着它走，而 **`.run\` / `backups\` / `comfyui\` / `app-support\` 永远按运行根目录算**（端口文件的位置不能跟着数据走，脚本与捕获扩展都读它）。判据只有一份：`lib\core\backend_paths.dart` 的 `dataDirOf()`，`scripts\backend.ps1` 的 `Resolve-DataDir` 是它的镜像；e2e 脚本读库也要过它。界面上是「设置 → 数据目录」，迁移走 `lib\core\data_dir_migration.dart`（**先停后端 → 复制 → 逐文件校验 → 最后才落指针**，旧目录默认保留、搬完问一次）。
 - **端口只有一个真源**：后端绑好之后自己写 `<根>\.run\api.json`（写者是 `api_port_file.rs`）；App（`settings_store.dart`）、脚本（`api-port.ps1`）、捕获扩展（`capture_core.py`）**都只读它**，谁也不许自己编端口。
 - ⚠ **"要不要听用户的"只有一条判据**：`SettingsStore.isLocalBackendUrl()` —— **回环地址永远跟着端口文件走**（哪怕它先前被写进过偏好），只有**指向别的机器**的地址才算用户覆盖。**别退回"偏好里有值 = 用户手填过"**：端口是 `--port 0` 自动挑的（重启就换），那条判据会把自动发现的地址存成"用户配置"，从此界面对着死端口等满 60 秒超时。回归 `test\settings_base_url_test.dart`。
 - **`--port 0` 是刻意的**：写死端口会撞"被占 / 落在 Windows 保留段"，而且真实端口要从 listener 读回来（`--port 0` 时那个 0 不是端口）。
@@ -280,12 +281,13 @@
 
 | 内容 | 落点 | 一次性导入 |
 | --- | --- | --- |
-| 数据库 | `<根>\.db\comfyhub.db` | 无 |
+| 数据目录覆盖（库 + `storage` 被搬走时） | `<根>\data-dir.json` | 无 |
+| 数据库 | `<数据目录>\.db\comfyhub.db`（默认 `<根>\.db\`） | 无 |
 | 库备份（`VACUUM INTO` 出来的 .db） | `<根>\backups\` | 无 |
-| 产物 / 缩略图 / 附件 | `<根>\storage\` | 无 |
-| 偏好 | `<根>\storage\app-support` | `%APPDATA%\…\shared_preferences.json` |
-| MCP 运行时（便携 python + venv） | `<根>\storage\ai\mcp` | 无 |
-| comfy-cli 凭据 / 缓存 | `<根>\storage\ai\mcp\comfy-cli-home` | `%LOCALAPPDATA%\comfy-cli\{secrets.json,config.ini}` |
+| 产物 / 缩略图 / 附件 | `<数据目录>\storage\`（默认 `<根>\storage\`） | 无 |
+| 偏好 | `<根>\app-support` | `<根>\storage\app-support`（旧版）与 `%APPDATA%\…\shared_preferences.json` |
+| MCP 运行时（便携 python + venv） | `<数据目录>\storage\ai\mcp` | 无 |
+| comfy-cli 凭据 / 缓存 | `<数据目录>\storage\ai\mcp\comfy-cli-home` | `%LOCALAPPDATA%\comfy-cli\{secrets.json,config.ini}` |
 | 临时文件 / DevFS | `<根>\.run\tmp` | 无 |
 
 1. **别再用"探系统位置 → 写不进才退回"这个模式**：判据不可靠（能不能写取决于进程映像位置，§12），方向本身也错 —— 静默换地方正是"哪份才是真的要看机器上装过什么"的来源。真写不进去就**如实报错**，让用户把包 / 项目放到可写的地方。

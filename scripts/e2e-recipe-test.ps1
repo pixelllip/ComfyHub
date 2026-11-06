@@ -135,7 +135,14 @@ Get-CimInstance Win32_Process -Filter "Name='comfyhub-server-rs.exe'" -ErrorActi
 
 if (Test-Path $WorkDir) { Remove-Item $WorkDir -Recurse -Force -ErrorAction SilentlyContinue }
 New-Item -ItemType Directory -Force -Path $WorkDir | Out-Null
-$realDb = Join-Path $ProjectRoot '.db\comfyhub.db'
+# 数据目录可能被用户搬到别的盘（`<根>\data-dir.json`，与 lib\core\backend_paths.dart 同一约定）
+$DataDir = $ProjectRoot
+$DataDirFile = Join-Path $ProjectRoot 'data-dir.json'
+if (Test-Path $DataDirFile) {
+    try { $customDataDir = (Get-Content $DataDirFile -Raw -Encoding UTF8 | ConvertFrom-Json).dataDir } catch { $customDataDir = '' }
+    if ($customDataDir) { $DataDir = $customDataDir }
+}
+$realDb = Join-Path $DataDir '.db\comfyhub.db'
 $hasRealDb = Test-Path $realDb
 $dbCopy = Join-Path $WorkDir 'comfyhub.db'
 if ($hasRealDb) {

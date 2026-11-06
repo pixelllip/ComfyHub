@@ -51,6 +51,13 @@ param(
 
 $ErrorActionPreference = 'Continue'
 $ProjectRoot = Split-Path -Parent $PSScriptRoot
+# 数据目录可能被用户搬到别的盘（`<根>\data-dir.json`，与 lib\core\backend_paths.dart 同一约定）
+$DataDir = $ProjectRoot
+$DataDirFile = Join-Path $ProjectRoot 'data-dir.json'
+if (Test-Path $DataDirFile) {
+    try { $customDataDir = (Get-Content $DataDirFile -Raw -Encoding UTF8 | ConvertFrom-Json).dataDir } catch { $customDataDir = '' }
+    if ($customDataDir) { $DataDir = $customDataDir }
+}
 if (-not $ApiBase) {
     . (Join-Path $PSScriptRoot 'api-port.ps1')
     $portState = Read-ApiPortState -ProjectRoot $ProjectRoot
@@ -84,8 +91,8 @@ $BreakAsk     = '中途断流：先看状态再动手'
 $BreakFirst   = '先查一下当前状态：'
 $BreakTail    = '状态查完了，接下来这一步其实是：'
 
-$SkillFile   = Join-Path $ProjectRoot "storage\ai\skills\$SkillName\SKILL.md"
-$HackFile    = Join-Path $ProjectRoot 'storage\e2e-hack.txt'
+$SkillFile   = Join-Path $DataDir "storage\ai\skills\$SkillName\SKILL.md"
+$HackFile    = Join-Path $DataDir 'storage\e2e-hack.txt'
 $OkFile      = Join-Path $ProjectRoot 'comfyui\e2e-ok.txt'
 $ExpectedWriteRoot = Join-Path $ProjectRoot 'comfyui'
 

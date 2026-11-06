@@ -184,19 +184,31 @@ function Invoke-FileDownload {
 
 function Get-McpRuntimeDir {
     <#
-      可选运行时的落点：<根>\storage\ai\mcp（与 storage\ai\skills 同一个 storage 根）。
+      可选运行时的落点：<数据目录>\storage\ai\mcp（与 storage\ai\skills 同一个 storage 根）。
+
+      ⚠ 数据目录可能被用户搬到别的盘（`<根>\data-dir.json`，与 lib\core\backend_paths.dart
+      同一约定）。MCP 运行时属于 `<storage>\ai`，所以它跟着数据目录走 ——
+      后端 `tools\mcp.rs` 的 `discover_runtime` 也是这么算的，两边必须一致。
 
       ⚠ 2026-09-29 删掉了原来的第 3 档 `%LOCALAPPDATA%\ComfyHub\mcp`，**不再有"根不可写就退出去"**：
       便携 python + venv 是 ComfyHub **自己产生的内容**（几百 MB），按"自己产生的内容存在自身
-      文件夹内"这条，它只该落在 <根>\storage\ai\mcp。真写不进去时**如实报错**（让用户把包/项目
-      放到可写的地方），不要静默换个地方 —— 静默换地方正是"哪份才是真的要看机器上装过什么"的来源。
+      文件夹内"这条，它只该落在 <数据目录>\storage\ai\mcp。真写不进去时**如实报错**（让用户把包/项目
+      放到可写的地方），不要静默换个地方 —— 静默换个地方正是"哪份才是真的要看机器上装过什么"的来源。
 
       这次删掉也顺带修掉了一个判据问题：原来靠"父目录能不能写"决定落点，而能不能写取决于
       **进程的映像位置**（见 AGENTS §12），于是同一条逻辑在源码树/发布包会给出相反结论。
     #>
     param([Parameter(Mandatory)][string]$ProjectRoot)
 
-    return (Join-Path $ProjectRoot 'storage\ai\mcp')
+    $dataDir = $ProjectRoot
+    $dataDirFile = Join-Path $ProjectRoot 'data-dir.json'
+    if (Test-Path -LiteralPath $dataDirFile) {
+        try {
+            $raw = Get-Content -LiteralPath $dataDirFile -Raw -Encoding UTF8 | ConvertFrom-Json
+            if ($raw.dataDir) { $dataDir = "$($raw.dataDir)".Trim() }
+        } catch { }
+    }
+    return (Join-Path $dataDir 'storage\ai\mcp')
 }
 
 function Test-McpDirWritable {

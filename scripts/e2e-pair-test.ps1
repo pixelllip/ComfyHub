@@ -131,7 +131,14 @@ try {
     New-Item -ItemType Directory -Path (Join-Path $storage 'ai') -Force | Out-Null
 
     # 真库的**临时副本**（连同 WAL：只拷主文件会丢掉最后一批事务）
-    $realDb = Join-Path $ProjectRoot '.db\comfyhub.db'
+    # 数据目录可能被用户搬到别的盘（`<根>\data-dir.json`，与 backend_paths.dart 同一约定）
+    $DataDir = $ProjectRoot
+    $DataDirFile = Join-Path $ProjectRoot 'data-dir.json'
+    if (Test-Path $DataDirFile) {
+        try { $customDataDir = (Get-Content $DataDirFile -Raw -Encoding UTF8 | ConvertFrom-Json).dataDir } catch { $customDataDir = '' }
+        if ($customDataDir) { $DataDir = $customDataDir }
+    }
+    $realDb = Join-Path $DataDir '.db\comfyhub.db'
     $dbCopy = Join-Path $WorkDir 'comfyhub.db'
     if (Test-Path $realDb) {
         Copy-Item $realDb $dbCopy -Force

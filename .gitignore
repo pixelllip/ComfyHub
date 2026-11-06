@@ -73,6 +73,10 @@ app.*.map.json
 # 用户上传的生成产物原始文件
 /storage/
 
+# 偏好（shared_preferences.json）：2026-11-06 起从 `<根>\storage\app-support` 搬到
+# `<根>\app-support`（数据目录可以搬走，偏好不跟着走）。属于运行期数据，不进版本库。
+/app-support/
+
 # 库备份（`VACUUM INTO` 出来的 .db）：属于运行期数据，每台机器各一份
 /backups/
 

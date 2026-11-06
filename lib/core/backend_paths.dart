@@ -218,6 +218,78 @@ String dbParentOf(String root) => [root, '.db'].join(Platform.pathSeparator);
 String storageDirOf(String root) =>
     [root, 'storage'].join(Platform.pathSeparator);
 
+// ---------------------------------------------------------------------------
+//  数据目录（2026-11-06）：库 + 产物 / AI 数据可以搬出程序目录
+// ---------------------------------------------------------------------------
+//
+// 用户要"把数据放到别的盘"。判据只有一条：**数据目录里装什么**——
+//   · `<数据目录>\.db\comfyhub.db`（库）
+//   · `<数据目录>\storage\`（产物 / 缩略图 / 附件 / Skills / 记忆 / MCP 运行时）
+//
+// 程序目录（运行根目录）里留下的东西**不动**：`.run\`（端口记录）、`backups\`
+// （库备份）、`comfyui\`（工具写白名单）、`skills\builtin\`、`app-support\`（偏好）。
+// 这样 App / 脚本 / ComfyUI 捕获扩展读端口文件的位置不变，而大文件可以搬到别的盘。
+//
+// 覆盖值存在 `<根>\data-dir.json`，**不放偏好里**：偏好文件在 `<根>\app-support`，
+// 而数据目录可能在可移动盘上；把"数据在哪"写进数据自己里面，等于拔了盘就忘了路。
+
+/// 数据目录覆盖文件的名字（`<根>\data-dir.json`）。
+const String kDataDirFileName = 'data-dir.json';
+
+String dataDirFileOf(String root) =>
+    [root, kDataDirFileName].join(Platform.pathSeparator);
+
+/// 读"数据目录被指到哪儿了"；没设 / 文件坏了都回 `null`（= 用运行根目录）。
+String? readDataDirOverride(String root) {
+  try {
+    final file = File(dataDirFileOf(root));
+    if (!file.existsSync()) return null;
+    final value = jsonDecode(file.readAsStringSync());
+    if (value is Map) {
+      final raw = value['dataDir'];
+      if (raw is String && raw.trim().isNotEmpty) return raw.trim();
+    }
+  } catch (_) {
+    // 半截 JSON / 正在被替换：当"这次没读到"，走默认目录
+  }
+  return null;
+}
+
+/// 这次真正用的数据目录：覆盖值优先，否则就是运行根目录。
+String dataDirOf(String root) => readDataDirOverride(root) ?? root;
+
+/// 写 / 清数据目录覆盖。`dataDir` 为 null 或空 = 恢复默认（删掉覆盖文件）。
+///
+/// **先写 `.tmp` 再 rename**：中途崩掉只会留下一个半截临时文件，
+/// `readDataDirOverride` 读不到它就是"没设过"，不会把 App 指到一个不存在的目录。
+bool writeDataDirOverride(String root, String? dataDir) {
+  final file = File(dataDirFileOf(root));
+  try {
+    if (dataDir == null || dataDir.trim().isEmpty) {
+      if (file.existsSync()) file.deleteSync();
+      return true;
+    }
+    final tmp = File('${file.path}.tmp');
+    tmp.writeAsStringSync(jsonEncode({'dataDir': dataDir.trim()}));
+    tmp.renameSync(file.path);
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+/// 数据目录里的库文件（`<数据目录>\.db\comfyhub.db`）。
+String dataDbFileOf(String dataDir) =>
+    [dataDir, '.db', 'comfyhub.db'].join(Platform.pathSeparator);
+
+/// 数据目录里的库目录（`<数据目录>\.db`）。
+String dataDbParentOf(String dataDir) =>
+    [dataDir, '.db'].join(Platform.pathSeparator);
+
+/// 数据目录里的产物 / AI 数据目录（`<数据目录>\storage`）。
+String dataStorageDirOf(String dataDir) =>
+    [dataDir, 'storage'].join(Platform.pathSeparator);
+
 String runDirOf(String root) =>
     [root, '.run'].join(Platform.pathSeparator);
 

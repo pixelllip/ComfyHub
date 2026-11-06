@@ -3,9 +3,9 @@ import 'dart:io' show Platform;
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import 'package:url_launcher/url_launcher.dart';
 
 import '../core/backend_launcher.dart';
+import '../core/backend_paths.dart';
 import '../core/formatting.dart';
 import '../core/media_cache.dart';
 import '../core/settings_store.dart';
@@ -18,6 +18,7 @@ import '../widgets/settings_switch_row.dart';
 import 'ai_provider_settings_page.dart';
 import 'ai_tools_settings_page.dart';
 import 'settings_comfy_capture_page.dart';
+import 'settings_data_dir_page.dart';
 import 'settings_interface_page.dart';
 import 'settings_local_services_page.dart';
 import 'settings_pairing_page.dart';
@@ -88,17 +89,6 @@ class _SettingsPageState extends State<SettingsPage> {
 
   void _push(BuildContext context, Widget page) {
     Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => page));
-  }
-
-  Future<void> _openFolder(String path) async {
-    if (path.isEmpty) return;
-    final messenger = ScaffoldMessenger.of(context);
-    try {
-      await launchUrl(Uri.directory(path));
-    } catch (e) {
-      if (!mounted) return;
-      messenger.showSnackBar(SnackBar(content: Text('打开失败，$e')));
-    }
   }
 
   @override
@@ -202,25 +192,23 @@ class _SettingsPageState extends State<SettingsPage> {
           estimatedHeight: 360,
           child: _statsCard(theme, store),
         ),
-        // 「打开项目目录」是**主设置菜单**里的一项（用户 2026-11-05：不该藏在
-        // 「界面」子页里）。它是单动作，不需要子页，直接一行。
+        // 「数据目录」是**主设置菜单**里的一项（用户 2026-11-05：不该藏在
+        // 「界面」子页里）。2026-11-06 起它变成子页入口：那里能看当前位置、
+        // 打开目录、换位置（带迁移）—— 不再是一个"点开就跳走"的单动作。
+        //
+        // 副标题写 `<数据目录>\storage`（产物 / 附件 / AI 文件），不是运行根目录：
+        // 根目录是开发概念，源码树里跑它就是仓库根（用户 2026-11-06）。
         if (isWindowsDesktop)
           SettingsSection(
             title: '目录',
             estimatedHeight: 140,
-            child: Card(
-              clipBehavior: Clip.antiAlias,
-              child: ListTile(
-                contentPadding:
-                    const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-                leading: const Icon(Icons.folder_open_outlined),
-                title: const Text('打开项目目录'),
-                subtitle: Text(launcher.projectRoot ?? '未定位到项目目录'),
-                trailing: const Icon(Icons.chevron_right),
-                onTap: launcher.projectRoot == null
-                    ? null
-                    : () => _openFolder(launcher.projectRoot!),
-              ),
+            child: SettingsEntryTile(
+              icon: Icons.folder_open_outlined,
+              title: '数据目录',
+              subtitle: launcher.dataDir == null
+                  ? '未定位到数据目录'
+                  : dataStorageDirOf(launcher.dataDir!),
+              onTap: () => _push(context, const DataDirSettingsPage()),
             ),
           ),
         if (isWindowsDesktop)

@@ -112,6 +112,13 @@ param(
 
 $ErrorActionPreference = 'Continue'
 $ProjectRoot = Split-Path -Parent $PSScriptRoot
+# 数据目录可能被用户搬到别的盘（`<根>\data-dir.json`，与 lib\core\backend_paths.dart 同一约定）
+$DataDir = $ProjectRoot
+$DataDirFile = Join-Path $ProjectRoot 'data-dir.json'
+if (Test-Path $DataDirFile) {
+    try { $customDataDir = (Get-Content $DataDirFile -Raw -Encoding UTF8 | ConvertFrom-Json).dataDir } catch { $customDataDir = '' }
+    if ($customDataDir) { $DataDir = $customDataDir }
+}
 if (-not $ApiBase) {
     . (Join-Path $PSScriptRoot 'api-port.ps1')
     $portState = Read-ApiPortState -ProjectRoot $ProjectRoot
@@ -281,7 +288,7 @@ try {
             $media = Invoke-Api 'GET' '/api/media?size=20' $null
             $pick = @($media.items) | Where-Object { $_.kind -eq 'IMAGE' } | Select-Object -First 1
             if (-not $pick) { Say '  没有参考照片，也找不到可用的画廊产物 —— 用 -RefPhoto 指定一张。' 'Red'; exit 1 }
-            $RefPhoto = Join-Path (Join-Path $ProjectRoot 'storage\media') $pick.storedName
+            $RefPhoto = Join-Path (Join-Path $DataDir 'storage\media') $pick.storedName
             Say "  底图：画廊产物 #$($pick.id)「$($pick.title)」" 'DarkGray'
         }
     }

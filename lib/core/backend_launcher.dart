@@ -96,6 +96,13 @@ class BackendLauncher extends ChangeNotifier {
 
   String? get projectRoot => layout?.root;
 
+  /// 这次真正用的数据目录（库 + `storage`；默认就是运行根目录，可被
+  /// `<根>\data-dir.json` 指到别的盘，见 `backend_paths.dart`）。
+  String? get dataDir {
+    final root = layout?.root;
+    return root == null ? null : dataDirOf(root);
+  }
+
   Process? _process;
   bool _cancelled = false;
   bool _disposed = false;
@@ -260,6 +267,8 @@ class BackendLauncher extends ChangeNotifier {
     serverExeSource = resolved.exeSource;
     if (log) {
       _log('运行根目录: ${resolved.root}');
+      final data = dataDirOf(resolved.root);
+      if (data != resolved.root) _log('数据目录:   $data');
       if (resolved.exe != null) {
         _log('后端程序:   ${resolved.exe}（来源：${resolved.exeSource}）');
       } else {
@@ -351,10 +360,17 @@ class BackendLauncher extends ChangeNotifier {
   /// 起后端并等它健康。
   Future<bool> _spawnAndWait() async {
     final root = layout!.root;
+    // 数据目录（库 + storage）可以搬出程序目录；`.run` / `backups` / `comfyui`
+    // 仍按运行根目录算 —— 端口文件的位置不能跟着数据走，脚本与捕获扩展都读它。
+    final data = dataDirOf(root);
     final exe = serverExe!;
 
     // 目录先备好：后端会自己建库目录，但 `.run` / `storage` 缺失会让它多打几句警告
-    for (final dir in [runDirOf(root), storageDirOf(root), dbParentOf(root)]) {
+    for (final dir in [
+      runDirOf(root),
+      dataStorageDirOf(data),
+      dataDbParentOf(data),
+    ]) {
       try {
         Directory(dir).createSync(recursive: true);
       } catch (_) {}
@@ -362,8 +378,8 @@ class BackendLauncher extends ChangeNotifier {
 
     await _normalizeIntegrity(exe);
 
-    final dbFile = dbFileOf(root);
-    final storage = storageDirOf(root);
+    final dbFile = dataDbFileOf(data);
+    final storage = dataStorageDirOf(data);
     final bindHost = _settings.allowRemoteBackend ? '0.0.0.0' : '127.0.0.1';
     // **先要回上一次那个端口**（2026-10-13）：`--port 0` 让系统挑，代价是重启就换
     // 端口，而**手机存的是 `http://<局域网IP>:<端口>`** —— 端口一变那条地址就废了，

@@ -233,6 +233,33 @@ void main() {
     launcher.dispose();
   });
 
+  test('启动：数据目录被指到别处时 --db / --storage 跟着走，根目录基准不变', () async {
+    writeApiJson(await deadPort());
+    final settings = await loadSettings();
+    final data = Directory('${root.path}${Platform.pathSeparator}elsewhere-data')
+      ..createSync(recursive: true);
+    expect(writeDataDirOverride(root.path, data.path), isTrue);
+    final launcher = BackendLauncher(settings);
+    installStarter();
+
+    await launcher.ensureRunning();
+
+    final sep = Platform.pathSeparator;
+    expect(spawns, hasLength(1));
+    expect(spawns.single.args, [
+      '--db', '${data.path}$sep.db${sep}comfyhub.db',
+      '--storage', '${data.path}${sep}storage',
+      '--host', '127.0.0.1',
+      '--port', '0',
+      '--watch-stdin',
+    ]);
+    // 端口文件 / 备份 / 工具白名单的基准仍是运行根目录（数据搬了，程序没搬）
+    expect(spawns.single.workDir, root.path);
+    expect(spawns.single.environment, containsPair('COMFYHUB_PROJECT_ROOT', root.path));
+    expect(launcher.dataDir, data.path);
+    launcher.dispose();
+  });
+
   test('启动：开了「允许局域网」就 --host 0.0.0.0 + COMFYHUB_ALLOW_REMOTE=1', () async {
     writeApiJson(await deadPort());
     final settings = await loadSettings(allowRemote: true);

@@ -43,6 +43,13 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $ProjectRoot = Split-Path -Parent $PSScriptRoot
+# 数据目录可能被用户搬到别的盘（`<根>\data-dir.json`，与 lib\core\backend_paths.dart 同一约定）
+$DataDir = $ProjectRoot
+$DataDirFile = Join-Path $ProjectRoot 'data-dir.json'
+if (Test-Path $DataDirFile) {
+    try { $customDataDir = (Get-Content $DataDirFile -Raw -Encoding UTF8 | ConvertFrom-Json).dataDir } catch { $customDataDir = '' }
+    if ($customDataDir) { $DataDir = $customDataDir }
+}
 . (Join-Path $PSScriptRoot 'comfy-path.ps1')
 
 function Say([string]$Text, [string]$Color = 'Gray') { Write-Host $Text -ForegroundColor $Color }
@@ -99,7 +106,7 @@ if (-not $BgImage) {
         Where-Object { $_.kind -eq 'IMAGE' -and -not $_.title.StartsWith('comfyhub_inpaint_e2e') } |
         Select-Object -First 1
     if (-not $pick) { throw "画廊里没有任何图片产物 —— 用 -BgImage 指定一张底图" }
-    $BgImage = Join-Path $ProjectRoot ("storage\media\" + $pick.storedName)
+    $BgImage = Join-Path $DataDir ("storage\media\" + $pick.storedName)
     Say "底图：画廊产物 #$($pick.id)「$($pick.title)」$($pick.width)x$($pick.height)" 'Cyan'
 }
 if (-not (Test-Path $BgImage)) { throw "底图不存在：$BgImage" }

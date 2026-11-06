@@ -16,6 +16,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:viewer/core/ai_api_client.dart';
 import 'package:viewer/core/api_client.dart';
 import 'package:viewer/core/backend_launcher.dart';
+import 'package:viewer/core/backend_paths.dart';
 import 'package:viewer/core/settings_store.dart';
 import 'package:viewer/core/theme.dart';
 import 'package:viewer/pages/settings_page.dart';
@@ -83,6 +84,7 @@ MockClient _mockClient() {
 Future<BackendLauncher> _pumpSettings(
   WidgetTester tester, {
   int? portFallbackFrom,
+  BackendLayout? layout,
 }) async {
   SharedPreferences.setMockInitialValues({});
   final settings = SettingsStore();
@@ -91,7 +93,9 @@ Future<BackendLauncher> _pumpSettings(
   final store = LibraryStore(settings, api: ApiClient(settings.baseUrl, client: client));
   // 「端口没能要回来」是后端写在 .run\api.json 里的事实，由 launcher 读懂后交给界面。
   // 这里直接把它摆出来（真值的来源在 backend_launcher_test.dart 里验）。
-  final launcher = BackendLauncher(settings)..portFallbackFrom = portFallbackFrom;
+  final launcher = BackendLauncher(settings)
+    ..portFallbackFrom = portFallbackFrom
+    ..layout = layout;
   final nsfw = NsfwStore(api: AiApiClient(settings.baseUrl, client: client));
   addTearDown(store.dispose);
   addTearDown(launcher.dispose);
@@ -153,6 +157,33 @@ void main() {
         reason: '左侧要有留白，不能贴到卡片边缘');
     expect(cardRect.right - tileRect.right, greaterThanOrEqualTo(20),
         reason: '右侧（开关那一侧）也要有留白');
+  });
+
+  // 用户 2026-11-06："不应该是跳转开发者的项目目录吧？" —— 设置首页这一项原来
+  // 打开的是**运行根目录**：源码树里跑它就是仓库根，用户点开看到的是开发者的
+  // 项目目录。现在它是「数据目录」子页的入口（副标题就是数据目录），
+  // 换位置（带迁移）在子页里做。
+  testWidgets('设置首页：目录卡是「数据目录」入口，副标题是当前数据目录', (tester) async {
+    tester.view.physicalSize = const Size(1700, 1200);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    await _pumpSettings(
+      tester,
+      layout: const BackendLayout(root: r'D:\demo\viewer', exe: null),
+    );
+
+    expect(find.text('数据目录'), findsOneWidget);
+    expect(find.text('打开项目目录'), findsNothing, reason: '不许再把运行根目录摆给用户');
+    expect(find.text(r'D:\demo\viewer\storage'), findsOneWidget,
+        reason: '副标题写产物 / 附件 / AI 文件所在的那个目录');
+
+    // 点进去是子页：看当前位置、打开、换位置
+    await tester.tap(find.text('数据目录'));
+    await tester.pumpAndSettle();
+    expect(find.text('当前位置'), findsOneWidget);
+    expect(find.text('更改位置…'), findsOneWidget);
+    expect(find.textContaining('旧目录不会自动删除'), findsOneWidget);
   });
 
   // 用户 2026-10-13：「主题（浅色/深色）那里排版奇怪，不应该一行搞定吗」。

@@ -1,4 +1,4 @@
-//! Windows：把 shared_preferences 的落盘位置固定在项目内（`<项目根>\storage\app-support`）。
+//! Windows：把 shared_preferences 的落盘位置固定在项目内（`<项目根>\app-support`）。
 //!
 //! ## 为什么（2026-09-28 用户报的现场，2026-09-29 改了方向）
 //!
@@ -14,12 +14,18 @@
 //! 原来的修法是"**默认位置写得进就一切照旧，写不进才重定向**"。方向错了：
 //! ① 判据是"探针能不能建文件"，而那取决于进程映像位置，于是同一条逻辑在源码树/发布包
 //!    给出相反结论；② 更根本的是 —— 偏好是 **ComfyHub 自己产生的内容**，
-//!    按"自己产生的内容存在自身文件夹内"这条，它默认就该在 `<项目根>\storage\app-support`，
-//!    不该散在 `%APPDATA%`。
+//!    按"自己产生的内容存在自身文件夹内"这条，它默认就该在项目内，不该散在 `%APPDATA%`。
 //!
 //! **现在：默认就落在项目内，并一次性把 `%APPDATA%` 里已有的那份导入过来**
 //! （用户上次的草稿 / 选中的 provider-model 不丢）。代价是设置不再跨安装共享 ——
 //! 但 db 与 storage 本来就在各自文件夹里，这与"发布包是便携的"本来就是一致的。
+//!
+//! ## 2026-11-06：从 `<根>\storage\app-support` 搬到 `<根>\app-support`
+//!
+//! 数据目录（库 + `storage`）现在可以被用户搬到别的盘（`data-dir.json`）。
+//! 偏好**不能跟着走**：它必须在"数据目录还不知道在哪"的时候就能读，
+//! 而且用户删掉旧数据目录之后设置不该一起消失。所以它挪到**运行根目录下**、
+//! 与数据分开；旧位置的文件一次性拷过来（拷完不删旧文件，回退时还在）。
 //!
 //! ## 怎么实现
 //!
@@ -50,9 +56,11 @@ Future<bool> installPortablePaths() async {
     final String? root = BackendLauncher.detectProjectRoot();
     if (root == null) return false;
     final sep = Platform.pathSeparator;
-    final workspaceDir = '$root${sep}storage${sep}app-support';
+    final workspaceDir = '$root${sep}app-support';
     await Directory(workspaceDir).create(recursive: true);
-    // 一次性导入：把用户此前落在 %APPDATA% 的那份搬进来（没有就跳过）
+    // 一次性导入：先把"上一版落点"（`<根>\storage\app-support`）里的那份拷过来，
+    // 再兜底 `%APPDATA%` 的老文件（没有就跳过）。目标已存在时两个都不动。
+    _migratePrefsFile('$root${sep}storage${sep}app-support', workspaceDir);
     final String? legacyDir = await PathProviderWindows().getApplicationSupportPath();
     _migrateLegacyPrefsFile(legacyDir, workspaceDir);
     final store = SharedPreferencesStorePlatform.instance;
@@ -83,12 +91,18 @@ class WorkspacePathProvider extends PathProviderWindows {
   Future<String?> getApplicationSupportPath() async => dir;
 }
 
-/// 把旧的偏好文件从 `%APPDATA%` 拷到新位置（**只拷一次**：目标已存在就不动）。
+/// 把旧的偏好文件从一个目录拷到新位置（**只拷一次**：目标已存在就不动）。
 /// 受限进程**读**项目外是允许的，所以即便 errno 5 的现场，迁移也做得成。
 void _migrateLegacyPrefsFile(String? legacyDir, String newDir) {
   if (legacyDir == null || legacyDir.isEmpty) return;
+  _migratePrefsFile(legacyDir, newDir);
+}
+
+/// 从 [fromDir] 拷一份 `shared_preferences.json` 到 [newDir]（目标已存在就不动）。
+void _migratePrefsFile(String? fromDir, String newDir) {
+  if (fromDir == null || fromDir.isEmpty) return;
   final sep = Platform.pathSeparator;
-  final src = File('$legacyDir$sep$_prefsFileName');
+  final src = File('$fromDir$sep$_prefsFileName');
   final dst = File('$newDir$sep$_prefsFileName');
   if (!src.existsSync() || dst.existsSync()) return;
   try {

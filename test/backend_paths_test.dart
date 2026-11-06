@@ -188,8 +188,41 @@ void main() {
     });
   });
 
-  group('readPortFile：启动与退出的关键路径，绝不能抛', () {
-    test('没有文件回 null', () {
+  // 数据目录（2026-11-06）：库 + storage 可以被用户搬到别的盘。
+  // 判据是 `<根>\data-dir.json`；没有它就是运行根目录。
+  group('数据目录覆盖：<根>\\data-dir.json', () {
+    test('没设过 = 运行根目录（默认）', () {
+      expect(readDataDirOverride(root.path), isNull);
+      expect(dataDirOf(root.path), root.path);
+      expect(dataDbFileOf(root.path),
+          p([root.path, '.db', 'comfyhub.db']));
+      expect(dataStorageDirOf(root.path), p([root.path, 'storage']));
+    });
+
+    test('写了覆盖值就按它走，清了就回默认', () {
+      final target = p([root.path, 'other-disk', 'ComfyHubData']);
+      expect(writeDataDirOverride(root.path, target), isTrue);
+      expect(readDataDirOverride(root.path), target);
+      expect(dataDirOf(root.path), target);
+      expect(dataDbFileOf(target), p([target, '.db', 'comfyhub.db']));
+      expect(dataStorageDirOf(target), p([target, 'storage']));
+
+      expect(writeDataDirOverride(root.path, null), isTrue);
+      expect(readDataDirOverride(root.path), isNull);
+      expect(dataDirOf(root.path), root.path);
+    });
+
+    test('半截 JSON / 坏值当没设过，绝不抛', () {
+      File(p([root.path, kDataDirFileName])).writeAsStringSync('{"dataDir": "D:\\x"');
+      expect(readDataDirOverride(root.path), isNull);
+      expect(dataDirOf(root.path), root.path);
+
+      File(p([root.path, kDataDirFileName])).writeAsStringSync('{"dataDir": ""}');
+      expect(readDataDirOverride(root.path), isNull);
+    });
+  });
+
+  group('readPortFile：启动与退出的关键路径，绝不能抛', () {    test('没有文件回 null', () {
       expect(readPortFile(root.path), isNull);
     });
 

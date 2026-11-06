@@ -148,7 +148,14 @@ try {
     New-Item -ItemType Directory -Path (Join-Path $storage 'ai') -Force | Out-Null
 
     # 真库的**临时副本**（连同 WAL：只拷主文件会丢掉最后一批事务）
-    $realDb = Join-Path $ProjectRoot '.db\comfyhub.db'
+    # 数据目录可能被用户搬到别的盘（`<根>\data-dir.json`，与 backend_paths.dart 同一约定）
+    $DataDir = $ProjectRoot
+    $DataDirFile = Join-Path $ProjectRoot 'data-dir.json'
+    if (Test-Path $DataDirFile) {
+        try { $customDataDir = (Get-Content $DataDirFile -Raw -Encoding UTF8 | ConvertFrom-Json).dataDir } catch { $customDataDir = '' }
+        if ($customDataDir) { $DataDir = $customDataDir }
+    }
+    $realDb = Join-Path $DataDir '.db\comfyhub.db'
     $dbCopy = Join-Path $WorkDir 'comfyhub.db'
     if (-not (Test-Path $realDb)) { throw "没有 $realDb：Rust 后端不建表，先让 Kotlin 后端起一次库" }
     Copy-Item $realDb $dbCopy -Force
@@ -160,7 +167,7 @@ try {
 
     # 真实的凭据文件副本 —— 它里面有 **Kotlin 写过的**那几把 key：
     # "Rust 解得开 Kotlin 写的"这一半靠它（没有它就只能验我们自己自洽）。
-    $realCred = Join-Path $ProjectRoot 'storage\ai\credentials.dpapi.json'
+    $realCred = Join-Path $DataDir 'storage\ai\credentials.dpapi.json'
     $credCopy = Join-Path $storage 'ai\credentials.dpapi.json'
     $realRefs = @()
     if (Test-Path $realCred) {
