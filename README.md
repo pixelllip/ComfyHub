@@ -262,6 +262,8 @@ cargo test --manifest-path server-rs\Cargo.toml                       # 后端�
 pwsh -File scripts\e2e-submit-test.ps1                                # 提交链路（6 幕，不出网、不花钱）
 ```
 
+- **push / PR 时 GitHub Actions 会跑前两条**（`.github/workflows/ci.yml`，Windows runner）：
+  `flutter analyze` + `flutter test`，`cargo test`。e2e 不进 CI（要本机后端与 ComfyUI 现场）。
 - 纯逻辑改动跑单测就够；**改了 `HarnessRunner` 的上下文拼装要跑三条 e2e**（AGENTS §10.1）。
 - 要**活体**验收（真 ComfyUI）用 `spot_check`：`cargo test --test spot_check -- --ignored`。
 - 测试落盘一律 `testpaths::scratch()`（`server-rs\target\.scratch\`）—— 受限会话里写 `%TEMP%` 必红。
