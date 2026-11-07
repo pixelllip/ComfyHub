@@ -465,6 +465,18 @@ class LibraryStore extends ChangeNotifier {
 
   void setPromptPage(int page) {
     promptPage = page;
+    final cached = _promptPages[page];
+    if (cached != null) {
+      // 相邻页已经预取好了：**立刻**把内容换过去，翻页动画不用等网络。
+      // 顺带作废还在飞的那次请求（否则它回来会把页码/内容改回旧的一页）。
+      _promptSeq++;
+      promptsError = null;
+      loadingPrompts = false;
+      prompts = cached;
+      _safeNotify();
+      _prefetchPromptNeighbours(page);
+      return;
+    }
     refreshPrompts();
   }
 
@@ -541,6 +553,18 @@ class LibraryStore extends ChangeNotifier {
 
   void setMediaPage(int page) {
     mediaPage = page;
+    final cached = _mediaPages[page];
+    if (cached != null) {
+      // 相邻页已经预取好了：**立刻**把内容换过去，翻页动画不用等网络。
+      // 顺带作废还在飞的那次请求（否则它回来会把页码/内容改回旧的一页）。
+      _mediaSeq++;
+      mediaError = null;
+      loadingMedia = false;
+      media = cached;
+      _safeNotify();
+      _prefetchMediaNeighbours(page);
+      return;
+    }
     refreshMedia();
   }
 
@@ -603,6 +627,7 @@ class LibraryStore extends ChangeNotifier {
         deleted++;
       }
     }
+    _invalidatePromptPages();
     await Future.wait([refreshPrompts(), refreshTags(), refreshStats()]);
     return deleted;
   }

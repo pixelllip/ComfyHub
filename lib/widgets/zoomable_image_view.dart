@@ -67,6 +67,15 @@ class ZoomableImageView extends StatefulWidget {
   final double maxScale;
   final Color background;
 
+  /// 1:1 时把横向拖动交给外层的翻页组件（拖动中同时露出前后两张图）。
+  ///
+  /// 用原始指针而不是 `GestureDetector`：`InteractiveViewer` 自己的
+  /// `ScaleGestureRecognizer` 会先赢下手势竞技场，包在外面的横向拖动根本收不到。
+  final VoidCallback? onPageDragStart;
+  final ValueChanged<double>? onPageDragUpdate;
+  final ValueChanged<double>? onPageDragEnd;
+  final VoidCallback? onPageDragCancel;
+
   const ZoomableImageView({
     super.key,
     required this.url,
@@ -75,6 +84,10 @@ class ZoomableImageView extends StatefulWidget {
     this.minScale = 1,
     this.maxScale = 8,
     this.background = Colors.black,
+    this.onPageDragStart,
+    this.onPageDragUpdate,
+    this.onPageDragEnd,
+    this.onPageDragCancel,
   });
 
   @override
@@ -92,6 +105,15 @@ class _ZoomableImageViewState extends State<ZoomableImageView> {
   Size? _intrinsic;
   Size _viewport = Size.zero;
   bool _dragging = false;
+
+  // --- 1:1 时把横向拖动让给外层翻页 ---
+  int _pointers = 0;
+  Offset? _pageStart;
+  bool _pageDragging = false;
+  bool _pageIgnored = false;
+  double _lastX = 0;
+  Duration _lastStamp = Duration.zero;
+  double _velocity = 0;
 
   @override
   void initState() {
@@ -233,109 +255,192 @@ class _ZoomableImageViewState extends State<ZoomableImageView> {
   }
 
   // -------------------------------------------------------------------------
+  //  1:1 时把横向拖动交给外层翻页
+  // -------------------------------------------------------------------------
+
+  bool get _canPageDrag => _scale <= widget.minScale + 0.001;
+
+  void _resetPageGesture() {
+    _pageStart = null;
+    _pageDragging = false;
+    _pageIgnored = false;
+    _velocity = 0;
+  }
+
+  void _onPointerDown(PointerDownEvent event) {
+    _pointers++;
+    if (_pointers > 1) {
+      if (_pageDragging) widget.onPageDragCancel?.call();
+      _resetPageGesture();
+      return;
+    }
+    if (!_canPageDrag) return;
+    _pageStart = event.position;
+    _pageDragging = false;
+    _pageIgnored = false;
+    _lastX = event.position.dx;
+    _lastStamp = event.timeStamp;
+  }
+
+  void _onPointerMove(PointerMoveEvent event) {
+    final start = _pageStart;
+    if (_pointers != 1 || start == null || _pageIgnored) return;
+    final dx = event.position.dx - start.dx;
+    final dy = event.position.dy - start.dy;
+    if (!_pageDragging) {
+      if (dx.abs() < 8 && dy.abs() < 8) return;
+      // 竖着拖 = 滚页面（窄屏详情页是 ListView）；只认明确的横向意图。
+      if (dx.abs() <= dy.abs() * 1.2 || dx.abs() < 8) {
+        _pageIgnored = true;
+        return;
+      }
+      _pageDragging = true;
+      widget.onPageDragStart?.call();
+    }
+    final dt = (event.timeStamp - _lastStamp).inMicroseconds;
+    if (dt > 0) {
+      _velocity = (event.position.dx - _lastX) / (dt / 1000000.0);
+    }
+    _lastX = event.position.dx;
+    _lastStamp = event.timeStamp;
+    widget.onPageDragUpdate?.call(event.delta.dx);
+  }
+
+  void _onPointerUp(PointerEvent event) {
+    if (_pointers > 0) _pointers--;
+    if (_pageDragging) {
+      widget.onPageDragEnd?.call(_velocity);
+    }
+    _resetPageGesture();
+  }
+
+  void _onPointerCancel(PointerCancelEvent event) {
+    if (_pointers > 0) _pointers--;
+    if (_pageDragging) widget.onPageDragCancel?.call();
+    _resetPageGesture();
+  }
+
+  // -------------------------------------------------------------------------
   //  构建
   // -------------------------------------------------------------------------
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      color: widget.background,
-      child: LayoutBuilder(
-        builder: (context, constraints) {
-          final width = constraints.maxWidth;
-          // 高度无界时（例如塞进 ListView 且没给高度）退一个 3:2 的默认高度，别让布局崩掉
-          final height = constraints.hasBoundedHeight
-              ? constraints.maxHeight
-              : width * 2 / 3;
-          final viewport = Size(width, height);
-          if (viewport != _viewport) {
-            // 视口变了（窗口缩放）：缩放系数保留，但平移要重新夹回合法范围。
-            // 这里还在 layout 阶段，改 notifier 会踩"build 期间标脏"，所以挪到帧后。
-            _viewport = viewport;
-            if (_scale > widget.minScale) {
-              _afterFrame(() {
-                final t = _tc.value.getTranslation();
-                _tc.value = _clampedTransform(
-                  _scale,
-                  Offset(t.x, t.y),
-                  viewport,
-                );
-              });
+    return Listener(
+      behavior: HitTestBehavior.translucent,
+      onPointerDown: _onPointerDown,
+      onPointerMove: _onPointerMove,
+      onPointerUp: _onPointerUp,
+      onPointerCancel: _onPointerCancel,
+      child: Container(
+        color: widget.background,
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final width = constraints.maxWidth;
+            // 高度无界时（例如塞进 ListView 且没给高度）退一个 3:2 的默认高度，别让布局崩掉
+            final height = constraints.hasBoundedHeight
+                ? constraints.maxHeight
+                : width * 2 / 3;
+            final viewport = Size(width, height);
+            if (viewport != _viewport) {
+              // 视口变了（窗口缩放）：缩放系数保留，但平移要重新夹回合法范围。
+              // 这里还在 layout 阶段，改 notifier 会踩"build 期间标脏"，所以挪到帧后。
+              _viewport = viewport;
+              if (_scale > widget.minScale) {
+                _afterFrame(() {
+                  final t = _tc.value.getTranslation();
+                  _tc.value = _clampedTransform(
+                    _scale,
+                    Offset(t.x, t.y),
+                    viewport,
+                  );
+                });
+              }
             }
-          }
-          final imageRect = _imageRect(viewport);
+            final imageRect = _imageRect(viewport);
 
-          return ClipRect(
-            child: Stack(
-              fit: StackFit.expand,
-              children: [
-                MouseRegion(
-                  cursor: _dragging
-                      ? SystemMouseCursors.grabbing
-                      : SystemMouseCursors.grab,
-                  child: InteractiveViewer(
-                    transformationController: _tc,
-                    minScale: widget.minScale,
-                    maxScale: widget.maxScale,
-                    // 画面永远铺满视口，所以零边距就是"不能拖出边界"
-                    boundaryMargin: EdgeInsets.zero,
-                    onInteractionStart: (_) => setState(() => _dragging = true),
-                    onInteractionEnd: (_) => setState(() => _dragging = false),
-                    child: SizedBox.fromSize(
-                      size: viewport,
-                      // **大图不打码**（用户 2026-09-20："打开详情之后就没必要模糊了"）。
-                      // 走到这里说明用户已经主动点开了这一条 —— 再糊一层只会让他
-                      // 多点一次"点击查看"。打码只发生在列表 / 缩略图那类"被动看到"的位置
-                      // （见 `media_thumb.dart` 与回复里的产物卡）。
-                      child: _image(viewport),
+            return ClipRect(
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  MouseRegion(
+                    cursor: _dragging
+                        ? SystemMouseCursors.grabbing
+                        : SystemMouseCursors.grab,
+                    // ⚠ 1:1 时必须关掉平移：否则 `InteractiveViewer` 会把横向拖动
+                    // 吃掉，外层的翻页手势永远收不到（放大之后才该平移画面）。
+                    child: ValueListenableBuilder<Matrix4>(
+                      valueListenable: _tc,
+                      builder: (context, matrix, _) => InteractiveViewer(
+                        transformationController: _tc,
+                        minScale: widget.minScale,
+                        maxScale: widget.maxScale,
+                        panEnabled:
+                            matrix.getMaxScaleOnAxis() >
+                            widget.minScale + 0.001,
+                        // 画面永远铺满视口，所以零边距就是"不能拖出边界"
+                        boundaryMargin: EdgeInsets.zero,
+                        onInteractionStart: (_) =>
+                            setState(() => _dragging = true),
+                        onInteractionEnd: (_) =>
+                            setState(() => _dragging = false),
+                        child: SizedBox.fromSize(
+                          size: viewport,
+                          // **大图不打码**（用户 2026-09-20："打开详情之后就没必要模糊了"）。
+                          // 走到这里说明用户已经主动点开了这一条 —— 再糊一层只会让他
+                          // 多点一次"点击查看"。打码只发生在列表 / 缩略图那类"被动看到"的位置
+                          // （见 `media_thumb.dart` 与回复里的产物卡）。
+                          child: _image(viewport),
+                        ),
+                      ),
                     ),
                   ),
-                ),
-                ValueListenableBuilder<Matrix4>(
-                  valueListenable: _tc,
-                  builder: (context, matrix, _) {
-                    final zoomed =
-                        matrix.getMaxScaleOnAxis() > widget.minScale + 0.001;
-                    return Stack(
-                      fit: StackFit.expand,
-                      children: [
-                        if (zoomed)
-                          Positioned(
-                            right: 12,
-                            bottom: 12,
-                            child: _Minimap(
-                              key: zoomableMinimapKey,
-                              provider: _provider,
-                              imageRect: imageRect,
-                              fraction: visibleImageFraction(
-                                matrix,
-                                viewport,
-                                imageRect,
+                  ValueListenableBuilder<Matrix4>(
+                    valueListenable: _tc,
+                    builder: (context, matrix, _) {
+                      final zoomed =
+                          matrix.getMaxScaleOnAxis() > widget.minScale + 0.001;
+                      return Stack(
+                        fit: StackFit.expand,
+                        children: [
+                          if (zoomed)
+                            Positioned(
+                              right: 12,
+                              bottom: 12,
+                              child: _Minimap(
+                                key: zoomableMinimapKey,
+                                provider: _provider,
+                                imageRect: imageRect,
+                                fraction: visibleImageFraction(
+                                  matrix,
+                                  viewport,
+                                  imageRect,
+                                ),
+                                intrinsic: _intrinsic,
+                                onSeek: (f) => _seekTo(f, imageRect),
                               ),
-                              intrinsic: _intrinsic,
-                              onSeek: (f) => _seekTo(f, imageRect),
+                            ),
+                          Positioned(
+                            left: 12,
+                            bottom: 12,
+                            child: _ZoomBar(
+                              key: zoomableZoomBarKey,
+                              scale: matrix.getMaxScaleOnAxis(),
+                              zoomed: zoomed,
+                              onZoomIn: () => _zoomBy(1.25),
+                              onZoomOut: () => _zoomBy(1 / 1.25),
+                              onReset: _reset,
                             ),
                           ),
-                        Positioned(
-                          left: 12,
-                          bottom: 12,
-                          child: _ZoomBar(
-                            key: zoomableZoomBarKey,
-                            scale: matrix.getMaxScaleOnAxis(),
-                            zoomed: zoomed,
-                            onZoomIn: () => _zoomBy(1.25),
-                            onZoomOut: () => _zoomBy(1 / 1.25),
-                            onReset: _reset,
-                          ),
-                        ),
-                      ],
-                    );
-                  },
-                ),
-              ],
-            ),
-          );
-        },
+                        ],
+                      );
+                    },
+                  ),
+                ],
+              ),
+            );
+          },
+        ),
       ),
     );
   }

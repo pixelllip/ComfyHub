@@ -5,7 +5,7 @@ import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
-import '../app.dart' show kWideLayoutMinWidth;
+import '../core/layout_constants.dart';
 import '../core/settings_store.dart';
 import '../models/models.dart';
 import '../state/library_store.dart';
@@ -14,6 +14,7 @@ import '../widgets/scroll_linked_title.dart';
 import '../widgets/common.dart';
 import '../widgets/export_dialog.dart';
 import '../widgets/media_thumb.dart';
+import '../widgets/nsfw_blur.dart';
 import '../widgets/paged_swipe.dart';
 import '../widgets/upload_sheet.dart';
 import 'media_detail_page.dart';
@@ -546,6 +547,70 @@ class _GalleryPageState extends State<GalleryPage> {
   static double collectionPanelWidth(double available) => (available * 0.32)
       .clamp(kCollectionPanelMinWidth, kCollectionPanelMaxWidth);
 
+  /// 一页产物网格。当前页与预取到的相邻页都用它 —— 翻页动画要同时画出两页，
+  /// 所以这里只吃"这一页的 [data]"，不再直接读 `store.media.items`。
+  Widget _mediaGrid(LibraryStore store, Paged<MediaAsset> data) =>
+      GridView.builder(
+        padding: const EdgeInsets.fromLTRB(16, 8, 16, 96),
+        // 每个格子**已经**带了自己的 RepaintBoundary（SliverChildBuilderDelegate
+        // 的 addRepaintBoundaries 默认就是 true），所以这里不用再手包一层；
+        // 但 keep-alive 媒体格子用不上（没有输入框 / 可保留的选择），关掉就少两个
+        // 包装 Element + State 要建。cacheExtent 也用默认的 250 逻辑像素：
+        // 只多预建一行的量，正是它挡住了"滑动时把几百张离屏图都解出来"。
+        addAutomaticKeepAlives: false,
+        gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+          maxCrossAxisExtent: 230,
+          crossAxisSpacing: 10,
+          mainAxisSpacing: 10,
+          childAspectRatio: 1,
+        ),
+        itemCount: data.items.length,
+        itemBuilder: (context, i) {
+          final m = data.items[i];
+          // 集合格子（同一批微调的产物折叠成一张）：叠放封面 + 右下角总数。
+          // 判定完全来自后端（`collectionId` + `collectionSize > 1`），前端不猜。
+          //
+          // ⚠ 例外是「仅收藏」：那一档**无视集合**，每个收藏都要显示成**单张图**
+          // （用户 2026-10-24）。后端的折叠也确实是关掉的，这里再把格子的
+          // "集合外观"关掉 —— 两件事必须同时做，不然会看到一个只含收藏的文件夹。
+          final favoritesFlat = store.mediaFavoritesFlat;
+          final grouped = m.isCollection && !favoritesFlat;
+          final thumb = grouped
+              ? CollectionThumb(
+                  media: m,
+                  previewIds: m.collectionPreview,
+                  selectionMode: _selectionMode,
+                  selected: _picked.containsKey(m.id),
+                  onToggleSelect: () => _togglePick(m),
+                  // 点文件夹 = **展开列出成员**（用户 2026-10-18："点进文件夹…再选择其一
+                  // 进入它的详情"），不再直接跳封面的详情页。
+                  onTap: () => _showFolder(m),
+                )
+              : MediaThumb(
+                  media: m,
+                  selectionMode: _selectionMode,
+                  selected: _picked.containsKey(m.id),
+                  onToggleSelect: () => _togglePick(m),
+                  onTap: () => _openDetail(m.id),
+                );
+          return GestureDetector(
+            // 长按 = 进"整理/多选"模式（两件事合成一个模式，用户 2026-10-18 拍板）。
+            // ⚠ 集合格子进来时**整组计入**，不然"选了一组、删掉一张"又会重演。
+            onLongPress: () => setState(() {
+              _selectionMode = true;
+              _pickOf(m);
+            }),
+            // 右键：单个产物最常用的三个操作，不用先点进详情页。
+            // 这里把 itemBuilder 的 context 传下去 —— 它在 ContextMenuScope **里面**，
+            // 而 `_GalleryPageState.context` 在 Scope 外面（页面 build 才返回 Scope），
+            // 用后者去找右键菜单宿主必然找不到。
+            onSecondaryTapDown: (details) =>
+                _showThumbMenu(context, m, details.globalPosition),
+            child: _draggableTile(m, thumb),
+          );
+        },
+      );
+
   Widget _libraryBody(
     BuildContext context,
     LibraryStore store,
@@ -579,8 +644,8 @@ class _GalleryPageState extends State<GalleryPage> {
     }
 
     final theme = Theme.of(context);
-    // 页码请求走后端分页：`mediaPage` 是"用户要看第几页"，
-    // `media.page` 才是"现在这份 items 属于第几页"。两者不一致 = 新一页还在路上。
+    // 页码请求走后端分页：`mediaPage` 是"用户要看第几页"。
+    // 相邻页由 store 预取（`ensureMediaPage`），拖动时两页要同时在树里。
     final pageBusy = store.mediaPage != store.media.page;
     final grid = Column(
       children: [
@@ -589,75 +654,22 @@ class _GalleryPageState extends State<GalleryPage> {
           child: SwipePageView(
             page: store.mediaPage,
             pages: store.media.pages,
+            builder: (page) {
+              final data = store.mediaPageData(page);
+              return data == null ? null : _mediaGrid(store, data);
+            },
             onPageChanged: store.setMediaPage,
-            builder: (page) => page == store.media.page
-                ? GridView.builder(
-              padding: const EdgeInsets.fromLTRB(16, 8, 16, 96),
-              // 每个格子**已经**带了自己的 RepaintBoundary（SliverChildBuilderDelegate
-              // 的 addRepaintBoundaries 默认就是 true），所以这里不用再手包一层；
-              // 但 keep-alive 媒体格子用不上（没有输入框 / 可保留的选择），关掉就少两个
-              // 包装 Element + State 要建。cacheExtent 也用默认的 250 逻辑像素：
-              // 只多预建一行的量，正是它挡住了"滑动时把几百张离屏图都解出来"。
-              addAutomaticKeepAlives: false,
-              gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-                maxCrossAxisExtent: 230,
-                crossAxisSpacing: 10,
-                mainAxisSpacing: 10,
-                childAspectRatio: 1,
-              ),
-              itemCount: store.media.items.length,
-              itemBuilder: (context, i) {
-                final m = store.media.items[i];
-                // 集合格子（同一批微调的产物折叠成一张）：叠放封面 + 右下角总数。
-                // 判定完全来自后端（`collectionId` + `collectionSize > 1`），前端不猜。
-                //
-                // ⚠ 例外是「仅收藏」：那一档**无视集合**，每个收藏都要显示成**单张图**
-                // （用户 2026-10-24）。后端的折叠也确实是关掉的，这里再把格子的
-                // "集合外观"关掉 —— 两件事必须同时做，不然会看到一个只含收藏的文件夹。
-                final favoritesFlat = store.mediaFavoritesFlat;
-                final grouped = m.isCollection && !favoritesFlat;
-                final thumb = grouped
-                    ? CollectionThumb(
-                        media: m,
-                        previewIds: m.collectionPreview,
-                        selectionMode: _selectionMode,
-                        selected: _picked.containsKey(m.id),
-                        onToggleSelect: () => _togglePick(m),
-                        // 点文件夹 = **展开列出成员**（用户 2026-10-18："点进文件夹…再选择其一
-                        // 进入它的详情"），不再直接跳封面的详情页。
-                        onTap: () => _showFolder(m),
-                      )
-                    : MediaThumb(
-                        media: m,
-                        selectionMode: _selectionMode,
-                        selected: _picked.containsKey(m.id),
-                        onToggleSelect: () => _togglePick(m),
-                        onTap: () => _openDetail(m.id),
-                      );
-                return GestureDetector(
-                  // 长按 = 进"整理/多选"模式（两件事合成一个模式，用户 2026-10-18 拍板）。
-                  // ⚠ 集合格子进来时**整组计入**，不然"选了一组、删掉一张"又会重演。
-                  onLongPress: () => setState(() {
-                    _selectionMode = true;
-                    _pickOf(m);
-                  }),
-                  // 右键：单个产物最常用的三个操作，不用先点进详情页。
-                  // 这里把 itemBuilder 的 context 传下去 —— 它在 ContextMenuScope **里面**，
-                  // 而 `_GalleryPageState.context` 在 Scope 外面（页面 build 才返回 Scope），
-                  // 用后者去找右键菜单宿主必然找不到。
-                  onSecondaryTapDown: (details) =>
-                      _showThumbMenu(context, m, details.globalPosition),
-                  child: _draggableTile(m, thumb),
-                );
-              },
-            )
-                : null,
+            onPageNeeded: store.ensureMediaPage,
+            // 桌面格子可以直接拖去组成集合，横向拖动会被格子先抢走；
+            // 关掉翻页手势，翻页只走下面那条显式按钮，避免"想翻页却拖走一张图"。
+            swipeEnabled: !_mouseFirst,
           ),
         ),
         PageBar(
           page: store.mediaPage,
           pages: store.media.pages,
           busy: pageBusy,
+          showSwipeHint: !_mouseFirst,
           onChanged: store.setMediaPage,
         ),
       ],
@@ -1194,10 +1206,7 @@ class _GalleryPageState extends State<GalleryPage> {
                   ? const Center(child: CircularProgressIndicator())
                   : members.isEmpty
                   ? Center(
-                      child: Text(
-                        '这里还没有产物',
-                        style: theme.textTheme.bodySmall,
-                      ),
+                      child: Text('这里还没有产物', style: theme.textTheme.bodySmall),
                     )
                   : GridView.builder(
                       padding: const EdgeInsets.all(12),
@@ -2078,6 +2087,75 @@ class _CollectionPickerDialogState extends State<_CollectionPickerDialog> {
     }
   }
 
+  /// 集合封面的小预览。没有封面 id 时退回原来的文件夹图标。
+  ///
+  /// 用户 2026-11-07 的原话："至少给我一个预览吧？" —— 一排
+  /// 「未命名集合（3 张）」长得完全一样，不喂一张图根本选不中。
+  Widget _collectionCover(
+    ThemeData theme,
+    MediaCollection collection, {
+    required bool fits,
+  }) {
+    final id = collection.coverMediaId;
+    if (id == null) {
+      return Icon(
+        collection.isManual ? Icons.folder_outlined : Icons.auto_awesome_motion,
+        size: 22,
+        color: fits ? null : theme.disabledColor,
+      );
+    }
+    final kind = collection.kind.toUpperCase();
+    if (kind == 'AUDIO') {
+      return _coverPlaceholder(theme, kind, dimmed: !fits);
+    }
+    final api = context.read<LibraryStore>().api;
+    // 图片走 /thumb；视频走 /poster（视频的 /thumb 是 204）。
+    final url = kind == 'VIDEO'
+        ? api.mediaPosterUrl(id)
+        : api.absolute('/api/media/$id/thumb');
+    final dpr = MediaQuery.devicePixelRatioOf(context);
+    return Opacity(
+      opacity: fits ? 1 : 0.45,
+      child: NsfwBlur(
+        nsfw: collection.coverNsfw,
+        revealKey: 'media:$id',
+        borderRadius: BorderRadius.circular(8),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(8),
+          child: CachedThumbImage(
+            mediaId: id,
+            url: url,
+            api: api,
+            cacheWidth: (48 * dpr).round(),
+            theme: theme,
+            loading: () => _coverPlaceholder(theme, kind),
+            failed: () => _coverPlaceholder(theme, kind),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _coverPlaceholder(
+    ThemeData theme,
+    String kind, {
+    bool dimmed = false,
+  }) {
+    return Container(
+      color: theme.colorScheme.surfaceContainerHighest,
+      alignment: Alignment.center,
+      child: Icon(
+        kind == 'VIDEO'
+            ? Icons.movie_outlined
+            : kind == 'AUDIO'
+            ? Icons.graphic_eq
+            : Icons.image_outlined,
+        size: 20,
+        color: dimmed ? theme.disabledColor : theme.colorScheme.outline,
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -2110,12 +2188,11 @@ class _CollectionPickerDialogState extends State<_CollectionPickerDialog> {
                     return ListTile(
                       dense: true,
                       enabled: fits,
-                      leading: Icon(
-                        collection.isManual
-                            ? Icons.folder_outlined
-                            : Icons.auto_awesome_motion,
-                        size: 18,
-                        color: fits ? null : theme.disabledColor,
+                      minLeadingWidth: 52,
+                      leading: SizedBox(
+                        width: 48,
+                        height: 48,
+                        child: _collectionCover(theme, collection, fits: fits),
                       ),
                       title: Text(
                         collection.label,

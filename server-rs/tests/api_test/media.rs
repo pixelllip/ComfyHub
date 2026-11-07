@@ -265,6 +265,11 @@ async fn creating_collection_without_a_title_gets_a_default_name() {
         "名字留空时后端要给默认名 —— 展开详情才不会再显示『这一组』"
     );
     assert_eq!(body["size"], 1);
+    assert_eq!(
+        body["coverMediaId"], 100,
+        "选择器要有一张封面图才分得清几个『未命名集合』"
+    );
+    assert_eq!(body["coverNsfw"], false, "普通产物的封面不该被误标成 NSFW");
 }
 
 #[tokio::test]
@@ -297,7 +302,10 @@ async fn collection_rename_endpoint_sets_title_and_promotes_to_manual() {
     assert_eq!(status, StatusCode::OK, "改名不该失败：{body}");
     assert_eq!(body["id"], collection_id);
     assert_eq!(body["title"], "夜景三连", "首尾空白要去掉");
-    assert_eq!(body["origin"], "manual", "起了名字的组归用户，重新整理不许解散");
+    assert_eq!(
+        body["origin"], "manual",
+        "起了名字的组归用户，重新整理不许解散"
+    );
     assert_eq!(body["size"], 1);
 
     // 空名字明确拒绝（否则展开详情又回到"这一组"）
@@ -322,6 +330,7 @@ async fn collection_rename_endpoint_sets_title_and_promotes_to_manual() {
     let (_, rows) = get_json(router_for(state), "/api/media/collections").await;
     assert_eq!(rows[0]["id"], collection_id);
     assert_eq!(rows[0]["title"], "夜景三连");
+    assert_eq!(rows[0]["coverMediaId"], 100, "清单里也要带封面 id");
 }
 
 #[tokio::test]

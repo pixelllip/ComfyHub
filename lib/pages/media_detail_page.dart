@@ -17,6 +17,7 @@ import '../state/nsfw_store.dart';
 import '../widgets/audio_player_view.dart';
 import '../widgets/common.dart';
 import '../widgets/export_dialog.dart';
+import '../widgets/paged_swipe.dart';
 import '../widgets/prompt_params.dart';
 import '../widgets/upload_sheet.dart';
 import '../widgets/video_view.dart';
@@ -87,6 +88,15 @@ class _MediaDetailPageState extends State<MediaDetailPage> {
   /// "只有一份产物时禁用箭头"）。
   List<int> _siblings = const [];
 
+  /// 同批产物的完整元数据（后端列成员时顺手带回来的）。
+  ///
+  /// 翻页动画要**同时画出前后两张**，不可能等切过去再请求；这份缓存让相邻页
+  /// 在拖动开始的那一帧就能建出来。
+  final Map<int, MediaAsset> _siblingMedia = <int, MediaAsset>{};
+
+  /// 图片翻页的手势桥：`ZoomableImageView` 在 1:1 时把横向拖动交给它。
+  final SwipePageController _pager = SwipePageController();
+
   @override
   void initState() {
     super.initState();
@@ -154,9 +164,11 @@ class _MediaDetailPageState extends State<MediaDetailPage> {
       // 一张示例可能本来是画廊里某个集合的成员，按集合取会把用户带出卡片
       // （用户 2026-11-07 报的 bug）。示例的顺序就是卡片里挂的顺序。
       var siblings = const <int>[];
+      var siblingMedia = <int, MediaAsset>{};
       final fixed = widget.siblings;
       if (fixed != null) {
         siblings = [for (final item in fixed) item.id];
+        siblingMedia = {for (final item in fixed) item.id: item};
       } else if (media.collectionId != null) {
         try {
           final page = await store.api.listMedia(
@@ -165,15 +177,20 @@ class _MediaDetailPageState extends State<MediaDetailPage> {
             size: 200,
           );
           siblings = page.items.map((e) => e.id).toList();
+          siblingMedia = {for (final item in page.items) item.id: item};
         } catch (_) {
           siblings = const [];
         }
       }
       if (!mounted || _currentId != id) return;
+      siblingMedia[media.id] = media;
       setState(() {
         _media = media;
         _prompt = prompt;
         _siblings = siblings;
+        _siblingMedia
+          ..clear()
+          ..addAll(siblingMedia);
         _cachedFile = null;
         _autoCacheSkipped = false;
         _loading = false;
@@ -700,6 +717,49 @@ class _MediaDetailPageState extends State<MediaDetailPage> {
     // 页面自己的 `State.context` 在 Scope 外面，用它找不到菜单宿主。
     return Builder(
       builder: (menuContext) {
+        final store = context.read<LibraryStore>();
+        final paged =
+            m.kind == MediaKind.image &&
+            _siblings.length > 1 &&
+            _indexInSiblings >= 0;
+
+        // 图片翻页：**两页同时在树里**，拖动到一半就是左右各半张。
+        // 页面数据来自 `_siblingMedia`（列成员时后端已经带回来了），所以
+        // 不需要等下一次网络请求，拖起来就能看到相邻那张。
+        final content = paged
+            ? SwipePageView(
+                // 这一组成员变了（外部换了一条产物 / 换了集合）才重置翻页器：
+                // 不同的成员顺序不同，沿用旧页码会指到别人。
+                // ⚠ 别拿 `m.collectionId` 当 key：卡片示例可能来自不同的集合，
+                // 每翻一页都会重建整台翻页器、把过渡动画硬切掉。
+                key: ValueKey<String>(_siblings.join(',')),
+                page: _indexInSiblings + 1,
+                pages: _siblings.length,
+                controller: _pager,
+                builder: (page) {
+                  final id = _siblings[page - 1];
+                  final asset = id == m.id ? m : _siblingMedia[id];
+                  if (asset == null) return null;
+                  return _Preview(
+                    media: asset,
+                    url: id == m.id ? url : store.api.absolute(asset.fileUrl),
+                    posterUrl: null,
+                    file: id == m.id ? file : null,
+                    pager: _pager,
+                  );
+                },
+                onPageChanged: (page) {
+                  final id = _siblings[page - 1];
+                  _goTo(id);
+                },
+              )
+            : _Preview(
+                media: m,
+                url: url,
+                posterUrl: _posterUrl(m),
+                file: file,
+              );
+
         final preview = GestureDetector(
           // translucent：视频/音频四周的留白也要右键
           behavior: HitTestBehavior.translucent,
@@ -726,19 +786,7 @@ class _MediaDetailPageState extends State<MediaDetailPage> {
                 );
               }
             },
-            // **过渡只做在图片里**（用户 2026-10-11："切换时整个界面闪烁"）。
-            //
-            // 这里刻意**不**在 `_currentId` 外面套 `AnimatedSwitcher`：
-            // 页面一按 → 就换 key，等于在数据还没回来时先把旧图拆掉、再建一个新的，
-            // 用户看到的就是"显式注销旧界面"。改成让 `ZoomableImageView` 自己
-            // 留住旧图 —— 新图解码出第一帧之后才换 provider 并淡入（见那边 `_primeNext`）。
-            // 所以这里 child 的实例 / State 在翻图时**始终是同一个**。
-            child: _Preview(
-              media: m,
-              url: url,
-              posterUrl: _posterUrl(m),
-              file: file,
-            ),
+            child: content,
           ),
         );
 
@@ -951,11 +999,15 @@ class _Preview extends StatelessWidget {
   /// 本机缓存原件；有它就不走网络（手机端离线看已缓存的图）。
   final File? file;
 
+  /// 图片在 1:1 时把横向拖动交给它（详情页的翻页控制器）。
+  final SwipePageController? pager;
+
   const _Preview({
     required this.media,
     required this.url,
     this.posterUrl,
     this.file,
+    this.pager,
   });
 
   @override
@@ -969,6 +1021,10 @@ class _Preview extends StatelessWidget {
           imageSize: (media.width != null && media.height != null)
               ? Size(media.width!.toDouble(), media.height!.toDouble())
               : null,
+          onPageDragStart: pager?.beginDrag,
+          onPageDragUpdate: pager?.dragBy,
+          onPageDragEnd: (velocity) => pager?.endDrag(velocity: velocity),
+          onPageDragCancel: pager?.cancelDrag,
         );
 
       case MediaKind.video:

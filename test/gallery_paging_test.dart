@@ -159,10 +159,27 @@ void main() {
     final (store, fake) = await _makeStore(4);
 
     await store.refreshMedia();
-    final before = fake.requests.length;
+    final before = fake.requests.where((r) => r.contains('page=1')).length;
     await store.refreshMedia();
 
-    expect(fake.requests.length - before, 1, reason: '正常情况下一次刷新只发一个请求');
+    // 相邻页的预取走的是 page=2，不在这里的计数里；当前页只该发一次。
+    expect(
+      fake.requests.where((r) => r.contains('page=1')).length - before,
+      1,
+      reason: '正常情况下一次刷新只发一个当前页请求',
+    );
     expect(store.media.items, hasLength(3));
+  });
+
+  test('相邻页会提前缓存：翻页动画要同时画出前后两页', () async {
+    final (store, _) = await _makeStore(10); // 每页 3 条 → 共 4 页
+
+    await store.refreshMedia();
+    await store.ensureMediaPage(2);
+
+    final next = store.mediaPageData(2);
+    expect(next, isNotNull, reason: '第 2 页应该已经被预取');
+    expect(next!.items.map((m) => m.id), [4, 5, 6]);
+    expect(store.mediaPageData(1), isNotNull, reason: '当前页也要能按页码取到');
   });
 }

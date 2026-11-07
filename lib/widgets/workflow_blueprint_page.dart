@@ -4,7 +4,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
-import '../app.dart' show kWideLayoutMinWidth;
+import '../core/layout_constants.dart';
 import '../core/workflow_blueprint.dart';
 import 'markdown_view.dart';
 import 'workflow_blueprint_painter.dart';

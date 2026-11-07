@@ -358,6 +358,11 @@ pub struct MediaCollectionDto {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
     pub size: i64,
+    /// 选择器里给这一组显示一张封面（第一张成员的 media id）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cover_media_id: Option<i64>,
+    /// 封面是不是 NSFW（选择器里照样打码）。
+    pub cover_nsfw: bool,
 }
 
 impl From<crate::media::collection::CollectionSummary> for MediaCollectionDto {
@@ -368,6 +373,8 @@ impl From<crate::media::collection::CollectionSummary> for MediaCollectionDto {
             origin: value.origin,
             title: value.title,
             size: value.size,
+            cover_media_id: value.cover_media_id,
+            cover_nsfw: value.cover_nsfw,
         }
     }
 }

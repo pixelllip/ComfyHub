@@ -537,12 +537,23 @@ class MediaCollection {
   final String? title;
   final int size;
 
+  /// 选择器里给这一组显示一张封面（第一张成员的 media id）。
+  ///
+  /// 没有它时选择器只能显示"未命名集合（3 张）"——几个未命名集合长得一模一样，
+  /// 用户根本分不出要把图移进哪一个（2026-11-07 用户："至少给我一个预览吧？"）。
+  final int? coverMediaId;
+
+  /// 封面是不是 NSFW（选择器里照样打码，别为了"看一眼封面"把规则破了）。
+  final bool coverNsfw;
+
   const MediaCollection({
     required this.id,
     required this.kind,
     required this.origin,
     this.title,
     this.size = 0,
+    this.coverMediaId,
+    this.coverNsfw = false,
   });
 
   bool get isManual => origin == 'manual';
@@ -567,6 +578,8 @@ class MediaCollection {
         origin: (json['origin'] ?? 'auto').toString(),
         title: json['title']?.toString(),
         size: (json['size'] as num?)?.toInt() ?? 0,
+        coverMediaId: (json['coverMediaId'] as num?)?.toInt(),
+        coverNsfw: json['coverNsfw'] == true,
       );
 }
 

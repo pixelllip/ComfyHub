@@ -88,6 +88,8 @@ void main() {
               'origin': 'manual',
               'title': '精选',
               'size': 3,
+              'coverMediaId': 7,
+              'coverNsfw': true,
             },
             // 算法分出来的**没有 title 这个键**（后端 skip_serializing_if）
             {'id': 9, 'kind': 'VIDEO', 'origin': 'auto', 'size': 2},
@@ -101,7 +103,10 @@ void main() {
     expect(rows, hasLength(2));
     expect(rows.first.isManual, isTrue);
     expect(rows.first.label, '精选');
+    expect(rows.first.coverMediaId, 7, reason: '选择器要用它显示一张封面预览');
+    expect(rows.first.coverNsfw, isTrue, reason: '预览也要按同一套 NSFW 规则打码');
     expect(rows.last.isManual, isFalse);
+    expect(rows.last.coverMediaId, isNull, reason: '没有封面 id 时退回图标，不许报错');
     expect(rows.last.label, '算法分组（2 张）', reason: '算法分组没有名字，界面要如实说');
   });
 

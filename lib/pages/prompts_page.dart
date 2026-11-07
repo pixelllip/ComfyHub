@@ -579,46 +579,22 @@ class _PromptsPageState extends State<PromptsPage>
       );
     }
 
-    // 页码请求走后端分页：`promptPage` 是"用户要看第几页"，
-    // `prompts.page` 才是"现在这份 items 属于第几页"。两者不一致 = 新一页还在路上。
+    // 页码请求走后端分页：`promptPage` 是"用户要看第几页"。
+    // 相邻页由 store 预取（`ensurePromptPage`），拖动时两页要同时在树里。
     final pageBusy = store.promptPage != store.prompts.page;
     return Column(
       children: [
         Expanded(
-          // 左右滑动 = 翻当前列表的页（带滑入 / 滑出动画，见 SwipePageView）
+          // 左右滑动 = 翻当前列表的页（两页同时滑动的过渡，见 SwipePageView）
           child: SwipePageView(
             page: store.promptPage,
             pages: store.prompts.pages,
+            builder: (page) {
+              final data = store.promptPageData(page);
+              return data == null ? null : _promptList(context, store, data);
+            },
             onPageChanged: store.setPromptPage,
-            builder: (page) => page == store.prompts.page
-                ? AdaptiveColumnList(
-              padding: const EdgeInsets.fromLTRB(16, 4, 16, 96),
-              runSpacing: 10,
-              itemCount: store.prompts.items.length,
-              itemBuilder: (context, i) {
-                final prompt = store.prompts.items[i];
-                return PromptCard(
-                  prompt: prompt,
-                  selectedTags: store.selectedTags,
-                  selectionMode: _selectionMode,
-                  selected: _selected.contains(prompt.id),
-                  onLongPress: () => setState(() {
-                    _selectionMode = true;
-                    _selected.add(prompt.id);
-                  }),
-                  onOpen: () => _selectionMode
-                      ? _toggle(prompt.id)
-                      : _openDetail(context, prompt),
-                  onToggleTag: store.toggleTag,
-                  // 「▶️运行」：交给宿主（HomeShell）送进工作台并切过去。
-                  // 宿主没接（比如用例里直接起这一页）时传 null，按钮就不显示。
-                  onRun: widget.onSendToWorkspace == null
-                      ? null
-                      : () => _runPreset(prompt),
-                );
-              },
-            )
-                : null,
+            onPageNeeded: store.ensurePromptPage,
           ),
         ),
         PageBar(
@@ -630,6 +606,38 @@ class _PromptsPageState extends State<PromptsPage>
       ],
     );
   }
+
+  /// 一页提示词列表。当前页与预取到的相邻页共用 —— 翻页动画要同时画出两页。
+  Widget _promptList(
+    BuildContext context,
+    LibraryStore store,
+    Paged<Prompt> data,
+  ) => AdaptiveColumnList(
+    padding: const EdgeInsets.fromLTRB(16, 4, 16, 96),
+    runSpacing: 10,
+    itemCount: data.items.length,
+    itemBuilder: (context, i) {
+      final prompt = data.items[i];
+      return PromptCard(
+        prompt: prompt,
+        selectedTags: store.selectedTags,
+        selectionMode: _selectionMode,
+        selected: _selected.contains(prompt.id),
+        onLongPress: () => setState(() {
+          _selectionMode = true;
+          _selected.add(prompt.id);
+        }),
+        onOpen: () =>
+            _selectionMode ? _toggle(prompt.id) : _openDetail(context, prompt),
+        onToggleTag: store.toggleTag,
+        // 「▶️运行」：交给宿主（HomeShell）送进工作台并切过去。
+        // 宿主没接（比如用例里直接起这一页）时传 null，按钮就不显示。
+        onRun: widget.onSendToWorkspace == null
+            ? null
+            : () => _runPreset(prompt),
+      );
+    },
+  );
 
   Future<void> _openDetail(BuildContext context, Prompt prompt) async {
     await Navigator.of(context).push(

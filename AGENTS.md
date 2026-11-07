@@ -55,7 +55,7 @@
 
 ### 6.0 两端一起设计
 
-任何界面改动都要在**桌面端和移动端**各问一句"这好用吗"。形态由**一个数字**划开：`lib/app.dart` 的 `kWideLayoutMinWidth = 900`（逻辑像素）。
+任何界面改动都要在**桌面端和移动端**各问一句"这好用吗"。形态由**一个数字**划开：`lib/core/layout_constants.dart` 的 `kWideLayoutMinWidth = 900`（逻辑像素）。
 
 | | 桌面端（≥ 900） | 移动端（< 900） |
 | --- | --- | --- |
@@ -129,6 +129,31 @@
   `ScrollTitleProgress`**，不要另算一套阈值。
 - 回归：`test/scroll_linked_title_test.dart`（顶部只有大标题 / 滚动后顶栏出现 /
   滚回顶部收回）。
+
+### 6.4 翻页：两页同时过渡，动画结束才注销旧页
+
+**2026-11-07 定下的硬约束**（用户："过渡动画会同时显示新旧两页的内容，动画结束后注销旧界面"）：
+
+- 所有"上一页 / 下一页"统一用 `lib/widgets/paged_swipe.dart` 的 `SwipePageView`，
+  **不要**再写 `AnimatedSwitcher` 那种"旧页淡出、新页淡入"的替换器；
+- `SwipePageView` 是"目标页码 + `builder(page)`"：拖动时当前页和相邻页**同时在树里**平移
+  （拖到一半就是左右各半页），松手过阈值才提交页码；**邻居页的数据要先备好**，
+  否则 `builder` 返回 `null`，它会保持旧页并请求 `onPageNeeded`；
+- 后端分页列表（画廊 / 预设）的相邻页缓存由 `LibraryStore` 负责：
+  `mediaPageData` / `promptPageData` 取缓存，`ensureMediaPage` / `ensurePromptPage` 预取；
+  改筛选 / 排序 / 删除后必须让缓存失效（`_invalidate*Pages`）；
+- 大图查看器在 **1:1 时**把横向拖动交给 `SwipePageController`（`ZoomableImageView`
+  用 `Listener` 读原始指针，绕开 `InteractiveViewer` 的手势竞技场）；放大之后
+  横向拖动只平移画面，不翻页；
+- **桌面画廊关掉滑动翻页**（`SwipePageView.swipeEnabled: !_mouseFirst`）：格子本身
+  可以直接拖去组成集合，横向拖动会被格子先抢走，硬留滑动只会变成"想翻页却拖走一张图"。
+  桌面用 `PageBar` 的显式「上一页 / 下一页」（≥520 宽带文字，360 宽仍是图标），
+  手机长按才拖格子，滑动翻页保持开启；
+- 详情页的同批产物必须在 `_load` 时把 `listMedia(collectionId: …)` 返回的
+  **完整 `MediaAsset`** 收进 `_siblingMedia`，否则拖动开始时凑不出相邻那一页；
+- 回归：`test/swipe_pager_test.dart`（拖到一半两页都在 / 数据没到不换页）、
+  `test/gallery_paging_test.dart`（相邻页缓存）、`test/media_detail_narrow_test.dart`
+  （看图器拖动翻页 / 动画中两个查看器、结束后只剩一个）。
 
 ---
 

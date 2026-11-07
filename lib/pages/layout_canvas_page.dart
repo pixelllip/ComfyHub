@@ -3,7 +3,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
-import '../app.dart' show kWideLayoutMinWidth;
+import '../core/layout_constants.dart';
 import '../core/layout_preset_store.dart';
 import '../models/layout_embed.dart';
 import '../models/layout_spec.dart';

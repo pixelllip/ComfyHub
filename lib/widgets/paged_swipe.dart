@@ -57,6 +57,13 @@ class SwipePageView extends StatefulWidget {
   /// 让外部（比如大图查看器的 `Listener`）也能驱动这套拖动。
   final SwipePageController? controller;
 
+  /// 要不要挂"左右拖动 = 翻页"的手势。
+  ///
+  /// 桌面画廊里每个格子本身可以直接拖去组成集合，横向拖动会被格子先抢走；
+  /// 这时关掉翻页手势、只用显式按钮，反而不会出现"想翻页却拖走了一张图"。
+  /// 手机端格子是长按才拖，和平滑翻页不冲突，保持开启。
+  final bool swipeEnabled;
+
   /// 旧页滑出 + 新页滑入的时长。
   final Duration duration;
 
@@ -68,6 +75,7 @@ class SwipePageView extends StatefulWidget {
     required this.onPageChanged,
     this.onPageNeeded,
     this.controller,
+    this.swipeEnabled = true,
     this.duration = const Duration(milliseconds: 300),
   });
 
@@ -171,13 +179,16 @@ class _SwipePageViewState extends State<SwipePageView>
     _scheduleNeeded();
 
     // 目标页的数据到了：从当前页滑过去（两页同时可见）。
-    if (!_transitioning && widget.page != _shownPage && _pages[widget.page] != null) {
+    if (!_transitioning &&
+        widget.page != _shownPage &&
+        _pages[widget.page] != null) {
       _startTransitionTo(widget.page);
     }
 
     // 动画途中父级重建：进入的那一页内容跟着更新（收藏 / 选择态等）。
     if (_transitioning) {
-      _pages[_toPage] = widget.builder(_toPage) ?? _pages[_toPage]!;
+      final refreshed = widget.builder(_toPage);
+      if (refreshed != null) _pages[_toPage] = refreshed;
     }
   }
 
@@ -196,6 +207,8 @@ class _SwipePageViewState extends State<SwipePageView>
     final wanted = <int>{
       _shownPage,
       widget.page,
+      if (_transitioning) _fromPage,
+      if (_transitioning) _toPage,
       if (_shownPage > 1) _shownPage - 1,
       if (_shownPage < widget.pages) _shownPage + 1,
       if (widget.page > 1) widget.page - 1,
@@ -223,7 +236,9 @@ class _SwipePageViewState extends State<SwipePageView>
       if (widget.page > 1) widget.page - 1,
       if (widget.page < widget.pages) widget.page + 1,
     };
-    wanted.removeWhere((page) => _pages.containsKey(page) || _requested.contains(page));
+    wanted.removeWhere(
+      (page) => _pages.containsKey(page) || _requested.contains(page),
+    );
     if (wanted.isEmpty || widget.onPageNeeded == null) return;
     _requested.addAll(wanted);
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -255,7 +270,9 @@ class _SwipePageViewState extends State<SwipePageView>
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted || !_transitioning) return;
-      final start = _width <= 0 ? 0.0 : (_startOffset.abs() / _width).clamp(0.0, 1.0);
+      final start = _width <= 0
+          ? 0.0
+          : (_startOffset.abs() / _width).clamp(0.0, 1.0);
       _anim.value = start;
       _animStarted = true;
       final left = 1.0 - start;
@@ -301,15 +318,15 @@ class _SwipePageViewState extends State<SwipePageView>
     });
     _anim.value = from;
     unawaited(
-      _anim.animateTo(0, duration: _snap, curve: Curves.easeOutCubic).whenComplete(
-        () {
-          if (!mounted) return;
-          setState(() {
-            _settling = false;
-            _anim.value = 0;
-          });
-        },
-      ),
+      _anim
+          .animateTo(0, duration: _snap, curve: Curves.easeOutCubic)
+          .whenComplete(() {
+            if (!mounted) return;
+            setState(() {
+              _settling = false;
+              _anim.value = 0;
+            });
+          }),
     );
   }
 
@@ -318,7 +335,7 @@ class _SwipePageViewState extends State<SwipePageView>
   // -------------------------------------------------------------------------
 
   void _beginDrag() {
-    if (_transitioning) return;
+    if (_transitioning || _waiting || _dragging) return;
     _anim.stop();
     _dragging = true;
     if (_settling) {
@@ -397,7 +414,9 @@ class _SwipePageViewState extends State<SwipePageView>
   @override
   Widget build(BuildContext context) {
     if (widget.pages <= 1) {
-      return _pages[_shownPage] ?? widget.builder(_shownPage) ?? const SizedBox.shrink();
+      return _pages[_shownPage] ??
+          widget.builder(_shownPage) ??
+          const SizedBox.shrink();
     }
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -409,13 +428,15 @@ class _SwipePageViewState extends State<SwipePageView>
         // 旧页在动画结束后就真的被注销了。
         final showAdjacent = _dragging || _settling || _dragPx != 0;
         final showPrev =
-            showAdjacent && _shownPage > 1 && _pages.containsKey(_shownPage - 1);
+            showAdjacent &&
+            _shownPage > 1 &&
+            _pages.containsKey(_shownPage - 1);
         final showNext =
             showAdjacent &&
             _shownPage < widget.pages &&
             _pages.containsKey(_shownPage + 1);
 
-        return ClipRect(
+        final body = ClipRect(
           child: Stack(
             fit: StackFit.expand,
             children: [
@@ -424,11 +445,13 @@ class _SwipePageViewState extends State<SwipePageView>
                   _fromPage,
                   _pages[_fromPage] ?? current,
                   _transitionOffset(),
+                  primary: null,
                 ),
                 _positioned(
                   _toPage,
                   _pages[_toPage] ?? current,
                   _transitionOffset() + _direction * _width,
+                  primary: null,
                 ),
               ] else ...[
                 if (showPrev)
@@ -436,14 +459,21 @@ class _SwipePageViewState extends State<SwipePageView>
                     _shownPage - 1,
                     _pages[_shownPage - 1]!,
                     _dragOffset() - _width,
+                    primary: null,
                   ),
                 if (showNext)
                   _positioned(
                     _shownPage + 1,
                     _pages[_shownPage + 1]!,
                     _dragOffset() + _width,
+                    primary: null,
                   ),
-                _positioned(_shownPage, current, _dragOffset()),
+                _positioned(
+                  _shownPage,
+                  current,
+                  _dragOffset(),
+                  primary: PrimaryScrollController.maybeOf(context),
+                ),
               ],
               if (_waiting)
                 const Positioned(
@@ -454,6 +484,19 @@ class _SwipePageViewState extends State<SwipePageView>
                 ),
             ],
           ),
+        );
+
+        // 大图查看器自带原始指针拖动（`controller != null`）：别再挂一层
+        // `GestureDetector`，否则同一次横向拖动会被两边各算一遍。
+        // 桌面画廊则因为格子拖拽会先赢下手势，直接不挂 —— 用显式翻页按钮。
+        if (widget.controller != null || !widget.swipeEnabled) return body;
+        return GestureDetector(
+          behavior: HitTestBehavior.deferToChild,
+          onHorizontalDragStart: _onDragStart,
+          onHorizontalDragUpdate: _onDragUpdate,
+          onHorizontalDragEnd: _onDragEnd,
+          onHorizontalDragCancel: _onDragCancel,
+          child: body,
         );
       },
     );
@@ -472,10 +515,25 @@ class _SwipePageViewState extends State<SwipePageView>
     return _startOffset + (end - _startOffset) * p;
   }
 
-  Widget _positioned(int page, Widget child, double dx) => Positioned.fill(
+  /// [primary] 只有"当前页"才传：相邻页同时挂着两个 `ScrollView`，
+  /// 如果两个都去认 `PrimaryScrollController`，手机上会直接报
+  /// "controller attached to multiple scroll views"。
+  Widget _positioned(
+    int page,
+    Widget child,
+    double dx, {
+    required ScrollController? primary,
+  }) => Positioned.fill(
     child: Transform.translate(
       offset: Offset(dx, 0),
-      child: KeyedSubtree(key: ValueKey<int>(page), child: child),
+      child: primary == null
+          ? PrimaryScrollController.none(
+              child: KeyedSubtree(key: ValueKey<int>(page), child: child),
+            )
+          : PrimaryScrollController(
+              controller: primary,
+              child: KeyedSubtree(key: ValueKey<int>(page), child: child),
+            ),
     ),
   );
 }
@@ -507,6 +565,9 @@ class PageBar extends StatelessWidget {
   /// 新一页还在路上：页码先显示目标值，但按钮暂时按不动（避免连点出一串请求）。
   final bool busy;
 
+  /// 是否显示"左右滑动翻页"的提示（桌面画廊关掉滑动手势时就不该再提示它）。
+  final bool showSwipeHint;
+
   final ValueChanged<int> onChanged;
 
   const PageBar({
@@ -515,6 +576,7 @@ class PageBar extends StatelessWidget {
     required this.pages,
     required this.onChanged,
     this.busy = false,
+    this.showSwipeHint = true,
   });
 
   @override
@@ -524,33 +586,61 @@ class PageBar extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(vertical: 6),
       decoration: BoxDecoration(
+        color: theme.colorScheme.surfaceContainerLow,
         border: Border(top: BorderSide(color: theme.dividerColor)),
       ),
       child: LayoutBuilder(
         builder: (context, constraints) {
-          // 360dp 上只放按钮与页码；中等宽度才加"左右滑动"的提示（不给窄屏添堵）
-          final showHint = constraints.maxWidth >= 520;
+          // 桌面 / 平板：按钮带文字（"上一页 / 下一页"），一眼就能看到；
+          // 360dp 上只放图标与页码，别把翻页条挤成两行。
+          final wide = constraints.maxWidth >= 520;
+          final canPrev = !busy && page > 1;
+          final canNext = !busy && page < pages;
+          final prev = wide
+              ? Tooltip(
+                  message: '上一页',
+                  child: TextButton.icon(
+                    onPressed: canPrev ? () => onChanged(page - 1) : null,
+                    icon: const Icon(Icons.chevron_left, size: 18),
+                    label: const Text('上一页'),
+                    style: TextButton.styleFrom(
+                      visualDensity: VisualDensity.compact,
+                      padding: const EdgeInsets.symmetric(horizontal: 10),
+                    ),
+                  ),
+                )
+              : IconButton(
+                  tooltip: '上一页',
+                  visualDensity: VisualDensity.compact,
+                  icon: const Icon(Icons.chevron_left),
+                  onPressed: canPrev ? () => onChanged(page - 1) : null,
+                );
+          final next = wide
+              ? Tooltip(
+                  message: '下一页',
+                  child: TextButton.icon(
+                    onPressed: canNext ? () => onChanged(page + 1) : null,
+                    icon: const Icon(Icons.chevron_right, size: 18),
+                    label: const Text('下一页'),
+                    style: TextButton.styleFrom(
+                      visualDensity: VisualDensity.compact,
+                      padding: const EdgeInsets.symmetric(horizontal: 10),
+                    ),
+                  ),
+                )
+              : IconButton(
+                  tooltip: '下一页',
+                  visualDensity: VisualDensity.compact,
+                  icon: const Icon(Icons.chevron_right),
+                  onPressed: canNext ? () => onChanged(page + 1) : null,
+                );
           return Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              IconButton(
-                tooltip: '上一页',
-                visualDensity: VisualDensity.compact,
-                icon: const Icon(Icons.chevron_left),
-                onPressed: !busy && page > 1
-                    ? () => onChanged(page - 1)
-                    : null,
-              ),
+              prev,
               Text('第 $page / $pages 页'),
-              IconButton(
-                tooltip: '下一页',
-                visualDensity: VisualDensity.compact,
-                icon: const Icon(Icons.chevron_right),
-                onPressed: !busy && page < pages
-                    ? () => onChanged(page + 1)
-                    : null,
-              ),
-              if (showHint) ...[
+              next,
+              if (wide && showSwipeHint) ...[
                 const SizedBox(width: 14),
                 Icon(
                   Icons.swipe_outlined,

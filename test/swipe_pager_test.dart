@@ -22,11 +22,14 @@ void main() {
     await g.moveBy(const Offset(-260, 0));
     await tester.pump();
     expect(find.text('page 1'), findsOneWidget, reason: '还没松手，不该换页');
+    // 2026-11-07：拖动到一半时**两页同时在树里**，不是等松手才建新页。
+    expect(find.text('page 2'), findsOneWidget, reason: '拖到中间应该同时露出下一页的内容');
 
     await g.up();
     await tester.pumpAndSettle();
     expect(changes, [2]);
     expect(find.text('page 2'), findsOneWidget);
+    expect(find.text('page 1'), findsNothing, reason: '动画结束，旧页注销');
 
     await tester.drag(find.byType(SwipePageView), const Offset(260, 0));
     await tester.pumpAndSettle();
@@ -81,6 +84,24 @@ void main() {
     await tester.pumpAndSettle();
     expect(changes, isEmpty);
     expect(find.byTooltip('下一页'), findsNothing);
+  });
+
+  testWidgets('关掉滑动后横向拖动不翻页，但显式按钮照常可用', (tester) async {
+    final changes = <int>[];
+    await tester.pumpWidget(
+      _host(changes: changes, pages: 3, swipeEnabled: false),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.drag(find.byType(SwipePageView), const Offset(-420, 0));
+    await tester.pumpAndSettle();
+    expect(changes, isEmpty, reason: '桌面画廊里横向拖动是"拖格子"，不该翻页');
+    expect(find.text('page 1'), findsOneWidget);
+
+    await tester.tap(find.byTooltip('下一页'));
+    await tester.pumpAndSettle();
+    expect(changes, [2]);
+    expect(find.text('page 2'), findsOneWidget);
   });
 
   // 2026-11-07 用户反馈："点击翻页后重新加载界面，会有个显式的注销旧界面的过程"。
@@ -149,6 +170,7 @@ class _AsyncHostState extends State<_AsyncHost> {
   /// 用户要求看的页；[content] 是列表数据实际装着的页。
   int page = 1;
   int content = 1;
+  final Set<int> loaded = {1};
 
   void go(int next) {
     changes.add(next);
@@ -156,23 +178,27 @@ class _AsyncHostState extends State<_AsyncHost> {
   }
 
   /// 模拟后端的这一页数据到了。
-  void deliver() => setState(() => content = page);
+  void deliver() => setState(() {
+    loaded.add(page);
+    content = page;
+  });
 
   @override
   Widget build(BuildContext context) {
-    final busy = page != content;
+    final busy = !loaded.contains(page);
     return Column(
       children: [
         Expanded(
           child: SwipePageView(
             page: page,
-            contentPage: content,
             pages: widget.pages,
+            builder: (p) => loaded.contains(p)
+                ? ColoredBox(
+                    color: Colors.blueGrey,
+                    child: Center(child: Text('page $p')),
+                  )
+                : null,
             onPageChanged: go,
-            child: ColoredBox(
-              color: Colors.blueGrey,
-              child: Center(child: Text('page $content')),
-            ),
           ),
         ),
         PageBar(page: page, pages: widget.pages, busy: busy, onChanged: go),
@@ -185,9 +211,15 @@ Widget _host({
   required List<int> changes,
   required int pages,
   int initialPage = 1,
+  bool swipeEnabled = true,
 }) => MaterialApp(
   home: Scaffold(
-    body: _Host(changes: changes, pages: pages, initialPage: initialPage),
+    body: _Host(
+      changes: changes,
+      pages: pages,
+      initialPage: initialPage,
+      swipeEnabled: swipeEnabled,
+    ),
   ),
 );
 
@@ -195,11 +227,13 @@ class _Host extends StatefulWidget {
   final List<int> changes;
   final int pages;
   final int initialPage;
+  final bool swipeEnabled;
 
   const _Host({
     required this.changes,
     required this.pages,
     required this.initialPage,
+    required this.swipeEnabled,
   });
 
   @override
@@ -222,11 +256,12 @@ class _HostState extends State<_Host> {
           child: SwipePageView(
             page: _page,
             pages: widget.pages,
-            onPageChanged: _go,
-            child: ColoredBox(
+            swipeEnabled: widget.swipeEnabled,
+            builder: (p) => ColoredBox(
               color: Colors.blueGrey,
-              child: Center(child: Text('page $_page')),
+              child: Center(child: Text('page $p')),
             ),
+            onPageChanged: _go,
           ),
         ),
         PageBar(page: _page, pages: widget.pages, onChanged: _go),

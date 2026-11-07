@@ -814,13 +814,21 @@ pub struct CollectionSummary {
     pub title: Option<String>,
     /// 成员数
     pub size: i64,
+    /// 选择器里给这一组显示一张封面（第一张成员的 media id）。
+    pub cover_media_id: Option<i64>,
+    /// 这张封面是不是 NSFW（选择器里要照样打码）。
+    pub cover_nsfw: bool,
 }
 
 /// 列出所有集合（手动在前、最近建的在前），给"移到集合…"的选择器用。
 pub fn list(conn: &Connection) -> Result<Vec<CollectionSummary>, WriteError> {
     let mut stmt = conn.prepare(
         "SELECT c.id, c.kind, c.origin, c.title,
-                (SELECT COUNT(*) FROM media_assets m WHERE m.collection_id = c.id)
+                (SELECT COUNT(*) FROM media_assets m WHERE m.collection_id = c.id),
+                (SELECT m.id FROM media_assets m WHERE m.collection_id = c.id
+                  ORDER BY m.id ASC LIMIT 1),
+                COALESCE((SELECT m.nsfw FROM media_assets m WHERE m.collection_id = c.id
+                           ORDER BY m.id ASC LIMIT 1), 0)
            FROM media_collections c
           ORDER BY (c.origin = 'manual') DESC, c.id DESC",
     )?;
@@ -831,6 +839,8 @@ pub fn list(conn: &Connection) -> Result<Vec<CollectionSummary>, WriteError> {
             origin: row.get(2)?,
             title: row.get(3)?,
             size: row.get(4)?,
+            cover_media_id: row.get(5)?,
+            cover_nsfw: row.get(6)?,
         })
     })?;
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
@@ -840,7 +850,11 @@ pub fn list(conn: &Connection) -> Result<Vec<CollectionSummary>, WriteError> {
 pub fn summary(conn: &Connection, id: i64) -> Result<CollectionSummary, WriteError> {
     conn.query_row(
         "SELECT c.id, c.kind, c.origin, c.title,
-                (SELECT COUNT(*) FROM media_assets m WHERE m.collection_id = c.id)
+                (SELECT COUNT(*) FROM media_assets m WHERE m.collection_id = c.id),
+                (SELECT m.id FROM media_assets m WHERE m.collection_id = c.id
+                  ORDER BY m.id ASC LIMIT 1),
+                COALESCE((SELECT m.nsfw FROM media_assets m WHERE m.collection_id = c.id
+                           ORDER BY m.id ASC LIMIT 1), 0)
            FROM media_collections c WHERE c.id = ?1",
         params![id],
         |row| {
@@ -850,6 +864,8 @@ pub fn summary(conn: &Connection, id: i64) -> Result<CollectionSummary, WriteErr
                 origin: row.get(2)?,
                 title: row.get(3)?,
                 size: row.get(4)?,
+                cover_media_id: row.get(5)?,
+                cover_nsfw: row.get(6)?,
             })
         },
     )

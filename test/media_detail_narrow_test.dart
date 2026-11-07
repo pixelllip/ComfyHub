@@ -187,12 +187,16 @@ void main() {
     // 而"原地换内容"必须还是**同一个** State 实例。`findsOneWidget` 抓不到这个差别
     // —— 换了路由之后新页面也只有一个。
     final stateBefore = tester.state(find.byType(MediaDetailPage));
-    // 预览用的 `ZoomableImageView` 也必须**同一个 State**：翻图时如果按 `_currentId`
-    // 换 key，就会在数据还没回来时先把旧图拆掉、再建一个新的 —— 用户看到的
-    // "显式注销旧界面"正是这么来的。新图由查看器自己解码完再淡入。
-    final viewerBefore = tester.state(find.byType(ZoomableImageView));
 
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 80));
+    // 过渡动画里**新旧两页同时在树里**：左右各露出半张图，动画结束才注销旧页。
+    expect(
+      find.byType(ZoomableImageView),
+      findsNWidgets(2),
+      reason: '翻图动画中应该同时看到新旧两张图',
+    );
     await tester.pumpAndSettle();
     expect(find.text('2 / 3'), findsOneWidget, reason: '→ 该切到下一张');
     expect(
@@ -206,9 +210,9 @@ void main() {
       reason: '切换必须是"原地换内容"，State 不许被重建（重建 = 关旧窗口开新窗口）',
     );
     expect(
-      identical(tester.state(find.byType(ZoomableImageView)), viewerBefore),
-      isTrue,
-      reason: '翻图只换内容，不许把大图查看器的 State 也重建掉',
+      find.byType(ZoomableImageView),
+      findsOneWidget,
+      reason: '动画结束，旧页注销，只留当前这一张',
     );
 
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
@@ -232,6 +236,35 @@ void main() {
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
     await tester.pumpAndSettle();
     expect(find.text('1 / 3'), findsOneWidget);
+  });
+
+  testWidgets('图还没放大时横向拖动 = 翻页，拖动中就同时露出两张', (tester) async {
+    _surface(tester, const Size(1200, 900));
+    final store = await _store();
+    addTearDown(store.dispose);
+    await tester.pumpWidget(_wrap(store));
+    await tester.pumpAndSettle();
+    expect(find.text('1 / 3'), findsOneWidget);
+
+    final gesture = await tester.startGesture(
+      tester.getCenter(find.byType(ZoomableImageView)),
+    );
+    await gesture.moveBy(const Offset(-220, 0));
+    await tester.pump();
+
+    // 拖到一半：旧图 + 新图都在树里（左右各半张），不是等松手才建新页。
+    expect(
+      find.byType(ZoomableImageView),
+      findsNWidgets(2),
+      reason: '拖动过程中要同时显示新旧两页',
+    );
+
+    await gesture.up();
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(find.text('2 / 3'), findsOneWidget, reason: '松手后页码立刻跟上');
+    await tester.pumpAndSettle();
+    expect(find.text('2 / 3'), findsOneWidget);
+    expect(find.byType(ZoomableImageView), findsOneWidget, reason: '动画结束，旧页注销');
   });
 
   testWidgets('只有一张（没进组）：不显示箭头与计数', (tester) async {
