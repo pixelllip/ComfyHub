@@ -343,7 +343,8 @@ pwsh -File scripts\e2e-submit-test.ps1                                # 提交�
 - **桌面端只有 Windows 构建**：macOS / Linux 没有实现（`video_player_win` 只有 Windows 端），
   仓库也不再带这两份脚手架 —— 留着只会让人以为"能编"。真要支持时用
   `flutter create --platforms=macos .`（或 `linux`）重建，几分钟的事。
-- **手机端是可选能力**：配对 / 同步的路是通的，但移动端 harness（Android Kotlin）仍在收尾。
+- **手机端是可选能力**：配对 / 同步的路是通的；M4（上行 / 下行同步）与 M5（排队提交）的代码与用例
+  都已落地，剩下的只是一次真机联调（见 [implementation-master-plan.md](docs/implementation-master-plan.md) §1）。
 - **MCP 运行时是可选下载**（几百 MB，装不上只影响一批 ComfyUI 工具，不拦启动）。
 - **ComfyUI 必须在跑**：AI 的 ComfyUI 工具都直连 `comfyUrl`（默认 `127.0.0.1:8188`），连不上会如实报。
 - **NSFW 开关只影响两件事**：注入那段越狱/人格系统提示、以及把标记过的产物在列表里打码。
