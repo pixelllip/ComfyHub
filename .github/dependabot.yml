@@ -1,0 +1,62 @@
+# 依赖自动升级（2026-11-07 加）。
+#
+# 只做三件事：每周开一次 PR，把 pub / cargo / actions 的**小版本与补丁**合成一个 PR；
+# 大版本仍然一条一个 PR（它们要人看一眼 breaking change）。
+#
+# 两条纪律：
+#   · 它**不在回归链路上** —— PR 红了就是 `.github/workflows/ci.yml` 那两条在拦，
+#     与这里无关；合并前 CI 必须绿。
+#   · 不想要这些 PR 就**删掉这个文件**（成本为零，CI 不依赖它）。
+#
+# 为什么是 weekly 而不是 daily：这个仓库的依赖绝大多数是"跟着 Flutter / Rust 版本走"，
+# 每天开 PR 只会把真正要看的那几条（大版本）淹掉。
+
+version: 2
+
+updates:
+  # Flutter / Dart 依赖（`pubspec.yaml` 在仓库根）
+  - package-ecosystem: 'pub'
+    directory: '/'
+    schedule:
+      interval: 'weekly'
+      day: 'monday'
+      time: '06:00'
+      timezone: 'Asia/Shanghai'
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: 'chore(deps)'
+    groups:
+      pub-minor-patch:
+        patterns: ['*']
+        update-types: ['minor', 'patch']
+
+  # Rust 后端（`Cargo.toml` 在 `server-rs/`；target 也在它下面）
+  - package-ecosystem: 'cargo'
+    directory: '/server-rs'
+    schedule:
+      interval: 'weekly'
+      day: 'monday'
+      time: '06:00'
+      timezone: 'Asia/Shanghai'
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: 'chore(deps)'
+    groups:
+      cargo-minor-patch:
+        patterns: ['*']
+        update-types: ['minor', 'patch']
+
+  # CI 自己用的 action（checkout / flutter-action / rust-cache …）
+  - package-ecosystem: 'github-actions'
+    directory: '/'
+    schedule:
+      interval: 'weekly'
+      day: 'monday'
+      time: '06:00'
+      timezone: 'Asia/Shanghai'
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: 'chore(deps)'
+    groups:
+      github-actions:
+        patterns: ['*']
