@@ -287,6 +287,12 @@ fn file_tool_defaults_match_the_kotlin_registry() {
     assert!(is_implemented("comfy_find_workflow"));
     assert_eq!(default_access("comfy_find_workflow"), "ALLOW");
     assert!(!is_mutating("comfy_find_workflow"));
+    // `comfy_list_templates`（官方模板，2026-11-07）：**只读本机 site-packages**，
+    // 不联网、不写盘 → 出厂 ALLOW。新模型第一次用时用户的 workflows 还是空的，
+    // 模板是"这个模型官方怎么跑"的唯一可靠答案，不该每查一次都等批准。
+    assert!(is_implemented("comfy_list_templates"));
+    assert_eq!(default_access("comfy_list_templates"), "ALLOW");
+    assert!(!is_mutating("comfy_list_templates"));
     // 体检两件（P4 第 62 步）：**只报不改** → 出厂 ALLOW、mutating=false
     // （Kotlin 那两条写的都是 `mutating = false, defaultAccess = ToolAccess.ALLOW`）
     for name in ["comfy_check_inputs", "comfy_fit_workflow"] {

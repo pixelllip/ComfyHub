@@ -335,8 +335,18 @@ impl ToolPolicy {
         let configured_output = crate::ai::ai_settings::configured_output_dir(state)
             .ok()
             .flatten();
-        let auto_read =
+        let mut auto_read =
             crate::comfy::comfy_dirs::auto_read_roots(&project_root, configured_output.as_deref());
+        // 官方模板在 `site-packages` 里：常规布局下已经在上面那份"ComfyUI 根 + 上一级"里，
+        // 但 venv 与 ComfyUI 分家（不同盘 / 不同父目录）时不在 —— 那样 `comfy_list_templates`
+        // 列得出路径、`comfy_load_workflow` 却报路径不准入。**仍然只放宽读。**
+        let homes =
+            crate::comfy::comfy_dirs::comfy_homes(&project_root, configured_output.as_deref());
+        for root in crate::comfy::template_library::read_roots(&homes) {
+            if !auto_read.contains(&root) {
+                auto_read.push(root);
+            }
+        }
         Ok(Self::new(project_root, config).with_auto_read_roots(auto_read))
     }
 

@@ -111,7 +111,8 @@ pub fn freshness(name: &str) -> Option<Freshness> {
         "list_skills" | "search_prompts" | "search_character_cards" | "search_style_cards" => {
             Ttl(secs(20))
         }
-        "comfy_list_workflows" | "comfy_find_workflow" | "comfy_list_recipes" => Ttl(secs(20)),
+        "comfy_list_workflows" | "comfy_find_workflow" | "comfy_list_recipes"
+        | "comfy_list_templates" => Ttl(secs(20)),
         "comfy_env_report" => Ttl(secs(60)),
 
         // ---- 活体探测：**短 TTL**，它答的是"此刻" ----

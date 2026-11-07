@@ -65,6 +65,8 @@ fn 只列真搬过来了的那些() {
             // 学（往本机配方库写一行）与列（只读）夹在 get_status 与 list_workflows 之间
             "comfy_learn_workflow",
             "comfy_list_recipes",
+            // 官方模板（2026-11-07）：ComfyUI 自带的那一套；只读本机 site-packages，不联网
+            "comfy_list_templates",
             "comfy_list_workflows",
             "comfy_load_workflow",
             "comfy_make_mask",

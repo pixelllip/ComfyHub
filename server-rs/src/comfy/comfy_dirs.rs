@@ -727,7 +727,7 @@ pub fn scan(dirs: &[PathBuf], query: Option<&str>, limit: usize) -> Vec<Workflow
 ///
 /// 与 `WorkflowConvert.isUiWorkflow` / `HistoryEntry.isNodeGraph` 的判据**完全同一份** ——
 /// 两边不一致就会出现"列表说能跑、加载说不是工作流"这种最难查的分歧。
-fn format_of(bytes: &[u8]) -> String {
+pub(crate) fn format_of(bytes: &[u8]) -> String {
     let Ok(text) = std::str::from_utf8(bytes) else {
         return "unknown".into();
     };
@@ -792,7 +792,7 @@ pub fn workflows_json(
 }
 
 /// 拿 `file:<sha256>` 问库："这份文件已经在库里了吗"。
-fn library_prompt_id(state: &crate::web::routes::AppState, sha: &str) -> Option<i64> {
+pub(crate) fn library_prompt_id(state: &crate::web::routes::AppState, sha: &str) -> Option<i64> {
     let run_key = format!("file:{sha}");
     state
         .with(|conn| {

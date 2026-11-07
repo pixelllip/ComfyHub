@@ -32,8 +32,8 @@ async fn run_kit_ships_every_rule_the_phone_needs() {
         body["schemaVersion"], 1,
         "与 /api/sync/manifest 的 user_version 同一个数"
     );
-    // v61：Skill 正文改为"用户授权执行的规则"，新增 `read_skill_file`。
-    assert_eq!(body["promptVersion"], "v61");
+    // v62：新增 `comfy_list_templates`（列 ComfyUI 自带的官方模板）。
+    assert_eq!(body["promptVersion"], "v62");
     assert_eq!(body["nsfwEnabled"], false, "夹具里没开 NSFW");
     assert_eq!(body["inlineBudget"]["perImageBytes"], 8388608, "单图 8MB");
     assert_eq!(body["inlineBudget"]["totalBytes"], 20971520, "合计 20MB");
@@ -425,7 +425,7 @@ async fn tool_policy_and_nsfw_endpoints() {
     assert_eq!(status, StatusCode::OK, "{saved}");
     assert_eq!(saved["permissionMode"], "full");
 
-    // ④ 工具清单：只列这台后端能跑的（42 个），六个键与 `AiToolInfo` 对齐
+    // ④ 工具清单：只列这台后端能跑的（条数不写死，按下面这份名单逐条对），六个键与 `AiToolInfo` 对齐
     let (status, tools) = get_json(router_for(state.clone()), "/api/ai/tools").await;
     assert_eq!(status, StatusCode::OK);
     let tools = tools.as_array().unwrap();
@@ -459,6 +459,8 @@ async fn tool_policy_and_nsfw_endpoints() {
             "comfy_get_status",
             "comfy_learn_workflow",
             "comfy_list_recipes",
+            // 官方模板（2026-11-07）：ComfyUI 自带的那一套，只读本机、不联网
+            "comfy_list_templates",
             "comfy_list_workflows",
             "comfy_load_workflow",
             // 图像编辑三件（投放 + 遮罩）：两阶段编辑的地基，出厂档都是 ask

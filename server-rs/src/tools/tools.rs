@@ -508,7 +508,7 @@ pub fn implemented() -> Vec<ToolView<'static>> {
 /// + **2D 布局模板**（`layout_propose`，见 [`crate::ai::layout_proposal`]，2026-11-03：
 ///   写提示词的同一轮把构图草稿交给用户预览 / 修改，改完再提交回来 —— 只出草稿，
 ///   不生成图片、不写库）。
-pub const IMPLEMENTED: [&str; 44] = [
+pub const IMPLEMENTED: [&str; 45] = [
     "ask_user_question",
     "civitai_search",
     "comfy_audit_workflow",
@@ -522,6 +522,7 @@ pub const IMPLEMENTED: [&str; 44] = [
     "comfy_get_status",
     "comfy_learn_workflow",
     "comfy_list_recipes",
+    "comfy_list_templates",
     "comfy_list_workflows",
     "comfy_load_workflow",
     "comfy_make_mask",
@@ -686,6 +687,7 @@ pub async fn execute(
             crate::workflow::workflow_fit::tool_fit_workflow(state, arguments).await
         }
         "comfy_list_workflows" => comfy_list_workflows(state, arguments),
+        "comfy_list_templates" => comfy_list_templates(state, arguments),
         "comfy_get_status" => comfy_get_status(state, arguments).await,
         "comfy_sync_history" => comfy_sync_history(state).await,
         "comfy_load_workflow" => comfy_load_workflow(state, policy, arguments).await,
@@ -1772,6 +1774,31 @@ fn comfy_list_workflows(state: &AppState, arguments: &Value) -> Result<ToolOutco
         },
     )
     .map_err(capture_failure)?;
+    Ok(ToolOutcome::new(json.to_string(), json))
+}
+
+/// `comfy_list_templates`：列 **ComfyUI 自带的官方模板**（只读）。
+///
+/// 为什么不是"再写一份 `comfy_list_workflows`"：那是**用户自己存过的**工作流
+/// （`user\<用户>\workflows`），新模型第一次用时那里必然是空的；模板是安装包自带的、
+/// 跟着 ComfyUI 版本维护的那一套，正是"这个新模型怎么跑"的官方答案。
+fn comfy_list_templates(state: &AppState, arguments: &Value) -> Result<ToolOutcome, ToolFailure> {
+    let query = arguments
+        .get("query")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    let limit = int_arg(arguments, "limit").unwrap_or(20).clamp(1, 100) as usize;
+    let project_root = state.project_root();
+    let configured_output = crate::ai::ai_settings::configured_output_dir(state)
+        .ok()
+        .flatten();
+    let homes = crate::comfy::comfy_dirs::comfy_homes(&project_root, configured_output.as_deref());
+    let libs = crate::comfy::template_library::libraries(&homes);
+    let json = crate::comfy::template_library::list_json(&libs, query.as_deref(), limit, |sha| {
+        crate::comfy::comfy_dirs::library_prompt_id(state, sha)
+    });
     Ok(ToolOutcome::new(json.to_string(), json))
 }
 

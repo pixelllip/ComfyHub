@@ -189,6 +189,17 @@ pub const DESKTOP_TOOLS: &[DesktopToolSpec] = &[
         mutating: false,
     },
     DesktopToolSpec {
+        name: "comfy_list_templates",
+        description: r#"列出**ComfyUI 自带的官方模板**（装好的 ComfyUI 都带一套，几百份，跟着版本维护）。
+什么时候用：① 用户拿来一个新模型问「这个怎么跑」；② 用户自己保存的工作流里没有能用的（新模型第一次用一定是空的）；③ 想找某个模型官方的标准接法。
+返回每份的 id、路径、格式、是否已经在库里。拿到 path 直接 comfy_load_workflow(path=…) 读进库，能跑就用 comfy_submit 提交；以后换模型只想改参数，再跟一句 comfy_learn_workflow 把它学成配方。
+它只读本机文件，不联网、不改用户的文件。别拿模板里的模型文件名当成本机就有 —— 提交前先用 comfy_fit_workflow 对一遍。"#,
+        input_schema: r#"{"type":"object","properties":{"query":{"type":"string","description":"按模型名过滤（大小写不敏感，可以几个词，例如 qwen、flux、wan、image edit）；不填就列前若干份"},"limit":{"type":"integer","description":"最多几份，默认 20，最多 100"}},"additionalProperties":false}"#,
+        scope: "DESKTOP",
+        access: "ALLOW",
+        mutating: false,
+    },
+    DesktopToolSpec {
         name: "comfy_list_workflows",
         description: r#"列出**本机 ComfyUI 里已经保存的工作流文件**（`user\<用户>\workflows\*.json`），带完整路径、格式（ui/api）与是否已经在本项目库里（inLibrary / promptId）。**首次使用、或者 comfy_find_workflow 什么都搜不到时，先看这里** —— 这些工作流不需要在 ComfyUI 里跑过一次才可用：拿到 path 直接 comfy_load_workflow(path=…) 读进库，再用返回的 promptId 提交。只读，不改用户的文件。"#,
         input_schema: r#"{"type":"object","properties":{"query":{"type":"string","description":"按**文件名**过滤（大小写不敏感的子串，例如 krea2）；不填就列最近修改的若干份"},"limit":{"type":"integer","description":"最多列几份，默认 20，最多 100"}},"additionalProperties":false}"#,
