@@ -4494,10 +4494,15 @@ class _ComfyProgress extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final jobs = store.comfyJobs;
+    final jobsError = store.comfyJobsError;
     final active = jobs.submissions.where((s) => s.isActive).toList();
     final recent = jobs.submissions.where((s) => !s.isActive).take(2).toList();
-    // 队列里没人、也没有最近提交过（或最近只是"不可达"）：不显示这一块
-    if (!jobs.hasActivity && recent.isEmpty && jobs.comfyReachable) {
+    // 队列里没人、也没有最近提交过（或最近只是"不可达"）：不显示这一块。
+    // ⚠ 拉取失败时**照样占一块**：否则"拉不到进度"看起来就是"没有任务"。
+    if (!jobs.hasActivity &&
+        recent.isEmpty &&
+        jobs.comfyReachable &&
+        jobsError == null) {
       return const SizedBox.shrink();
     }
 
@@ -4532,7 +4537,14 @@ class _ComfyProgress extends StatelessWidget {
               ],
             ),
             const SizedBox(height: 6),
-            if (!jobs.comfyReachable)
+            if (jobsError != null)
+              Text(
+                '拉不到实时进度，本地服务没有回话。',
+                style: theme.textTheme.labelSmall?.copyWith(
+                  color: theme.colorScheme.error,
+                ),
+              )
+            else if (!jobs.comfyReachable)
               Text(
                 'ComfyUI 连不上，进度拿不到（它没在跑？）',
                 style: theme.textTheme.labelSmall?.copyWith(
@@ -4550,7 +4562,10 @@ class _ComfyProgress extends StatelessWidget {
                 padding: const EdgeInsets.only(top: 4),
                 child: _SubmissionRow(submission: s, highlight: true),
               ),
-            if (active.isEmpty && jobs.queueRunning == 0 && jobs.comfyReachable)
+            if (active.isEmpty &&
+                jobs.queueRunning == 0 &&
+                jobs.comfyReachable &&
+                jobsError == null)
               Text(
                 '当前没有正在生成的任务',
                 style: theme.textTheme.labelSmall?.copyWith(

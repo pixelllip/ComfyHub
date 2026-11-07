@@ -77,6 +77,16 @@ class MediaCacheCard extends StatelessWidget {
                   color: theme.colorScheme.outline,
                 ),
               ),
+              // 读不到目录时上面的数字全是 0，必须说清"不是没占空间，是读不出来"
+              if (snapshot.error != null) ...[
+                const SizedBox(height: 4),
+                Text(
+                  '缓存目录读不出来，上面的数字不可信（${snapshot.error}）。',
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.error,
+                  ),
+                ),
+              ],
             ],
             const SizedBox(height: 12),
             // `Wrap` 而不是 `Row`：320dp 上"原件上限 + 下拉 + 清理"放不下一行，

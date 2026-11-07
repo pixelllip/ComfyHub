@@ -261,6 +261,10 @@ String dataDirFileOf(String root) =>
     [root, kDataDirFileName].join(Platform.pathSeparator);
 
 /// 读"数据目录被指到哪儿了"；没设 / 文件坏了都回 `null`（= 用运行根目录）。
+///
+/// ⚠ **读不动 ≠ 没设过**：这两个结论对用户的意思完全相反（一个"数据在别的盘"，
+/// 一个"数据就在这儿"）。所以读失败一定要留一行日志；界面上会看到"库里空空的"，
+/// 排查时第一件事就是看这行。
 String? readDataDirOverride(String root) {
   try {
     final file = File(dataDirFileOf(root));
@@ -270,8 +274,10 @@ String? readDataDirOverride(String root) {
       final raw = value['dataDir'];
       if (raw is String && raw.trim().isNotEmpty) return raw.trim();
     }
-  } catch (_) {
-    // 半截 JSON / 正在被替换：当"这次没读到"，走默认目录
+    debugPrint('[paths] data-dir.json 里没有可用的 dataDir，按运行根目录处理');
+  } catch (e) {
+    // 半截 JSON / 正在被替换：当"这次没读到"，走默认目录 —— 但要说出来
+    debugPrint('[paths] data-dir.json 读不动，这次按运行根目录处理：$e');
   }
   return null;
 }

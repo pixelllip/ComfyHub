@@ -319,7 +319,10 @@ class _DataDirSettingsPageState extends State<DataDirSettingsPage> {
     if (!mounted) {
       // 页面被关掉了也要把后端拉回可用状态：不能因为关了个弹窗让本地服务一直停着
       nav.pop();
-      if (!result.ok) writeDataDirOverride(root, previousPointer);
+      if (!result.ok && !writeDataDirOverride(root, previousPointer)) {
+        // 页面已经没了，弹不出提示：至少留一行日志（下次启动会去读这个指针）
+        debugPrint('[data-dir] 迁移失败后回滚 data-dir.json 也没成功，指针可能还指着新目录');
+      }
       await launcher.ensureRunning(force: true);
       progress.dispose();
       return;
@@ -328,15 +331,23 @@ class _DataDirSettingsPageState extends State<DataDirSettingsPage> {
     progress.dispose();
 
     if (!result.ok) {
-      // 指针没写（或已回滚），旧目录还在用：把后端按原样起回来
-      writeDataDirOverride(root, previousPointer);
+      // 指针没写（或已回滚），旧目录还在用：把后端按原样起回来。
+      // ⚠ 回滚**可能失败**（data-dir.json 写不进去），那时下一句就不能说"旧目录还在用"。
+      final restored = writeDataDirOverride(root, previousPointer);
       await launcher.ensureRunning(force: true);
       if (!mounted) return;
       setState(() {
         _busy = false;
         _status = '';
       });
-      await _info(result.cancelled ? '已取消' : '没有搬成', result.message);
+      await _info(
+        result.cancelled ? '已取消' : '没有搬成',
+        restored
+            ? result.message
+            : '${result.message}\n\n'
+                  '而且"改回原来的数据目录"也没写成（<根>\\data-dir.json 改不动）。'
+                  '下次启动会按文件里现在写的那条走，请到「设置 → 数据目录」确认一次。',
+      );
       return;
     }
 
@@ -344,18 +355,23 @@ class _DataDirSettingsPageState extends State<DataDirSettingsPage> {
     final ok = await launcher.ensureRunning(force: true);
     if (!mounted) return;
     if (!ok) {
-      writeDataDirOverride(root, previousPointer);
+      final restored = writeDataDirOverride(root, previousPointer);
       final recovered = await launcher.ensureRunning(force: true);
       if (!mounted) return;
       setState(() {
         _busy = false;
         _status = '';
       });
-      await _info(
-        '搬完了，但后端用新目录没起来',
-        '数据已经复制到 $to，但后端用这个目录启动失败'
-            '${recovered ? '，已经改回原来的目录并重启。' : '，改回原来的目录也没起来，请到「本地服务」看日志。'}',
-      );
+      // 回滚本身也可能失败：那时不能把"改回原来的目录"说成已经发生
+      final String tail;
+      if (!restored) {
+        tail = '。而且"改回原来的数据目录"也没写成（data-dir.json 改不动），请到「设置 → 数据目录」手动确认';
+      } else if (recovered) {
+        tail = '，已经改回原来的目录并重启。';
+      } else {
+        tail = '，改回原来的目录也没起来，请到「本地服务」看日志。';
+      }
+      await _info('搬完了，但后端用新目录没起来', '数据已经复制到 $to，但后端用这个目录启动失败$tail');
       return;
     }
 

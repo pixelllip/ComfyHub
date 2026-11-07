@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 
 import 'api_client.dart';
@@ -86,6 +87,19 @@ class MediaCache {
 
   /// 目录只扫一次（之后靠 [_record] / [_forget] 增量维护）。
   Future<void>? _scan;
+
+  /// 最近一次**读不到缓存目录**的原因（成功为 null）。
+  ///
+  /// 它存在的理由只有一个：**"列不出目录"不等于"缓存是空的"**。以前这两件事
+  /// 在界面上长得一模一样（都显示 0 B），用户会以为"缓存没占空间"，实际上是
+  /// 目录读不动。现在统计结果带着这个原因，设置页如实写一句。
+  String? lastScanError;
+
+  /// 最近一次 `clear()` 里**删不掉的文件数**（0 = 全删干净了）。
+  int lastClearFailures = 0;
+
+  /// 最近一次 `clear()` **列目录失败**的原因（null = 列出来了）。
+  String? lastClearError;
 
   /// 文件名 → 大小 + 最后一次访问时间（LRU 的唯一依据）。
   final Map<String, _CacheEntry> _index = {};
@@ -278,13 +292,13 @@ class MediaCache {
   }
 
   /// 当前占用（设置页「已用 / 上限」）。桌面端返回全 0，不碰 path_provider。
+  ///
+  /// 目录列不出来时仍然回全 0，但 [MediaCacheStats.error] 会带上原因 ——
+  /// 调用方**必须**把这一句显示出来，否则"读不动"会装成"没占空间"。
   Future<MediaCacheStats> stats() async {
     if (enabled) {
-      try {
-        await _ensureScanned();
-      } catch (_) {
-        // 目录都列不出来就按 0 报，别让设置页炸掉
-      }
+      // 扫描失败已经记在 [lastScanError] 里（见 [_scanDir]），这里不重复吞一次
+      await _ensureScanned();
     }
     var thumbCount = 0;
     var origCount = 0;
@@ -302,6 +316,7 @@ class MediaCache {
       origCount: origCount,
       thumbBudget: _thumbBudget,
       origBudget: _origBudget,
+      error: lastScanError,
     );
   }
 
@@ -309,7 +324,12 @@ class MediaCache {
   ///
   /// 正在下载的那一条**跳过**（`.part` 与目标文件）：删了会让那次下载变成
   /// "写进了一个已经没了的路径"，用户看到的是保存失败。
+  ///
+  /// 删不掉的文件数与列目录失败的原因分别记在 [lastClearFailures] / [lastClearError]：
+  /// 清理是删动作，**不能把"没删掉"说成"清干净了"**。
   Future<int> clear() async {
+    lastClearFailures = 0;
+    lastClearError = null;
     if (!enabled) return 0;
     final dir = await _cacheDir();
     var freed = 0;
@@ -324,12 +344,16 @@ class MediaCache {
         try {
           freed += await entity.length();
           await entity.delete();
-        } catch (_) {
-          // 删不掉就跳过（别让一个坏文件挡住整次清理）
+        } catch (e) {
+          // 删不掉就跳过（别让一个坏文件挡住整次清理），但要数出来
+          lastClearFailures++;
+          debugPrint('[media-cache] 清理时删不掉 $name：$e');
         }
       }
-    } catch (_) {
-      // 列目录失败，返回已经清掉的部分
+    } catch (e) {
+      // 列目录失败：已经清掉的部分照旧返回，原因交给调用方如实说
+      lastClearError = '$e';
+      debugPrint('[media-cache] 清理时列不出缓存目录 ${dir.path}：$e');
     }
     _index.clear();
     _thumbBytes = 0;
@@ -348,11 +372,7 @@ class MediaCache {
 
   Future<void> _trimOnce() async {
     if (!enabled) return;
-    try {
-      await _ensureScanned();
-    } catch (_) {
-      return;
-    }
+    await _ensureScanned();
     final dirPath = _dirPath;
     if (dirPath == null) return;
     for (final thumb in const [true, false]) {
@@ -391,11 +411,19 @@ class MediaCache {
 
   int _budgetFor(bool thumb) => thumb ? _thumbBudget : _origBudget;
 
-  Future<void> _ensureScanned() => _scan ??= _scanDir();
+  Future<void> _ensureScanned() {
+    final running = _scan;
+    if (running != null) return running;
+    // 扫描失败**不缓存那次失败**（否则第一次读不动之后，这个进程里永远读不动）
+    final future = _scanDir();
+    _scan = future;
+    return future;
+  }
 
   Future<void> _scanDir() async {
-    final dir = await _cacheDir();
+    lastScanError = null;
     try {
+      final dir = await _cacheDir();
       await for (final entity in dir.list()) {
         if (entity is! File) continue;
         final name = entity.uri.pathSegments.last;
@@ -407,8 +435,8 @@ class MediaCache {
                 const Duration(hours: 1)) {
               await entity.delete();
             }
-          } catch (_) {
-            // 忽略
+          } catch (e) {
+            debugPrint('[media-cache] 扫不掉残片 $name：$e');
           }
           continue;
         }
@@ -425,12 +453,17 @@ class MediaCache {
             at: stat.modified,
             thumb: thumb,
           );
-        } catch (_) {
-          // 单个文件读不出来不影响别的
+        } catch (e) {
+          // 单个文件读不出来不影响别的，但**不能悄悄把它当 0 字节**：
+          // 它还在盘上占空间，统计里会少算这一条
+          debugPrint('[media-cache] 读不到 $name 的大小（统计会少算这一条）：$e');
         }
       }
-    } catch (_) {
-      // 目录列不出来：当作空缓存
+    } catch (e) {
+      // 目录列不出来：统计会按 0 报 —— 把原因记下来，让设置页说得清楚
+      lastScanError = '$e';
+      _scan = null; // 允许下一次重试（比如权限刚被恢复）
+      debugPrint('[media-cache] 列不出缓存目录：$e');
     }
     _recount();
   }
@@ -505,6 +538,7 @@ class MediaCacheStats {
     required this.origCount,
     required this.thumbBudget,
     required this.origBudget,
+    this.error,
   });
 
   final int thumbBytes;
@@ -513,6 +547,12 @@ class MediaCacheStats {
   final int origCount;
   final int thumbBudget;
   final int origBudget;
+
+  /// 读不到缓存目录时的原因（成功为 null）。
+  ///
+  /// 非 null 时上面那些数字**不可信**（都按 0 报的）—— 界面必须把这句话说出来，
+  /// 否则"列不出目录"看起来就是"缓存是空的"。
+  final String? error;
 
   int get totalBytes => thumbBytes + origBytes;
   int get totalBudget => thumbBudget + origBudget;

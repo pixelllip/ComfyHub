@@ -963,6 +963,13 @@ class AiWorkspaceStore extends ChangeNotifier {
   /// 最近一次拿到的 ComfyUI 实时进度。右侧栏显示它。
   AiComfyJobs comfyJobs = AiComfyJobs.empty;
 
+  /// 最近一次拉实时进度**失败**的原因（成功为 null）。
+  ///
+  /// 右侧栏靠它区分两件事：**ComfyUI 没开**（`comfyJobs.comfyReachable == false`，
+  /// 是后端连得上、ComfyUI 连不上）与**连后端都拉不到**（这里是非 null）。
+  /// 以前失败被 `catch (_)` 吞掉，界面只剩"不可达 / 当前没有任务"，两种毛病看起来一样。
+  String? comfyJobsError;
+
   Timer? _jobsTimer;
   bool _jobsInFlight = false;
 
@@ -987,7 +994,8 @@ class AiWorkspaceStore extends ChangeNotifier {
     _jobsTimer = null;
   }
 
-  /// 拉一次实时进度。失败**不弹错**（进度是辅助信息，不该因为 ComfyUI 没开就骚扰用户）。
+  /// 拉一次实时进度。失败**不弹错**（进度是辅助信息，不该因为 ComfyUI 没开就骚扰用户），
+  /// 但原因要留在 [comfyJobsError] 里 —— 界面据此说"拉不到"，不许装成"没有任务"。
   Future<void> refreshComfyJobs() async {
     if (_jobsInFlight) return;
     _jobsInFlight = true;
@@ -996,10 +1004,17 @@ class AiWorkspaceStore extends ChangeNotifier {
       // 活动状态变了就重建定时器（空闲 ↔ 有任务 的节奏不一样）
       final wasActive = comfyJobs.hasActivity;
       comfyJobs = next;
+      comfyJobsError = null;
       notifyListeners();
       if (wasActive != next.hasActivity) startWatchingComfy();
-    } catch (_) {
-      // 静默：后端不可达时右侧栏本来就显示"不可达"
+    } catch (e) {
+      // 静默不弹错，但**不能把"拉不到"当成"没有活动"**：原因记下来给界面用。
+      final message = '$e';
+      if (comfyJobsError != message) {
+        comfyJobsError = message;
+        debugPrint('[comfy] 拉实时进度失败：$message');
+        notifyListeners();
+      }
     } finally {
       _jobsInFlight = false;
     }
@@ -1398,8 +1413,10 @@ class AiWorkspaceStore extends ChangeNotifier {
     // 收尾只改状态与错误说明，已经说出去的话一个字不动（R6）。
     try {
       recoveredRuns = await _source.recoverUnfinishedRuns();
-    } catch (_) {
-      // 收尾失败不该拦住整个聊天页
+    } catch (e) {
+      // 收尾失败不该拦住整个聊天页。但界面上会留下"永远转圈的幽灵气泡"，
+      // 所以留一行日志 —— "上一轮没跑完"与"收尾失败"是两种毛病。
+      debugPrint('[M3] 上一轮 Run 收尾失败，界面上可能留着转圈的旧气泡：$e');
       recoveredRuns = 0;
     }
     conversations = await _source.listConversations();
@@ -1679,7 +1696,10 @@ class AiWorkspaceStore extends ChangeNotifier {
   Future<int> _pendingOutbox() async {
     try {
       return await _source.pendingOutbox();
-    } catch (_) {
+    } catch (e) {
+      // 读不动当作"没有待办"（这条通道坏了是另一件事，不该让"回到前台"变成崩溃）。
+      // 但**别静默**：真机上"消息一直没上桌面"时就靠这一行日志区分是网络还是本机库。
+      debugPrint('[M4] 读不到本地待推队列，这一拍先不推：$e');
       return 0;
     }
   }

@@ -74,17 +74,27 @@ class _SettingsPageState extends State<SettingsPage> {
   Future<void> _clearCache() async {
     setState(() => _cacheBusy = true);
     final freed = await MediaCache.instance.clear();
+    final failures = MediaCache.instance.lastClearFailures;
+    final listError = MediaCache.instance.lastClearError;
     final stats = await MediaCache.instance.stats();
     if (!mounted) return;
     setState(() {
       _cacheStats = stats;
       _cacheBusy = false;
     });
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(freed > 0 ? '已清理 ${formatSize(freed)}' : '缓存本来就是空的'),
-      ),
-    );
+    // **不把"没删掉"说成"清干净了"**：列目录失败 / 有文件删不掉都要如实写。
+    final String message;
+    if (listError != null) {
+      message = '没能列完缓存目录，只清掉了 ${formatSize(freed)}。';
+    } else if (failures > 0) {
+      message = '已清理 ${formatSize(freed)}，还有 $failures 个文件删不掉（可能正被播放器占用）。';
+    } else if (freed > 0) {
+      message = '已清理 ${formatSize(freed)}';
+    } else {
+      message = '缓存本来就是空的';
+    }
+    ScaffoldMessenger.of(context)
+        .showSnackBar(SnackBar(content: Text(message)));
   }
 
   void _push(BuildContext context, Widget page) {
