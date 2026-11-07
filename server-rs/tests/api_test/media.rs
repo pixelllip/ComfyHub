@@ -249,6 +249,82 @@ async fn media_list_uses_the_same_keys_and_filters() {
 }
 
 #[tokio::test]
+async fn creating_collection_without_a_title_gets_a_default_name() {
+    let state = state();
+    let (status, body) = send_json(
+        router_for(state),
+        "POST",
+        "/api/media/collections",
+        serde_json::json!({"mediaIds": [100]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "新建集合不该失败：{body}");
+    assert_eq!(body["origin"], "manual");
+    assert_eq!(
+        body["title"], "集合 1",
+        "名字留空时后端要给默认名 —— 展开详情才不会再显示『这一组』"
+    );
+    assert_eq!(body["size"], 1);
+}
+
+#[tokio::test]
+async fn collection_rename_endpoint_sets_title_and_promotes_to_manual() {
+    let state = state();
+    // 造一个算法分组，把夹具里的产物 100 挂进去（模拟"展开详情 → 重命名"）
+    let collection_id = state
+        .with(|conn| {
+            conn.execute(
+                "INSERT INTO media_collections (group_key, kind, origin, rule_version)
+                 VALUES ('k-rename', 'IMAGE', 'auto', 1)",
+                [],
+            )?;
+            let id = conn.last_insert_rowid();
+            conn.execute(
+                "UPDATE media_assets SET collection_id = ?1 WHERE id = 100",
+                rusqlite::params![id],
+            )?;
+            Ok(id)
+        })
+        .unwrap();
+
+    let (status, body) = send_json(
+        router_for(state.clone()),
+        "PATCH",
+        &format!("/api/media/collections/{collection_id}"),
+        serde_json::json!({"title": "  夜景三连  "}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "改名不该失败：{body}");
+    assert_eq!(body["id"], collection_id);
+    assert_eq!(body["title"], "夜景三连", "首尾空白要去掉");
+    assert_eq!(body["origin"], "manual", "起了名字的组归用户，重新整理不许解散");
+    assert_eq!(body["size"], 1);
+
+    // 空名字明确拒绝（否则展开详情又回到"这一组"）
+    let (status, _) = send_json(
+        router_for(state.clone()),
+        "PATCH",
+        &format!("/api/media/collections/{collection_id}"),
+        serde_json::json!({"title": "   "}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    // 不存在的集合是 404
+    let (status, _) = send_json(
+        router_for(state.clone()),
+        "PATCH",
+        "/api/media/collections/9999",
+        serde_json::json!({"title": "找不到"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    let (_, rows) = get_json(router_for(state), "/api/media/collections").await;
+    assert_eq!(rows[0]["id"], collection_id);
+    assert_eq!(rows[0]["title"], "夜景三连");
+}
+
+#[tokio::test]
 async fn media_file_serves_bytes_with_etag_and_range() {
     let state = state();
     // 给夹具补一个内容哈希：ETag 直接用 sha256（内容寻址）

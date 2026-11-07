@@ -56,6 +56,12 @@ pub fn write_router() -> Router<AppState> {
         // 手动集合（2026-10-18）：建一个集合并把选中的产物一起移进去。
         // 读那一半（`GET /api/media/collections`）在读端点表里。
         .route("/api/media/collections", post(create_collection))
+        // 改名（2026-11-07）：展开详情里点「重命名集合」；改名同时把它转成 manual，
+        // 免得「重新自动整理」下次把名字连同集合一起解散。
+        .route(
+            "/api/media/collections/{id}",
+            patch(rename_collection),
+        )
         // 「重新自动整理」：把 `origin='auto'` 的集合全解散再按当前规则重分。
         // ⚠ 与上面那条是**两个互相独立**的静态路径（不是同一路径的不同方法，
         // 也不是动态段），所以两条都要写出来 —— 少了任何一条，对应操作都是 404/405。
@@ -112,14 +118,32 @@ async fn create_collection(
     let created = state.write(|tx| {
         crate::media::collection::create_manual(tx, &body.media_ids, body.title.as_deref())
     })?;
+    // 直接按 id 取摘要：默认名 / 成员数都由后端算好，别让界面再猜一遍。
     let summary = state
         .with(|conn| {
-            crate::media::collection::list(conn).map_err(crate::web::routes::as_sql_error)
-        })?
-        .into_iter()
-        .find(|c| c.id == created)
-        .ok_or_else(|| ApiError::internal("集合刚建好就找不到了"))?;
+            crate::media::collection::summary(conn, created)
+                .map_err(crate::web::routes::as_sql_error)
+        })?;
     Ok((StatusCode::CREATED, Json(summary.into())))
+}
+
+/// `PATCH /api/media/collections/{id}` 的请求体。
+#[derive(Debug, serde::Deserialize)]
+pub struct RenameCollectionInput {
+    pub title: String,
+}
+
+/// `PATCH /api/media/collections/{id}`：给集合改名（2026-11-07）。
+///
+/// 空名字回 400（界面上不允许把名字清回"这一组"）；改名同时把 `origin` 翻成
+/// `manual`（见 `collection::rename` 的注释）。
+async fn rename_collection(
+    State(state): State<AppState>,
+    Id(id): Id,
+    Json(body): Json<RenameCollectionInput>,
+) -> Result<Json<crate::web::models::MediaCollectionDto>, ApiError> {
+    let summary = state.write(|tx| crate::media::collection::rename(tx, id, &body.title))?;
+    Ok(Json(summary.into()))
 }
 
 /// `PATCH /api/media/{id}`：改标题 / 关联提示词 / 收藏 / 备注 / NSFW 标记。

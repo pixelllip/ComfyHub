@@ -547,10 +547,13 @@ class MediaCollection {
 
   bool get isManual => origin == 'manual';
 
-  /// 界面上显示的名字：手动集合用人起的名字；算法的如实说"算法分组（几张）"。
+  /// 界面上显示的名字：手动集合用人起的名字；没有名字时——
+  /// * `manual`（老版本建的 / 后端还没补默认名）：如实说「未命名集合」；
+  /// * `auto`（算法分组）：说「算法分组」，别让人以为是用户起的。
   String get label {
     final named = title?.trim() ?? '';
-    return named.isEmpty ? '算法分组（$size 张）' : named;
+    if (named.isNotEmpty) return named;
+    return isManual ? '未命名集合（$size 张）' : '算法分组（$size 张）';
   }
 
   /// 装不装得下 [mediaKind]（一个集合只装一种，用户 2026-10-18 拍板）。

@@ -55,12 +55,27 @@ final List<Map<String, dynamic>> createdCollections = [];
 /// 记下每一次 `PATCH /api/media/{id}`：`(id, body)`。拖拽落点最关键的证据在这里。
 final List<({int id, Map<String, dynamic> body})> patchedMedia = [];
 
+/// 记下集合改名请求（`PATCH /api/media/collections/{id}`）。
+final List<({int id, Map<String, dynamic> body})> renamedCollections = [];
+
 http.Client _client() => MockClient((request) async {
   final path = request.url.path;
   Object? body;
   var status = 200;
+  final rename = RegExp(r'^/api/media/collections/(\d+)$').firstMatch(path);
   final patch = RegExp(r'^/api/media/(\d+)$').firstMatch(path);
-  if (request.method == 'PATCH' && patch != null) {
+  if (request.method == 'PATCH' && rename != null) {
+    final id = int.parse(rename.group(1)!);
+    final sent = Map<String, dynamic>.from(jsonDecode(request.body) as Map);
+    renamedCollections.add((id: id, body: sent));
+    body = {
+      'id': id,
+      'kind': 'IMAGE',
+      'origin': 'manual',
+      'title': (sent['title'] as String).trim(),
+      'size': 3,
+    };
+  } else if (request.method == 'PATCH' && patch != null) {
     patchedMedia.add((
       id: int.parse(patch.group(1)!),
       body: Map<String, dynamic>.from(jsonDecode(request.body) as Map),
@@ -74,8 +89,14 @@ http.Client _client() => MockClient((request) async {
       'id': 77,
       'kind': 'IMAGE',
       'origin': 'manual',
+      'title': (sent['title'] as String?) ?? '集合 1',
       'size': (sent['mediaIds'] as List).length,
     };
+  } else if (path == '/api/media/collections') {
+    // 展开详情时读这一组的名字（用户 2026-11-07：别再显示"这一组"）
+    body = [
+      {'id': 9, 'kind': 'IMAGE', 'origin': 'manual', 'title': '样片', 'size': 3},
+    ];
   } else if (path == '/api/media') {
     // 按 collectionId 列成员要**如实**回那一组的成员：集合 9 是 {2,3,4}。
     // 假后端在这里含糊，用例就会对着一个不真实的成员表下断言。
@@ -152,6 +173,7 @@ void main() {
   setUp(() {
     createdCollections.clear();
     patchedMedia.clear();
+    renamedCollections.clear();
     debugMouseFirstOverride = null;
   });
 
@@ -205,16 +227,12 @@ void main() {
     await tester.pumpWidget(_app(store, settings));
     await tester.pumpAndSettle();
 
-    expect(find.textContaining('这一组'), findsNothing, reason: '前提：没展开');
+    expect(_folderTitle(), findsNothing, reason: '前提：没展开');
 
     await tester.tap(find.byType(CollectionThumb));
     await tester.pumpAndSettle();
 
-    expect(
-      find.textContaining('这一组（3 张）'),
-      findsOneWidget,
-      reason: '要点开文件夹列成员',
-    );
+    expect(_folderTitle(), findsOneWidget, reason: '要点开文件夹列成员');
     expect(
       find.textContaining('长按可多选'),
       findsOneWidget,
@@ -230,6 +248,42 @@ void main() {
     // 收起
     await tester.tap(find.byTooltip('关闭'));
     await tester.pumpAndSettle();
+    expect(_folderTitle(), findsNothing);
+  });
+
+  testWidgets('展开详情显示集合自己的名字，并且能当场改名', (tester) async {
+    // 用户 2026-11-07："新建集合展开详情时都显示『这一组』—— 应该有个默认编组名，
+    // 然后允许用户自行更改名字。"
+    final (store, settings) = await _seed();
+    await tester.pumpWidget(_app(store, settings));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byType(CollectionThumb));
+    await tester.pumpAndSettle();
+    expect(
+      find.text('样片（3 张）'),
+      findsOneWidget,
+      reason: '标题要用集合自己的名字（后端给的），不是『这一组』',
+    );
+
+    await tester.tap(find.byTooltip('重命名集合'));
+    await tester.pumpAndSettle();
+    expect(find.text('重命名集合'), findsOneWidget);
+
+    await tester.enterText(
+      find.descendant(
+        of: find.byType(AlertDialog),
+        matching: find.byType(TextField),
+      ),
+      '精选',
+    );
+    await tester.tap(find.widgetWithText(FilledButton, '保存'));
+    await tester.pumpAndSettle();
+
+    expect(renamedCollections, hasLength(1));
+    expect(renamedCollections.single.id, 9);
+    expect(renamedCollections.single.body['title'], '精选');
+    expect(find.text('精选（3 张）'), findsOneWidget, reason: '改完名字标题要当场换，不用关掉重开');
     expect(find.textContaining('这一组'), findsNothing);
   });
 
@@ -305,7 +359,7 @@ void main() {
 
     await tester.tap(find.byType(CollectionThumb));
     await tester.pumpAndSettle();
-    expect(find.textContaining('这一组（3 张）'), findsOneWidget);
+    expect(_folderTitle(), findsOneWidget);
 
     final from = tester.getCenter(
       find.byKey(const Key('folder-member-thumb')).first,
@@ -319,7 +373,7 @@ void main() {
     await gesture.moveTo(const Offset(30, 570));
     await tester.pump();
     expect(
-      find.textContaining('这一组（3 张）'),
+      _folderTitle(),
       findsNothing,
       reason: '★ 拖出弹窗外之后弹窗必须让开，否则底下的格子根本收不到落点',
     );
@@ -339,7 +393,7 @@ void main() {
       isNotEmpty,
       reason: '★ 松手必须真的把这一张移出集合',
     );
-    expect(find.textContaining('这一组'), findsNothing, reason: '拖完弹窗收起');
+    expect(_folderTitle(), findsNothing, reason: '拖完弹窗收起');
   });
 
   testWidgets('弹窗里多选之后拖其中一张 = **整批一起走**', (tester) async {
@@ -396,7 +450,7 @@ void main() {
 
     await tester.tap(find.byType(CollectionThumb));
     await tester.pumpAndSettle();
-    expect(find.textContaining('这一组（3 张）'), findsOneWidget, reason: '前提：面板开着');
+    expect(_folderTitle(), findsOneWidget, reason: '前提：面板开着');
 
     final from = tester.getCenter(
       find.byKey(const Key('folder-member-thumb')).first,
@@ -409,7 +463,7 @@ void main() {
     await gesture.moveTo(const Offset(40, 900));
     await tester.pump();
     expect(
-      find.textContaining('这一组（3 张）'),
+      _folderTitle(),
       findsOneWidget,
       reason: '★ 停靠面板**不该**因为拖出去就消失（它本来就不挡路）',
     );
@@ -438,7 +492,7 @@ void main() {
 
     await tester.tap(find.byType(CollectionThumb));
     await tester.pumpAndSettle();
-    expect(find.textContaining('这一组（3 张）'), findsOneWidget);
+    expect(_folderTitle(), findsOneWidget);
 
     final from = tester.getCenter(
       find.byKey(const Key('folder-member-thumb')).first,
@@ -451,13 +505,13 @@ void main() {
     // 移到弹窗之外，再**移回弹窗正中间**：不许因此把弹窗放回来
     await gesture.moveTo(const Offset(20, 880));
     await tester.pump();
-    expect(find.textContaining('这一组（3 张）'), findsNothing, reason: '拖出去就该让开');
+    expect(_folderTitle(), findsNothing, reason: '拖出去就该让开');
 
     final center = Offset(tester.view.physicalSize.width / 2, 450);
     await gesture.moveTo(center);
     await tester.pump();
     expect(
-      find.textContaining('这一组（3 张）'),
+      _folderTitle(),
       findsNothing,
       reason: '★ 让开之后**不许**再"拖回来就重新挡住"，否则中间那些格子永远落不到',
     );
@@ -483,7 +537,7 @@ void main() {
 
     // 拖画廊里的散图（id=1）到面板**标题**上（不是成员格子）
     final from = tester.getCenter(find.byType(MediaThumb));
-    final to = tester.getCenter(find.textContaining('这一组（3 张）'));
+    final to = tester.getCenter(_folderTitle());
 
     final gesture = await tester.startGesture(from);
     await tester.pump();
@@ -722,7 +776,10 @@ void main() {
 // -----------------------------------------------------------------------------
 
 /// 集合面板的标题（**两种形态都有**这一行，所以它只当"面板在不在"的锚点）。
-Finder _folderTitle() => find.textContaining('这一组（3 张）');
+///
+/// 用 key 而不是标题文字：标题现在是**集合自己的名字**（用户起的 / 后端给的默认名 /
+/// 「算法分组」），拿文字当锚点的话改个名用例就会红。
+Finder _folderTitle() => find.byKey(const Key('collection-panel-title'));
 
 /// ★ 凭什么判"停靠 vs 弹窗"（读完 `gallery_page.dart` 后定的判据，不是"能跑就行"）：
 ///

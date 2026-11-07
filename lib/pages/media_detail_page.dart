@@ -32,7 +32,16 @@ import 'tag_results_page.dart';
 class MediaDetailPage extends StatefulWidget {
   final int mediaId;
 
-  const MediaDetailPage({super.key, required this.mediaId});
+  /// 从**自定的一组产物**里点进来时，这一组是什么（卡片上的示例产物）。
+  ///
+  /// 传了它，左右切换就只在这一组里走，**不再按画廊里的 `collectionId` 取成员**
+  /// —— 否则点开卡片上的示例，翻出来的是它原本待在画廊哪个集合里那一批，
+  /// 而不是用户刚刚看到的这几个示例（用户 2026-11-07 报的 bug）。
+  ///
+  /// `null` = 普通入口（画廊 / 标签 / 提示词关联产物…），仍按集合成员切换。
+  final List<MediaAsset>? siblings;
+
+  const MediaDetailPage({super.key, required this.mediaId, this.siblings});
 
   @override
   State<MediaDetailPage> createState() => _MediaDetailPageState();
@@ -139,9 +148,16 @@ class _MediaDetailPageState extends State<MediaDetailPage> {
           prompt = null;
         }
       }
-      // 集合成员：拿到失败**不影响详情页**（没有箭头而已，不是错误）
+      // 集合成员：拿到失败**不影响详情页**（没有箭头而已，不是错误）。
+      //
+      // ⚠ 从卡片示例进来时**只看那一组**（`widget.siblings`），不去问集合：
+      // 一张示例可能本来是画廊里某个集合的成员，按集合取会把用户带出卡片
+      // （用户 2026-11-07 报的 bug）。示例的顺序就是卡片里挂的顺序。
       var siblings = const <int>[];
-      if (media.collectionId != null) {
+      final fixed = widget.siblings;
+      if (fixed != null) {
+        siblings = [for (final item in fixed) item.id];
+      } else if (media.collectionId != null) {
         try {
           final page = await store.api.listMedia(
             collectionId: media.collectionId,

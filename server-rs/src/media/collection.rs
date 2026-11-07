@@ -693,16 +693,59 @@ pub fn detach(conn: &Connection, media_id: i64) -> Result<(), WriteError> {
     Ok(())
 }
 
+/// 给一个还没名字的集合起个默认名（`集合 1`、`集合 2`…）。
+///
+/// 只在"用户建了组但没填名字"或"用户碰了算法组、它转成手动"时用。挑第一个没被
+/// 占用的编号，别让界面上出现两个同名的组；用户自己起的名字**原样不动**。
+fn default_title(conn: &Connection) -> Result<String, WriteError> {
+    let mut n = 1i64;
+    loop {
+        let candidate = format!("集合 {n}");
+        let used: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM media_collections WHERE title = ?1",
+            params![candidate],
+            |row| row.get(0),
+        )?;
+        if used == 0 {
+            return Ok(candidate);
+        }
+        n += 1;
+    }
+}
+
 /// 移进之后要把 `origin` 从 `auto` 翻成 `manual`。
 ///
 /// 为什么必须翻：`auto` 集合的 `group_key` 是"算法算出来的那一组"的指纹 ——
 /// 用户往里塞了一张提示词不同的图之后，这个指纹就**不再描述它的内容**了，
 /// 而 `attach` 还在按这个 key 往它里面吸新图（把不相关的图越吸越多）。
 /// 用户碰过它，它就是手动的了；要回到算法分组只能显式"重新自动分组"。
+///
+/// 翻成手动时**顺手给一个默认名字**：否则界面上会显示成"未命名集合"，
+/// 用户还得自己再改一次（2026-11-07 用户要求"新建集合要有默认编组名"）。
 fn mark_manual(conn: &Connection, collection_id: i64) -> Result<(), WriteError> {
+    let row: Option<(String, Option<String>)> = conn
+        .query_row(
+            "SELECT origin, title FROM media_collections WHERE id = ?1",
+            params![collection_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()?;
+    let Some((origin, title)) = row else {
+        return Ok(());
+    };
+    if origin == Origin::Manual.as_str() {
+        return Ok(());
+    }
+    let title = title
+        .map(|t| t.trim().to_string())
+        .filter(|t| !t.is_empty())
+        .unwrap_or(default_title(conn)?);
     conn.execute(
-        "UPDATE media_collections SET origin = ?1 WHERE id = ?2 AND origin <> ?1",
-        params![Origin::Manual.as_str(), collection_id],
+        "UPDATE media_collections
+            SET origin = ?1, title = ?2,
+                updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+          WHERE id = ?3",
+        params![Origin::Manual.as_str(), title, collection_id],
     )?;
     Ok(())
 }
@@ -793,6 +836,52 @@ pub fn list(conn: &Connection) -> Result<Vec<CollectionSummary>, WriteError> {
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
+/// 取一个集合的摘要（名字 / kind / origin / 成员数）；不存在回 [`WriteError::NotFound`]。
+pub fn summary(conn: &Connection, id: i64) -> Result<CollectionSummary, WriteError> {
+    conn.query_row(
+        "SELECT c.id, c.kind, c.origin, c.title,
+                (SELECT COUNT(*) FROM media_assets m WHERE m.collection_id = c.id)
+           FROM media_collections c WHERE c.id = ?1",
+        params![id],
+        |row| {
+            Ok(CollectionSummary {
+                id: row.get(0)?,
+                kind: row.get(1)?,
+                origin: row.get(2)?,
+                title: row.get(3)?,
+                size: row.get(4)?,
+            })
+        },
+    )
+    .optional()?
+    .ok_or(WriteError::NotFound)
+}
+
+/// **给集合改名**（用户在集合详情里点「重命名」）。
+///
+/// 两条纪律：
+/// 1. **空名字要明确拒绝**：界面上一旦允许清空，展开详情又回到"这一组"——
+///    用户 2026-11-07 要的正是"每个集合都有名字"；
+/// 2. **改名同时把 `origin` 翻成 `manual`**：用户给它起了名字，这一组就归用户了；
+///    否则下次「重新自动整理」会把它当 `auto` 解散，名字跟着没。
+pub fn rename(conn: &Connection, id: i64, title: &str) -> Result<CollectionSummary, WriteError> {
+    let title = title.trim();
+    if title.is_empty() {
+        return Err(WriteError::Validation("集合名不能为空".into()));
+    }
+    let changed = conn.execute(
+        "UPDATE media_collections
+            SET title = ?1, origin = ?2,
+                updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+          WHERE id = ?3",
+        params![title, Origin::Manual.as_str(), id],
+    )?;
+    if changed == 0 {
+        return Err(WriteError::NotFound);
+    }
+    summary(conn, id)
+}
+
 /// **新建一个手动集合**，并把 `media_ids` 全部移进去；返回新集合 id。
 ///
 /// 选中的产物 **kind 必须一致**（同上：不混图像和视频），不一致就明确拒绝。
@@ -832,6 +921,12 @@ pub fn create_manual(
         }
     }
     let kind = kind.ok_or(WriteError::NotFound)?;
+    // 用户没填名字（或只填了空白）就给它一个默认名 —— 展开详情不能显示"这一组"
+    // （用户 2026-11-07 的要求）。显式名字仍然原样保留，只去首尾空白。
+    let title = match title.map(str::trim).filter(|t| !t.is_empty()) {
+        Some(title) => title.to_string(),
+        None => default_title(conn)?,
+    };
 
     conn.execute(
         "INSERT INTO media_collections (group_key, kind, origin, rule_version, title)
@@ -841,7 +936,7 @@ pub fn create_manual(
             kind,
             Origin::Manual.as_str(),
             RULE_VERSION,
-            title.map(str::trim).filter(|t| !t.is_empty()),
+            title,
         ],
     )?;
     let created = conn.last_insert_rowid();

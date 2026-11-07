@@ -306,12 +306,12 @@ class CardsViewState extends State<CardsView> {
         onEdit: () => _edit(_cards[i]),
         onDelete: () => _delete(_cards[i]),
         onManageExamples: () => _manageExamples(_cards[i]),
-        onOpenExample: _openExample,
+        onOpenExample: (media) => _openExample(_cards[i], media),
       ),
     );
   }
 
-  void _openExample(MediaAsset media) {
+  void _openExample(CharacterCard card, MediaAsset media) {
     // 测试里可能没有 LibraryStore；那时缩略图只做展示，点开无动作（不崩）。
     // ⚠ 别用 `read<LibraryStore?>()` —— provider 注册的是非空类型，问可空类型
     // 找不到同一个 InheritedWidget（会永远返回 null，真机上点缩略图就"没反应"）。
@@ -323,7 +323,12 @@ class CardsViewState extends State<CardsView> {
     }
     if (store.api.baseUrl.isEmpty) return;
     Navigator.of(context).push(
-      MaterialPageRoute(builder: (_) => MediaDetailPage(mediaId: media.id)),
+      MaterialPageRoute(
+        // 详情页的左右切换只在这张卡挂的示例里走 —— 不传的话它会按
+        // `collectionId` 把用户带回画廊里原本那一批（用户 2026-11-07 报的 bug）。
+        builder: (_) =>
+            MediaDetailPage(mediaId: media.id, siblings: card.examples),
+      ),
     );
   }
 }

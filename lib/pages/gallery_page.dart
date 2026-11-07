@@ -78,6 +78,12 @@ class _GalleryPageState extends State<GalleryPage> {
   MediaAsset? _openFolder;
   List<MediaAsset>? _folderMembers;
 
+  /// 展开的这一组的**摘要**（名字 / 是算法分组还是手动集合）。
+  ///
+  /// 与 `_folderMembers` 分开取：名字读不到不该让成员也打不开；反过来也一样。
+  /// 集合名真源在后端（`GET /api/media/collections`），前端不自己猜。
+  MediaCollection? _folderCollection;
+
   /// 集合弹窗里的**多选**（用户 2026-10-18："在集合内我不能多选操作"）。
   bool _folderSelection = false;
   final Set<int> _folderPicked = {};
@@ -582,10 +588,10 @@ class _GalleryPageState extends State<GalleryPage> {
           // 左右滑动 = 翻当前页（与预设页同一套交互，见 SwipePageView）
           child: SwipePageView(
             page: store.mediaPage,
-            contentPage: store.media.page,
             pages: store.media.pages,
             onPageChanged: store.setMediaPage,
-            child: GridView.builder(
+            builder: (page) => page == store.media.page
+                ? GridView.builder(
               padding: const EdgeInsets.fromLTRB(16, 8, 16, 96),
               // 每个格子**已经**带了自己的 RepaintBoundary（SliverChildBuilderDelegate
               // 的 addRepaintBoundaries 默认就是 true），所以这里不用再手包一层；
@@ -644,7 +650,8 @@ class _GalleryPageState extends State<GalleryPage> {
                   child: _draggableTile(m, thumb),
                 );
               },
-            ),
+            )
+                : null,
           ),
         ),
         PageBar(
@@ -942,10 +949,35 @@ class _GalleryPageState extends State<GalleryPage> {
     setState(() {
       _openFolder = collection;
       _folderMembers = null;
+      _folderCollection = null;
     });
-    final members = await _collectionMembers(collection.collectionId);
+    // 成员与名字**并行**取：名字只影响标题，读不到也不该让成员列表打不开。
+    final membersFuture = _collectionMembers(collection.collectionId);
+    final metaFuture = _collectionMeta(collection.collectionId);
+    final members = await membersFuture;
+    final meta = await metaFuture;
     if (!mounted || _openFolder?.id != collection.id) return;
-    setState(() => _folderMembers = members ?? const []);
+    setState(() {
+      _folderMembers = members ?? const [];
+      _folderCollection = meta;
+    });
+  }
+
+  /// 展开的那一组在后端叫什么（名字 / 算法分组还是手动集合）。
+  ///
+  /// 读不到就返回 `null`，标题退回中性的「集合」—— 不能因此把面板关上：
+  /// 用户来这里是看图的，名字只是标题。
+  Future<MediaCollection?> _collectionMeta(int? collectionId) async {
+    if (collectionId == null) return null;
+    try {
+      final rows = await context.read<LibraryStore>().api.listCollections();
+      for (final row in rows) {
+        if (row.id == collectionId) return row;
+      }
+    } catch (_) {
+      // 名字读不到不影响看图（标题会显示「集合」）
+    }
+    return null;
   }
 
   void _closeFolder() {
@@ -953,6 +985,7 @@ class _GalleryPageState extends State<GalleryPage> {
     setState(() {
       _openFolder = null;
       _folderMembers = null;
+      _folderCollection = null;
       _folderSelection = false;
       _folderPicked.clear();
       _folderDragging = false;
@@ -960,6 +993,56 @@ class _GalleryPageState extends State<GalleryPage> {
       // 换一个新的 key：下一组要用一份干净的矩形
       _folderKey = GlobalKey();
     });
+  }
+
+  /// 展开面板的标题：**集合自己的名字**，不再一律写"这一组"。
+  ///
+  /// * 有名字（用户起的 / 新建时自动给的）= 用名字；
+  /// * 算法分出来的没名字 = 「算法分组」（如实说，不假装是用户起的名）；
+  /// * 老手动集合没名字 = 「未命名集合」，点旁边的铅笔就能补一个。
+  String _folderTitleText() {
+    final meta = _folderCollection;
+    final title = meta?.title?.trim();
+    if (title != null && title.isNotEmpty) return title;
+    if (meta == null) return '集合';
+    return meta.isManual ? '未命名集合' : '算法分组';
+  }
+
+  /// 给展开的这一组改名（面板标题旁的铅笔）。
+  ///
+  /// 改名之后标题**当场**换成新名字；后端还会把算法分组转成手动 ——
+  /// 所以弹窗里对自动分组多解释一句"以后重新整理不会动它"。
+  Future<void> _renameFolder() async {
+    final folder = _openFolder;
+    final collectionId = folder?.collectionId;
+    if (folder == null || collectionId == null) return;
+
+    final meta = _folderCollection;
+    final name = await showDialog<String>(
+      context: context,
+      builder: (_) => _RenameCollectionDialog(
+        initial: (meta?.title ?? '').trim(),
+        explainManual: meta != null && !meta.isManual,
+      ),
+    );
+    if (name == null || !mounted) return;
+    if (name.isEmpty) {
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text('集合名不能为空')));
+      return;
+    }
+    try {
+      final updated = await context.read<LibraryStore>().api.renameCollection(
+        collectionId,
+        name,
+      );
+      if (!mounted) return;
+      setState(() => _folderCollection = updated);
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('改名失败，$e')));
+    }
   }
 
   /// 一个集合的成员（**带缩略图信息**，展开文件夹要画图，不能只要 id）。
@@ -1075,7 +1158,10 @@ class _GalleryPageState extends State<GalleryPage> {
               dense: true,
               leading: const Icon(Icons.folder_open, size: 18),
               title: Text(
-                '这一组（${members?.length ?? folder.collectionSize} 张）',
+                '${_folderTitleText()}（${members?.length ?? folder.collectionSize} 张）',
+                key: const Key('collection-panel-title'),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
                 style: theme.textTheme.labelLarge,
               ),
               subtitle: Text(
@@ -1086,10 +1172,20 @@ class _GalleryPageState extends State<GalleryPage> {
                   color: theme.colorScheme.outline,
                 ),
               ),
-              trailing: IconButton(
-                tooltip: '关闭',
-                icon: const Icon(Icons.close, size: 18),
-                onPressed: _closeFolder,
+              trailing: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  IconButton(
+                    tooltip: '重命名集合',
+                    icon: const Icon(Icons.edit_outlined, size: 18),
+                    onPressed: _renameFolder,
+                  ),
+                  IconButton(
+                    tooltip: '关闭',
+                    icon: const Icon(Icons.close, size: 18),
+                    onPressed: _closeFolder,
+                  ),
+                ],
               ),
             ),
             const Divider(height: 1),
@@ -1098,7 +1194,10 @@ class _GalleryPageState extends State<GalleryPage> {
                   ? const Center(child: CircularProgressIndicator())
                   : members.isEmpty
                   ? Center(
-                      child: Text('这一组空了', style: theme.textTheme.bodySmall),
+                      child: Text(
+                        '这里还没有产物',
+                        style: theme.textTheme.bodySmall,
+                      ),
                     )
                   : GridView.builder(
                       padding: const EdgeInsets.all(12),
@@ -1645,9 +1744,17 @@ class _GalleryPageState extends State<GalleryPage> {
       return;
     }
     final name = (target.title ?? '').trim();
-    await _run(() async {
-      await store.api.createCollection(ids, title: name);
-    }, '已新建集合「${name.isEmpty ? '未命名' : name}」并移入 ${ids.length} 张');
+    // 名字留空时后端会给默认名（`集合 1`…），提示里用后端回来的那个，
+    // 别在这里自己复制一份命名规则。
+    var createdLabel = name;
+    await _run(
+      () async {
+        final created = await store.api.createCollection(ids, title: name);
+        createdLabel = created.label;
+      },
+      '已新建集合',
+      toastOf: () => '已新建集合「$createdLabel」并移入 ${ids.length} 张',
+    );
   }
 
   /// 清除未关联产物：没有关联任何提示词的图片 / 视频 / 音频。
@@ -1907,7 +2014,7 @@ class _DragChip extends StatelessWidget {
 /// 选择器的结果。
 ///
 /// * [collection] 非空 = 移进这个已有集合；
-/// * 否则看 [title] = **新建**一个集合（名字可以是空的，后端会存 NULL）。
+/// * 否则看 [title] = **新建**一个集合（名字可以是空的 —— 后端会给它一个默认名）。
 class CollectionTarget {
   final MediaCollection? collection;
   final String? title;
@@ -2037,7 +2144,7 @@ class _CollectionPickerDialogState extends State<_CollectionPickerDialog> {
                   child: TextField(
                     controller: _nameController,
                     decoration: const InputDecoration(
-                      labelText: '新建集合的名字（可空）',
+                      labelText: '新建集合的名字（不填就自动起名）',
                       isDense: true,
                     ),
                     onSubmitted: (_) => _create(),
@@ -2061,4 +2168,76 @@ class _CollectionPickerDialogState extends State<_CollectionPickerDialog> {
 
   void _create() =>
       Navigator.of(context).pop(CollectionTarget.create(_nameController.text));
+}
+
+/// 「重命名集合」的小弹窗。
+///
+/// 单独一个 StatefulWidget 是为了**自己管 `TextEditingController`**：在页面方法里
+/// new 一个、`showDialog` 一返回就 `dispose()`，退场动画里 TextField 还会用到它，
+/// 报 "A TextEditingController was used after being disposed"。交给 State 管，
+/// 弹窗真正拆掉时才释放。
+class _RenameCollectionDialog extends StatefulWidget {
+  final String initial;
+
+  /// 给算法分组多解释一句：起了名字它就归用户，重新整理不会解散。
+  final bool explainManual;
+
+  const _RenameCollectionDialog({
+    required this.initial,
+    required this.explainManual,
+  });
+
+  @override
+  State<_RenameCollectionDialog> createState() =>
+      _RenameCollectionDialogState();
+}
+
+class _RenameCollectionDialogState extends State<_RenameCollectionDialog> {
+  late final TextEditingController _controller = TextEditingController(
+    text: widget.initial,
+  );
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void _submit() => Navigator.of(context).pop(_controller.text.trim());
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return AlertDialog(
+      title: const Text('重命名集合'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          TextField(
+            controller: _controller,
+            autofocus: true,
+            decoration: const InputDecoration(labelText: '集合名'),
+            onSubmitted: (_) => _submit(),
+          ),
+          if (widget.explainManual) ...[
+            const SizedBox(height: 10),
+            Text(
+              '改了名字之后这一组归你手动管理，重新自动整理不会动它。',
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.outline,
+              ),
+            ),
+          ],
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('取消'),
+        ),
+        FilledButton(onPressed: _submit, child: const Text('保存')),
+      ],
+    );
+  }
 }

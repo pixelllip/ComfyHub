@@ -137,6 +137,35 @@ void main() {
     expect(body.containsKey('title'), isFalse, reason: '空白名字等于没有名字，别发一个空串过去');
   });
 
+  test('重命名集合：PATCH 到那一组的路径，发 title，回新摘要', () async {
+    late Map<String, dynamic> body;
+    final api = ApiClient(
+      'http://127.0.0.1:1',
+      client: MockClient((request) async {
+        expect(request.method, 'PATCH');
+        expect(request.url.path, '/api/media/collections/11');
+        body = Map<String, dynamic>.from(jsonDecode(request.body) as Map);
+        return http.Response(
+          jsonEncode({
+            'id': 11,
+            'kind': 'IMAGE',
+            'origin': 'manual',
+            'title': '夜景三连',
+            'size': 2,
+          }),
+          200,
+          headers: {'content-type': 'application/json; charset=utf-8'},
+        );
+      }),
+    );
+
+    final renamed = await api.renameCollection(11, '  夜景三连  ');
+    expect(body['title'], '夜景三连', reason: '首尾空白由前端去掉，别把空格存进去');
+    expect(renamed.id, 11);
+    expect(renamed.title, '夜景三连');
+    expect(renamed.isManual, isTrue, reason: '改名之后后端会把它转成手动');
+  });
+
   test('一个集合只装一种：accepts 判据大小写不敏感', () {
     const image = MediaCollection(
       id: 1,
@@ -147,6 +176,18 @@ void main() {
     expect(image.accepts('IMAGE'), isTrue);
     expect(image.accepts('image'), isTrue);
     expect(image.accepts('VIDEO'), isFalse, reason: '图像集合装不下视频 —— 目标要置灰');
+  });
+
+  test('没名字时：手动集合说未命名，算法分组说算法（两件事别混）', () {
+    const manual = MediaCollection(
+      id: 1,
+      kind: 'IMAGE',
+      origin: 'manual',
+      size: 2,
+    );
+    const auto = MediaCollection(id: 2, kind: 'IMAGE', origin: 'auto', size: 2);
+    expect(manual.label, '未命名集合（2 张）', reason: '老的手动集合没名字时别冒充算法分组');
+    expect(auto.label, '算法分组（2 张）');
   });
 
   test('mediaPath：磁盘路径由后端给，前端不拼', () async {

@@ -617,6 +617,17 @@ class ApiClient {
     return MediaCollection.fromJson(Map<String, dynamic>.from(json as Map));
   }
 
+  /// **给集合改名**（集合详情里的「重命名」）。
+  ///
+  /// 后端会顺手把这一组转成手动（`origin = manual`）：用户起了名字，它就归用户，
+  /// 下次「重新自动整理」不会把组连同名字一起解散。
+  Future<MediaCollection> renameCollection(int id, String title) async {
+    final json = await _send('PATCH', '/api/media/collections/$id', {
+      'title': title.trim(),
+    });
+    return MediaCollection.fromJson(Map<String, dynamic>.from(json as Map));
+  }
+
   /// 上传若干文件；[promptId] 为空表示"暂不关联"。
   Future<UploadResult> uploadMedia({
     required List<String> filePaths,

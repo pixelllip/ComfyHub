@@ -588,11 +588,10 @@ class _PromptsPageState extends State<PromptsPage>
           // 左右滑动 = 翻当前列表的页（带滑入 / 滑出动画，见 SwipePageView）
           child: SwipePageView(
             page: store.promptPage,
-            contentPage: store.prompts.page,
             pages: store.prompts.pages,
             onPageChanged: store.setPromptPage,
-            // 列数 = 可用宽度 / 550（宽窗口自动多列，窄窗口仍是单列）
-            child: AdaptiveColumnList(
+            builder: (page) => page == store.prompts.page
+                ? AdaptiveColumnList(
               padding: const EdgeInsets.fromLTRB(16, 4, 16, 96),
               runSpacing: 10,
               itemCount: store.prompts.items.length,
@@ -618,7 +617,8 @@ class _PromptsPageState extends State<PromptsPage>
                       : () => _runPreset(prompt),
                 );
               },
-            ),
+            )
+                : null,
           ),
         ),
         PageBar(

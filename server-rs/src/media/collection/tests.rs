@@ -694,8 +694,72 @@ fn 新建手动集合_成员挂上去且老集合收拾干净() {
     crate::infra::testpaths::cleanup(&dir);
 }
 
-/// 手动集合的 key 必须以 `manual:` 开头 —— 否则它会被 [`attach`] 当成"算法那一组"，
-/// 新图就会源源不断地吸进用户自己建的组里。
+/// 新建手动集合：没填名字就用默认名（`集合 1`、`集合 2`…），显式名字原样保留。
+///
+/// 2026-11-07 用户要求："新建集合要有默认编组名，别展开详情只显示『这一组』。"
+#[test]
+fn 新建手动集合_没给名字就用默认名() {
+    let (conn, dir) = temp_db("default-title");
+    let p = insert_prompt(&conn, "IMAGE", "1girl", None);
+    let a = insert_media(&conn, Some(p), "IMAGE");
+    let b = insert_media(&conn, Some(p), "IMAGE");
+    let c = insert_media(&conn, Some(p), "IMAGE");
+
+    let first = create_manual(&conn, &[a], None).unwrap();
+    let second = create_manual(&conn, &[b], Some("   ")).unwrap();
+    let named = create_manual(&conn, &[c], Some("  我的精选  ")).unwrap();
+
+    assert_eq!(summary(&conn, first).unwrap().title.as_deref(), Some("集合 1"));
+    assert_eq!(
+        summary(&conn, second).unwrap().title.as_deref(),
+        Some("集合 2"),
+        "空白名字按没填处理，编号接着往后排"
+    );
+    assert_eq!(
+        summary(&conn, named).unwrap().title.as_deref(),
+        Some("我的精选"),
+        "用户起的名字只去首尾空白，一个编号都不许加"
+    );
+    crate::infra::testpaths::cleanup(&dir);
+}
+
+/// 改名：改掉标题，同时把算法分组转成手动（否则「重新自动整理」会连名字一起解散）。
+#[test]
+fn 重命名集合_改名字并把算法分组转成手动() {
+    let (conn, dir) = temp_db("rename");
+    let p = insert_prompt(&conn, "IMAGE", "1girl", None);
+    let a = insert_media(&conn, Some(p), "IMAGE");
+    let b = insert_media(&conn, Some(p), "IMAGE");
+    let auto = group_id(&conn, a);
+    assert_eq!(group_id(&conn, b), auto);
+
+    let renamed = rename(&conn, auto, "  夜景三连  ").unwrap();
+    assert_eq!(renamed.id, auto);
+    assert_eq!(renamed.title.as_deref(), Some("夜景三连"), "首尾空白要去掉");
+    assert_eq!(renamed.origin, "manual", "用户起了名字，这一组就归用户了");
+    assert_eq!(renamed.size, 2);
+
+    match rename(&conn, auto, "   ").unwrap_err() {
+        WriteError::Validation(message) => assert!(
+            message.contains("集合名不能为空"),
+            "空名字要明确拒绝，不能把标题清成『这一组』"
+        ),
+        other => panic!("空名字应该回 Validation，实际是 {other}"),
+    }
+    assert!(
+        matches!(rename(&conn, 9999, "找不到").unwrap_err(), WriteError::NotFound),
+        "不存在的集合要回 NotFound"
+    );
+
+    // 重算之后仍然在，且名字还在 —— 这正是"改名同时翻 manual"要守住的
+    regroup_auto(&conn).unwrap();
+    assert_eq!(
+        summary(&conn, auto).unwrap().title.as_deref(),
+        Some("夜景三连")
+    );
+    crate::infra::testpaths::cleanup(&dir);
+}
+
 #[test]
 fn 新建手动集合的key不会被新图吸走() {
     let (conn, dir) = temp_db("manual-key");
@@ -779,6 +843,15 @@ fn 移进算法分组_那一组就地转成手动() {
         "manual",
         "★ 用户碰过的组必须转成手动，否则它还会继续吸新图"
     );
+    // 顺手要有默认名字：界面上不能显示成"未命名集合"（用户 2026-11-07 的要求）
+    let title: Option<String> = conn
+        .query_row(
+            "SELECT title FROM media_collections WHERE id = ?1",
+            params![auto],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(title.as_deref(), Some("集合 1"));
     crate::infra::testpaths::cleanup(&dir);
 }
 

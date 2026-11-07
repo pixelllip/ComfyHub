@@ -102,6 +102,11 @@ http.Client _client() => MockClient((request) async {
         'pages': 1,
       };
     }
+  } else if (path == '/api/media/collections') {
+    // 展开详情时读集合名字：标题要显示名字，不再写死"这一组"（2026-11-07）
+    body = [
+      {'id': 9, 'kind': 'IMAGE', 'origin': 'manual', 'title': '样片', 'size': 3},
+    ];
   } else if (path == '/api/tags' || path == '/api/tags/categories') {
     body = <Object>[];
   } else if (path == '/api/stats') {
@@ -231,7 +236,11 @@ void main() {
     await tester.tap(find.byType(CollectionThumb));
     await tester.pumpAndSettle();
 
-    expect(find.textContaining('这一组（3 张）'), findsOneWidget, reason: '前提：集合已展开');
+    expect(
+      find.byKey(const Key('collection-panel-title')),
+      findsOneWidget,
+      reason: '前提：集合已展开',
+    );
     expect(
       find.byIcon(Icons.star),
       findsOneWidget,
