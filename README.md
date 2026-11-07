@@ -293,15 +293,21 @@ D:\dist\ComfyHub\viewer.exe
 ## 10. 测试
 
 ```powershell
-$env:PUB_HOSTED_URL='https://pub.dev'; flutter analyze; flutter test   # 前端：592 例 ≈ 65s
-cargo test --manifest-path server-rs\Cargo.toml                       # 后端：lib 789 + 集成 158 ≈ 40s
+$env:PUB_HOSTED_URL='https://pub.dev'; flutter analyze; flutter test   # 前端：静态检查 + 用例
+cargo test --manifest-path server-rs\Cargo.toml                       # 后端：lib + 集成
 pwsh -File scripts\e2e-submit-test.ps1                                # 提交链路（6 幕，不出网、不花钱）
 ```
 
+- **刻意不在这里写用例数与耗时**：它们每加一批用例就漂一次（历史上前一版写的还是
+  「592 例 ≈ 65s」「lib 789 + 集成 158」，早就对不上了）。要数字就看 `flutter test` /
+  `cargo test` 自己的输出，别抄进文档。
 - **push / PR 时 GitHub Actions 会跑前两条**（`.github/workflows/ci.yml`，Windows runner）：
   `dart format --set-exit-if-changed` + `flutter analyze` + `flutter test`，
   `cargo fmt --check` + `cargo clippy --all-targets -- -D warnings` + `cargo test`。
   e2e 不进 CI（要本机后端与 ComfyUI 现场）。
+- **依赖自动升级**：`.github/dependabot.yml` 每周一开一次 PR，把 pub / cargo / actions 的
+  **小版本与补丁**合成一条（大版本仍然一条一个 PR，要人看 breaking change）。它不在回归链路上 ——
+  不想被 PR 打扰就直接删掉这个文件，CI 不依赖它。
 - 纯逻辑改动跑单测就够；**改了 `HarnessRunner` 的上下文拼装要跑三条 e2e**（AGENTS §10.1）。
 - 要**活体**验收（真 ComfyUI）用 `spot_check`：`cargo test --test spot_check -- --ignored`。
 - 测试落盘一律 `testpaths::scratch()`（`server-rs\target\.scratch\`）—— 受限会话里写 `%TEMP%` 必红。

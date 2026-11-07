@@ -14,7 +14,8 @@
 - 只动 `lib/` 下的 Dart → `pwsh -File scripts\dev-app.ps1`（保证后端二进制最新 + `flutter run -d windows --debug`），起来后按 `r` 热重载。
 - **别为了看一个前端改动跑 `flutter build windows --release`**：改 `windows/` 原生代码、改依赖、要出正式产物时才需要（它末段自己 `cargo build --release` 并把后端装进 `backend\`）。
 - 改完过 `flutter analyze` + `flutter test`（`PUB_HOSTED_URL=https://pub.dev`）。详情页大图 / 工作流弹窗这类交互改动跑对应用例（`test\zoomable_image_test.dart`、`test\workflow_viewer_test.dart`），别只跑 `widget_test.dart`。
-- **测试的唯一标准是"删了以后出错还能不能被抓住"**：同一事实写两遍、为用掉 import 的占位用例，该删就删；真正的防线（零上游请求、审批顺序、越界写被拒、内联预算、滚动条与懒构建）一条都不能删。本机实测：`flutter test` ≈ 25s、`cargo test`（lib 630 + 集成 150）≈ 30s（热构建）、`e2e-ai-tools-test.ps1` ≈ 5~15s、`e2e-capture/submit-test.ps1` ≈ 20~35s。
+- **测试的唯一标准是"删了以后出错还能不能被抓住"**：同一事实写两遍、为用掉 import 的占位用例，该删就删；真正的防线（零上游请求、审批顺序、越界写被拒、内联预算、滚动条与懒构建）一条都不能删。本机实测（热构建）：`flutter test` / `cargo test` 都是几十秒，`e2e-ai-tools-test.ps1` ≈ 5~15s、`e2e-capture/submit-test.ps1` ≈ 20~35s。**用例数别抄进文档** —— 以前那句「lib 630 + 集成 150」现在已经是 844 + 171 了，写一次漂一次，要看数字直接看命令输出。
+- **`catch (_)` 的判据只有一条：这次失败会不会被当成成功。** 会的那几条必须如实说出来（缓存写/清、路径探测、后台轮询、回滚指针 —— 2026-11-07 审过一轮，见 `media_cache.dart` 的 `lastScanError` / `lastClearFailures`、`backend_paths.dart` 的 `dataDir.json` 日志、`ai_workspace_store.dart` 的 `comfyJobsError`）；纯 best-effort 的（清残片、关客户端、删临时文件）才可以静默。**别为了"代码整洁"把前一类也吞成 `catch (_)`**。
 - **Rust 用例要落盘只许 `testpaths::scratch()`**（落点 `<crate>\target\.scratch\`，`tests/` 里是 `comfyhub_server_rs::infra::testpaths::scratch()`），**别用 `std::env::temp_dir()`** —— 工作区里编出来的测试二进制带 Low 标签（§12），受限会话里必然 `os error 5`。要造"写不进去"就用**同名目录占位**，别改 ACL。
 - 产物：debug / release 在 `build\windows\...\runner\{Debug,Release}\`。**debug 产物里没有 `backend\`**，用的是 `server-rs\target\{release,debug}\` 那份 —— 改了 Rust 只要 `cargo build`，不用重建 App。
 - **"我改了但界面没变"先查构建新鲜度**，别怀疑代码：跑的可能还是旧产物（Release 看 `data\app.so`、debug 看 `data\flutter_assets\kernel_blob.bin`）。界面类修复必须 `flutter build windows --debug`（或 `dev-app.ps1`）重启一次再截图确认；后端看 `scripts\backend.ps1 status`。
