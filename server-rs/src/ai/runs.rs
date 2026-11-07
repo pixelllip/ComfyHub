@@ -66,6 +66,10 @@ pub struct AiRunDto {
     pub error_message: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub prompt_version: Option<String>,
+    /// 这次 Run 能用的 Skill 快照（`{count, skills:[{name,digest,source}]}`）。
+    /// 以前只写库、谁也读不到；现在随 Run DTO 交给界面做"当时用的是哪版规则"的追溯。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub skill_snapshot: Option<Value>,
     /// 本次 Run **实际生效**的思考强度（`off` = 不支持或用户关掉了，AIH-056）
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reasoning_effort: Option<String>,
@@ -110,6 +114,9 @@ pub fn run_from_row(row: &Row<'_>) -> rusqlite::Result<AiRunDto> {
         error_code: row.get("error_code")?,
         error_message: row.get("error_message")?,
         prompt_version: row.get("prompt_version")?,
+        skill_snapshot: row
+            .get::<_, Option<String>>("skill_snapshot")?
+            .and_then(|text| serde_json::from_str(&text).ok()),
         reasoning_effort: row.get("reasoning_effort")?,
         retry_of_run_id: row.get("retry_of_run_id")?,
         started_at: iso_time(row.get::<_, Option<String>>("started_at")?.as_deref()),

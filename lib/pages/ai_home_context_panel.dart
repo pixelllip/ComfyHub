@@ -324,6 +324,7 @@ class _ContextPanelState extends State<_ContextPanel> {
                       itemCount: visibleSkills.length,
                       itemBuilder: (context, i) => _SkillRow(
                         skill: visibleSkills[i],
+                        onToggle: () => _toggleSkill(visibleSkills[i]),
                         onDelete: () => _deleteSkill(visibleSkills[i]),
                       ),
                     ),
@@ -348,8 +349,13 @@ class _ContextPanelState extends State<_ContextPanel> {
     );
   }
 
-  Future<void> _rescanSkills() async {
-    final result = await widget.store.rescanSkills();
+  Future<void> _toggleSkill(AiSkill skill) async {
+    final result = await widget.store.setSkillEnabled(skill.name, !skill.enabled);
+    if (!mounted) return;
+    _snack(result.message, error: !result.ok);
+  }
+
+  Future<void> _rescanSkills() async {    final result = await widget.store.rescanSkills();
     if (!mounted) return;
     if (result.ok && widget.store.skillsError == null) {
       _snack(result.message);
@@ -438,8 +444,13 @@ class _ContextPanelState extends State<_ContextPanel> {
 class _SkillRow extends StatelessWidget {
   final AiSkill skill;
   final VoidCallback onDelete;
+  final VoidCallback onToggle;
 
-  const _SkillRow({required this.skill, required this.onDelete});
+  const _SkillRow({
+    required this.skill,
+    required this.onDelete,
+    required this.onToggle,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -502,8 +513,24 @@ class _SkillRow extends StatelessWidget {
             ),
         ],
       ),
-      trailing: skill.isBuiltin
-          ? Tooltip(
+      trailing: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          IconButton(
+            tooltip: skill.enabled ? '停用 Skill' : '启用 Skill',
+            icon: Icon(
+              skill.enabled
+                  ? Icons.visibility_outlined
+                  : Icons.visibility_off_outlined,
+              size: 16,
+            ),
+            visualDensity: VisualDensity.compact,
+            constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
+            padding: EdgeInsets.zero,
+            onPressed: onToggle,
+          ),
+          if (skill.isBuiltin)
+            Tooltip(
               message: '内置 Skill 只读（可在磁盘上改）',
               child: Icon(
                 Icons.lock_outline,
@@ -511,7 +538,8 @@ class _SkillRow extends StatelessWidget {
                 color: theme.colorScheme.outline,
               ),
             )
-          : IconButton(
+          else
+            IconButton(
               tooltip: '删除 Skill',
               icon: const Icon(Icons.delete_outline, size: 16),
               visualDensity: VisualDensity.compact,
@@ -519,6 +547,8 @@ class _SkillRow extends StatelessWidget {
               padding: EdgeInsets.zero,
               onPressed: onDelete,
             ),
+        ],
+      ),
     );
   }
 }

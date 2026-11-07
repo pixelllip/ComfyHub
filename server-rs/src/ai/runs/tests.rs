@@ -59,7 +59,7 @@ fn null_columns_fall_back_to_missing_keys() {
                     NULL AS model_id, NULL AS assistant_message_id, NULL AS user_message_id,
                     NULL AS error_code, NULL AS error_message, NULL AS prompt_version,
                     NULL AS reasoning_effort, NULL AS retry_of_run_id, NULL AS started_at,
-                    NULL AS completed_at, NULL AS created_at",
+                    NULL AS completed_at, NULL AS created_at, NULL AS skill_snapshot",
         )
         .unwrap();
     let mut rows = stmt.query([]).unwrap();

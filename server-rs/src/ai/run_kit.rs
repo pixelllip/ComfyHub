@@ -332,9 +332,10 @@ pub fn build(
         .parent()
         .unwrap_or(state.media_dir())
         .to_path_buf();
-    let skill_catalog = skills::catalog(
+    let skill_catalog = skills::catalog_with(
         &state.project_root().join("skills").join("builtin"),
         &storage.join("ai").join("skills"),
+        &skills::disabled_of(state),
     );
     let memory_text = memory::prompt_text(&storage.join("ai"));
 

@@ -1462,10 +1462,46 @@ void main() {
       lessThan(sent.indexOf('[CHARACTER CARD]\n诗音\n')),
     );
     expect(sent, endsWith('保留构图'));
-    // 发出去之后卡片清空，下一轮不会重复带上一轮的卡
-    expect(find.textContaining('角色卡 · 凛'), findsNothing);
-    expect(find.textContaining('角色卡 · 诗音'), findsNothing);
-    expect(find.textContaining('画风卡 · 物理感动画'), findsNothing);
+    // 发出去之后：输入区的"待发送卡片"清空（下一轮不会重复带上一轮的卡），
+    // 但**这条消息自己**要留下快照小卡片（点开能看到当时那一版）。
+    expect(
+      find.byWidgetPredicate(
+        (w) =>
+            w is InputChip &&
+            w.key.toString().contains('character-card-chip-'),
+      ),
+      findsNothing,
+    );
+    expect(
+      find.byWidgetPredicate(
+        (w) =>
+            w is InputChip && w.key.toString().contains('style-card-chip-'),
+      ),
+      findsNothing,
+    );
+    expect(find.byKey(const ValueKey('mention-character_card-凛')), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('mention-character_card-诗音')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('mention-style_card-物理感动画')),
+      findsOneWidget,
+    );
+    // 发送内容里同时带"用户看到的正文"和卡片快照（模型侧仍是原来的卡块）
+    expect(lastRunBody!['displayText'], '保留构图');
+    final mentions = lastRunBody!['mentions'] as List;
+    expect(mentions.first['kind'], 'style_card');
+    expect(
+      (mentions[1]['snapshot'] as Map)['prompt'],
+      contains('Rin, black hair'),
+    );
+
+    // 点开小卡片：弹窗显示的是**发送时**的卡正文
+    await tester.tap(find.byKey(const ValueKey('mention-character_card-凛')));
+    await tester.pumpAndSettle();
+    expect(find.text('角色卡 · 凛'), findsWidgets);
+    expect(find.textContaining('Rin, black hair'), findsOneWidget);
   });
 
   testWidgets('@ 卡片：再点一次已选中的角色卡 = 取消（多选是切换，不是只能加）', (tester) async {

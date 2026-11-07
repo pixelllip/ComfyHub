@@ -1028,6 +1028,57 @@ class AiMessage {
   bool get isUser => role == 'user';
 }
 
+/// 用户发消息时附带的一张卡 / 一个技能（只在 `POST .../runs` 与用户消息 parts 里出现）。
+///
+/// 为什么要带 snapshot：卡和技能都可能在下一次打开会话之前被改掉，而用户点开
+/// 这条消息想核对的是"我**当时**发出去的是哪一版"。
+class OutgoingMention {
+  const OutgoingMention({
+    required this.kind,
+    required this.name,
+    this.modelText,
+    this.snapshot,
+  });
+
+  /// character_card / style_card / skill
+  final String kind;
+  final String name;
+
+  /// 给模型看的那段原文（卡正文块）；技能不需要，后端现读磁盘。
+  final String? modelText;
+
+  /// 发送那一刻的卡片快照（界面弹窗用）。
+  final Map<String, dynamic>? snapshot;
+
+  Map<String, dynamic> toJson() => {
+    'kind': kind,
+    'name': name,
+    if (modelText != null) 'modelText': modelText,
+    if (snapshot != null) 'snapshot': snapshot,
+  };
+}
+
+/// 一条要发出去的用户消息：给模型的正文 + 用户看到的正文 + 卡片/技能引用。
+class OutgoingMessage {
+  const OutgoingMessage({
+    required this.text,
+    required this.displayText,
+    this.mentions = const [],
+  });
+
+  const OutgoingMessage.plain(this.text)
+    : displayText = text,
+      mentions = const [];
+
+  /// 给模型的完整正文（含卡片块）。
+  final String text;
+
+  /// 用户看到的正文（不含卡片块，也不含 `/技能` 那个标记）。
+  final String displayText;
+
+  final List<OutgoingMention> mentions;
+}
+
 /// 附件（AIH-029 / M3）：准入结论由后端 preflight 给出，前端不自行放行。
 ///
 /// 上传成功后后端会返回 `id`：界面靠它取**缩略图 / 视频预览帧**

@@ -21,6 +21,32 @@ fn render_with(policy: &ToolPolicy, nsfw: bool, memory_text: &str) -> String {
     render_on(TODAY, policy, nsfw, memory_text)
 }
 
+fn render_with_skills(skills: &[SkillEntry]) -> String {
+    let tools: Vec<ToolView<'_>> = MOBILE_TOOLS.iter().map(ToolView::from).collect();
+    render(
+        "Command Code Goat",
+        "openai-completions",
+        "demo-model",
+        TODAY,
+        &tools,
+        skills,
+        &policy("{}"),
+        "",
+        false,
+        true,
+        false,
+    )
+}
+
+fn skill(name: &str, description: &str) -> SkillEntry {
+    SkillEntry {
+        name: name.to_string(),
+        description: description.to_string(),
+        when_to_use: None,
+        version: None,
+    }
+}
+
 fn render_on(today: &str, policy: &ToolPolicy, nsfw: bool, memory_text: &str) -> String {
     let tools: Vec<ToolView<'_>> = MOBILE_TOOLS.iter().map(ToolView::from).collect();
     render(
@@ -147,4 +173,24 @@ impl NsfwNote for String {
     fn contains_nsfw_disabled_note(&self) -> bool {
         self.contains("本机没有开启 NSFW 模式")
     }
+}
+
+#[test]
+fn 技能目录超过六十个要说明没列全() {
+    let skills: Vec<SkillEntry> = (1..=61)
+        .map(|i| skill(&format!("s{i:02}"), "一条描述"))
+        .collect();
+    let text = render_with_skills(&skills);
+    assert!(text.contains("s60："), "第 60 个应该在目录里");
+    assert!(!text.contains("s61："), "第 61 个不该被静默列出来");
+    assert!(text.contains("本机共 61 个 Skill"), "超出上限必须说明");
+    assert!(text.contains("只列前 60 个"));
+}
+
+#[test]
+fn 技能描述被截断时补省略号() {
+    let long = "描".repeat(300);
+    let text = render_with_skills(&[skill("long-skill", &long)]);
+    assert!(text.contains(&format!("{}…", "描".repeat(239))));
+    assert!(!text.contains(&"描".repeat(300)));
 }

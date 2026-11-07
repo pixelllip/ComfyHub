@@ -44,7 +44,7 @@
 //!    `INVALID_ARGUMENT` / `SKILL_NOT_FOUND` / `MEMORY_FULL` / `PATH_DENIED` 各有各的下一步。
 
 use std::collections::HashSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde_json::{json, Value};
 
@@ -212,9 +212,18 @@ pub struct ToolSession {
     /// `comfy_check_inputs` 靠它区分"投放一下就能解决"与"必须问用户要一张"——
     /// 少了这一位，模型会去要一张它已经收到的图。
     pub has_image_attachment: bool,
+    /// 用户这一轮**显式调用**的 skill 名（`/名字`）。带这个标记的技能即使
+    /// `disable-model-invocation: true` 也允许加载；同时它的正文已经在系统提示里预加载过。
+    pub explicit_skills: HashSet<String>,
 }
 
 impl ToolSession {
+    /// 把用户显式调用的 skill 记为"本轮已加载"（正文已经在系统提示里预加载过）。
+    pub fn mark_explicit_skill(&mut self, name: &str) {
+        self.explicit_skills.insert(name.to_string());
+        self.loaded_skills.insert(name.to_string());
+    }
+
     /// 还能不能再动一次工具（窗内额度与绝对天花板都没到）。
     pub fn has_calls_left(&self, max_calls: i64) -> bool {
         self.calls_in_window < max_calls.max(1) && self.calls < ABSOLUTE_CALL_CAP
@@ -499,7 +508,7 @@ pub fn implemented() -> Vec<ToolView<'static>> {
 /// + **2D 布局模板**（`layout_propose`，见 [`crate::ai::layout_proposal`]，2026-11-03：
 ///   写提示词的同一轮把构图草稿交给用户预览 / 修改，改完再提交回来 —— 只出草稿，
 ///   不生成图片、不写库）。
-pub const IMPLEMENTED: [&str; 43] = [
+pub const IMPLEMENTED: [&str; 44] = [
     "ask_user_question",
     "civitai_search",
     "comfy_audit_workflow",
@@ -532,6 +541,7 @@ pub const IMPLEMENTED: [&str; 43] = [
     "list_skills",
     "load_skill",
     "read_file",
+    "read_skill_file",
     "reference_image_search",
     "register_skill",
     "remember",
@@ -647,6 +657,7 @@ pub async fn execute(
         // ---- 桌面文件工具五件（P4 第 40 步）--------------------------------
         "list_dir" => list_dir(policy, arguments),
         "read_file" => read_file(policy, arguments),
+        "read_skill_file" => read_skill_file(state, arguments),
         // 参考图搜索（2026-11-04）：按 Danbooru tag 找真实图片，下载成本机附件
         "reference_image_search" => {
             crate::tools::reference_images::tool_search(state, arguments).await
@@ -1001,13 +1012,22 @@ fn list_skills(state: &AppState) -> Result<ToolOutcome, ToolFailure> {
     let skills: Vec<Value> = entries
         .into_iter()
         .map(|s| {
+            let available = s.valid && s.enabled;
+            let reason = if !s.valid {
+                s.error
+            } else if !s.enabled {
+                "已被用户停用".to_string()
+            } else {
+                String::new()
+            };
             json!({
                 "name": s.name,
                 "description": s.description,
                 "whenToUse": s.when_to_use,
                 "source": s.source,
-                "available": s.valid,
-                "validationError": if s.valid { Value::Null } else { json!(s.error) },
+                "enabled": s.enabled,
+                "available": available,
+                "validationError": if reason.is_empty() { Value::Null } else { json!(reason) },
             })
         })
         .collect();
@@ -1023,10 +1043,18 @@ fn load_skill(
 ) -> Result<ToolOutcome, ToolFailure> {
     let name = string_arg(arguments, "name")?;
     let name = name.trim().to_string();
-    if !session.loaded_skills.insert(name.clone()) {
+    // 先去重（纯查询），**校验成功之后才记"已加载"** —— 否则第一次按错名字，
+    // 第二次再按同一个名字会得到"已经加载过了"这句假话。
+    if session.loaded_skills.contains(&name) {
         return Err(ToolFailure::new(
             "SKILL_ALREADY_LOADED",
             format!("skill「{name}」在本次回复里已经加载过了，直接按它的规则继续"),
+        ));
+    }
+    if crate::ai::skills::disabled_of(state).contains(&name) {
+        return Err(ToolFailure::new(
+            "SKILL_DISABLED",
+            format!("skill「{name}」已被用户停用；需要时请让用户在右侧栏重新启用"),
         ));
     }
     let (builtin, user) = skill_roots(state);
@@ -1042,6 +1070,21 @@ fn load_skill(
             format!("skill「{name}」不合法，不能加载：它的 frontmatter 或正文没通过校验"),
         ));
     }
+    if !found.model_invocable && !session.explicit_skills.contains(&name) {
+        return Err(ToolFailure::new(
+            "SKILL_NOT_INVOCABLE",
+            format!("skill「{name}」要求由用户显式调用；请让用户用 /{name} 重新发送"),
+        ));
+    }
+    let dir = found
+        .path
+        .parent()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let files: Vec<Value> = crate::ai::skills::bundle_files(&found)
+        .into_iter()
+        .map(|(path, size)| json!({ "path": path, "size": size }))
+        .collect();
     let entry = found.entry;
     // 形状照抄 Kotlin：正文包在 `<skill_content name="…" version="…">` 里
     // （`version` 只在 frontmatter 写了的时候出现 —— 这是模型判断"加载的是哪一版"的唯一线索）
@@ -1051,9 +1094,98 @@ fn load_skill(
     }
     open.push_str(">\n");
     let content = format!("{open}{}\n</skill_content>", found.body);
+    session.loaded_skills.insert(name.clone());
+
     Ok(ToolOutcome::new(
         content,
-        json!({ "name": entry.name, "digest": found.digest }),
+        json!({
+            "name": entry.name,
+            "digest": found.digest,
+            "source": found.source,
+            "dir": dir,
+            "files": files,
+        }),
+    ))
+}
+
+/// `read_skill_file`：只读一个 Skill **自己目录内**的附带文件。
+fn read_skill_file(state: &AppState, arguments: &Value) -> Result<ToolOutcome, ToolFailure> {
+    let name = string_arg(arguments, "name")?;
+    let name = name.trim().to_string();
+    let rel = string_arg(arguments, "path")?;
+    let rel = rel.trim();
+    let (builtin, user) = skill_roots(state);
+    let Some(found) = crate::ai::skills::read_body(&builtin, &user, &name) else {
+        return Err(ToolFailure::new(
+            "SKILL_NOT_FOUND",
+            format!("没有名为「{name}」的 skill；先用 list_skills 看有哪些"),
+        ));
+    };
+    if !found.valid {
+        return Err(ToolFailure::new(
+            "SKILL_INVALID",
+            format!("skill「{name}」不合法，不能读取它的附带文件"),
+        ));
+    }
+    let Some(root) = crate::ai::skills::bundle_root(&found) else {
+        return Err(ToolFailure::new(
+            "SKILL_NO_FILES",
+            format!("skill「{name}」是单个 .md 文件，没有附带文件"),
+        ));
+    };
+    if rel.is_empty() || Path::new(rel).is_absolute() || rel.contains('\u{0}') {
+        return Err(ToolFailure::new("PATH_DENIED", "附带文件路径必须是相对路径"));
+    }
+    let mut target = root.to_path_buf();
+    for comp in Path::new(rel).components() {
+        match comp {
+            std::path::Component::Normal(part) => target.push(part),
+            std::path::Component::CurDir => {}
+            _ => {
+                return Err(ToolFailure::new(
+                    "PATH_DENIED",
+                    format!("拒绝读取 skill 目录之外的路径：{rel}"),
+                ))
+            }
+        }
+    }
+    let real_root = std::fs::canonicalize(root).map_err(|e| {
+        ToolFailure::new("IO_ERROR", format!("读不了 skill「{name}」的目录：{e}"))
+    })?;
+    let real = std::fs::canonicalize(&target).map_err(|_| {
+        ToolFailure::new(
+            "FILE_NOT_FOUND",
+            format!("skill「{name}」里没有这个文件：{rel}"),
+        )
+    })?;
+    if !real.starts_with(&real_root) {
+        return Err(ToolFailure::new(
+            "PATH_DENIED",
+            format!("拒绝读取 skill 目录之外的路径：{rel}"),
+        ));
+    }
+    if !real.is_file() {
+        return Err(ToolFailure::new(
+            "FILE_NOT_FOUND",
+            format!("skill「{name}」里没有这个文件：{rel}"),
+        ));
+    }
+    let size = std::fs::metadata(&real).map(|m| m.len()).unwrap_or(0);
+    if size > 4 * 1024 * 1024 {
+        return Err(ToolFailure::new(
+            "FILE_TOO_LARGE",
+            format!("skill 附带文件太大（{size} 字节，上限 4MB）"),
+        ));
+    }
+    let text = std::fs::read_to_string(&real).map_err(|e| {
+        ToolFailure::new(
+            "IO_ERROR",
+            format!("读不了 skill 附带文件（{rel}）：{e}（它可能不是文本文件）"),
+        )
+    })?;
+    Ok(ToolOutcome::new(
+        text,
+        json!({ "name": name, "path": rel, "bytes": size }),
     ))
 }
 
@@ -2432,7 +2564,8 @@ fn today(state: &AppState) -> Result<String, ToolFailure> {
 /// 而 `list_skills` 要的是"装了但有问题"的那些 —— 静默过滤掉正是 AIH-038 要防的事。
 fn scan_all(state: &AppState) -> Vec<crate::ai::skills::ScannedSkill> {
     let (builtin, user) = skill_roots(state);
-    crate::ai::skills::scan_all(&builtin, &user)
+    let disabled = crate::ai::skills::disabled_of(state);
+    crate::ai::skills::scan_all(&builtin, &user, &disabled)
 }
 
 #[cfg(test)]

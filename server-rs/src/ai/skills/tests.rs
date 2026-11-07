@@ -92,6 +92,114 @@ fn 扫描认_bundle_与平铺两种形态并且非法项要标记出来() {
 }
 
 #[test]
+fn 平铺技能通过_read_body_能加载() {
+    let dir = crate::infra::testpaths::scratch("skills-flat-load");
+    let user = dir.join("user");
+    std::fs::create_dir_all(&user).unwrap();
+    std::fs::write(
+        user.join("flat.md"),
+        "---\nname: flat\ndescription: 平铺\n---\n正文",
+    )
+    .unwrap();
+    let found = read_body(&dir.join("builtin"), &user, "flat").expect("找得到平铺技能");
+    assert!(found.valid, "平铺技能必须能通过校验：{:?}", found.valid);
+    assert_eq!(found.body, "正文");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn 平铺文件的名字可以与_frontmatter_不同() {
+    let dir = crate::infra::testpaths::scratch("skills-flat-rename");
+    let user = dir.join("user");
+    std::fs::create_dir_all(&user).unwrap();
+    std::fs::write(
+        user.join("Anima提示词.md"),
+        "---\nname: anima-prompt\ndescription: 平铺改名\n---\n正文",
+    )
+    .unwrap();
+    let found = read_body(&dir.join("builtin"), &user, "anima-prompt").expect("按 name 找得到");
+    assert!(found.valid);
+    assert_eq!(found.entry.name, "anima-prompt");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn 目录注入只收_model_invocable_且尊重停用名单() {
+    let dir = crate::infra::testpaths::scratch("skills-invocable");
+    let user = dir.join("user");
+    std::fs::create_dir_all(&user).unwrap();
+    std::fs::write(
+        user.join("manual.md"),
+        "---\nname: manual\ndescription: 只让用户调\ndisable-model-invocation: true\n---\n正文",
+    )
+    .unwrap();
+    std::fs::write(
+        user.join("auto.md"),
+        "---\nname: auto\ndescription: 模型可调\n---\n正文",
+    )
+    .unwrap();
+
+    let names: Vec<String> = catalog(&dir.join("builtin"), &user)
+        .into_iter()
+        .map(|s| s.name)
+        .collect();
+    assert_eq!(names, vec!["auto"], "disable-model-invocation 的不进目录");
+
+    let disabled: HashSet<String> = HashSet::from(["auto".to_string()]);
+    let none = catalog_with(&dir.join("builtin"), &user, &disabled);
+    assert!(none.is_empty(), "停用的不进目录");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn 用户版不合法时目录回落到内置版() {
+    let dir = crate::infra::testpaths::scratch("skills-override-invalid");
+    let builtin = dir.join("builtin");
+    let user = dir.join("user");
+    std::fs::create_dir_all(&builtin).unwrap();
+    std::fs::create_dir_all(&user).unwrap();
+    std::fs::write(
+        builtin.join("same.md"),
+        "---\nname: same\ndescription: 内置\n---\n正文",
+    )
+    .unwrap();
+    // 缺 description → 非法
+    std::fs::write(user.join("same.md"), "---\nname: same\n---\n用户正文").unwrap();
+
+    let found = catalog(&builtin, &user);
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].description, "内置", "用户版非法时应回落到内置版");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn bundle_附带文件能列出来() {
+    let dir = crate::infra::testpaths::scratch("skills-bundle-files");
+    let user = dir.join("user");
+    let bundle = user.join("with-files");
+    std::fs::create_dir_all(bundle.join("references")).unwrap();
+    std::fs::write(
+        bundle.join("SKILL.md"),
+        "---\nname: with-files\ndescription: 带附件\n---\n正文",
+    )
+    .unwrap();
+    std::fs::write(bundle.join("references").join("a.md"), "参考").unwrap();
+    let found = read_body(&dir.join("builtin"), &user, "with-files").expect("读取技能");
+    let files = bundle_files(&found);
+    assert_eq!(files.len(), 1);
+    assert_eq!(files[0].0, "references/a.md");
+    // 平铺技能没有 bundle，列不出附带文件
+    std::fs::write(
+        user.join("flat.md"),
+        "---\nname: flat\ndescription: 平铺\n---\n正文",
+    )
+    .unwrap();
+    let flat = read_body(&dir.join("builtin"), &user, "flat").expect("读取平铺");
+    assert!(bundle_files(&flat).is_empty());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn 同名时用户版胜出() {
     let dir = crate::infra::testpaths::scratch("skills-override");
     let builtin = dir.join("builtin");

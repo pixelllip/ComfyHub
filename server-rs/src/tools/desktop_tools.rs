@@ -393,6 +393,14 @@ pub const DESKTOP_TOOLS: &[DesktopToolSpec] = &[
         mutating: false,
     },
     DesktopToolSpec {
+        name: "read_skill_file",
+        description: r#"读一个 Skill **自带的附带文件**（`references/`、模板、示例等）。`load_skill` 的结果里有 `files` 列表，只读那里列出来的相对路径；路径被限制在这个 Skill 自己的目录内。平铺的单个 `.md` Skill 没有附带文件。"#,
+        input_schema: r#"{"type":"object","properties":{"name":{"type":"string","description":"skill 名（kebab-case，见 list_skills）"},"path":{"type":"string","description":"相对该 Skill 目录的路径，例如 references/official-prompting.md（只能用 load_skill 返回的 files 里的路径）"}},"required":["name","path"],"additionalProperties":false}"#,
+        scope: "DESKTOP",
+        access: "ALLOW",
+        mutating: false,
+    },
+    DesktopToolSpec {
         name: "reference_image_search",
         description: r#"按关键词找**真实参考图**（Danbooru 帖子），下载后存成本机附件。用户要确认发型 / 发饰 / 服装 / 场景"到底长什么样"时先用它找图，再把返回的 `attachmentId` 放进 `ask_user_question` 的选项里（界面会把图显示在选项文字前面）。`query` 用英文 Danbooru tag，多个用逗号分隔（例如 `blunt_bangs,hair_ornament` / `classroom,night` / `shrine,cherry_blossoms`）。只下载采样图 / 预览图，不贴外链；NSFW 受本机开关限制（关着时强制 general）。"#,
         input_schema: r#"{"type":"object","properties":{"query":{"type":"string","description":"Danbooru tag，多个用逗号分隔（英文、下划线），例如 blunt_bangs / classroom,night"},"limit":{"type":"integer","description":"可选：最多几张（默认 4，上限 6）"},"allowNsfw":{"type":"boolean","description":"可选：用户明确要成人参考图时才传 true；本机 NSFW 总开关关着时无效"}},"required":["query"],"additionalProperties":false}"#,

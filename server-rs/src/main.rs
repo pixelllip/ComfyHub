@@ -281,6 +281,23 @@ async fn main() {
         media_dir.clone(),
     );
 
+    // ---- Skills 投放口的自动登记（AGENTS §10）--------------------------------
+    //
+    // 用户把 skill 文件夹 / `.md` 拷进 `<storage>\ai\skills` 就算装好：没有 frontmatter 的
+    // 在这里补 `name` / `description`（正文不动）。**不能只在点刷新时才做** ——
+    // 用户装完直接重启应用是常态，那时界面上会一直显示"缺少 description"。
+    let auto = comfyhub_server_rs::ai::skills::auto_register(&state);
+    if auto.registered > 0 {
+        println!(
+            "Skills 自动登记：{} 个（{}）",
+            auto.registered,
+            auto.names.join("、")
+        );
+    }
+    for error in &auto.errors {
+        eprintln!("Skills 自动登记：{error}");
+    }
+
     // ---- 启动恢复（与 Kotlin `Application.module` 的三步同序）----------------
     //
     // 这三步都是"上次进程死得不明不白"留下的残局，**少一步就是界面永远转圈**：

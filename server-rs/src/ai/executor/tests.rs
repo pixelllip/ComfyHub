@@ -189,6 +189,66 @@ fn messages_without_parts_fall_back_to_text() {
     assert!(turns_of(&empty, &AttachmentPlan::empty()).is_empty());
 }
 
+/// 用户消息里的卡片 mention：`modelText` 必须按序拼回正文，模型才不会丢卡。
+#[test]
+fn mention_parts_contribute_their_model_text() {
+    let m = message(
+        "user",
+        vec![
+            crate::ai::conversations::AiMessagePartDto {
+                r#type: "mention".into(),
+                text: None,
+                attachment_id: None,
+                tool_call_id: None,
+                json_payload: Some(json!({
+                    "kind": "character_card",
+                    "name": "凛",
+                    "modelText": "[CHARACTER CARD]\n凛\n银发",
+                    "snapshot": { "prompt": "银发" },
+                })),
+            },
+            crate::ai::conversations::AiMessagePartDto {
+                r#type: "text".into(),
+                text: Some("保留构图".into()),
+                attachment_id: None,
+                tool_call_id: None,
+                json_payload: None,
+            },
+        ],
+    );
+    let turns = turns_of(&m, &AttachmentPlan::empty());
+    assert_eq!(turns.len(), 1);
+    assert_eq!(turns[0].content, "[CHARACTER CARD]\n凛\n银发保留构图");
+}
+
+/// `/技能` 的正文快照只从用户消息的 skill mention 里取。
+#[test]
+fn explicit_skill_body_comes_from_the_user_message() {
+    let mut m = message(
+        "user",
+        vec![crate::ai::conversations::AiMessagePartDto {
+            r#type: "mention".into(),
+            text: None,
+            attachment_id: None,
+            tool_call_id: None,
+            json_payload: Some(json!({
+                "kind": "skill",
+                "name": "demo-skill",
+                "version": "3",
+                "body": "按这个做",
+            })),
+        }],
+    );
+    m.id = "u1".into();
+    let found = explicit_skills_of(&[m], Some("u1"));
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].0, "demo-skill");
+    assert_eq!(found[0].1.as_deref(), Some("3"));
+    assert_eq!(found[0].2, "按这个做");
+    // 没有用户消息 id / 对不上：不误加载
+    assert!(explicit_skills_of(&[], Some("u1")).is_empty());
+}
+
 /// 取消旗标：**立起来 ≠ 立刻停**（主循环在安全点自己收尾，R6 要求它先把话说完）。
 #[test]
 fn cancel_flag_lifecycle() {

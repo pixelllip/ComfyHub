@@ -740,12 +740,40 @@ class AiWorkspaceStore extends ChangeNotifier {
     skillsBusy = true;
     notifyListeners();
     try {
-      await _api.deleteSkill(name);
+      final deleted = await _api.deleteSkill(name);
+      if (!deleted) {
+        return (ok: false, message: '没有删掉「$name」，它可能已经不在了');
+      }
       skills = await _api.listSkills();
       skillsError = null;
       return (ok: true, message: '已删除 skill「$name」');
     } catch (e) {
       return (ok: false, message: '删除「$name」失败，$e');
+    } finally {
+      skillsBusy = false;
+      notifyListeners();
+    }
+  }
+
+  /// 停用 / 启用一个 skill（内置与用户都允许）。停用只影响对话，文件不动。
+  Future<({bool ok, String message})> setSkillEnabled(
+    String name,
+    bool enabled,
+  ) async {
+    skillsBusy = true;
+    notifyListeners();
+    try {
+      final updated = await _api.setSkillEnabled(name, enabled);
+      skills = [
+        for (final skill in skills) skill.name == updated.name ? updated : skill,
+      ];
+      skillsError = null;
+      return (
+        ok: true,
+        message: enabled ? '已启用 skill「$name」' : '已停用 skill「$name」',
+      );
+    } catch (e) {
+      return (ok: false, message: '${enabled ? "启用" : "停用"}「$name」失败，$e');
     } finally {
       skillsBusy = false;
       notifyListeners();
@@ -2407,8 +2435,12 @@ class AiWorkspaceStore extends ChangeNotifier {
   /// 因为 `send()` 也可能被别处直接调用 —— 被拒时**只**写 [notice]，绝不动调用方的输入框。
   /// 通过之后：先把这条会话的草稿作废（顺序见下面那段注释），再创建 Run，
   /// 并一直 await 到整轮结束（流式收完 → 落库 → 与服务端对齐）。
-  Future<void> send(String text) async {
+  Future<void> send(String text) => sendMessage(OutgoingMessage.plain(text));
+
+  Future<void> sendMessage(OutgoingMessage message) async {
+    final text = message.text;
     final body = text.trim();
+    final visible = message.displayText.trim();
     // 没什么可发的（空正文 + 没附件）：静默返回，不弹任何提示
     if (body.isEmpty && attachments.isEmpty) return;
     // 准入判断与页面共用同一份（[sendBlockReason]）：不通过就**只**写提示，
@@ -2430,8 +2462,11 @@ class AiWorkspaceStore extends ChangeNotifier {
 
     try {
       if (conversation == null) {
+        final titleSource = visible.isNotEmpty ? visible : body;
         final conv = await _source.createConversation(
-          title: body.length > 20 ? body.substring(0, 20) : body,
+          title: titleSource.length > 20
+              ? titleSource.substring(0, 20)
+              : titleSource,
           providerId: provider.id,
           modelId: model.id,
         );
@@ -2454,7 +2489,9 @@ class AiWorkspaceStore extends ChangeNotifier {
       final start = await _source.startRun(
         RunStartRequest(
           conversationId: conv.id,
-          text: body,
+          text: text,
+          displayText: message.displayText,
+          mentions: message.mentions,
           providerId: provider.id,
           modelId: model.id,
           reasoningEffort: effort,
@@ -2491,9 +2528,23 @@ class AiWorkspaceStore extends ChangeNotifier {
           seq: messages.length + 1,
           role: 'user',
           status: 'complete',
-          text: body,
+          text: text,
           parts: [
-            if (body.isNotEmpty) AiMessagePart(type: 'text', text: body),
+            // 卡片 / 技能引用放在正文前面，与后端落库顺序一致：
+            // 界面按 parts 顺序画，模型按同一顺序读。
+            for (final mention in message.mentions)
+              AiMessagePart(
+                type: 'mention',
+                payload: {
+                  'kind': mention.kind,
+                  'name': mention.name,
+                  if (mention.modelText != null)
+                    'modelText': mention.modelText,
+                  if (mention.snapshot != null) 'snapshot': mention.snapshot,
+                },
+              ),
+            if (visible.isNotEmpty)
+              AiMessagePart(type: 'text', text: message.displayText),
             for (final a in attachments)
               AiMessagePart(
                 type: 'attachment',

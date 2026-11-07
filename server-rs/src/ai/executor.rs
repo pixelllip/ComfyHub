@@ -246,9 +246,10 @@ async fn run_once(
         .parent()
         .unwrap_or(state.media_dir())
         .to_path_buf();
-    let skills = crate::ai::skills::catalog(
+    let skills = crate::ai::skills::catalog_with(
         &state.project_root().join("skills").join("builtin"),
         &storage.join("ai").join("skills"),
+        &crate::ai::skills::disabled_of(state),
     );
     let memory_text = crate::ai::memory::prompt_text(&storage.join("ai"));
 
@@ -281,7 +282,7 @@ async fn run_once(
     let mut reference_budget = crate::ai::reference_attach::Budget::default();
     let mut attached_reference_paths: HashSet<String> = HashSet::new();
 
-    let system_prompt = crate::ai::system_prompt::render(
+    let mut system_prompt = crate::ai::system_prompt::render(
         &provider.display_name,
         &provider.api,
         &model.id,
@@ -298,6 +299,22 @@ async fn run_once(
         model.input_modalities.iter().any(|m| m == "image"),
         nsfw,
     );
+
+    // 用户在消息里用 `/名字` 显式选中的技能：正文在**这一轮**的系统提示里预加载。
+    // 追加在最后而不是插在前面 —— 前面几段是跨 Run 稳定的前缀，动它们会打断前缀缓存。
+    let explicit_skills = explicit_skills_of(&history, run.user_message_id.as_deref());
+    if !explicit_skills.is_empty() {
+        system_prompt.push_str("\n\n## 本次用户显式调用的技能（已加载，直接按它执行）\n");
+        for (name, version, body) in &explicit_skills {
+            let ver = version
+                .as_deref()
+                .map(|v| format!(" version=\"{v}\""))
+                .unwrap_or_default();
+            system_prompt.push_str(&format!(
+                "用户这条消息手动选择了技能「{name}」。完整规则如下：\n<skill_content name=\"{name}\"{ver}>\n{body}\n</skill_content>\n"
+            ));
+        }
+    }
 
     let mut turns = vec![ChatTurn {
         role: "system".into(),
@@ -394,6 +411,11 @@ async fn run_once(
     // 用户刚发了图：`comfy_check_inputs` 要能区分"投放一下就能解决"与"必须问用户要一张"
     // （Kotlin `ToolContext.hasImageAttachment`，与上面喂给系统提示的是**同一个值**）
     session.has_image_attachment = has_inlined_attachments;
+    // 显式调用的技能已经在系统提示里预加载：标记成"已加载"，模型再调 load_skill
+    // 只会得到"已经加载过了"，不会把同一份正文灌第二遍。
+    for (name, _, _) in &explicit_skills {
+        session.mark_explicit_skill(name);
+    }
     let mut trailing: Vec<ChatTurn> = Vec::new();
     let mut total_usage: Option<TokenUsage> = None;
     let mut last_provider_response_id: Option<String> = None;
@@ -1898,6 +1920,43 @@ fn attachment_plan_of(
 /// * **附件块**（R9 / AIH-030）：进得了 [`AttachmentPlan::inline`] 的变成真图片块
 ///   （适配器各自铺开），其余的**必须**在那一轮正文后面附一句"以下附件未随本次请求发送：…"
 ///   —— 既不能静默丢弃，也不能因为消息里带了附件就把请求打成 400。
+/// 本 Run 的用户消息里由 `/名字` 显式调用的技能（正文快照）。
+///
+/// 快照在 `POST /runs` 落库时由后端现读磁盘写入，不是前端传来的正文 ——
+/// 前端只负责说"用了哪个名字"。
+fn explicit_skills_of(
+    messages: &[crate::ai::conversations::AiMessageDto],
+    user_message_id: Option<&str>,
+) -> Vec<(String, Option<String>, String)> {
+    let Some(user_message_id) = user_message_id else {
+        return Vec::new();
+    };
+    let Some(message) = messages.iter().find(|m| m.id == user_message_id) else {
+        return Vec::new();
+    };
+    message
+        .parts
+        .iter()
+        .filter(|p| p.r#type == "mention")
+        .filter_map(|p| {
+            let payload = p.json_payload.as_ref()?;
+            if payload.get("kind").and_then(|v| v.as_str()) != Some("skill") {
+                return None;
+            }
+            let name = payload.get("name").and_then(|v| v.as_str())?.to_string();
+            let body = payload.get("body").and_then(|v| v.as_str())?.to_string();
+            if body.trim().is_empty() {
+                return None;
+            }
+            let version = payload
+                .get("version")
+                .and_then(|v| v.as_str())
+                .map(str::to_string);
+            Some((name, version, body))
+        })
+        .collect()
+}
+
 fn turns_of(message: &AiMessageDto, plan: &AttachmentPlan) -> Vec<ChatTurn> {
     let mut out = Vec::new();
     if message.role == "assistant" {
@@ -1947,12 +2006,31 @@ fn turns_of(message: &AiMessageDto, plan: &AttachmentPlan) -> Vec<ChatTurn> {
     let body = if message.parts.is_empty() {
         message.text.clone()
     } else {
-        message
-            .parts
-            .iter()
-            .filter(|p| p.r#type == "text")
-            .filter_map(|p| p.text.clone())
-            .collect()
+        // 用户消息的 parts 现在是"卡片/技能 mention + 用户正文"：
+        // mention 的 `modelText` 是**给模型看的那段原文**（卡正文），text 块是用户敲的字。
+        // 二者按 ordinal 顺序拼回去，才是模型这一轮该看到的那条消息。
+        let mut out = String::new();
+        for part in &message.parts {
+            match part.r#type.as_str() {
+                "text" => {
+                    if let Some(text) = &part.text {
+                        out.push_str(text);
+                    }
+                }
+                "mention" => {
+                    if let Some(model_text) = part
+                        .json_payload
+                        .as_ref()
+                        .and_then(|p| p.get("modelText"))
+                        .and_then(|v| v.as_str())
+                    {
+                        out.push_str(model_text);
+                    }
+                }
+                _ => {}
+            }
+        }
+        out
     };
     // 附件块：进得了计划的变成真图片块，其余**全部**进"未随本次请求发送"那一句
     let mut images: Vec<crate::provider::protocol::ChatImage> = Vec::new();

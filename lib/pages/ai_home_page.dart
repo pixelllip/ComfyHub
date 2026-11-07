@@ -366,9 +366,9 @@ class _AiHomePageState extends State<AiHomePage> {
     // （Tooltip 12 / MenuAnchor 12 / ListTile 10）。现在只有这棵树重建。
     // 输入框回车与「布局画布 → 提交回工作台」走**同一条发送路**：
     // 清空输入框 / 贴底 / 准入判断都只写一份，免得两条入口的规矩慢慢分叉。
-    Future<void> submit(AiWorkspaceStore store, String text) async {
+    Future<void> submit(AiWorkspaceStore store, OutgoingMessage message) async {
       // 空输入 + 没有附件：没什么可发的，静默返回（也别弹提示）。
-      if (text.trim().isEmpty && store.attachments.isEmpty) return;
+      if (message.text.trim().isEmpty && store.attachments.isEmpty) return;
 
       // **只有"真的会被发出去"才清空输入框**。
       //
@@ -385,7 +385,7 @@ class _AiHomePageState extends State<AiHomePage> {
         if (mounted) setState(() => _atBottom = true);
         _scrollToBottom();
       }
-      await store.send(text);
+      await store.sendMessage(message);
       _scrollToBottom();
     }
 
@@ -397,7 +397,8 @@ class _AiHomePageState extends State<AiHomePage> {
       onShowStatus: showPanel ? null : () => _showContextSheet(context),
       onJumpToBottom: _jumpToBottom,
       onSubmitted: submit,
-      onLayoutResubmit: (text) => submit(store, text),
+      onLayoutResubmit: (text) =>
+          submit(store, OutgoingMessage.plain(text)),
     );
 
     if (wide) {
@@ -529,7 +530,8 @@ class _Thread extends StatelessWidget {
   final FocusNode inputFocus;
   final VoidCallback? onShowStatus;
   final VoidCallback onJumpToBottom;
-  final Future<void> Function(AiWorkspaceStore store, String text) onSubmitted;
+  final Future<void> Function(AiWorkspaceStore store, OutgoingMessage message)
+  onSubmitted;
 
   /// 用户在画布上改完布局、点「提交回工作台」时走这条路。
   ///
@@ -621,14 +623,15 @@ class _Thread extends StatelessWidget {
           _AskComposer(
             store: store,
             questions: questions,
-            onSubmit: (text) => onSubmitted(store, text),
+            onSubmit: (text) =>
+                onSubmitted(store, OutgoingMessage.plain(text)),
           )
         else
           _Composer(
             store: store,
             controller: input,
             focusNode: inputFocus,
-            onSubmit: (text) => onSubmitted(store, text),
+            onSubmit: (message) => onSubmitted(store, message),
             // 顶栏精简后，工作流选择从输入框的 `+` 菜单进（功能不丢）。
             onPickWorkflow: store.isLocal ? null : () => _pickWorkflow(context),
           ),
@@ -1443,6 +1446,12 @@ class _MessageBubble extends StatelessWidget {
           buffer.write(part.text ?? '');
           continue;
         }
+        if (part.type == 'mention') {
+          flush();
+          final chip = _mentionChip(context, part);
+          if (chip != null) blocks.add(chip);
+          continue;
+        }
         if (part.type != 'tool_call') continue;
         flush();
         final call = toolCalls
@@ -1475,6 +1484,114 @@ class _MessageBubble extends StatelessWidget {
     }
     steps.flush();
     return blocks;
+  }
+
+  /// 用户消息里的 `@` 卡片 / `/技能`：一个小卡片，点开看**发送那一刻**的快照。
+  Widget? _mentionChip(BuildContext context, AiMessagePart part) {
+    final payload = part.payload;
+    if (payload == null) return null;
+    final kind = payload['kind'] as String? ?? '';
+    final name = payload['name'] as String? ?? '';
+    if (name.isEmpty) return null;
+    late final String label;
+    late final IconData icon;
+    if (kind == 'style_card') {
+      label = '画风卡';
+      icon = Icons.palette_outlined;
+    } else if (kind == 'character_card') {
+      label = '角色卡';
+      icon = Icons.person_outline;
+    } else if (kind == 'skill') {
+      label = '技能';
+      icon = Icons.auto_awesome_outlined;
+    } else {
+      label = '引用';
+      icon = Icons.link;
+    }
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 6),
+      child: Align(
+        alignment: Alignment.centerLeft,
+        child: InputChip(
+          key: ValueKey('mention-$kind-$name'),
+          avatar: Icon(icon, size: 16),
+          label: Text('$label · $name'),
+          visualDensity: VisualDensity.compact,
+          onPressed: () => _showMentionSnapshot(context, kind, name, payload),
+        ),
+      ),
+    );
+  }
+
+  /// 快照弹窗：卡看正面 / 负面提示词，技能看这次调用时的正文与版本。
+  void _showMentionSnapshot(
+    BuildContext context,
+    String kind,
+    String name,
+    Map<String, dynamic> payload,
+  ) {
+    final snapshot = payload['snapshot'] is Map
+        ? Map<String, dynamic>.from(payload['snapshot'] as Map)
+        : const <String, dynamic>{};
+    final title = kind == 'skill'
+        ? '技能 · $name'
+        : kind == 'style_card'
+        ? '画风卡 · $name'
+        : '角色卡 · $name';
+    Widget section(String label, String? value) {
+      if (value == null || value.trim().isEmpty) {
+        return const SizedBox.shrink();
+      }
+      return Padding(
+        padding: const EdgeInsets.only(bottom: 12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(label, style: const TextStyle(fontWeight: FontWeight.w600)),
+            const SizedBox(height: 4),
+            SelectableText(
+              value,
+              style: const TextStyle(fontFamily: 'Consolas', fontSize: 12),
+            ),
+          ],
+        ),
+      );
+    }
+
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(title),
+        content: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 560),
+          child: SingleChildScrollView(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                if (kind == 'skill') ...[
+                  if ((payload['version'] as String?)?.isNotEmpty ?? false)
+                    Text('版本 ${payload['version']}'),
+                  const SizedBox(height: 8),
+                  section(
+                    '调用时的技能正文',
+                    payload['body'] as String? ?? '（这条消息发送时没有留下正文快照）',
+                  ),
+                ] else ...[
+                  section('正面提示词', snapshot['prompt'] as String?),
+                  section('负面提示词', snapshot['negative'] as String?),
+                ],
+              ],
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('关闭'),
+          ),
+        ],
+      ),
+    );
   }
 
   /// 打开画布改这一份布局；用户点「提交回工作台」时把规格发回对话。
@@ -2801,7 +2918,7 @@ class _Composer extends StatefulWidget {
   final AiWorkspaceStore store;
   final TextEditingController controller;
   final FocusNode focusNode;
-  final Future<void> Function(String text) onSubmit;
+  final Future<void> Function(OutgoingMessage message) onSubmit;
 
   /// 「选择现有工作流…」（从顶栏搬到 `+` 菜单）。null = 这个端没有工作流库。
   final Future<void> Function()? onPickWorkflow;
@@ -2995,31 +3112,107 @@ class _ComposerState extends State<_Composer> {
     widget.focusNode.requestFocus();
   }
 
+  /// 行首的 `/技能名`（与后端 `valid_name` 同一条字符集）。
+  static final RegExp _skillPrefix = RegExp(
+    r'^\s*/([a-z0-9][a-z0-9-]{0,63})(?:\s+|$)',
+  );
+
   /// 把选中的卡拼到消息前面（画风卡一段；角色卡**一张一段**，按选中顺序）。
   ///
   /// 槽位名与 skill `r2i-prompt` 的输入约定逐字一致；卡正文**一个字符都不改**。
   /// 多段 `[CHARACTER CARD]` = 多角色同框，skill 里写清了怎么处理。
-  String _composeOutgoing(String text) {
+  ///
+  /// 同时把每张卡的**发送时快照**与 `/技能` 一起交给后端：界面气泡按 mention 块画小卡片，
+  /// 模型仍拿到同样顺序的卡正文。
+  OutgoingMessage _composeOutgoingMessage(String raw) {
+    var bodyText = raw;
+    AiSkill? invoked;
+    final match = _skillPrefix.firstMatch(raw);
+    if (match != null) {
+      final name = match.group(1)!;
+      for (final skill in widget.store.skills) {
+        if (skill.name == name &&
+            skill.enabled &&
+            skill.userInvocable &&
+            skill.validationError == null) {
+          invoked = skill;
+          bodyText = raw.substring(match.end);
+          break;
+        }
+      }
+    }
+
     final blocks = <String>[];
+    final mentions = <OutgoingMention>[];
     final style = _styleCard;
     if (style != null) {
-      blocks.add('[STYLE SPEC]\n${style.name}\n${style.prompt}');
+      final block = '[STYLE SPEC]\n${style.name}\n${style.prompt}';
+      blocks.add(block);
+      mentions.add(
+        OutgoingMention(
+          kind: 'style_card',
+          name: style.name,
+          modelText: block,
+          snapshot: _cardSnapshot(style),
+        ),
+      );
     }
     for (final character in _characterCards) {
-      blocks.add('[CHARACTER CARD]\n${character.name}\n${character.prompt}');
+      final block = '[CHARACTER CARD]\n${character.name}\n${character.prompt}';
+      blocks.add(block);
+      mentions.add(
+        OutgoingMention(
+          kind: 'character_card',
+          name: character.name,
+          modelText: block,
+          snapshot: _cardSnapshot(character),
+        ),
+      );
     }
-    final body = text.trim();
-    if (blocks.isEmpty) return text;
-    if (body.isEmpty) return blocks.join('\n\n');
-    return '${blocks.join('\n\n')}\n\n$body';
+    if (invoked != null) {
+      mentions.add(
+        OutgoingMention(kind: 'skill', name: invoked.name),
+      );
+    }
+
+    final displayText = bodyText.trim();
+    if (blocks.isEmpty && invoked == null) {
+      return OutgoingMessage.plain(raw);
+    }
+    final String full;
+    if (blocks.isEmpty) {
+      // 只点了技能、没写正文：还要给标题 / 审计留一行东西（模型看到的是技能正文）
+      full = displayText.isEmpty ? '/${invoked!.name}' : displayText;
+    } else if (displayText.isEmpty) {
+      full = blocks.join('\n\n');
+    } else {
+      full = '${blocks.join('\n\n')}\n\n$displayText';
+    }
+    return OutgoingMessage(
+      text: full,
+      displayText: displayText,
+      mentions: mentions,
+    );
   }
+
+  /// 发送时把卡的可读字段抄一份（之后卡被改 / 删，弹窗里仍是当时那一版）。
+  Map<String, dynamic> _cardSnapshot(CharacterCard card) => {
+    'id': card.id,
+    'name': card.name,
+    'prompt': card.prompt,
+    'negative': card.negative,
+    'updatedAt': card.updatedAt,
+  };
 
   /// 菜单里列出的 skills：只列**用户可调用**且启用的（`/` 就是用户显式调用）。
   List<AiSkill> get _slashMatches {
     final query = _slashQuery;
     if (query == null) return const [];
     final all = widget.store.skills
-        .where((s) => s.enabled && s.userInvocable)
+        .where(
+          (s) =>
+              s.enabled && s.userInvocable && s.validationError == null,
+        )
         .toList();
     if (query.isEmpty) return all;
     final q = query.toLowerCase();
@@ -3661,10 +3854,10 @@ class _ComposerState extends State<_Composer> {
     // 组字（拼音还没上屏）期间的回车是"选词 / 上屏"，不是发送（AIH-053）；
     // 按钮走同一条路，所以闸放在这里，两条入口都拦得住。
     if (_composing) return;
-    // 选中的卡拼在正文前面（槽位标记逐字固定，卡正文不改）。
-    final text = _composeOutgoing(widget.controller.text);
+    // 选中的卡 / `/技能` 拼在正文前面（槽位标记逐字固定，卡正文不改）。
+    final message = _composeOutgoingMessage(widget.controller.text);
     final sendable = widget.store.sendBlockReason() == null;
-    widget.onSubmit(text);
+    widget.onSubmit(message);
     // 只有"真的会被发出去"才清掉卡片：被拒时（正在生成 / 附件还在上传）卡片要留着，
     // 不能因为按了一次回车就没了。
     if (sendable && (_characterCards.isNotEmpty || _styleCard != null)) {
@@ -3687,7 +3880,7 @@ class _ComposerState extends State<_Composer> {
       ),
     );
     if (result == null || !mounted) return;
-    widget.onSubmit(result.toMessage());
+    widget.onSubmit(OutgoingMessage.plain(result.toMessage()));
   }
 
   Future<void> _pickFiles() async {
@@ -3739,7 +3932,7 @@ class _ComposerState extends State<_Composer> {
     if (!mounted) return;
     // 上传失败时 store 已经写过 error / notice；这里不再发一条"没有图"的消息
     if (widget.store.attachments.isEmpty) return;
-    await widget.onSubmit(_characterSheetPrompt);
+    await widget.onSubmit(OutgoingMessage.plain(_characterSheetPrompt));
   }
 
   /// `Ctrl+V`：剪贴板里是**文件**或**一张图**就吃成附件，都不是就把这次粘贴还回去。

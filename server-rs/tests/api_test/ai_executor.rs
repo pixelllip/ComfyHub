@@ -1696,3 +1696,118 @@ async fn view_outputs_auto_attaches_the_gallery_image_to_the_next_round() {
 
     gateway.abort();
 }
+
+/// `@` 卡片与 `/技能`：用户消息落 mention 块，技能正文由后端现读磁盘。
+#[tokio::test]
+async fn run_mentions_persist_card_snapshots_and_load_skills_server_side() {
+    let state = state();
+    seed_provider_and_model(&state);
+    let (_, user_root) = skill_dirs(&state);
+    std::fs::create_dir_all(user_root.join("demo-skill")).unwrap();
+    std::fs::write(
+        user_root.join("demo-skill").join("SKILL.md"),
+        "---\nname: demo-skill\ndescription: 演示\ndisable-model-invocation: true\n---\n第一步\n第二步",
+    )
+    .unwrap();
+
+    let (status, body) = send_json(
+        router_for(state.clone()),
+        "POST",
+        "/api/ai/conversations/conv-0/runs",
+        serde_json::json!({
+            "text": "照这个做",
+            "displayText": "照这个做",
+            "providerId": "goat",
+            "modelId": "m1",
+            "mentions": [
+                {
+                    "kind": "character_card",
+                    "name": "凛",
+                    "modelText": "[CHARACTER CARD]\n凛\n银发",
+                    "snapshot": { "prompt": "银发", "negative": "低质量" }
+                },
+                { "kind": "skill", "name": "demo-skill" }
+            ]
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+    let user_id = body["userMessageId"].as_str().unwrap().to_string();
+    let run_id = body["runId"].as_str().unwrap().to_string();
+
+    let (_, messages) = get_json(
+        router_for(state.clone()),
+        "/api/ai/conversations/conv-0/messages",
+    )
+    .await;
+    let user = messages
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["id"] == user_id.as_str())
+        .expect("用户消息在");
+    assert_eq!(user["text"], "照这个做");
+    let parts = user["parts"].as_array().unwrap();
+    assert_eq!(parts[0]["type"], "mention");
+    assert_eq!(parts[0]["jsonPayload"]["kind"], "character_card");
+    assert_eq!(parts[0]["jsonPayload"]["snapshot"]["prompt"], "银发");
+    assert_eq!(parts[0]["jsonPayload"]["modelText"], "[CHARACTER CARD]\n凛\n银发");
+    assert_eq!(parts[1]["type"], "mention");
+    assert_eq!(parts[1]["jsonPayload"]["kind"], "skill");
+    assert!(
+        parts[1]["jsonPayload"]["body"]
+            .as_str()
+            .unwrap()
+            .contains("第一步"),
+        "技能正文必须由后端从磁盘读出来"
+    );
+    assert_eq!(parts[2]["type"], "text");
+    assert_eq!(parts[2]["text"], "照这个做");
+
+    // Run DTO 能查到这次生效的 skill 快照（以前只写库、谁都不读）
+    let (_, run) = get_json(router_for(state.clone()), &format!("/api/ai/runs/{run_id}")).await;
+    assert!(
+        run.get("skillSnapshot").is_some(),
+        "Run 详情要带 skillSnapshot：{run}"
+    );
+
+    // 停用后：显式调用也拒绝，且不留下半条用户消息
+    let (status, _) = send_json(
+        router_for(state.clone()),
+        "PUT",
+        "/api/ai/skills/demo-skill/enabled",
+        serde_json::json!({ "enabled": false }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (_, before) = get_json(
+        router_for(state.clone()),
+        "/api/ai/conversations/conv-0/messages",
+    )
+    .await;
+    let before_count = before.as_array().unwrap().len();
+    let (status, body) = send_json(
+        router_for(state.clone()),
+        "POST",
+        "/api/ai/conversations/conv-0/runs",
+        serde_json::json!({
+            "text": "再试一次",
+            "providerId": "goat",
+            "modelId": "m1",
+            "mentions": [{ "kind": "skill", "name": "demo-skill" }]
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["error"], "SKILL_DISABLED");
+    let (_, after) = get_json(
+        router_for(state.clone()),
+        "/api/ai/conversations/conv-0/messages",
+    )
+    .await;
+    assert_eq!(
+        after.as_array().unwrap().len(),
+        before_count,
+        "被拒的请求不许留下半条消息"
+    );
+}

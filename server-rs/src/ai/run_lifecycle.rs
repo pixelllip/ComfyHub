@@ -72,7 +72,32 @@ pub struct RunStartRequest {
     pub attachment_ids: Vec<String>,
     #[serde(default)]
     pub retry_of_run_id: Option<String>,
+    /// 用户**看到的**那条正文（卡片块已剥掉）。缺省 = `text`（老客户端）。
+    #[serde(default)]
+    pub display_text: Option<String>,
+    /// `@` 卡片与 `/技能` 的结构化快照；界面用它画小卡片，模型用 `modelText` / 技能正文。
+    #[serde(default)]
+    pub mentions: Vec<RunMention>,
 }
+
+/// 一条 `@` 卡片 / `/技能` 引用。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunMention {
+    /// character_card / style_card / skill
+    pub kind: String,
+    pub name: String,
+    /// 卡片正文块（给模型看的原文）；skill 不需要，后端现读磁盘
+    #[serde(default)]
+    pub model_text: Option<String>,
+    /// 发送那一刻的卡片快照（界面弹窗用）
+    #[serde(default)]
+    pub snapshot: Option<Value>,
+}
+
+const MAX_MENTIONS: usize = 32;
+const MAX_MENTION_TEXT: usize = 64 * 1024;
+const MAX_MENTION_SNAPSHOT: usize = 128 * 1024;
 
 /// `POST .../runs` 的响应（202）。
 #[derive(Debug, Serialize)]
@@ -305,6 +330,115 @@ pub fn thinking_effort(
 /// 顺序**照抄 Kotlin**（`AiRoutes.kt:358`），每一步都不能挪：先校验（不通过就是一封
 /// 400 + 稳定码，**一个字节都不写库**），再落用户消息与助手占位，最后才建 Run。
 /// 顺序错了的表现是"消息进去了、Run 没建成"—— 会话里凭空多一条提问。
+/// 把界面传来的 `@` 卡片 / `/技能` 引用变成有序块。
+///
+/// 两条纪律：
+/// * **卡片的快照与正文都只是用户消息的一部分**，不校验内容（那是用户自己的卡），只限大小；
+/// * **技能的正文绝不采信前端** —— 只认 `name`，由后端现读磁盘（用户可能刚改过，
+///   前端那份也可能是伪造的），并在这里就把"停用 / 不合法 / 不允许用户调用"挡掉。
+fn prepare_mentions(
+    state: &AppState,
+    mentions: &[RunMention],
+) -> Result<Vec<crate::ai::conversations::AiMessagePartDto>, ApiError> {
+    use crate::ai::conversations::AiMessagePartDto;
+    if mentions.len() > MAX_MENTIONS {
+        return Err(ApiError::ai(
+            "INVALID_ARGUMENT",
+            format!("一条消息最多带 {MAX_MENTIONS} 个卡片或技能引用"),
+        ));
+    }
+    let mut disabled: Option<std::collections::HashSet<String>> = None;
+    let mut out = Vec::with_capacity(mentions.len());
+    for mention in mentions {
+        let kind = mention.kind.trim();
+        if !matches!(kind, "character_card" | "style_card" | "skill") {
+            return Err(ApiError::ai(
+                "INVALID_ARGUMENT",
+                format!("不认识的引用类型：{kind}"),
+            ));
+        }
+        let name = mention.name.trim();
+        if name.is_empty() || name.chars().count() > 200 {
+            return Err(ApiError::ai(
+                "INVALID_ARGUMENT",
+                "卡片或技能的名字为空或太长",
+            ));
+        }
+        let mut payload = json!({ "kind": kind, "name": name });
+        if kind == "skill" {
+            let disabled = disabled.get_or_insert_with(|| crate::ai::skills::disabled_of(state));
+            if disabled.contains(name) {
+                return Err(ApiError::ai(
+                    "SKILL_DISABLED",
+                    format!("skill「{name}」已被用户停用"),
+                ));
+            }
+            let (builtin, user) = crate::ai::skills::roots_of(state);
+            let Some(found) = crate::ai::skills::read_body(&builtin, &user, name) else {
+                return Err(ApiError::ai(
+                    "SKILL_NOT_FOUND",
+                    format!("没有名为「{name}」的 skill"),
+                ));
+            };
+            if !found.valid {
+                return Err(ApiError::ai(
+                    "SKILL_INVALID",
+                    format!("skill「{name}」不合法，不能调用"),
+                ));
+            }
+            if !found.user_invocable {
+                return Err(ApiError::ai(
+                    "SKILL_NOT_USER_INVOCABLE",
+                    format!("skill「{name}」不允许用户直接调用"),
+                ));
+            }
+            if let Some(version) = &found.entry.version {
+                payload["version"] = json!(version);
+            }
+            payload["digest"] = json!(found.digest);
+            payload["source"] = json!(found.source);
+            payload["body"] = json!(found.body);
+            // 给模型的一句说明（用户只点了技能、没写正文时，这条消息也得有内容）。
+            payload["modelText"] = json!(format!(
+                "（用户手动调用了技能「{name}」，请按系统提示中的技能规则执行。）"
+            ));
+        } else {
+            if let Some(model_text) = &mention.model_text {
+                if model_text.len() > MAX_MENTION_TEXT {
+                    return Err(ApiError::ai(
+                        "INVALID_ARGUMENT",
+                        format!("卡片正文太长（超过 {MAX_MENTION_TEXT} 字节）"),
+                    ));
+                }
+                payload["modelText"] = json!(model_text);
+            }
+            if let Some(snapshot) = &mention.snapshot {
+                if !snapshot.is_object() {
+                    return Err(ApiError::ai(
+                        "INVALID_ARGUMENT",
+                        "卡片快照必须是一个对象",
+                    ));
+                }
+                if snapshot.to_string().len() > MAX_MENTION_SNAPSHOT {
+                    return Err(ApiError::ai(
+                        "INVALID_ARGUMENT",
+                        "卡片快照太大",
+                    ));
+                }
+                payload["snapshot"] = snapshot.clone();
+            }
+        }
+        out.push(AiMessagePartDto {
+            r#type: "mention".into(),
+            text: None,
+            attachment_id: None,
+            tool_call_id: None,
+            json_payload: Some(payload),
+        });
+    }
+    Ok(out)
+}
+
 pub fn start(
     state: &AppState,
     conversation_id: &str,
@@ -322,7 +456,7 @@ pub fn start(
         .collect::<std::collections::BTreeSet<_>>()
         .into_iter()
         .collect();
-    if req.text.trim().is_empty() && attachment_ids.is_empty() {
+    if req.text.trim().is_empty() && attachment_ids.is_empty() && req.mentions.is_empty() {
         return Err(ApiError::ai("CONFIG_ERROR", "消息内容不能为空"));
     }
 
@@ -443,13 +577,21 @@ pub fn start(
         None => {
             // 正文 + **每个附件一个有序块**（Kotlin 同）：块是附件与消息之间唯一的关联，
             // 少了它界面画不出缩略图、执行器也不知道"这条消息带了图"（R9 的"不许静默丢弃"）。
-            let mut parts = vec![crate::ai::conversations::AiMessagePartDto {
+            //
+            // 卡片 / 技能引用放在正文**前面**：与 `_composeOutgoing` 的槽位顺序一致，
+            // 模型读到的仍是"[卡正文] + 用户这句话"。界面渲染时它们会变成小卡片。
+            let mut parts = prepare_mentions(state, &req.mentions)?;
+            parts.push(crate::ai::conversations::AiMessagePartDto {
                 r#type: "text".into(),
-                text: Some(req.text.clone()),
+                text: Some(
+                    req.display_text
+                        .clone()
+                        .unwrap_or_else(|| req.text.clone()),
+                ),
                 attachment_id: None,
                 tool_call_id: None,
                 json_payload: None,
-            }];
+            });
             for id in unique_ids.iter() {
                 parts.push(crate::ai::conversations::AiMessagePartDto {
                     r#type: "attachment".into(),

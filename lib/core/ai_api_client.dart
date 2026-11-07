@@ -245,8 +245,30 @@ class AiApiClient {
   );
 
   /// 删除用户 skill。内置 skill 会被后端拒绝（错误消息原样展示给用户）。
-  Future<void> deleteSkill(String name) async =>
-      _send('DELETE', '/api/ai/skills/${Uri.encodeComponent(name)}');
+  ///
+  /// 返回**真的删掉了没有**：后端对"名字不存在"回 200 + `{deleted:false}`，
+  /// 只按 2xx 判成功会让界面弹一句"已删除"而文件还在。
+  Future<bool> deleteSkill(String name) async {
+    final body = await _send(
+      'DELETE',
+      '/api/ai/skills/${Uri.encodeComponent(name)}',
+    );
+    if (body is Map && body['deleted'] == false) return false;
+    return true;
+  }
+
+  /// 停用 / 启用一个 skill（内置与用户都允许；只影响对话，不动文件）。
+  Future<AiSkill> setSkillEnabled(String name, bool enabled) async =>
+      AiSkill.fromJson(
+        Map<String, dynamic>.from(
+          await _send(
+                'PUT',
+                '/api/ai/skills/${Uri.encodeComponent(name)}/enabled',
+                {'enabled': enabled},
+              )
+              as Map,
+        ),
+      );
 
   /// skills 投放口在哪（界面显示绝对路径，让用户知道往哪个文件夹拷）。
   Future<AiSkillRoots> skillRoots() async => AiSkillRoots.fromJson(
@@ -889,6 +911,8 @@ class AiApiClient {
     String? reasoningEffort,
     List<String> attachmentIds = const [],
     String? retryOfRunId,
+    String? displayText,
+    List<OutgoingMention> mentions = const [],
   }) async => AiRunStart.fromJson(
     Map<String, dynamic>.from(
       await _send('POST', '/api/ai/conversations/$conversationId/runs', {
@@ -898,6 +922,9 @@ class AiApiClient {
         'reasoningEffort': ?reasoningEffort,
         if (attachmentIds.isNotEmpty) 'attachmentIds': attachmentIds,
         'retryOfRunId': ?retryOfRunId,
+        'displayText': ?displayText,
+        if (mentions.isNotEmpty)
+          'mentions': [for (final mention in mentions) mention.toJson()],
       }) as Map,
     ),
   );

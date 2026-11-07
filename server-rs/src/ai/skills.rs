@@ -25,7 +25,7 @@
 //! * `save` 写的永远是 `<用户根>/<name>/SKILL.md`（不存在"写进内置目录"这条路）；
 //! * 路径先过 `safe_child`（`..` 之类不许逃出用户根）。
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
@@ -402,8 +402,11 @@ pub fn parse_one(file: &Path, fallback_name: &str, source: &'static str) -> Opti
     })
 }
 
-/// 扫一个根目录（同名时 **bundle（`<name>/SKILL.md`）胜出**）。
-fn scan_root(root: &Path, source: &'static str) -> Vec<(String, ParsedSkill)> {
+/// 扫一个根目录（同名时 **bundle（`<name>/SKILL.md`）胜出**），**带上真实路径**。
+///
+/// 路径必须由扫描结果带出来，而不是拿 name 反拼一个 —— 平铺 `<x>.md` 的
+/// frontmatter `name` 可以与文件名不同，反拼就会出现"列表里有、加载时说没有"。
+fn scan_root_paths(root: &Path, source: &'static str) -> Vec<(String, PathBuf, ParsedSkill)> {
     if !is_dir_no_follow(root) {
         return Vec::new();
     }
@@ -415,7 +418,7 @@ fn scan_root(root: &Path, source: &'static str) -> Vec<(String, ParsedSkill)> {
     let mut paths: Vec<PathBuf> = entries.flatten().map(|e| e.path()).collect();
     paths.sort();
 
-    let mut by_name: Vec<(String, ParsedSkill, bool)> = Vec::new();
+    let mut by_name: Vec<(String, PathBuf, ParsedSkill, bool)> = Vec::new();
     for entry in paths {
         let file_name = entry
             .file_name()
@@ -447,21 +450,58 @@ fn scan_root(root: &Path, source: &'static str) -> Vec<(String, ParsedSkill)> {
             continue;
         };
         let name = parsed.entry.name.clone();
-        match by_name.iter_mut().find(|(n, _, _)| *n == name) {
+        match by_name.iter_mut().find(|(n, _, _, _)| *n == name) {
             Some(slot) => {
                 // 已有一条：只有"这条是目录形态、那条不是"时才换（bundle 胜出）
-                if is_dir && !slot.2 {
-                    *slot = (name, parsed, is_dir);
+                if is_dir && !slot.3 {
+                    *slot = (name, file, parsed, is_dir);
                 }
             }
-            None => by_name.push((name, parsed, is_dir)),
+            None => by_name.push((name, file, parsed, is_dir)),
         }
     }
     by_name
         .into_iter()
-        .map(|(name, parsed, _)| (name, parsed))
+        .map(|(name, file, parsed, _)| (name, file, parsed))
         .collect()
 }
+
+/// 扫一个根目录（丢掉路径）—— 界面 / 冲突判定用。
+fn scan_root(root: &Path, source: &'static str) -> Vec<(String, ParsedSkill)> {
+    scan_root_paths(root, source)
+        .into_iter()
+        .map(|(name, _, parsed)| (name, parsed))
+        .collect()
+}
+
+/// 在**一个**根目录里按 name 找条目（连同真实路径）。
+fn find_in_root(root: &Path, name: &str, source: &'static str) -> Option<(PathBuf, ParsedSkill)> {
+    scan_root_paths(root, source)
+        .into_iter()
+        .find(|(n, _, _)| n == name)
+        .map(|(_, path, parsed)| (path, parsed))
+}
+
+/// 一次 Run / 一次加载**真正生效**的那一份：
+/// 用户版合法 → 用户版；否则内置版合法 → 内置版；再否则把用户版（可能非法）交出去当诊断。
+///
+/// 这条顺序与 [`catalog`] 必须**逐字一致**，否则会出现"系统提示里是内置版、
+/// `load_skill` 却读到用户那份非法版"的自相矛盾。
+pub fn effective_entry(
+    builtin_root: &Path,
+    user_root: &Path,
+    name: &str,
+) -> Option<(PathBuf, ParsedSkill)> {
+    let user = find_in_root(user_root, name, "user");
+    let builtin = find_in_root(builtin_root, name, "builtin");
+    match (user, builtin) {
+        (Some((path, parsed)), _) if parsed.valid => Some((path, parsed)),
+        (_, Some((path, parsed))) if parsed.valid => Some((path, parsed)),
+        (Some((path, parsed)), _) => Some((path, parsed)),
+        (_, builtin) => builtin,
+    }
+}
+
 
 /// 全量扫描（内置 + 用户），同名冲突 **用户胜出**（AIH-037）。
 ///
@@ -580,10 +620,80 @@ pub fn roots_of(state: &crate::web::routes::AppState) -> (PathBuf, PathBuf) {
 /// `GET /api/ai/skills` —— 全量清单（**含非法项**，AIH-038）。
 pub fn list(state: &crate::web::routes::AppState) -> Vec<SkillDto> {
     let (builtin, user) = roots_of(state);
+    let disabled = disabled_of(state);
     scan_with_conflict(&builtin, &user)
         .iter()
-        .map(|(parsed, conflict)| SkillDto::of(parsed, conflict.clone()))
+        .map(|(parsed, conflict)| {
+            // 用户版覆盖了同名内置版、但用户版自己不合法时：对话会回落到内置版。
+            // 这条必须说出来，否则用户看到"我覆盖了却没生效"没有任何线索。
+            let conflict = match (conflict, parsed.valid) {
+                (Some(_), false) => Some("覆盖了同名内置 skill；用户版不合法，对话仍用内置版".to_string()),
+                (conflict, _) => conflict.clone(),
+            };
+            let mut dto = SkillDto::of(parsed, conflict);
+            dto.enabled = !disabled.contains(parsed.entry.name.as_str());
+            dto
+        })
         .collect()
+}
+
+/// 停用名单的落点：`<storage>\ai\skills.disabled.json`（与投放口同级，不进投放口目录，
+/// 免得被扫描当成一个 skill 条目）。
+pub fn disabled_path(state: &crate::web::routes::AppState) -> PathBuf {
+    let (_, user) = roots_of(state);
+    user.parent().unwrap_or(&user).join("skills.disabled.json")
+}
+
+/// 读停用名单。读不到 / 坏了都当"没有停用"（**不拦对话**），但要留一行日志。
+pub fn disabled_of(state: &crate::web::routes::AppState) -> HashSet<String> {
+    let path = disabled_path(state);
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        return HashSet::new();
+    };
+    match serde_json::from_str::<Vec<String>>(&text) {
+        Ok(names) => names.into_iter().collect(),
+        Err(e) => {
+            eprintln!("skills：停用名单读不了（{}）：{e}", path.display());
+            HashSet::new()
+        }
+    }
+}
+
+fn write_disabled(path: &Path, names: &HashSet<String>) -> Result<(), String> {
+    if names.is_empty() {
+        let _ = std::fs::remove_file(path);
+        return Ok(());
+    }
+    let mut sorted: Vec<&String> = names.iter().collect();
+    sorted.sort();
+    let body = serde_json::to_string_pretty(&sorted).map_err(|e| e.to_string())?;
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, body).map_err(|e| e.to_string())?;
+    std::fs::rename(&tmp, path).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// 停用 / 启用一个 skill（内置与用户都允许；停用只影响对话，文件不动）。
+pub fn set_enabled(
+    state: &crate::web::routes::AppState,
+    name: &str,
+    enabled: bool,
+) -> Result<SkillDto, SkillFailure> {
+    validate_name(name)?;
+    let found = list(state)
+        .into_iter()
+        .find(|dto| dto.name == name)
+        .ok_or_else(|| SkillFailure::new("SKILL_NOT_FOUND", format!("没有名为 {name} 的 skill")))?;
+    let mut disabled = disabled_of(state);
+    if enabled {
+        disabled.remove(name);
+    } else {
+        disabled.insert(name.to_string());
+    }
+    write_disabled(&disabled_path(state), &disabled).map_err(|e| {
+        SkillFailure::new("IO_ERROR", format!("保存 skill 启停状态失败：{e}"))
+    })?;
+    Ok(SkillDto { enabled, ..found })
 }
 
 /// 投放口的位置（`SkillRootsDto`）：界面要显示绝对路径，用户得知道往哪个文件夹拷。
@@ -675,14 +785,19 @@ pub fn read_detail(
         ));
     }
     let (builtin, user) = roots_of(state);
-    let file = file_of(&builtin, &user, name)
-        .map(|(path, _)| path)
-        .ok_or_else(|| {
-            SkillFailure::new(
-                "SKILL_NOT_FOUND",
-                format!("找不到 skill「{name}」的正文文件"),
-            )
-        })?;
+    // 按**这条 DTO 自己的来源**取文件：用户版覆盖内置版时，详情要给用户看的那一份。
+    let file = if dto.source == "user" {
+        find_in_root(&user, name, "user")
+    } else {
+        find_in_root(&builtin, name, "builtin")
+    }
+    .map(|(path, _)| path)
+    .ok_or_else(|| {
+        SkillFailure::new(
+            "SKILL_NOT_FOUND",
+            format!("找不到 skill「{name}」的正文文件"),
+        )
+    })?;
     let raw = std::fs::read_to_string(&file)
         .map_err(|e| SkillFailure::new("IO_ERROR", format!("读不了 skill「{name}」的正文：{e}")))?;
     let (_, body) = parse_front_matter(&raw);
@@ -765,6 +880,14 @@ pub fn save(
         )
     })?;
 
+    // 用户/模型刚显式写入这个名字 = 想用它；把它从停用名单里拿掉。
+    let mut disabled = disabled_of(state);
+    if disabled.remove(name) {
+        write_disabled(&disabled_path(state), &disabled).map_err(|e| {
+            SkillFailure::new("IO_ERROR", format!("保存 skill 启停状态失败：{e}"))
+        })?;
+    }
+
     list(state)
         .into_iter()
         .find(|dto| dto.name == name)
@@ -785,8 +908,10 @@ pub fn delete(state: &crate::web::routes::AppState, name: &str) -> Result<bool, 
             format!("「{name}」是内置 skill，只能停用不能删除"),
         ));
     }
-    let (builtin, user_root) = roots_of(state);
-    let Some((file, _)) = file_of(&builtin, &user_root, name) else {
+    let (_builtin, user_root) = roots_of(state);
+    // ⚠ 只找**用户根**：用户版非法覆盖内置版时，`file_of` 会回落到内置版路径 ——
+    // 用它来删会删掉内置文件。
+    let Some((file, _)) = find_in_root(&user_root, name, "user") else {
         return Ok(false);
     };
     let _ = std::fs::remove_file(&file);
@@ -795,6 +920,11 @@ pub fn delete(state: &crate::web::routes::AppState, name: &str) -> Result<bool, 
         if parent != user_root && parent.starts_with(&user_root) {
             let _ = std::fs::remove_dir_all(parent);
         }
+    }
+    // 删掉的技能不该继续占着停用名单
+    let mut disabled = disabled_of(state);
+    if disabled.remove(name) {
+        let _ = write_disabled(&disabled_path(state), &disabled);
     }
     Ok(true)
 }
@@ -949,14 +1079,46 @@ pub fn auto_register(state: &crate::web::routes::AppState) -> SkillAutoRegisterR
     }
 }
 
+/// 同名时**生效的那一份**：用户版合法 → 用户版；否则内置版合法 → 内置版。
+///
+/// 与 [`effective_entry`] 同一条顺序；与 `scan_with_conflict` 的区别是后者要给界面
+/// 看"用户版不合法"的诊断，而这里只回答"对话里到底用哪一份"。
+fn effective_scan(builtin_root: &Path, user_root: &Path) -> Vec<ParsedSkill> {
+    let mut by_name: BTreeMap<String, ParsedSkill> = BTreeMap::new();
+    for (name, parsed) in scan_root(builtin_root, "builtin") {
+        by_name.insert(name, parsed);
+    }
+    for (name, parsed) in scan_root(user_root, "user") {
+        let keep_builtin = by_name
+            .get(&name)
+            .map(|existing| !parsed.valid && existing.valid)
+            .unwrap_or(false);
+        if !keep_builtin {
+            by_name.insert(name, parsed);
+        }
+    }
+    by_name.into_values().collect()
+}
+
 /// 可以进系统提示的 skills（校验不过的**不进**，但也不是"没看见"——见文件头第 1 条）。
 ///
-/// 顺序 = 按 name 升序（Kotlin `scan()` 末尾就是 `sortedBy { it.name }`；
-/// 进得了这里的名字都是 kebab-case，ASCII 序与 Kotlin 的 UTF-16 序一致）。
+/// 过滤条件是**三件**：合法、`model-invocable`、没有被用户停用。
+/// 顺序 = 按 name 升序（BTreeMap 保证；进得了这里的名字都是 kebab-case，ASCII 序一致）。
 pub fn catalog(builtin_root: &Path, user_root: &Path) -> Vec<SkillEntry> {
-    scan(builtin_root, user_root)
+    catalog_with(builtin_root, user_root, &HashSet::new())
+}
+
+/// 带"停用名单"的 [`catalog`]（桌面执行器 / run-kit 走这一条）。
+pub fn catalog_with(
+    builtin_root: &Path,
+    user_root: &Path,
+    disabled: &HashSet<String>,
+) -> Vec<SkillEntry> {
+    effective_scan(builtin_root, user_root)
         .into_iter()
-        .filter(|s| s.valid)
+        .filter(|s| {
+            s.valid && s.model_invocable && !disabled.contains(s.entry.name.as_str())
+        })
         .map(|s| s.entry)
         .collect()
 }
@@ -967,26 +1129,20 @@ pub fn catalog(builtin_root: &Path, user_root: &Path) -> Vec<SkillEntry> {
 /// 没有它，用户改了 skill 之后再问"为什么它当时那么做"就永远查不清。
 ///
 /// 形状与 Kotlin `AiRunRepo.create(skillSnapshot = …)` **逐字一致**：
-/// `count` 是**这次生效的**条数（校验不过的与 `user-invocable=false` 的不算），
-/// 每条三个键 `name` / `digest` / `source`，按 name 升序。
+/// `count` 是**这次能用的**条数（校验不过的、被停用的不算；`disable-model-invocation`
+/// 的**算**——用户可以显式调用它），按 name 升序。
 ///
 /// ⚠ `digest` 是**文件原文** sha256 的前 16 位（不是解析后的 body）——
 /// 与 Kotlin `SkillStore.sha256(raw)` 同一个口径，改一个字就不同。
 pub fn snapshot(
     state: &crate::web::routes::AppState,
 ) -> Result<serde_json::Value, crate::web::routes::ApiError> {
-    let storage = state
-        .media_dir()
-        .parent()
-        .unwrap_or(state.media_dir())
-        .to_path_buf();
-    let entries = scan(
-        &state.project_root().join("skills").join("builtin"),
-        &storage.join("ai").join("skills"),
-    );
+    let (builtin, user) = roots_of(state);
+    let disabled = disabled_of(state);
+    let entries = effective_scan(&builtin, &user);
     let skills: Vec<serde_json::Value> = entries
         .into_iter()
-        .filter(|s| s.valid)
+        .filter(|s| s.valid && !disabled.contains(s.entry.name.as_str()))
         .map(|s| {
             serde_json::json!({
                 "name": s.entry.name,
@@ -1000,32 +1156,14 @@ pub fn snapshot(
 
 /// 一个 skill 的**正文文件位置**与来源（`load_skill` 要读它）。
 ///
-/// 返回 `(路径, source)`。与 [`catalog`] 走**同一次扫描**：分开扫两次会出现
-/// "目录里有它、load 说找不到"这种自相矛盾。
+/// 返回**真正生效**的那一份（用户版合法优先，否则内置版）。
 pub fn file_of(
     builtin_root: &Path,
     user_root: &Path,
     name: &str,
 ) -> Option<(PathBuf, &'static str)> {
-    let trimmed = name.trim();
-    // 走 `scan_root` 而不是 `scan`：要连**不合法**的那条也找得到，
-    // 这样 `load_skill` 才能区分"没有这个 skill"与"有这个 skill 但它不合法"
-    for (root, source) in [(user_root, "user"), (builtin_root, "builtin")] {
-        // 目录形态优先（bundle 胜出，与 `scan_root` 同一条规则）
-        let bundle = root.join(trimmed).join("SKILL.md");
-        if bundle.is_file() {
-            return Some((bundle, source));
-        }
-        let lower = root.join(trimmed).join("skill.md");
-        if lower.is_file() {
-            return Some((lower, source));
-        }
-        let flat = root.join(format!("{trimmed}.md"));
-        if flat.is_file() {
-            return Some((flat, source));
-        }
-    }
-    None
+    effective_entry(builtin_root, user_root, name)
+        .map(|(path, parsed)| (path, parsed.source))
 }
 
 /// 一个 skill 的正文（**去掉 frontmatter**）—— `load_skill` 返回给模型的就是它。
@@ -1036,26 +1174,34 @@ pub struct SkillBody {
     pub valid: bool,
     /// 文件原文 sha256 的前 16 位（`load_skill` 的结构化结果里要带上它）
     pub digest: String,
+    /// builtin / user
+    pub source: &'static str,
+    /// 正文文件真实路径（`load_skill` 由它算 bundle 目录与附带文件）
+    pub path: PathBuf,
+    /// `disable-model-invocation` 取反：false 的只允许用户显式调用
+    pub model_invocable: bool,
+    /// `user-invocable`（缺省 true）：false 的不出现在 `/` 菜单里
+    pub user_invocable: bool,
 }
 
 /// 读一个 skill 的正文。
 ///
 /// `None` = 没有这个名字的 skill。**不缓存**：AI 刚注册完，下一次 `load_skill` 就要读到新的。
 pub fn read_body(builtin_root: &Path, user_root: &Path, name: &str) -> Option<SkillBody> {
-    let (file, _) = file_of(builtin_root, user_root, name)?;
-    let raw = std::fs::read_to_string(&file).ok()?;
+    // 直接用扫描结果里的 `ParsedSkill`：不要拿 name 反拼路径、也不要重新猜 fallback ——
+    // 平铺 `<x>.md` 的 frontmatter name 可以与文件名不同，反拼会把它判成"name 与目录名不一致"。
+    let (path, parsed) = effective_entry(builtin_root, user_root, name)?;
+    let raw = std::fs::read_to_string(&path).ok()?;
     let (_, body) = parse_front_matter(&raw);
-    let fallback = file
-        .parent()
-        .and_then(|p| p.file_name())
-        .map(|n| n.to_string_lossy().to_string())
-        .unwrap_or_else(|| name.trim().to_string());
-    let parsed = parse_one(&file, &fallback, "user")?;
     Some(SkillBody {
         entry: parsed.entry,
         body: body.trim().to_string(),
         valid: parsed.valid,
-        digest: parsed.digest,
+        digest: short_digest(&raw),
+        source: parsed.source,
+        path,
+        model_invocable: parsed.model_invocable,
+        user_invocable: parsed.user_invocable,
     })
 }
 
@@ -1064,19 +1210,25 @@ pub fn read_body(builtin_root: &Path, user_root: &Path, name: &str) -> Option<Sk
 /// 为什么不复用 [`catalog`]：那个**刻意**只给能用的（它进系统提示），
 /// 而 `list_skills` 要的是"装了但有问题"的那些 —— 静默过滤掉正是 AIH-038 要防的事
 /// （用户看到"装了个 skill 却没生效"而没有任何线索）。
-pub fn scan_all(builtin_root: &Path, user_root: &Path) -> Vec<ScannedSkill> {
+pub fn scan_all(
+    builtin_root: &Path,
+    user_root: &Path,
+    disabled: &HashSet<String>,
+) -> Vec<ScannedSkill> {
     scan(builtin_root, user_root)
         .into_iter()
         .map(|s| {
             // `validation_error` 现在就是 `parse_one` 里那条**原话**（以前这里是按 `valid`
             // 反推一句概括，而 `valid=false` 的原因有五种，概括出来的话与界面看到的不一样）
             let error = s.validation_error.clone().unwrap_or_default();
+            let enabled = !disabled.contains(s.entry.name.as_str());
             ScannedSkill {
                 name: s.entry.name,
                 description: s.entry.description,
                 when_to_use: s.entry.when_to_use,
                 source: s.source,
                 valid: s.valid,
+                enabled,
                 error,
             }
         })
@@ -1090,8 +1242,63 @@ pub struct ScannedSkill {
     pub when_to_use: Option<String>,
     pub source: &'static str,
     pub valid: bool,
+    /// 用户有没有把它停用（停用只影响对话，文件还在）
+    pub enabled: bool,
     /// 非空 = 不合格，内容是给人看的原因
     pub error: String,
+}
+
+/// bundle 的根目录：只有 `<name>/SKILL.md` 这种形态才有附带文件；平铺 `.md` 返回 `None`。
+pub fn bundle_root(body: &SkillBody) -> Option<&Path> {
+    let file_name = body.path.file_name()?.to_string_lossy().to_lowercase();
+    if file_name != "skill.md" {
+        return None;
+    }
+    body.path.parent()
+}
+
+/// bundle 里的附带文件（相对路径 + 字节数，按路径升序，最多 200 条）。
+///
+/// 给 `load_skill` 的结构化结果用：模型得先知道 `references/` 里有什么，
+/// 才谈得上按需读。平铺技能没有 bundle，返回空表。
+pub fn bundle_files(body: &SkillBody) -> Vec<(String, i64)> {
+    let Some(root) = bundle_root(body) else {
+        return Vec::new();
+    };
+    fn walk(root: &Path, dir: &Path, depth: usize, out: &mut Vec<(String, i64)>) {
+        if depth > 4 || out.len() >= 200 {
+            return;
+        }
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        let mut paths: Vec<PathBuf> = entries.flatten().map(|e| e.path()).collect();
+        paths.sort();
+        for path in paths {
+            if out.len() >= 200 {
+                return;
+            }
+            let Ok(meta) = std::fs::symlink_metadata(&path) else {
+                continue;
+            };
+            if meta.is_dir() {
+                walk(root, &path, depth + 1, out);
+            } else if meta.is_file() {
+                let Ok(rel) = path.strip_prefix(root) else {
+                    continue;
+                };
+                let rel = rel.to_string_lossy().replace('\\', "/");
+                // 正文自己不算"附带文件"
+                if rel.eq_ignore_ascii_case("SKILL.md") {
+                    continue;
+                }
+                out.push((rel, meta.len() as i64));
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(root, root, 1, &mut out);
+    out
 }
 
 /// `Files.isDirectory(path, NOFOLLOW_LINKS)`：**不看符号链接指向什么**。

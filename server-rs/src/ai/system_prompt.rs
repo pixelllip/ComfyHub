@@ -60,6 +60,14 @@ fn mark_of(access: ToolAccess, mutating: bool) -> &'static str {
     }
 }
 
+/// 提示词里的截断：超限才补省略号（`take_utf16` 只砍不加标记，模型会以为那就是全文）。
+fn clipped_for_prompt(text: &str, max: usize) -> String {
+    if text.encode_utf16().count() <= max {
+        return text.to_string();
+    }
+    format!("{}…", memory::take_utf16(text, max.saturating_sub(1)))
+}
+
 /// 渲染整段系统提示。
 ///
 /// `tools`：**已按 name 升序、已剔除 `deny`** 的工具清单（见文件头第 3 条）。
@@ -114,16 +122,24 @@ pub fn render(
             out.push_str("  · ");
             out.push_str(&skill.name);
             out.push('：');
-            out.push_str(&memory::take_utf16(&skill.one_line_for_prompt(), 240));
+            out.push_str(&clipped_for_prompt(&skill.one_line_for_prompt(), 240));
             if let Some(when) = skill.when_to_use.as_deref() {
                 out.push_str("（适用：");
-                out.push_str(&memory::take_utf16(
+                out.push_str(&clipped_for_prompt(
                     &crate::ai::skills::collapse_whitespace(when),
                     120,
                 ));
                 out.push('）');
             }
             out.push('\n');
+        }
+        // 超出上限**必须说出来**：静默截断会让"装了的 skill 模型看不见"变成一个
+        // 用户和模型都查不出的问题（与 AIH-038 同一条纪律）。
+        if skills.len() > 60 {
+            out.push_str(&format!(
+                "  · （本机共 {} 个 Skill，这里只列前 60 个；其余用 list_skills 查看。）\n",
+                skills.len()
+            ));
         }
     }
 

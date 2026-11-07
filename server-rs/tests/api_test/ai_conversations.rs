@@ -732,11 +732,12 @@ async fn run_persistence_round_trips_shape_and_terminal_state() {
             "promptVersion",
             "providerId",
             "reasoningEffort",
+            "skillSnapshot",
             "startedAt",
             "status",
             "userMessageId",
         ],
-        "Run 的键集合（Kotlin AiRunDto 的 11 个非空键）"
+        "Run 的键集合（含 skillSnapshot：事后能查到当时用的哪版 Skill）"
     );
     assert!(value.get("completedAt").is_none(), "还没结束 → 键不出现");
     assert!(value.get("errorCode").is_none() && value.get("retryOfRunId").is_none());

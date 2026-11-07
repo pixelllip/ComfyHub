@@ -23,6 +23,8 @@ class RunStartRequest {
     this.assistantMessageId,
     this.attachmentIds = const [],
     this.retryOfRunId,
+    this.displayText,
+    this.mentions = const [],
   });
 
   final String conversationId;
@@ -43,6 +45,15 @@ class RunStartRequest {
 
   /// 这次 Run 是重放哪一次失败的（AIH-024），远端用它把两次 Run 关联起来。
   final String? retryOfRunId;
+
+  /// 用户**看到的**正文（卡片块已剥掉）；缺省 = [text]。
+  ///
+  /// `text` 仍是给模型的完整正文（含卡正文），界面按 [displayText] +
+  /// [mentions] 画小卡片。
+  final String? displayText;
+
+  /// `@` 卡片 / `/技能` 的发送时快照（后端落成用户消息的 `mention` 块）。
+  final List<OutgoingMention> mentions;
 
   /// 调用方**自己生成**的会话 / 消息主键（M3.2）。
   ///
@@ -244,6 +255,8 @@ class RemoteRunEventSource implements RunEventSource {
       reasoningEffort: request.reasoningEffort,
       attachmentIds: request.attachmentIds,
       retryOfRunId: request.retryOfRunId,
+      displayText: request.displayText,
+      mentions: request.mentions,
     );
     // 远端这两个 id 由后端生成：**回传什么就用什么**（不要拿请求里那份，远端才是真源）
     return RunHandles(

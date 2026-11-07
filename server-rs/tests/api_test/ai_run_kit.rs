@@ -32,8 +32,8 @@ async fn run_kit_ships_every_rule_the_phone_needs() {
         body["schemaVersion"], 1,
         "与 /api/sync/manifest 的 user_version 同一个数"
     );
-    // v60：新增 `reference_image_search`，第 26 条补"选项先找参考图"。
-    assert_eq!(body["promptVersion"], "v60");
+    // v61：Skill 正文改为"用户授权执行的规则"，新增 `read_skill_file`。
+    assert_eq!(body["promptVersion"], "v61");
     assert_eq!(body["nsfwEnabled"], false, "夹具里没开 NSFW");
     assert_eq!(body["inlineBudget"]["perImageBytes"], 8388608, "单图 8MB");
     assert_eq!(body["inlineBudget"]["totalBytes"], 20971520, "合计 20MB");
@@ -489,6 +489,7 @@ async fn tool_policy_and_nsfw_endpoints() {
             "list_skills",
             "load_skill",
             "read_file",
+            "read_skill_file",
             // 参考图搜索（2026-11-04）：按 Danbooru tag 找真实图片、下载成本机附件
             "reference_image_search",
             "register_skill",
@@ -696,6 +697,41 @@ async fn skills_crud_round_trip_with_stable_error_codes() {
     let (_, body) = get_json(router_for(state.clone()), "/api/ai/skills").await;
     assert_eq!(body.as_array().unwrap().len(), 1);
     assert_eq!(body[0]["name"], "demo-skill");
+
+    // 停用 / 启用（内置与用户都允许；只影响对话，文件不动）
+    let (status, body) = send_json(
+        router_for(state.clone()),
+        "PUT",
+        "/api/ai/skills/demo-skill/enabled",
+        serde_json::json!({ "enabled": false }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["enabled"], false);
+    let (_, body) = get_json(router_for(state.clone()), "/api/ai/skills").await;
+    assert_eq!(body[0]["enabled"], false, "停用状态要回给界面");
+    assert!(
+        user_root.join("demo-skill").join("SKILL.md").is_file(),
+        "停用不许删文件"
+    );
+    let (status, body) = send_json(
+        router_for(state.clone()),
+        "PUT",
+        "/api/ai/skills/demo-skill/enabled",
+        serde_json::json!({ "enabled": true }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["enabled"], true);
+    let (status, body) = send_json(
+        router_for(state.clone()),
+        "PUT",
+        "/api/ai/skills/nope/enabled",
+        serde_json::json!({ "enabled": false }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["error"], "SKILL_NOT_FOUND");
 
     // 详情：元数据 + **去 frontmatter 的正文**
     let (status, body) = get_json(router_for(state.clone()), "/api/ai/skills/demo-skill").await;

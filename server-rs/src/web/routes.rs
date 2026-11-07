@@ -374,6 +374,11 @@ pub fn router(state: AppState) -> Router {
             "/api/ai/skills/{name}",
             get(ai_skill_detail).delete(delete_skill),
         )
+        // 停用 / 启用（内置与用户都允许；只影响对话，文件不动）
+        .route(
+            "/api/ai/skills/{name}/enabled",
+            axum::routing::put(ai_skill_enabled),
+        )
         // 界面端点第四批（P4 第 36 步）：**长期记忆五条**。真源是 `<storage>\ai\memory.md`
         // （一行一条、用户能手改），界面上的保存 / 加一条 / 删几条 / 清空都打这里。
         .route(
@@ -1796,6 +1801,26 @@ struct SkillUpsertRequest {
 /// 工具层失败 → AI 错误（`AiRoutes.toolGuard` 的对应物：**码要原样传出去**）。
 fn skill_failed(failure: crate::ai::skills::SkillFailure) -> ApiError {
     failure.into_api_error()
+}
+
+/// `PUT /api/ai/skills/{name}/enabled` 的入参。
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SkillEnabledRequest {
+    enabled: bool,
+}
+
+/// `PUT /api/ai/skills/{name}/enabled` —— 停用 / 启用一个 skill。
+///
+/// 内置 skill 不能删，但可以停用；停用名单落在 `<storage>\ai\skills.disabled.json`，
+/// 只影响系统提示与 `/` 菜单，磁盘上的正文一个字节都不动。
+async fn ai_skill_enabled(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+    Json(body): Json<SkillEnabledRequest>,
+) -> Result<Json<crate::ai::skills::SkillDto>, ApiError> {
+    let dto = crate::ai::skills::set_enabled(&state, &name, body.enabled).map_err(skill_failed)?;
+    Ok(Json(dto))
 }
 
 /// `GET /api/ai/skills` —— 全量清单（**含非法项**：带 `validationError` 的照样列出来，AIH-038）。
