@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:viewer/core/run_event_source.dart';
+import 'package:viewer/models/ai_models.dart';
 
 /// `RunEventSource` 的**本地实现**（手机 harness 的通道那一侧）。
 ///
@@ -86,6 +87,40 @@ void main() {
     expect(handles.runId, 'r1');
     expect(handles.conversationId, 'c1');
     expect(handles.kitVersion, '2026-09-23.1');
+  });
+
+  test('startRun 把展示正文与卡片快照送下去（重开会话才画得出小卡片）', () async {
+    mockMethods((call) async {
+      expect(call.method, 'startRun');
+      final args = Map<String, dynamic>.from(call.arguments as Map);
+      // 给模型的正文仍是完整那份（含卡正文）
+      expect(args['text'], '[STYLE SPEC]\n赛博\n霓虹\n\n按这个画');
+      // 用户看到的那句单独送下去：少了它，重开会话那条气泡会退化成一大段卡正文
+      expect(args['displayText'], '按这个画');
+      final mentions = jsonDecode(args['mentions'] as String) as List;
+      expect(mentions, hasLength(1));
+      expect(mentions.first['kind'], 'style_card');
+      expect(mentions.first['name'], '赛博霓虹');
+      expect(mentions.first['modelText'], '[STYLE SPEC]\n赛博\n霓虹');
+      expect((mentions.first['snapshot'] as Map)['id'], 's1');
+      return jsonEncode({'runId': 'r1', 'conversationId': 'c1'});
+    });
+
+    await source().startRun(
+      const RunStartRequest(
+        conversationId: 'c1',
+        text: '[STYLE SPEC]\n赛博\n霓虹\n\n按这个画',
+        displayText: '按这个画',
+        mentions: [
+          OutgoingMention(
+            kind: 'style_card',
+            name: '赛博霓虹',
+            modelText: '[STYLE SPEC]\n赛博\n霓虹',
+            snapshot: {'id': 's1', 'name': '赛博霓虹'},
+          ),
+        ],
+      ),
+    );
   });
 
   test('startRun 把界面生成的两个消息 id 送下去，并读回 Kotlin 的回显（M3.2）', () async {

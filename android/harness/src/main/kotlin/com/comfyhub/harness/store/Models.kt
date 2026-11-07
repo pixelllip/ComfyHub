@@ -212,6 +212,14 @@ object PartType {
     const val TOOL_CALL = "tool_call"
     const val TOOL_RESULT = "tool_result"
     const val ATTACHMENT = "attachment"
+
+    /**
+     * 用户消息里的 `@` 卡片 / `/技能` 引用（桌面 `prepare_mentions` 落的就是这个类型）。
+     *
+     * 有了它，界面上那条用户气泡才能画成小卡片；没有它，重开会话时只能把卡正文
+     * 当普通文字铺出来（2026-11-07 修的那条）。
+     */
+    const val MENTION = "mention"
 }
 
 /**

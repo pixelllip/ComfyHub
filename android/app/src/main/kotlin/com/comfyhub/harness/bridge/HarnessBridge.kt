@@ -2,6 +2,7 @@ package com.comfyhub.harness.bridge
 
 import android.content.Context
 import com.comfyhub.harness.agent.HarnessRunner
+import com.comfyhub.harness.agent.MentionSpec
 import com.comfyhub.harness.agent.RunRequest
 import com.comfyhub.harness.event.RunEventBus
 import com.comfyhub.harness.kit.Decision
@@ -36,9 +37,13 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import java.io.File
 
@@ -371,6 +376,14 @@ class HarnessBridge(private val context: Context) :
             result.error("BAD_ARGUMENTS", "未知协议：${call.argument<String>("api")}", null)
             return
         }
+        // `@` 卡片 / `/技能` 的发送时快照（Dart 侧 `OutgoingMention.toJson()` 的数组）。
+        // 解析不了就当场回 BAD_ARGUMENTS —— 静默当空数组会把用户选的卡悄悄丢掉。
+        val mentions = try {
+            parseMentions(call.argument<String>("mentions"))
+        } catch (e: IllegalArgumentException) {
+            result.error("BAD_ARGUMENTS", e.message ?: "mentions 读不懂", null)
+            return
+        }
         val request = RunRequest(
             conversationId = call.argument<String>("conversationId") ?: com.comfyhub.harness.store.Timestamps.newId(),
             providerId = call.argument<String>("providerId").orEmpty(),
@@ -380,6 +393,10 @@ class HarnessBridge(private val context: Context) :
             credentialRef = call.argument<String>("credentialRef"),
             kit = kit,
             userText = call.argument<String>("text").orEmpty(),
+            // 界面画气泡用这两样：`displayText` 是用户看到的正文，`mentions` 是小卡片。
+            // 少了它们，重开会话时那条气泡会退化成一大段卡正文（与刚发出时长得不一样）。
+            displayText = call.argument<String>("displayText"),
+            mentions = mentions,
             reasoningEffort = ReasoningEffort.parse(call.argument<String>("reasoningEffort")),
             maxSteps = call.argument<Int>("maxSteps") ?: 8,
             // 界面自己生成的 id：它已经按这两个 id 插好气泡了，库里必须用同一对
@@ -402,6 +419,42 @@ class HarnessBridge(private val context: Context) :
                 put("promptVersion", kit.promptVersion)
             }.toString(),
         )
+    }
+
+    /**
+     * 解析 Dart 侧送来的 `mentions`（JSON **数组字符串**）。
+     *
+     * 形状与桌面 `POST /api/ai/conversations/{id}/runs` 的 `mentions[]` 同一套键名：
+     * `{kind, name, modelText?, snapshot?}`。这里**只做形状校验**，内容不校验
+     * （卡片是用户自己的东西，跟桌面同一条纪律）；解析不了就抛，由调用方回 `BAD_ARGUMENTS`
+     * —— 静默当空数组等于把用户选的卡悄悄丢掉，界面上那张小卡片就永远画不出来。
+     *
+     * 上限与桌面同值（`MAX_MENTIONS = 32`）：超了直接说，不截断。
+     */
+    private fun parseMentions(raw: String?): List<MentionSpec> {
+        if (raw.isNullOrBlank()) return emptyList()
+        val element = Json.parseToJsonElement(raw)
+        val array = element as? JsonArray
+            ?: throw IllegalArgumentException("mentions 必须是一段 JSON 数组")
+        if (array.size > MAX_MENTIONS) {
+            throw IllegalArgumentException("一条消息最多带 $MAX_MENTIONS 个卡片或技能引用")
+        }
+        return array.map { item ->
+            val obj = item as? JsonObject
+                ?: throw IllegalArgumentException("mentions 里每一项都必须是 JSON 对象")
+            val kind = obj["kind"]?.jsonPrimitive?.contentOrNull?.trim().orEmpty()
+            val name = obj["name"]?.jsonPrimitive?.contentOrNull?.trim().orEmpty()
+            if (kind.isEmpty()) throw IllegalArgumentException("mentions 里有一项没有 kind")
+            if (name.isEmpty()) throw IllegalArgumentException("mentions 里有一项没有名字")
+            // 快照原样留着（它是发送那一刻的只读副本），到落库时才序列化
+            val snapshot = obj["snapshot"]?.takeIf { it is JsonObject }?.toString()
+            MentionSpec(
+                kind = kind,
+                name = name,
+                modelText = obj["modelText"]?.jsonPrimitive?.contentOrNull,
+                snapshotJson = snapshot,
+            )
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -747,6 +800,9 @@ class HarnessBridge(private val context: Context) :
 
         /** 事件通道名（Dart 侧 `EventChannel('comfyhub/harness/events')`）。 */
         const val EVENT_CHANNEL = "comfyhub/harness/events"
+
+        /** 一条消息最多带几个卡片 / 技能引用（与桌面 `run_lifecycle::MAX_MENTIONS` 同值）。 */
+        const val MAX_MENTIONS = 32
     }
 }
 

@@ -21,6 +21,7 @@ import com.comfyhub.harness.tools.MobileAskGate
 import com.comfyhub.harness.tools.MobileToolRegistry
 import com.comfyhub.harness.tools.SecretLookup
 import kotlinx.coroutines.runBlocking
+import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
@@ -207,6 +208,58 @@ class HarnessRunnerTest {
     }
 
     // --- 标题 --------------------------------------------------------------
+
+    // --- 用户消息的卡片快照（2026-11-07）-------------------------------------
+
+    @Test
+    fun `用户消息落展示正文与卡片快照：重开会话仍能画小卡片`() = runBlocking {
+        val transport = ScriptedTransport()
+        transport.script(*(sse(textFrame("好"), doneFrame("stop"))).toTypedArray())
+        val req = request(text = "[STYLE SPEC]\n赛博\n霓虹\n\n按这个画").copy(
+            userMessageId = "u-1",
+            displayText = "按这个画",
+            mentions = listOf(
+                MentionSpec(
+                    kind = "style_card",
+                    name = "赛博霓虹",
+                    modelText = "[STYLE SPEC]\n赛博\n霓虹",
+                    snapshotJson = """{"id":"s1","name":"赛博霓虹","prompt":"霓虹"}""",
+                ),
+            ),
+        )
+        runner(transport).run(req)
+
+        // ① 给模型的正文**一个字都不许少**（历史轮直接拿 text 拼，改它模型就看不到卡正文）
+        val user = store.getMessage("u-1")!!
+        assertEquals("[STYLE SPEC]\n赛博\n霓虹\n\n按这个画", user.text)
+
+        // ② 有序块：先卡片、再用户看到的那句正文（前端在 parts 非空时只渲染 parts）
+        val parts = store.listParts("u-1")
+        assertEquals(listOf(PartType.MENTION, PartType.TEXT), parts.map { it.type })
+        assertEquals("按这个画", parts[1].text)
+
+        val payload = Json.parseToJsonElement(parts[0].jsonPayload!!).jsonObject
+        assertEquals("style_card", payload["kind"]!!.jsonPrimitive.content)
+        assertEquals("赛博霓虹", payload["name"]!!.jsonPrimitive.content)
+        assertEquals("[STYLE SPEC]\n赛博\n霓虹", payload["modelText"]!!.jsonPrimitive.content)
+        // 快照是**发送那一刻**的原文：卡后来被改 / 删，弹窗里仍是当时那版
+        assertEquals("s1", payload["snapshot"]!!.jsonObject["id"]!!.jsonPrimitive.content)
+    }
+
+    @Test
+    fun `普通消息不落块：老行为一个字节都不变`() = runBlocking {
+        val transport = ScriptedTransport()
+        transport.script(*(sse(textFrame("好"), doneFrame("stop"))).toTypedArray())
+        runner(transport).run(request(text = "画一只猫").copy(userMessageId = "u-2"))
+
+        val user = store.getMessage("u-2")!!
+        assertEquals("画一只猫", user.text)
+        assertTrue(
+            "没有卡片、展示正文与正文相同 → 不写块（省掉每条消息多几行上行）",
+            store.listParts("u-2").isEmpty(),
+        )
+    }
+
 
     @Test
     fun `第一问起标题：写进会话、发 conversation-updated、正文里看不到标记`() = runBlocking {

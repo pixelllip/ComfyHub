@@ -39,7 +39,9 @@ import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import java.util.concurrent.ConcurrentHashMap
 
@@ -60,6 +62,16 @@ data class RunRequest(
     /** 本次 Run 用的规则工件（**必须来自 run-kit**，R13）。 */
     val kit: RunKit,
     val userText: String,
+    /**
+     * 用户**看到的**那段正文（`@` 卡片块与 `/技能` 标记已经剥掉）；缺省 = [userText]。
+     *
+     * 为什么要分两个：`userText` 是**给模型**的完整正文（卡正文 + 用户这句话），
+     * 而界面上那条气泡只该显示用户自己敲的字 —— 卡片由 [mentions] 画成小卡片。
+     * 只写 `userText` 的表现是"刚发出去时是小卡片，重开会话就变回一大段卡正文"。
+     */
+    val displayText: String? = null,
+    /** `@` 卡片 / `/技能` 的发送时快照，落成用户消息的有序块（`mention`）。 */
+    val mentions: List<MentionSpec> = emptyList(),
     val reasoningEffort: ReasoningEffort? = null,
     /**
      * 单次回复的工具轮数上限。
@@ -103,6 +115,26 @@ data class RunOutcome(
     val status: String,
     val text: String,
     val errorCode: String? = null,
+)
+
+/**
+ * 一条 `@` 卡片 / `/技能` 引用（用户消息里的 `mention` 块）。
+ *
+ * 与桌面 `POST /api/ai/conversations/{id}/runs` 的 `mentions[]` **同一套键名**
+ * （`docs/ai-tools-and-skills.md` §2.0.2）：手机只是把"发送那一刻的快照"落进本地库，
+ * 界面据此画小卡片、点开看当时的卡正文。
+ *
+ * ⚠ 桌面对 `skill` 是**现读磁盘**取正文（不采信前端）；手机没有那份文件，
+ * 所以这里也**不编正文** —— 只记 `kind` / `name`，要正文时由模型自己去 `load_skill`
+ * （手机侧那个工具读的是本机投放口，取不到就如实报 `SKILL_NOT_FOUND`）。
+ */
+data class MentionSpec(
+    val kind: String,
+    val name: String,
+    /** 卡片正文块（给模型看的原文）；技能不需要，手机也拿不到。 */
+    val modelText: String? = null,
+    /** 发送那一刻的卡片快照（原样 JSON 文本；界面弹窗只读）。 */
+    val snapshotJson: String? = null,
 )
 
 /**
@@ -226,6 +258,7 @@ class HarnessRunner(
             text = request.userText,
             id = request.userMessageId ?: Timestamps.newId(),
         )
+        writeUserParts(user.id, request)
         val assistant = store.appendMessage(
             conversationId = conversation.id,
             role = "assistant",
@@ -250,6 +283,50 @@ class HarnessRunner(
         bus.open(run.id)
         return Prepared(run.id, request.copy(conversationId = conversation.id), user.id, assistant.id)
     }
+
+    /**
+     * 用户消息的有序块：`@` 卡片 / `/技能` 的 `mention` + **用户看到的正文**（`text`）。
+     *
+     * 为什么非有不可（2026-11-07 用户报的现象）：只写 `text` 的话，界面上那条气泡在
+     * "刚发出去"时靠内存里的乐观状态画成小卡片，**重开会话**读回库就只剩一大段卡正文 ——
+     * 同一句话在两个时刻长得不一样。桌面是完整的（`POST /runs` 会落
+     * `mention` 块 + `text(displayText)`），手机要跟它对齐。
+     *
+     * 三条纪律：
+     * ① **没有任何引用、且用户看到的与发出去的相同 → 不落块**（老行为一个字节都不变，
+     *    也省掉每条消息多几行上行）；
+     * ② 只要落了块，就**必须**落那条 `text` 块 —— 前端在 `parts` 非空时**只渲染 parts**，
+     *    少写它等于把用户敲的字弄丢；
+     * ③ `message.text` 仍写**完整正文**（含卡正文）：手机的历史轮是直接拿 `text` 拼的
+     *    （不像桌面会按块拼回来），改它就会让模型看不到卡正文。
+     */
+    private fun writeUserParts(messageId: String, request: RunRequest) {
+        val display = request.displayText ?: request.userText
+        if (request.mentions.isEmpty() && display == request.userText) return
+        var ordinal = 0
+        for (mention in request.mentions) {
+            if (mention.name.isBlank()) continue // 没有名字就画不出卡片，落下去只是垃圾行
+            store.appendPart(
+                messageId = messageId,
+                ordinal = ordinal++,
+                type = PartType.MENTION,
+                jsonPayload = mentionPayload(mention),
+            )
+        }
+        store.appendPart(messageId, ordinal, PartType.TEXT, text = display)
+    }
+
+    /** 一条 `mention` 块的 `json_payload`（键名与桌面 `prepare_mentions` 对齐）。 */
+    private fun mentionPayload(mention: MentionSpec): String = buildJsonObject {
+        put("kind", mention.kind)
+        put("name", mention.name)
+        mention.modelText?.takeIf { it.isNotBlank() }?.let { put("modelText", it) }
+        // 快照是**发送那一刻**的只读副本：能解析就原样嵌进去（界面弹窗要的是对象）。
+        // 解析不了就只丢这一份快照 —— 卡片本身、正文、模型看到的内容都不受影响。
+        mention.snapshotJson?.let { raw ->
+            runCatching { Json.parseToJsonElement(raw) }.getOrNull()?.let { put("snapshot", it) }
+        }
+    }.toString()
 
     // -----------------------------------------------------------------------
     //  主循环

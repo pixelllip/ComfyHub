@@ -572,6 +572,14 @@ class LocalHarnessRunEventSource implements RunEventSource {
     final raw = await _method.invokeMethod<String>('startRun', {
       'conversationId': request.conversationId,
       'text': request.text,
+      // 界面画气泡要用这两样（与桌面 `POST /runs` 同一套字段）：
+      // `displayText` 是用户看到的正文、`mentions` 是 `@` 卡片 / `/技能` 的快照。
+      // 少了它们，刚发出去的小卡片在**重开会话**后会退化成一大段卡正文。
+      'displayText': ?request.displayText,
+      if (request.mentions.isNotEmpty)
+        'mentions': jsonEncode([
+          for (final mention in request.mentions) mention.toJson(),
+        ]),
       'providerId': ?request.providerId,
       'modelId': ?request.modelId,
       'api': ?request.api,
