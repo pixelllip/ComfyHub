@@ -114,19 +114,23 @@ class _MediaDetailPageState extends State<MediaDetailPage> {
   Future<void> _load({bool showSpinner = true}) async {
     if (!mounted) return;
     final store = context.read<LibraryStore>();
+    // 本次要取的那一条。切换时 `_currentId` 会先变，但**旧内容要一直留到新数据回来**；
+    // 如果这次请求回来时用户已经翻到别的图了，它的结果直接丢掉。
+    final id = _currentId;
     // 打开详情 = 用户主动要看这一条（用户 2026-09-20：「打开详情之后就没必要模糊了」）：
     // 详情页自己不打码，顺手把"这一条看过了"记下来 —— 回到列表时它的缩略图也不再糊。
     // 只记在内存里（`NsfwStore`），关掉 App 再打开照旧打码。
     //
     // ⚠ 每次**切换**也要对新的那一条 reveal（`_goTo` 会再调一次 `_load`）——
     // 漏掉的表现是"看完第 1 张，第 2 张又糊上了"。
-    context.read<NsfwStore?>()?.reveal('media:$_currentId');
+    context.read<NsfwStore?>()?.reveal('media:$id');
     setState(() {
       if (showSpinner) _loading = true;
       _error = null;
     });
     try {
-      final media = await store.api.getMedia(_currentId);
+      final media = await store.api.getMedia(id);
+      if (!mounted || _currentId != id) return;
       Prompt? prompt;
       if (media.promptId != null) {
         try {
@@ -149,7 +153,7 @@ class _MediaDetailPageState extends State<MediaDetailPage> {
           siblings = const [];
         }
       }
-      if (!mounted) return;
+      if (!mounted || _currentId != id) return;
       setState(() {
         _media = media;
         _prompt = prompt;
@@ -185,7 +189,7 @@ class _MediaDetailPageState extends State<MediaDetailPage> {
         setState(() => _autoCacheSkipped = true);
       }
     } catch (e) {
-      if (!mounted) return;
+      if (!mounted || _currentId != id) return;
       setState(() {
         _error = '$e';
         _loading = false;
@@ -706,29 +710,18 @@ class _MediaDetailPageState extends State<MediaDetailPage> {
                 );
               }
             },
-            // **过渡只做在图片上**（用户 2026-10-11："切换时整个界面闪烁"）：
-            // 布局原地不动，只有这一块淡入。key 跟着 `_currentId` 变 ——
-            // 同一个 id 重建时（比如下拉刷新）不重放动画。
+            // **过渡只做在图片里**（用户 2026-10-11："切换时整个界面闪烁"）。
             //
-            // ⚠ 别把这个 `AnimatedSwitcher` 提到外层：提到外层就是"整页骨架重建"，
-            // 那正是闪烁的来源（`LayoutBuilder`/`Row`/滚动容器全都要重来一遍）。
-            child: AnimatedSwitcher(
-              duration: const Duration(milliseconds: 140),
-              // ⚠ **别用默认的 `layoutBuilder`**：它把新旧两份摆进一个 `Stack`
-              // 同时布局 —— 预览区是"由外层 `Row` 的 stretch 给高度"的，
-              // 两份同时存在时其中一份会拿到 unbounded 高度（溢出/闪烁）。
-              // 这里只留"新的那一份"，过渡就只剩淡入，布局始终只有一份。
-              layoutBuilder: (current, previous) =>
-                  current ?? const SizedBox.shrink(),
-              child: KeyedSubtree(
-                key: ValueKey<int>(_currentId),
-                child: _Preview(
-                  media: m,
-                  url: url,
-                  posterUrl: _posterUrl(m),
-                  file: file,
-                ),
-              ),
+            // 这里刻意**不**在 `_currentId` 外面套 `AnimatedSwitcher`：
+            // 页面一按 → 就换 key，等于在数据还没回来时先把旧图拆掉、再建一个新的，
+            // 用户看到的就是"显式注销旧界面"。改成让 `ZoomableImageView` 自己
+            // 留住旧图 —— 新图解码出第一帧之后才换 provider 并淡入（见那边 `_primeNext`）。
+            // 所以这里 child 的实例 / State 在翻图时**始终是同一个**。
+            child: _Preview(
+              media: m,
+              url: url,
+              posterUrl: _posterUrl(m),
+              file: file,
             ),
           ),
         );

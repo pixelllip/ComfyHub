@@ -579,12 +579,16 @@ class _PromptsPageState extends State<PromptsPage>
       );
     }
 
+    // 页码请求走后端分页：`promptPage` 是"用户要看第几页"，
+    // `prompts.page` 才是"现在这份 items 属于第几页"。两者不一致 = 新一页还在路上。
+    final pageBusy = store.promptPage != store.prompts.page;
     return Column(
       children: [
         Expanded(
           // 左右滑动 = 翻当前列表的页（带滑入 / 滑出动画，见 SwipePageView）
           child: SwipePageView(
-            page: store.prompts.page,
+            page: store.promptPage,
+            contentPage: store.prompts.page,
             pages: store.prompts.pages,
             onPageChanged: store.setPromptPage,
             // 列数 = 可用宽度 / 550（宽窗口自动多列，窄窗口仍是单列）
@@ -618,8 +622,9 @@ class _PromptsPageState extends State<PromptsPage>
           ),
         ),
         PageBar(
-          page: store.prompts.page,
+          page: store.promptPage,
           pages: store.prompts.pages,
+          busy: pageBusy,
           onChanged: store.setPromptPage,
         ),
       ],

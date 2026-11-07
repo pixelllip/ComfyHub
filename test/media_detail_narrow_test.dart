@@ -187,6 +187,10 @@ void main() {
     // 而"原地换内容"必须还是**同一个** State 实例。`findsOneWidget` 抓不到这个差别
     // —— 换了路由之后新页面也只有一个。
     final stateBefore = tester.state(find.byType(MediaDetailPage));
+    // 预览用的 `ZoomableImageView` 也必须**同一个 State**：翻图时如果按 `_currentId`
+    // 换 key，就会在数据还没回来时先把旧图拆掉、再建一个新的 —— 用户看到的
+    // "显式注销旧界面"正是这么来的。新图由查看器自己解码完再淡入。
+    final viewerBefore = tester.state(find.byType(ZoomableImageView));
 
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
     await tester.pumpAndSettle();
@@ -200,6 +204,11 @@ void main() {
       identical(tester.state(find.byType(MediaDetailPage)), stateBefore),
       isTrue,
       reason: '切换必须是"原地换内容"，State 不许被重建（重建 = 关旧窗口开新窗口）',
+    );
+    expect(
+      identical(tester.state(find.byType(ZoomableImageView)), viewerBefore),
+      isTrue,
+      reason: '翻图只换内容，不许把大图查看器的 State 也重建掉',
     );
 
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);

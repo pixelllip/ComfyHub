@@ -573,12 +573,16 @@ class _GalleryPageState extends State<GalleryPage> {
     }
 
     final theme = Theme.of(context);
+    // 页码请求走后端分页：`mediaPage` 是"用户要看第几页"，
+    // `media.page` 才是"现在这份 items 属于第几页"。两者不一致 = 新一页还在路上。
+    final pageBusy = store.mediaPage != store.media.page;
     final grid = Column(
       children: [
         Expanded(
           // 左右滑动 = 翻当前页（与预设页同一套交互，见 SwipePageView）
           child: SwipePageView(
             page: store.mediaPage,
+            contentPage: store.media.page,
             pages: store.media.pages,
             onPageChanged: store.setMediaPage,
             child: GridView.builder(
@@ -646,6 +650,7 @@ class _GalleryPageState extends State<GalleryPage> {
         PageBar(
           page: store.mediaPage,
           pages: store.media.pages,
+          busy: pageBusy,
           onChanged: store.setMediaPage,
         ),
       ],

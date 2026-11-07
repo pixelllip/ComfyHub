@@ -82,6 +82,103 @@ void main() {
     expect(changes, isEmpty);
     expect(find.byTooltip('下一页'), findsNothing);
   });
+
+  // 2026-11-07 用户反馈："点击翻页后重新加载界面，会有个显式的注销旧界面的过程"。
+  // 分页接口还没回来时，旧页必须**原地留着**；回来之后才滑走。
+  testWidgets('新页数据没到时停在旧页，到了才滑过去（不闪空白 / 不闪加载页）', (tester) async {
+    final key = GlobalKey<_AsyncHostState>();
+    await tester.pumpWidget(_asyncHost(key));
+    await tester.pumpAndSettle();
+    expect(find.text('page 1'), findsOneWidget);
+
+    await tester.tap(find.byTooltip('下一页'));
+    await tester.pump();
+
+    // 目标页码已经翻到 2，但内容还是第 1 页 —— 旧内容不许被拆掉。
+    expect(find.text('第 2 / 3 页'), findsOneWidget);
+    expect(find.text('page 1'), findsOneWidget);
+    expect(find.text('page 2'), findsNothing);
+    expect(find.byType(LinearProgressIndicator), findsOneWidget);
+
+    // 数据到位：先是"旧页 + 新页同时在"的过渡帧，然后只剩新页。
+    key.currentState!.deliver();
+    await tester.pump();
+    expect(find.text('page 1'), findsOneWidget);
+    expect(find.text('page 2'), findsOneWidget);
+
+    await tester.pumpAndSettle();
+    expect(find.text('page 1'), findsNothing);
+    expect(find.text('page 2'), findsOneWidget);
+    expect(find.byType(LinearProgressIndicator), findsNothing);
+  });
+
+  testWidgets('滑动请求换页后也停在旧页等数据，不先回弹再加载', (tester) async {
+    final key = GlobalKey<_AsyncHostState>();
+    await tester.pumpWidget(_asyncHost(key));
+    await tester.pumpAndSettle();
+
+    await tester.drag(find.byType(SwipePageView), const Offset(-300, 0));
+    await tester.pump();
+
+    expect(key.currentState!.changes, [2]);
+    expect(find.text('page 1'), findsOneWidget, reason: '新页没到，旧页不许消失');
+    expect(find.byType(LinearProgressIndicator), findsOneWidget);
+
+    key.currentState!.deliver();
+    await tester.pumpAndSettle();
+    expect(find.text('page 2'), findsOneWidget);
+  });
+}
+
+Widget _asyncHost(GlobalKey<_AsyncHostState> key) => MaterialApp(
+  home: Scaffold(body: _AsyncHost(key: key, pages: 3)),
+);
+
+class _AsyncHost extends StatefulWidget {
+  final int pages;
+
+  const _AsyncHost({super.key, required this.pages});
+
+  @override
+  State<_AsyncHost> createState() => _AsyncHostState();
+}
+
+class _AsyncHostState extends State<_AsyncHost> {
+  final changes = <int>[];
+
+  /// 用户要求看的页；[content] 是列表数据实际装着的页。
+  int page = 1;
+  int content = 1;
+
+  void go(int next) {
+    changes.add(next);
+    setState(() => page = next);
+  }
+
+  /// 模拟后端的这一页数据到了。
+  void deliver() => setState(() => content = page);
+
+  @override
+  Widget build(BuildContext context) {
+    final busy = page != content;
+    return Column(
+      children: [
+        Expanded(
+          child: SwipePageView(
+            page: page,
+            contentPage: content,
+            pages: widget.pages,
+            onPageChanged: go,
+            child: ColoredBox(
+              color: Colors.blueGrey,
+              child: Center(child: Text('page $content')),
+            ),
+          ),
+        ),
+        PageBar(page: page, pages: widget.pages, busy: busy, onChanged: go),
+      ],
+    );
+  }
 }
 
 Widget _host({

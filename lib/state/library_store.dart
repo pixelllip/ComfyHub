@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 
 import '../core/api_client.dart';
@@ -55,6 +57,16 @@ class LibraryStore extends ChangeNotifier {
   String promptSort = 'newest';
   int promptPage = 1;
 
+  /// 请求代次：快速连点翻页时只让**最新**那次请求改状态。
+  int _promptSeq = 0;
+
+  /// 筛选 / 排序代次：筛选变了以后，旧的预取结果一律不认。
+  int _promptGen = 0;
+
+  /// 相邻页缓存（翻页时要在拖动过程中同时画出前后两页）。
+  final Map<int, Paged<Prompt>> _promptPages = <int, Paged<Prompt>>{};
+  final Map<int, Future<void>> _promptPrefetching = <int, Future<void>>{};
+
   // -------------------------------------------------------------------------
   //  媒体
   // -------------------------------------------------------------------------
@@ -71,6 +83,16 @@ class LibraryStore extends ChangeNotifier {
   bool mediaUntagged = false;
   String mediaSort = 'newest';
   int mediaPage = 1;
+
+  /// 请求代次：快速连点翻页时只让**最新**那次请求改状态。
+  int _mediaSeq = 0;
+
+  /// 筛选 / 排序代次：筛选变了以后，旧的预取结果一律不认。
+  int _mediaGen = 0;
+
+  /// 相邻页缓存（翻页时要在拖动过程中同时画出前后两页）。
+  final Map<int, Paged<MediaAsset>> _mediaPages = <int, Paged<MediaAsset>>{};
+  final Map<int, Future<void>> _mediaPrefetching = <int, Future<void>>{};
 
   // -------------------------------------------------------------------------
   //  标签 / 统计
@@ -114,6 +136,10 @@ class LibraryStore extends ChangeNotifier {
   // -------------------------------------------------------------------------
 
   Future<void> refreshAll() async {
+    // 整库刷新通常意味着"外面有东西变了"（上传 / 删除 / 关联）：相邻页缓存
+    // 可能已经过期，别再拿它去拼翻页动画。
+    _invalidateMediaPages();
+    _invalidatePromptPages();
     await Future.wait([
       refreshPrompts(),
       refreshMedia(),
@@ -134,28 +160,81 @@ class LibraryStore extends ChangeNotifier {
   /// 同 [refreshMedia]：批量删除后当前页可能已经不存在，自动回到最后一页，
   /// 避免"删了几个却显示整个库空了"。
   Future<void> refreshPrompts() async {
+    final seq = ++_promptSeq;
+    final gen = _promptGen;
+    final requested = promptPage;
     loadingPrompts = true;
     promptsError = null;
     _safeNotify();
     try {
-      var result = await _listPrompts(page: promptPage);
+      var result = await _listPrompts(page: requested);
+      if (seq != _promptSeq || gen != _promptGen) return;
       if (result.items.isEmpty &&
           result.total > 0 &&
-          promptPage > result.pages) {
+          requested > result.pages) {
         promptPage = result.pages < 1 ? 1 : result.pages;
         result = await _listPrompts(page: promptPage);
+        if (seq != _promptSeq || gen != _promptGen) return;
       }
       prompts = result;
+      _promptPages[result.page] = result;
+      _prefetchPromptNeighbours(result.page);
     } on ApiException catch (e) {
+      if (seq != _promptSeq || gen != _promptGen) return;
       promptsError = e.toString();
       prompts = Paged.empty<Prompt>();
     } catch (e) {
+      if (seq != _promptSeq || gen != _promptGen) return;
       promptsError = '$e';
       prompts = Paged.empty<Prompt>();
     } finally {
-      loadingPrompts = false;
-      _safeNotify();
+      // 快速连点翻页时会有多个请求在飞：只有**最新那一个**能收尾，
+      // 否则旧请求回来会把 loading 提前关掉、把页码改回旧页。
+      if (seq == _promptSeq) {
+        loadingPrompts = false;
+        _safeNotify();
+      }
     }
+  }
+
+  /// 第 [page] 页的缓存（当前页永远以 [prompts] 为准）。
+  Paged<Prompt>? promptPageData(int page) =>
+      prompts.page == page ? prompts : _promptPages[page];
+
+  /// 预取某一页（翻页动画需要同时画出前后两页）。
+  ///
+  /// 失败**不报错**：真正翻到那一页时 [refreshPrompts] 会再试，并照常把错误
+  /// 显示在界面上；这里只是"提前拿一份"。
+  Future<void> ensurePromptPage(int page) {
+    if (page < 1) return Future<void>.value();
+    final known = prompts.pages;
+    if (known > 0 && page > known) return Future<void>.value();
+    if (promptPageData(page) != null) return Future<void>.value();
+    return _promptPrefetching[page] ??= _loadPromptPage(page);
+  }
+
+  Future<void> _loadPromptPage(int page) async {
+    final gen = _promptGen;
+    try {
+      final result = await _listPrompts(page: page);
+      if (_disposed || gen != _promptGen) return;
+      _promptPages[page] = result;
+      _safeNotify();
+    } catch (_) {
+      // 预取是 best-effort，见 [ensurePromptPage]
+    } finally {
+      _promptPrefetching.remove(page);
+    }
+  }
+
+  void _prefetchPromptNeighbours(int page) {
+    if (page > 1) unawaited(ensurePromptPage(page - 1));
+    if (page < prompts.pages) unawaited(ensurePromptPage(page + 1));
+  }
+
+  void _invalidatePromptPages() {
+    _promptGen++;
+    _promptPages.clear();
   }
 
   Future<Paged<Prompt>> _listPrompts({required int page}) => api.listPrompts(
@@ -197,28 +276,79 @@ class LibraryStore extends ChangeNotifier {
   /// "画廊还是空的"，其实库里还有东西，刷新一下才恢复（bug 清单第 2 条）。
   /// 这里多发一次请求把它纠正过来，用户感觉不到。
   Future<void> refreshMedia() async {
+    final seq = ++_mediaSeq;
+    final gen = _mediaGen;
+    final requested = mediaPage;
     loadingMedia = true;
     mediaError = null;
     _safeNotify();
     try {
-      var result = await _listMedia(page: mediaPage);
+      var result = await _listMedia(page: requested);
+      if (seq != _mediaSeq || gen != _mediaGen) return;
       if (result.items.isEmpty &&
           result.total > 0 &&
-          mediaPage > result.pages) {
+          requested > result.pages) {
         mediaPage = result.pages < 1 ? 1 : result.pages;
         result = await _listMedia(page: mediaPage);
+        if (seq != _mediaSeq || gen != _mediaGen) return;
       }
       media = result;
+      _mediaPages[result.page] = result;
+      _prefetchMediaNeighbours(result.page);
     } on ApiException catch (e) {
+      if (seq != _mediaSeq || gen != _mediaGen) return;
       mediaError = e.toString();
       media = Paged.empty<MediaAsset>();
     } catch (e) {
+      if (seq != _mediaSeq || gen != _mediaGen) return;
       mediaError = '$e';
       media = Paged.empty<MediaAsset>();
     } finally {
-      loadingMedia = false;
-      _safeNotify();
+      if (seq == _mediaSeq) {
+        loadingMedia = false;
+        _safeNotify();
+      }
     }
+  }
+
+  /// 第 [page] 页的缓存（当前页永远以 [media] 为准）。
+  Paged<MediaAsset>? mediaPageData(int page) =>
+      media.page == page ? media : _mediaPages[page];
+
+  /// 预取某一页（翻页动画需要同时画出前后两页）。
+  ///
+  /// 失败**不报错**：真正翻到那一页时 [refreshMedia] 会再试，并照常把错误
+  /// 显示在界面上；这里只是"提前拿一份"。
+  Future<void> ensureMediaPage(int page) {
+    if (page < 1) return Future<void>.value();
+    final known = media.pages;
+    if (known > 0 && page > known) return Future<void>.value();
+    if (mediaPageData(page) != null) return Future<void>.value();
+    return _mediaPrefetching[page] ??= _loadMediaPage(page);
+  }
+
+  Future<void> _loadMediaPage(int page) async {
+    final gen = _mediaGen;
+    try {
+      final result = await _listMedia(page: page);
+      if (_disposed || gen != _mediaGen) return;
+      _mediaPages[page] = result;
+      _safeNotify();
+    } catch (_) {
+      // 预取是 best-effort，见 [ensureMediaPage]
+    } finally {
+      _mediaPrefetching.remove(page);
+    }
+  }
+
+  void _prefetchMediaNeighbours(int page) {
+    if (page > 1) unawaited(ensureMediaPage(page - 1));
+    if (page < media.pages) unawaited(ensureMediaPage(page + 1));
+  }
+
+  void _invalidateMediaPages() {
+    _mediaGen++;
+    _mediaPages.clear();
   }
 
   /// 「仅收藏」时画廊**无视集合**：每张被收藏的图按单张列出（不折叠、也不展开成组）。
@@ -276,6 +406,7 @@ class LibraryStore extends ChangeNotifier {
   void setPromptQuery(String value) {
     promptQuery = value;
     promptPage = 1;
+    _invalidatePromptPages();
     refreshPrompts();
   }
 
@@ -286,42 +417,49 @@ class LibraryStore extends ChangeNotifier {
       selectedTags.add(name);
     }
     promptPage = 1;
+    _invalidatePromptPages();
     refreshPrompts();
   }
 
   void clearTags() {
     selectedTags.clear();
     promptPage = 1;
+    _invalidatePromptPages();
     refreshPrompts();
   }
 
   void setTagMode(String mode) {
     tagMode = mode;
     promptPage = 1;
+    _invalidatePromptPages();
     refreshPrompts();
   }
 
   void setPromptKind(String? kind) {
     promptKind = kind;
     promptPage = 1;
+    _invalidatePromptPages();
     refreshPrompts();
   }
 
   void setOnlyFavorite(bool value) {
     onlyFavorite = value;
     promptPage = 1;
+    _invalidatePromptPages();
     refreshPrompts();
   }
 
   void setOnlyUnlinked(bool value) {
     onlyUnlinked = value;
     promptPage = 1;
+    _invalidatePromptPages();
     refreshPrompts();
   }
 
   void setPromptSort(String sort) {
     promptSort = sort;
     promptPage = 1;
+    _invalidatePromptPages();
     refreshPrompts();
   }
 
@@ -344,6 +482,7 @@ class LibraryStore extends ChangeNotifier {
   void setMediaQuery(String value) {
     mediaQuery = value;
     mediaPage = 1;
+    _invalidateMediaPages();
     refreshMedia();
   }
 
@@ -354,42 +493,49 @@ class LibraryStore extends ChangeNotifier {
       mediaTags.add(name);
     }
     mediaPage = 1;
+    _invalidateMediaPages();
     refreshMedia();
   }
 
   void clearMediaTags() {
     mediaTags.clear();
     mediaPage = 1;
+    _invalidateMediaPages();
     refreshMedia();
   }
 
   void setMediaTagMode(String mode) {
     mediaTagMode = mode;
     mediaPage = 1;
+    _invalidateMediaPages();
     refreshMedia();
   }
 
   void setMediaKind(String? kind) {
     mediaKind = kind;
     mediaPage = 1;
+    _invalidateMediaPages();
     refreshMedia();
   }
 
   void setMediaOnlyFavorite(bool value) {
     mediaOnlyFavorite = value;
     mediaPage = 1;
+    _invalidateMediaPages();
     refreshMedia();
   }
 
   void setMediaUntagged(bool value) {
     mediaUntagged = value;
     mediaPage = 1;
+    _invalidateMediaPages();
     refreshMedia();
   }
 
   void setMediaSort(String sort) {
     mediaSort = sort;
     mediaPage = 1;
+    _invalidateMediaPages();
     refreshMedia();
   }
 
@@ -411,6 +557,7 @@ class LibraryStore extends ChangeNotifier {
 
   Future<void> deletePrompt(int id) async {
     await api.deletePrompt(id);
+    _invalidatePromptPages();
     await Future.wait([refreshPrompts(), refreshTags(), refreshStats()]);
   }
 
@@ -421,6 +568,7 @@ class LibraryStore extends ChangeNotifier {
     for (final id in ids) {
       await api.setPromptFavorite(id, favorite);
     }
+    _invalidatePromptPages();
     await Future.wait([refreshPrompts(), refreshStats()]);
   }
 
@@ -428,6 +576,7 @@ class LibraryStore extends ChangeNotifier {
     for (final id in ids) {
       await api.addPromptTags(id, tags);
     }
+    _invalidatePromptPages();
     await Future.wait([refreshPrompts(), refreshTags(), refreshStats()]);
   }
 
@@ -435,6 +584,7 @@ class LibraryStore extends ChangeNotifier {
     for (final id in ids) {
       await api.deletePrompt(id);
     }
+    _invalidatePromptPages();
     await Future.wait([refreshPrompts(), refreshTags(), refreshStats()]);
   }
 
@@ -459,16 +609,19 @@ class LibraryStore extends ChangeNotifier {
 
   Future<void> deleteMedia(int id) async {
     await api.deleteMedia(id);
+    _invalidateMediaPages();
     await Future.wait([refreshMedia(), refreshTags(), refreshStats()]);
   }
 
   Future<void> togglePromptFavorite(Prompt p) async {
     await api.setPromptFavorite(p.id, !p.favorite);
+    _invalidatePromptPages();
     await Future.wait([refreshPrompts(), refreshStats()]);
   }
 
   Future<void> toggleMediaFavorite(MediaAsset m) async {
     await api.updateMedia(m.id, favorite: !m.favorite);
+    _invalidateMediaPages();
     await refreshMedia();
   }
 }

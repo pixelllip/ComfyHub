@@ -7,9 +7,11 @@
 // 断言直接读 InteractiveViewer 上的 TransformationController（就是本组件传进去的那个），
 // 加上两个纯几何函数的单测，不依赖真实图片解码。
 
+import 'dart:async';
 import 'dart:convert';
-import 'dart:typed_data';
+import 'dart:ui' as ui;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -209,5 +211,74 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text('图片加载失败'), findsOneWidget);
     });
+
+    // 用户 2026-11-07："点击翻页后重新加载界面，会有个显式的注销旧界面的过程。"
+    // 换图时必须先把新图解码出来，旧图一直留着 —— 中间不许出现空白 / 转圈。
+    testWidgets('换图先保留旧图，新图第一帧到了才替换', (tester) async {
+      final first = MemoryImage(_pngBytes);
+      Widget viewer(String url, ImageProvider provider) => MaterialApp(
+        home: Scaffold(
+          body: SizedBox(
+            width: _viewport.width,
+            height: _viewport.height,
+            child: ZoomableImageView(
+              url: url,
+              imageSize: _image,
+              imageProvider: provider,
+            ),
+          ),
+        ),
+      );
+
+      await tester.pumpWidget(viewer('http://localhost/a.png', first));
+      await tester.pumpAndSettle();
+      expect(tester.widget<Image>(find.byType(Image)).image, first);
+
+      final completer = Completer<ImageInfo>();
+      final next = _ControlledImage(completer);
+      await tester.pumpWidget(viewer('http://localhost/b.png', next));
+      await tester.pump();
+
+      // 新图还没解码完：画面上仍是旧图，也没有"重新加载"的转圈。
+      expect(tester.widget<Image>(find.byType(Image)).image, first);
+      expect(find.byType(CircularProgressIndicator), findsNothing);
+
+      // 现画一张 1×1 的图当"新图解码结果"（比解 PNG 稳，不依赖 codec 是否买账）
+      final recorder = ui.PictureRecorder();
+      ui.Canvas(recorder).drawRect(
+        const ui.Rect.fromLTWH(0, 0, 1, 1),
+        ui.Paint()..color = const Color(0xFF000000),
+      );
+      final image = await recorder.endRecording().toImage(1, 1);
+      addTearDown(image.dispose);
+      completer.complete(ImageInfo(image: image));
+      await tester.pump(); // 帧后 setState
+      await tester.pump(); // 换成新 provider
+      await tester.pump(const Duration(milliseconds: 200)); // 淡入
+
+      final shown = tester
+          .widgetList<Image>(find.byType(Image))
+          .map((i) => i.image)
+          .toList();
+      expect(shown, contains(next));
+      expect(shown, isNot(contains(first)), reason: '旧图淡出后必须被移除');
+    });
   });
+}
+
+/// 可以手动决定什么时候"解码完成"的假图片。
+class _ControlledImage extends ImageProvider<_ControlledImage> {
+  _ControlledImage(this.completer);
+
+  final Completer<ImageInfo> completer;
+
+  @override
+  Future<_ControlledImage> obtainKey(ImageConfiguration configuration) =>
+      SynchronousFuture<_ControlledImage>(this);
+
+  @override
+  ImageStreamCompleter loadImage(
+    _ControlledImage key,
+    ImageDecoderCallback decode,
+  ) => OneFrameImageStreamCompleter(completer.future);
 }

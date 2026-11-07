@@ -5,108 +5,335 @@ import 'package:flutter/material.dart';
 
 /// **分页内容的左右滑动切换**（用户 2026-10-24 定的统一交互）。
 ///
-/// 需求原话："对于详情部分，左右滑动的逻辑是切换当前显示页数（有过渡动画不是硬切），
-/// 其中左右滑动切换显示页数的设计同步到其他需要翻页的界面"。
+/// 2026-11-07 用户把过渡要求说清楚了：
 ///
-/// ## 它做什么
+/// > "过渡动画会同时显示新旧两页的内容，动画结束后注销旧界面。"
 ///
-///   * 在内容上左右拖动时，内容**跟手**平移（到第一页 / 最后一页有阻尼，不会拖出空白）；
-///   * 松手后超过阈值（约 18% 宽度，或快速甩动）就切页：旧内容滑出、新内容从另一侧滑入；
-///   * 翻页按钮（[PageBar]）改 `page` 时，新内容同样**从对应方向滑入** —— 不是硬切；
-///   * 页数 ≤ 1 时它完全透明（连手势都不挂）。
+/// 所以它不是一个"旧内容淡出、新内容淡入"的替换器，而是一个**小号 PageView**：
 ///
-/// ## 为什么不用 `PageView`
+///   * 手指拖动时，当前页跟着走，相邻页从另一侧一起露出来 —— 拖到一半就是
+///     "左边半页旧内容 + 右边半页新内容"；
+///   * 松手过阈值（约 18% 宽度，或快速甩动）就滑到相邻页：整个动画里两页始终
+///     同时可见，直到动画结束才把旧页从树里拿掉；
+///   * 翻页按钮 / 快捷键改 [page] 时也走同一条动画，不硬切；
+///   * 新一页的数据还没到时，旧页**原地留着**（不闪加载圈、不先滑出去再滑回来），
+///     只在内容区顶上显示一条 2px 的细进度条；数据到了再滑。
 ///
-/// 这些列表的数据是**后端分页**的，`PageView` 要求每一页都是现成的 widget；用它就得
-/// 同时预取前后页，还会把"当前页"变成两套真相（PageController 与 store 的 page）。
-/// 这里只做"过渡表现"，页码真源仍然只有各处 store。
+/// ## 每页内容怎么来
 ///
-/// ⚠ 手势只认**水平**拖动：子树里的纵向滚动、缩略图长按拖动都各自照常工作。
-/// 画廊里 `Draggable` 的即时拖动和它是同一个竞技场（指针先落在图格上时图格优先），
-/// 这是刻意的 —— 拖图比翻页更"局部"。
+/// 用 [builder] 按页码现取。**邻居页的数据要调用方提前准备好**（画廊 / 预设页
+/// 由 store 分页缓存，详情页由同批产物缓存）；拿不到就返回 `null`，组件会：
+///   1. 通过 [onPageNeeded] 请求这一页；
+///   2. 在数据到之前不硬滑，旧页继续显示。
+///
+/// ## 以后接新的分页界面
+///
+/// ```dart
+/// SwipePageView(
+///   page: store.requestedPage,     // 点击后立刻变
+///   pages: store.pages,
+///   builder: (page) => store.hasPage(page) ? MyList(items: store.itemsOf(page)) : null,
+///   onPageChanged: store.setPage,
+///   onPageNeeded: store.loadPage,  // 预取相邻页
+/// )
+/// ```
+///
+/// ⚠ 手势只认**水平**拖动。子树里如果自己有纵向滚动 / 拖动，各自照常工作。
 class SwipePageView extends StatefulWidget {
+  /// 用户要求看的那一页（点翻页按钮 / 滑动松手后立刻变）。
   final int page;
+
   final int pages;
 
-  /// 翻页回调。只会在"手势确实要求换页"时调用，且**动画滑出之后**才调用。
+  /// 按页码取一页的内容。数据还没准备好时返回 `null`。
+  final Widget? Function(int page) builder;
+
+  /// 翻页回调。手势触发的换页在**松手后立即**调用（不等数据）。
   final ValueChanged<int> onPageChanged;
 
-  final Widget child;
+  /// 需要某一页的数据（用于预热相邻页）。可以重复调用，调用方自己做去重。
+  final ValueChanged<int>? onPageNeeded;
+
+  /// 让外部（比如大图查看器的 `Listener`）也能驱动这套拖动。
+  final SwipePageController? controller;
+
+  /// 旧页滑出 + 新页滑入的时长。
+  final Duration duration;
 
   const SwipePageView({
     super.key,
     required this.page,
     required this.pages,
+    required this.builder,
     required this.onPageChanged,
-    required this.child,
+    this.onPageNeeded,
+    this.controller,
+    this.duration = const Duration(milliseconds: 300),
   });
 
   @override
   State<SwipePageView> createState() => _SwipePageViewState();
 }
 
+/// 让页面内容自己驱动翻页拖动（大图查看器在 1:1 时用原始指针事件驱动它）。
+///
+/// 为什么需要它：`InteractiveViewer` 自己有一个 `ScaleGestureRecognizer`，
+/// 手指在大图上横拖时它会先赢下手势竞技场，包在外面的 `GestureDetector`
+/// 根本收不到 `onHorizontalDrag*`。所以看图器在缩放为 1 时用 `Listener`
+/// 直接读指针位移，再通过这个 controller 交给翻页组件。
+class SwipePageController {
+  _SwipePageViewState? _state;
+
+  void _attach(_SwipePageViewState state) => _state = state;
+  void _detach(_SwipePageViewState state) {
+    if (identical(_state, state)) _state = null;
+  }
+
+  void beginDrag() => _state?._beginDrag();
+  void dragBy(double dx) => _state?._dragBy(dx);
+  void endDrag({double velocity = 0}) => _state?._endDrag(velocity);
+  void cancelDrag() => _state?._cancelDrag();
+}
+
 class _SwipePageViewState extends State<SwipePageView>
     with SingleTickerProviderStateMixin {
-  static const Duration _slide = Duration(milliseconds: 260);
   static const Duration _snap = Duration(milliseconds: 180);
 
-  /// 0 = 正常位置；+1 = 内容整体右移一屏；-1 = 左移一屏。
-  late final AnimationController _controller = AnimationController(
+  late final AnimationController _anim = AnimationController(
     vsync: this,
-    duration: _slide,
+    duration: widget.duration,
   );
 
-  /// 手指拖动产生的位移（像素）。
+  /// 当前**居中**的那一页。动画结束后才更新（动画期间旧页还在）。
+  int _shownPage = 1;
+
+  /// 已经拿到内容的页（widget 描述，不是 Element）。只在拖动 / 动画时进树。
+  final Map<int, Widget> _pages = <int, Widget>{};
+
+  /// 水平拖动位移（像素）。`<0` = 往下一页拖。
   double _dragPx = 0;
 
-  /// 外部换页（翻页按钮 / 快捷键）时，新内容先停在进入侧的那一帧。
-  ///
-  /// 为什么要它：`didUpdateWidget` 里不能直接改 `AnimationController.value`
-  /// （那会在 build 期间触发监听者 setState）。用这个值让**第一帧**就把新内容
-  /// 摆到屏幕外，post-frame 再开始动画 —— 不会先闪一下再滑。
-  double _pendingFraction = 0;
+  bool _dragging = false;
 
-  /// 手势触发的换页正在播（期间忽略外部 page 变化，避免两套动画打架）。
-  bool _switching = false;
+  /// 回弹动画（没到阈值）在播。
+  bool _settling = false;
 
-  /// 外部换页的序号：连续的 page 变化只让最后一次的 post-frame 生效。
-  int _externalSeq = 0;
+  /// 换页动画在播。
+  bool _transitioning = false;
+  bool _animStarted = false;
+  int _fromPage = 1;
+  int _toPage = 1;
+  double _direction = 1;
+  double _startOffset = 0;
+
+  /// 已经请求过、但内容还没到的页（避免每帧重复请求）。
+  final Set<int> _requested = <int>{};
 
   double _width = 0;
+
+  bool get _waiting => widget.page != _shownPage && _pages[widget.page] == null;
+
+  @override
+  void initState() {
+    super.initState();
+    _shownPage = widget.page.clamp(1, math.max(1, widget.pages));
+    widget.controller?._attach(this);
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _refreshPages();
+    _scheduleNeeded();
+  }
 
   @override
   void didUpdateWidget(covariant SwipePageView oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (widget.page == oldWidget.page || _switching) return;
-    final dir = widget.page > oldWidget.page ? 1.0 : -1.0;
-    final seq = ++_externalSeq;
-    _pendingFraction = dir;
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted || _switching || seq != _externalSeq) return;
-      _pendingFraction = 0;
-      _controller.value = dir;
-      _controller.animateTo(0, duration: _slide, curve: Curves.easeOutCubic);
-    });
+    if (oldWidget.controller != widget.controller) {
+      oldWidget.controller?._detach(this);
+      widget.controller?._attach(this);
+    }
+    if (widget.pages <= 1) {
+      _anim.stop();
+      _transitioning = false;
+      _animStarted = false;
+      _settling = false;
+      _dragging = false;
+      _dragPx = 0;
+      _shownPage = 1;
+      _pages.removeWhere((page, _) => page != 1);
+      _refreshPages();
+      return;
+    }
+
+    _refreshPages();
+    _scheduleNeeded();
+
+    // 目标页的数据到了：从当前页滑过去（两页同时可见）。
+    if (!_transitioning && widget.page != _shownPage && _pages[widget.page] != null) {
+      _startTransitionTo(widget.page);
+    }
+
+    // 动画途中父级重建：进入的那一页内容跟着更新（收藏 / 选择态等）。
+    if (_transitioning) {
+      _pages[_toPage] = widget.builder(_toPage) ?? _pages[_toPage]!;
+    }
   }
 
   @override
   void dispose() {
-    _controller.dispose();
+    widget.controller?._detach(this);
+    _anim.dispose();
     super.dispose();
   }
 
-  void _onDragStart(DragStartDetails details) {
-    _controller.stop();
-    _dragPx = 0;
+  // -------------------------------------------------------------------------
+  //  页缓存 / 预取
+  // -------------------------------------------------------------------------
+
+  void _refreshPages() {
+    final wanted = <int>{
+      _shownPage,
+      widget.page,
+      if (_shownPage > 1) _shownPage - 1,
+      if (_shownPage < widget.pages) _shownPage + 1,
+      if (widget.page > 1) widget.page - 1,
+      if (widget.page < widget.pages) widget.page + 1,
+    };
+    for (final page in wanted) {
+      if (page < 1 || page > widget.pages) {
+        _pages.remove(page);
+        continue;
+      }
+      final content = widget.builder(page);
+      if (content == null) {
+        _pages.remove(page);
+      } else {
+        _pages[page] = content;
+      }
+    }
+    _pages.removeWhere((page, _) => !wanted.contains(page));
   }
 
-  void _onDragUpdate(DragUpdateDetails details) {
-    final delta = details.primaryDelta ?? 0;
+  void _scheduleNeeded() {
+    final wanted = <int>{
+      if (_shownPage > 1) _shownPage - 1,
+      if (_shownPage < widget.pages) _shownPage + 1,
+      if (widget.page > 1) widget.page - 1,
+      if (widget.page < widget.pages) widget.page + 1,
+    };
+    wanted.removeWhere((page) => _pages.containsKey(page) || _requested.contains(page));
+    if (wanted.isEmpty || widget.onPageNeeded == null) return;
+    _requested.addAll(wanted);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      for (final page in wanted) {
+        if (!_pages.containsKey(page)) widget.onPageNeeded?.call(page);
+        _requested.remove(page);
+      }
+    });
+  }
+
+  // -------------------------------------------------------------------------
+  //  换页动画
+  // -------------------------------------------------------------------------
+
+  void _startTransitionTo(int target) {
+    final content = _pages[target];
+    if (content == null) return;
+    _fromPage = _shownPage;
+    _toPage = target;
+    _direction = target >= _shownPage ? 1.0 : -1.0;
+    _startOffset = _dragPx;
+    _pages[target] = content;
+    _dragPx = 0;
+    _dragging = false;
+    _settling = false;
+    _transitioning = true;
+    _animStarted = false;
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_transitioning) return;
+      final start = _width <= 0 ? 0.0 : (_startOffset.abs() / _width).clamp(0.0, 1.0);
+      _anim.value = start;
+      _animStarted = true;
+      final left = 1.0 - start;
+      final duration = widget.duration * left;
+      unawaited(
+        _anim
+            .animateTo(
+              1,
+              duration: duration < const Duration(milliseconds: 60)
+                  ? const Duration(milliseconds: 60)
+                  : duration,
+              curve: Curves.easeOutCubic,
+            )
+            .whenComplete(_finishTransition),
+      );
+    });
+  }
+
+  void _finishTransition() {
+    if (!mounted) return;
+    final finished = _toPage;
     setState(() {
-      _dragPx += delta;
+      _transitioning = false;
+      _animStarted = false;
+      _anim.value = 0;
+      _shownPage = finished;
+      _startOffset = 0;
+    });
+    _refreshPages();
+    _scheduleNeeded();
+
+    // 动画这 300ms 里用户可能又点了一页：数据到了就接着滑，别让页码和画面对不上。
+    if (widget.page != _shownPage && _pages[widget.page] != null) {
+      _startTransitionTo(widget.page);
+    }
+  }
+
+  void _snapBack() {
+    final from = _width <= 0 ? 0.0 : (_dragPx / _width).clamp(-1.0, 1.0);
+    setState(() {
+      _dragPx = 0;
+      _settling = true;
+    });
+    _anim.value = from;
+    unawaited(
+      _anim.animateTo(0, duration: _snap, curve: Curves.easeOutCubic).whenComplete(
+        () {
+          if (!mounted) return;
+          setState(() {
+            _settling = false;
+            _anim.value = 0;
+          });
+        },
+      ),
+    );
+  }
+
+  // -------------------------------------------------------------------------
+  //  拖动（手势 / 外部 controller 共用）
+  // -------------------------------------------------------------------------
+
+  void _beginDrag() {
+    if (_transitioning) return;
+    _anim.stop();
+    _dragging = true;
+    if (_settling) {
+      _dragPx = _anim.value * _width;
+      _settling = false;
+    }
+  }
+
+  void _dragBy(double dx) {
+    if (_transitioning || !_dragging) return;
+    setState(() {
+      _dragPx += dx;
       if (_width <= 0) return;
-      final atFirst = widget.page <= 1;
-      final atLast = widget.page >= widget.pages;
+      final atFirst = _shownPage <= 1;
+      final atLast = _shownPage >= widget.pages;
       // 到头的方向给一点阻尼，让人知道"已经没有了"，而不是拖出大片空白
       if (atFirst && _dragPx > 0) {
         _dragPx = _dragPx.clamp(0.0, _width * 0.14).toDouble();
@@ -116,98 +343,141 @@ class _SwipePageViewState extends State<SwipePageView>
     });
   }
 
-  void _onDragEnd(DragEndDetails details) {
-    final velocity = details.primaryVelocity ?? 0;
+  void _onDragStart(DragStartDetails details) => _beginDrag();
+
+  void _onDragUpdate(DragUpdateDetails details) =>
+      _dragBy(details.primaryDelta ?? 0);
+
+  void _onDragEnd(DragEndDetails details) =>
+      _endDrag(details.primaryVelocity ?? 0);
+
+  void _onDragCancel() => _cancelDrag();
+
+  void _endDrag(double velocity) {
+    if (_transitioning || !_dragging) return;
+    _dragging = false;
     final dx = _dragPx;
     final fast = velocity.abs() > 520 && dx.abs() > 12;
     final farEnough = dx.abs() >= _width * 0.18;
     final dir = dx < 0 ? 1 : -1;
-    final canGo = dir > 0 ? widget.page < widget.pages : widget.page > 1;
+    final target = _shownPage + dir;
+    final canGo = target >= 1 && target <= widget.pages;
     if ((!farEnough && !fast) || !canGo) {
       _snapBack();
       return;
     }
-    unawaited(_swipeTo(dir));
-  }
 
-  void _onDragCancel() => _snapBack();
-
-  void _snapBack() {
-    final from = _width <= 0 ? 0.0 : _dragPx / _width;
-    setState(() => _dragPx = 0);
-    _controller.value = from.clamp(-1.0, 1.0);
-    _controller.animateTo(0, duration: _snap, curve: Curves.easeOutCubic);
-  }
-
-  /// [dir] = +1 下一页，-1 上一页。
-  Future<void> _swipeTo(int dir) async {
-    if (_switching || _width <= 0) return;
-    _switching = true;
-    try {
-      // 先把"手指拖到哪"接到动画控制器上，再平滑滑出
-      final start = _dragPx / _width;
-      setState(() => _dragPx = 0);
-      _controller.value = start.clamp(-1.0, 1.0);
-      await _controller.animateTo(
-        -dir.toDouble(),
-        duration: _slide,
-        curve: Curves.easeOutCubic,
-      );
-      if (!mounted) return;
-      // 旧内容已经滑出：让父级换页；新内容先停在**进入侧**
-      _pendingFraction = dir.toDouble();
-      widget.onPageChanged(widget.page + dir);
-      await WidgetsBinding.instance.endOfFrame;
-      if (!mounted) return;
-      _pendingFraction = 0;
-      _controller.value = dir.toDouble();
-      await _controller.animateTo(
-        0,
-        duration: _slide,
-        curve: Curves.easeOutCubic,
-      );
-    } on TickerCanceled {
-      // 页面在动画途中被销毁：正常情况，什么都不用做
-    } finally {
-      _switching = false;
+    // **不**把 _dragPx 归零：数据没到之前，旧页停在松手的位置，新页露出多少
+    // 就露多少；数据到了 _startTransitionTo 会从那里接着滑。
+    widget.onPageChanged(target);
+    if (_pages[target] != null) {
+      _startTransitionTo(target);
+    } else {
+      setState(() {}); // 让顶部细进度条出现
     }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      // 宿主没接这次换页（用例 / 只读视图）：回到原位，别卡在半路。
+      if (!_transitioning && !_dragging && widget.page != target) {
+        _snapBack();
+      }
+    });
   }
+
+  void _cancelDrag() {
+    if (!_dragging) return;
+    _dragging = false;
+    _snapBack();
+  }
+
+  // -------------------------------------------------------------------------
+  //  构建
+  // -------------------------------------------------------------------------
 
   @override
   Widget build(BuildContext context) {
-    if (widget.pages <= 1) return widget.child;
+    if (widget.pages <= 1) {
+      return _pages[_shownPage] ?? widget.builder(_shownPage) ?? const SizedBox.shrink();
+    }
     return LayoutBuilder(
       builder: (context, constraints) {
         _width = constraints.maxWidth;
+        final current = _pages[_shownPage];
+        if (current == null) return const SizedBox.shrink();
+
+        // 动画 / 拖动时才把相邻页也放进树里：静止时只有当前页，
+        // 旧页在动画结束后就真的被注销了。
+        final showAdjacent = _dragging || _settling || _dragPx != 0;
+        final showPrev =
+            showAdjacent && _shownPage > 1 && _pages.containsKey(_shownPage - 1);
+        final showNext =
+            showAdjacent &&
+            _shownPage < widget.pages &&
+            _pages.containsKey(_shownPage + 1);
+
         return ClipRect(
-          child: AnimatedBuilder(
-            animation: _controller,
-            builder: (context, child) {
-              final fraction = _width <= 0
-                  ? 0.0
-                  : _dragPx / _width + _pendingFraction + _controller.value;
-              // 滑出去的旧内容稍微淡一点：两个方向都看得出"在换页"而不是在拖动整页
-              final opacity =
-                  1.0 - math.min(0.28, fraction.abs() * 0.28).toDouble();
-              return Transform.translate(
-                offset: Offset(fraction * _width, 0),
-                child: Opacity(opacity: opacity, child: child),
-              );
-            },
-            child: GestureDetector(
-              // 让子树的点击 / 纵向滚动先正常参与命中测试
-              behavior: HitTestBehavior.deferToChild,
-              onHorizontalDragStart: _onDragStart,
-              onHorizontalDragUpdate: _onDragUpdate,
-              onHorizontalDragEnd: _onDragEnd,
-              onHorizontalDragCancel: _onDragCancel,
-              child: widget.child,
-            ),
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              if (_transitioning) ...[
+                _positioned(
+                  _fromPage,
+                  _pages[_fromPage] ?? current,
+                  _transitionOffset(),
+                ),
+                _positioned(
+                  _toPage,
+                  _pages[_toPage] ?? current,
+                  _transitionOffset() + _direction * _width,
+                ),
+              ] else ...[
+                if (showPrev)
+                  _positioned(
+                    _shownPage - 1,
+                    _pages[_shownPage - 1]!,
+                    _dragOffset() - _width,
+                  ),
+                if (showNext)
+                  _positioned(
+                    _shownPage + 1,
+                    _pages[_shownPage + 1]!,
+                    _dragOffset() + _width,
+                  ),
+                _positioned(_shownPage, current, _dragOffset()),
+              ],
+              if (_waiting)
+                const Positioned(
+                  top: 0,
+                  left: 0,
+                  right: 0,
+                  child: LinearProgressIndicator(minHeight: 2),
+                ),
+            ],
           ),
         );
       },
     );
   }
+
+  double _dragOffset() {
+    if (_width <= 0) return 0;
+    if (_settling) return _anim.value * _width;
+    return _dragPx;
+  }
+
+  double _transitionOffset() {
+    if (_width <= 0) return 0;
+    final p = _animStarted ? _anim.value : 0.0;
+    final end = -_direction * _width;
+    return _startOffset + (end - _startOffset) * p;
+  }
+
+  Widget _positioned(int page, Widget child, double dx) => Positioned.fill(
+    child: Transform.translate(
+      offset: Offset(dx, 0),
+      child: KeyedSubtree(key: ValueKey<int>(page), child: child),
+    ),
+  );
 }
 
 /// 把 FAB 抬到 [PageBar] 之上（移动端底部的「新建 / 上传」会盖住翻页按钮）。
@@ -233,6 +503,10 @@ Widget liftFabAbovePageBar(Widget fab, {bool lift = true}) => lift
 class PageBar extends StatelessWidget {
   final int page;
   final int pages;
+
+  /// 新一页还在路上：页码先显示目标值，但按钮暂时按不动（避免连点出一串请求）。
+  final bool busy;
+
   final ValueChanged<int> onChanged;
 
   const PageBar({
@@ -240,6 +514,7 @@ class PageBar extends StatelessWidget {
     required this.page,
     required this.pages,
     required this.onChanged,
+    this.busy = false,
   });
 
   @override
@@ -262,14 +537,18 @@ class PageBar extends StatelessWidget {
                 tooltip: '上一页',
                 visualDensity: VisualDensity.compact,
                 icon: const Icon(Icons.chevron_left),
-                onPressed: page > 1 ? () => onChanged(page - 1) : null,
+                onPressed: !busy && page > 1
+                    ? () => onChanged(page - 1)
+                    : null,
               ),
               Text('第 $page / $pages 页'),
               IconButton(
                 tooltip: '下一页',
                 visualDensity: VisualDensity.compact,
                 icon: const Icon(Icons.chevron_right),
-                onPressed: page < pages ? () => onChanged(page + 1) : null,
+                onPressed: !busy && page < pages
+                    ? () => onChanged(page + 1)
+                    : null,
               ),
               if (showHint) ...[
                 const SizedBox(width: 14),
