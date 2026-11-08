@@ -566,76 +566,95 @@ class _Thread extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final store = context.watch<AiWorkspaceStore>();
-    return Column(
-      // `stretch` 不能省（用户 bug 2026-09-20："聊天主体距离两侧边栏空出一大片空白"）。
-      //
-      // Column 的默认 `crossAxisAlignment` 是 **center**：子项拿到的是**松约束**，
-      // 于是消息区（`SingleChildScrollView`）会缩到"最宽那条气泡 + 内边距"的宽度
-      // （气泡上限 720 → 752），再**居中**摆在栏里 —— 实测 1600 逻辑像素的窗口下
-      // 消息区只有 752 宽、两侧各空 173，滚动条也画在那条 752 的右边缘上，
-      // 离边栏老远（theme 里把 `crossAxisMargin` 调成 0 治不了这个：滚动视图本身就没铺满）。
-      // 输入区同理：它跟着缩成一条窄条、居中。
-      // 铺开之后：消息区 = 栏宽、滚动条贴右侧边栏、输入区也是整栏宽。
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        _ConversationAppBar(
-          store: store,
-          onShowStatus: onShowStatus,
-          // 工作流库只在桌面后端有：手机上不给这个入口（给了也只会弹"读不到"）。
-          onPickWorkflow: store.isLocal ? null : () => _pickWorkflow(context),
-        ),
-        Expanded(
-          child: Stack(
-            children: [
-              _MessageList(
-                store: store,
-                controller: controller,
-                onLayoutResubmit: onLayoutResubmit,
-              ),
-              // 「AI 正在生成」的加载提示**不再做成底部浮层**（用户建议 2026-09-20：
-              // "不要出现在底部（很影响观感），而是当前正在生成回复的气泡底部，
-              // 并且只保留转圈圈动画"）—— 它现在是那个气泡自己的内容，
-              // 见 `_MessageBubble` 里 `isStreaming` 那一段。
-              // 回到聊天底部（用户建议 ④）：**只在用户翻上去之后**才出现，
-              // 贴在对话主体右下角，不挡输入区。
-              if (!atBottom)
-                Positioned(
-                  right: 16,
-                  bottom: 56,
-                  child: Tooltip(
-                    message: '回到最新消息',
-                    child: FloatingActionButton.small(
-                      heroTag: 'ai-jump-bottom',
-                      onPressed: onJumpToBottom,
-                      child: const Icon(Icons.arrow_downward),
-                    ),
+    final questions = store.pendingQuestions;
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        // ★ 输入区**有上限**（治本）：面板 / 已选卡片 / 多行输入加起来若超过
+        //   页面剩下的高度，Colum 会直接 `BOTTOM OVERFLOWED`。给它一个上限，
+        //   里面的弹层用 `Flexible` 自己收 —— 面板永远不会把输入框和底行顶出去。
+        //   （桌面没有虚拟键盘，140 只是留给消息区的最小高度，正常永远用不满。）
+        final composerMax = (constraints.maxHeight * 0.85)
+            .clamp(180.0, constraints.maxHeight)
+            .toDouble();
+        return Column(
+          // `stretch` 不能省（用户 bug 2026-09-20："聊天主体距离两侧边栏空出一大片空白"）。
+          //
+          // Column 的默认 `crossAxisAlignment` 是 **center**：子项拿到的是**松约束**，
+          // 于是消息区（`SingleChildScrollView`）会缩到"最宽那条气泡 + 内边距"的宽度
+          // （气泡上限 720 → 752），再**居中**摆在栏里 —— 实测 1600 逻辑像素的窗口下
+          // 消息区只有 752 宽、两侧各空 173，滚动条也画在那条 752 的右边缘上，
+          // 离边栏老远（theme 里把 `crossAxisMargin` 调成 0 治不了这个：滚动视图本身就没铺满）。
+          // 输入区同理：它跟着缩成一条窄条、居中。
+          // 铺开之后：消息区 = 栏宽、滚动条贴右侧边栏、输入区也是整栏宽。
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            _ConversationAppBar(
+              store: store,
+              onShowStatus: onShowStatus,
+              // 工作流库只在桌面后端有：手机上不给这个入口（给了也只会弹"读不到"）。
+              onPickWorkflow: store.isLocal ? null : () => _pickWorkflow(context),
+            ),
+            Expanded(
+              child: Stack(
+                children: [
+                  _MessageList(
+                    store: store,
+                    controller: controller,
+                    onLayoutResubmit: onLayoutResubmit,
                   ),
-                ),
-            ],
-          ),
-        ),
-        // 输入区**被提问接管**（用户 bug 2026-09-21）：AI 正在等用户回答时，
-        // 底下这块整个换成提问卡（选项 + 自己输入 + 跳过），而不是在普通输入框
-        // 上面再摞一张卡 —— 那样用户会不知道"该往哪儿打字"。
-        // 答完（或跳过）`pendingQuestion` 变 null，普通输入框自动回来。
-        if (store.pendingQuestions case final questions
-            when questions.isNotEmpty)
-          _AskComposer(
-            store: store,
-            questions: questions,
-            onSubmit: (text) =>
-                onSubmitted(store, OutgoingMessage.plain(text)),
-          )
-        else
-          _Composer(
-            store: store,
-            controller: input,
-            focusNode: inputFocus,
-            onSubmit: (message) => onSubmitted(store, message),
-            // 顶栏精简后，工作流选择从输入框的 `+` 菜单进（功能不丢）。
-            onPickWorkflow: store.isLocal ? null : () => _pickWorkflow(context),
-          ),
-      ],
+                  // 「AI 正在生成」的加载提示**不再做成底部浮层**（用户建议 2026-09-20：
+                  // "不要出现在底部（很影响观感），而是当前正在生成回复的气泡底部，
+                  // 并且只保留转圈圈动画"）—— 它现在是那个气泡自己的内容，
+                  // 见 `_MessageBubble` 里 `isStreaming` 那一段。
+                  // 回到聊天底部（用户建议 ④）：**只在用户翻上去之后**才出现，
+                  // 贴在对话主体右下角，不挡输入区。
+                  if (!atBottom)
+                    Positioned(
+                      right: 16,
+                      bottom: 56,
+                      child: Tooltip(
+                        message: '回到最新消息',
+                        child: FloatingActionButton.small(
+                          heroTag: 'ai-jump-bottom',
+                          onPressed: onJumpToBottom,
+                          child: const Icon(Icons.arrow_downward),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+            // 输入区**被提问接管**（用户 bug 2026-09-21）：AI 正在等用户回答时，
+            // 底下这块整个换成提问卡（选项 + 自己输入 + 跳过），而不是在普通输入框
+            // 上面再摞一张卡 —— 那样用户会不知道"该往哪儿打字"。
+            // 答完（或跳过）`pendingQuestion` 变 null，普通输入框自动回来。
+            ConstrainedBox(
+              constraints: BoxConstraints(maxHeight: composerMax),
+              // 不再套外层滚动：用户要在**输入框内部**滑动（2026-11-08），
+              // 外层滚动会把那次拖动抢走。高度由输入框自己的 `maxLines`
+              // 跟着"屏幕 - 键盘 - 卡片 - 底行"算出来（见 `_composerInputMaxLines`）。
+              child: questions.isNotEmpty
+                  ? _AskComposer(
+                      store: store,
+                      questions: questions,
+                      onSubmit: (text) =>
+                          onSubmitted(store, OutgoingMessage.plain(text)),
+                    )
+                  : _Composer(
+                      store: store,
+                      controller: input,
+                      focusNode: inputFocus,
+                      onSubmit: (message) => onSubmitted(store, message),
+                      maxHeight: composerMax,
+                      // 顶栏精简后，工作流选择从输入框的 `+` 菜单进（功能不丢）。
+                      onPickWorkflow: store.isLocal
+                          ? null
+                          : () => _pickWorkflow(context),
+                    ),
+            ),
+          ],
+        );
+      },
     );
   }
 }
@@ -2865,9 +2884,15 @@ class _EmptyThread extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    return Center(
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 560),
+    // 键盘弹起时可用高度会缩到一半 —— 直接 `Center` 一个固定内容会
+    // `BOTTOM OVERFLOWED`（真机 2026-11-08 实测 55px）。放不下就让它滚。
+    return LayoutBuilder(
+      builder: (context, constraints) => SingleChildScrollView(
+        child: ConstrainedBox(
+          constraints: BoxConstraints(minHeight: constraints.maxHeight),
+          child: Center(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 560),
         child: Padding(
           padding: const EdgeInsets.all(24),
           child: Column(
@@ -2906,6 +2931,9 @@ class _EmptyThread extends StatelessWidget {
           ),
         ),
       ),
+            ),
+          ),
+        ),
     );
   }
 }
@@ -2923,12 +2951,18 @@ class _Composer extends StatefulWidget {
   /// 「选择现有工作流…」（从顶栏搬到 `+` 菜单）。null = 这个端没有工作流库。
   final Future<void> Function()? onPickWorkflow;
 
+  /// 输入区**能用的最大高度**（页面按"body 高度 × 0.85"算好传进来）。
+  ///
+  /// 输入框行数就按它减去卡片 / 底行来算，保证任何键盘高度下都不会顶到 AppBar。
+  final double maxHeight;
+
   const _Composer({
     required this.store,
     required this.controller,
     required this.focusNode,
     required this.onSubmit,
     this.onPickWorkflow,
+    required this.maxHeight,
   });
 
   @override
@@ -2993,8 +3027,21 @@ class _ComposerState extends State<_Composer> {
     final match = RegExp(r'(?:^|\s)/([^\s/]*)$').firstMatch(text);
     final next = match?.group(1);
     // 键盘路径：行末输入 `@` 直接开卡片面板（按钮收在 "+" 菜单里；直接打字也该有入口）。
-    if (!_cardsOpen && RegExp(r'(?:^|\s)@$').hasMatch(text)) {
+    //
+    // ⚠ 只认**文本真的变了**的那一次（用户 2026-11-08）：关掉弹层后焦点回到
+    // 输入框，controller 的 selection 变化也会触发监听；只看"行末是 @"的话
+    // 会**又弹一遍**，得取消两次才能接着打字。用 `_atHandled` 记住这次 @ 已经处理过。
+    final atEnd = RegExp(r'(?:^|\s)@$').hasMatch(text);
+    if (!_cardsOpen && atEnd && text != _atHandled) {
+      _atHandled = text;
       _openCards();
+    } else if (!atEnd) {
+      _atHandled = null;
+    }
+    // ★ 两个弹层**互斥**（用户 2026-11-08：两个都开着会叠加溢出）。
+    //   开始打 `/` 说明用户要的是 skill 菜单，卡片面板当场收起。
+    if (next != null && _cardsOpen) {
+      _cardsOpen = false;
     }
     // 组字状态也参与"发送按钮可不可用"，所以它一变就得重建（见 build 里的 `composing`）
     final composing = _composing;
@@ -3021,8 +3068,14 @@ class _ComposerState extends State<_Composer> {
   final List<CharacterCard> _characterCards = [];
   StyleCard? _styleCard;
 
-  /// 卡片面板是否展开（选卡**不会**自动收起：角色卡是多选，选完可以接着点下一张）。
+  /// 卡片面板是否展开。
+  ///
+  /// 选一张就收起（用户 2026-11-08）；要连着选多张就再打一次 `@`。
+  /// 面板高度也按可用高度收（键盘弹起时不顶出屏幕）。
   bool _cardsOpen = false;
+
+  /// 已经处理过的"行末 `@`"文本。用来防止焦点回到输入框时**重复弹层**。
+  String? _atHandled;
 
   /// 当前页签：false = 角色卡，true = 画风卡。
   bool _cardsStyled = false;
@@ -3038,11 +3091,83 @@ class _ComposerState extends State<_Composer> {
   ///
   /// 失败不冒充"没有卡"：面板里如实显示错误（[`_cardsError`]）。
   Future<void> _openCards({bool style = false}) async {
+    final phone = Theme.of(context).platform == TargetPlatform.android ||
+        Theme.of(context).platform == TargetPlatform.iOS;
+    if (phone) {
+      // 手机：**底部弹层**。面板不参与输入区排版，键盘弹起也不会把
+      // 元素挤成一条（用户 2026-11-08："窗口高度太低，元素太小，很难操作"）。
+      FocusManager.instance.primaryFocus?.unfocus();
+      await _ensureCards();
+      if (!mounted) return;
+      var picked = false;
+      await showModalBottomSheet<void>(
+        context: context,
+        isScrollControlled: true,
+        useSafeArea: true,
+        backgroundColor: Colors.transparent,
+        builder: (ctx) {
+          final media = MediaQuery.of(ctx);
+          final height = ((media.size.height - media.viewInsets.bottom) * 0.66)
+              .clamp(280.0, media.size.height * 0.82)
+              .toDouble();
+          return Padding(
+            padding: EdgeInsets.only(bottom: media.viewInsets.bottom),
+            child: SizedBox(
+              height: height,
+              child: _CardPickerSheet(
+                characters: _characters,
+                styles: _styles,
+                selectedCharacterIds: _characterCards.map((c) => c.id).toSet(),
+                selectedStyleId: _styleCard?.id,
+                initialStyleTab: style,
+                loading: _cardsLoading,
+                error: _cardsError,
+                onPickCharacter: (card) {
+                  picked = true;
+                  _chooseCard(card);
+                  Navigator.of(ctx).pop();
+                },
+                onPickStyle: (card) {
+                  picked = true;
+                  _chooseCard(card);
+                  Navigator.of(ctx).pop();
+                },
+              ),
+            ),
+          );
+        },
+      );
+      if (!mounted) return;
+      if (!picked) {
+        // 取消选择：把行末那个 `@` 摘掉，再把焦点还给输入框。
+        // 不摘的话用户接着打字会变成"@ 后面跟正文"，而且下次点击又像要弹层
+        //（用户 2026-11-08：取消之后还得再取消一次才能打字）。
+        final text = widget.controller.text;
+        final match = RegExp(r'(?:^|\s)@$').firstMatch(text);
+        if (match != null) {
+          final next = text.substring(0, match.end - 1);
+          widget.controller.value = TextEditingValue(
+            text: next,
+            selection: TextSelection.collapsed(offset: next.length),
+          );
+        }
+      }
+      widget.focusNode.requestFocus();
+      return;
+    }
+
     setState(() {
       _cardsOpen = true;
+      // 与 `/` 菜单互斥：同一时刻只留一个弹层（否则两个叠在一起必溢出）
+      _slashQuery = null;
       _cardsStyled = style;
       _cardsError = null;
     });
+    await _ensureCards();
+  }
+
+  /// 拉一次卡片库（两类一起）。失败把原因写进 [\_cardsError]，不抛。
+  Future<void> _ensureCards() async {
     if (_characters.isNotEmpty || _styles.isNotEmpty || _cardsLoading) return;
     setState(() => _cardsLoading = true);
     try {
@@ -3097,7 +3222,12 @@ class _ComposerState extends State<_Composer> {
       // 选完清掉搜索词：下一张常常是另一个名字，不用先手动删一遍。
       _cardQuery = '';
       _cardSearch.clear();
+      // ★ 选完就收起（用户 2026-11-08："@卡片不会自动收回"）。
+      //   要再选一张就再打 `@` 或点 `+`；面板常驻会把输入区顶出屏幕。
+      _cardsOpen = false;
     });
+    // 面板收了、键盘也收过（打开时），把焦点还给输入框，用户可以接着写正文。
+    widget.focusNode.requestFocus();
     // 从键盘 `@` 进来的那条路：把行末那个查询词摘掉，只留用户自己写的正文。
     final text = widget.controller.text;
     final trigger = RegExp(r'(?:^|\s)@[^\s@]*$').firstMatch(text);
@@ -3236,8 +3366,42 @@ class _ComposerState extends State<_Composer> {
       text: next,
       selection: TextSelection.collapsed(offset: next.length),
     );
-    setState(() => _slashQuery = null);
+    setState(() {
+      _slashQuery = null;
+      // 与卡片面板互斥；插入 skill 之后也收起卡片面板（只留输入框）
+      _cardsOpen = false;
+    });
     widget.focusNode.requestFocus();
+  }
+
+  /// 键盘实际占的高度（逻辑像素）。
+  ///
+  /// ⚠ 不能用 `MediaQuery.viewInsetsOf(context).bottom`：`Scaffold` 的
+  /// `resizeToAvoidBottomInset` 会把它消费掉，body 里读出来是 0 —— 真机实测
+  /// 弹层仍按"全屏高度"排版，于是 `BOTTOM OVERFLOWED`。`View.viewInsets` 是
+  /// 原始物理像素，不会被 Scaffold 改。
+  double _keyboardInset(BuildContext context) {
+    final view = View.of(context);
+    final dpr = view.devicePixelRatio;
+    if (dpr <= 0) return 0;
+    return view.viewInsets.bottom / dpr;
+  }
+
+  /// 输入框最多能长几行：**屏幕 - 键盘 - 已选卡片 - 底行**剩下多少算多少。
+  ///
+  /// 超过这个行数时文本在输入框**内部**滚动（用户 2026-11-08："允许我在输入框内滑动"），
+  /// 整个输入区不会顶到 AppBar 上 —— 键盘高度可变，所以每次 build 都现算。
+  int get _inputMaxLines {
+    final cards = _characterCards.length + (_styleCard != null ? 1 : 0);
+    // 一行大约放两张 chip；留一点余量。
+    final chipRows = cards == 0 ? 0 : (cards + 1) ~/ 2;
+    // 底行 76 + chip 每行 52 + 输入区上下留白 20 + 余量 20
+    final reserved = 76.0 + chipRows * 52.0 + 20.0 + 20.0;
+    final available = widget.maxHeight - reserved;
+    final lines = (available / 32).floor();
+    if (lines < 1) return 1;
+    if (lines > 8) return 8;
+    return lines;
   }
 
   @override
@@ -3246,6 +3410,10 @@ class _ComposerState extends State<_Composer> {
     final store = widget.store;
     final blockers = store.preflight?.blockers ?? const <String>[];
     final slashMatches = _slashMatches;
+    // 输入框最多能长几行：**屏幕 - 键盘 - 已选卡片 - 底行** 里剩下的高度。
+    // 这样键盘高度怎么变，输入区都不会顶到 AppBar 上；超出这个行数时
+    // 文本在**输入框内部**滚动（用户 2026-11-08 明确要的交互）。
+    final inputMax = _inputMaxLines;
 
     return Container(
       decoration: BoxDecoration(
@@ -3254,6 +3422,9 @@ class _ComposerState extends State<_Composer> {
       ),
       padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
       child: Column(
+        // 输入区按内容取高（上限由页面那层 ConstrainedBox 给）：写成 max 会把
+        // 上限当成实际高度，桌面端输入区一下吃掉 960px、消息区只剩一条缝。
+        mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           if (store.notice != null)
@@ -3308,7 +3479,16 @@ class _ComposerState extends State<_Composer> {
             Padding(
               padding: const EdgeInsets.only(bottom: 6),
               child: ConstrainedBox(
-                constraints: const BoxConstraints(maxHeight: 180),
+                // 键盘弹起时窗口只剩一半：固定 180 会把输入区顶出屏幕
+                //（真机 2026-11-08 实测 `BOTTOM OVERFLOWED BY 17 PIXELS`）。
+                // 跟着可用高度收一收，最多仍是 180。
+                constraints: BoxConstraints(
+                  maxHeight: ((MediaQuery.sizeOf(context).height -
+                              _keyboardInset(context)) *
+                          0.28)
+                      .clamp(110.0, 180.0)
+                      .toDouble(),
+                ),
                 // 底色必须由 Material 给：用 Container 的 decoration 会盖掉
                 // ListTile 的水波纹（Flutter 会直接抛断言）
                 child: Material(
@@ -3350,14 +3530,21 @@ class _ComposerState extends State<_Composer> {
               ),
             ),
           // 卡片面板（角色卡 / 画风卡）：在输入框上方，和 `/` 菜单同一套位置。
+          // 手机走底部弹层（见 `_openCards`），这里只剩电脑端的内嵌面板。
           if (_cardsOpen) _cardsPanel(theme),
-          if (_characterCards.isNotEmpty || _styleCard != null)
-            _cardChips(theme),
           // 排版：上一行整宽输入框，下一行 [附件] [模型选择] …… [发送]
           Shortcuts(
-            shortcuts: const {
-              SingleActivator(LogicalKeyboardKey.enter): _SendIntent(),
-            },
+            // 回车 = 发送只在**电脑端**（2026-11-08 用户："手机的回车逻辑被你
+            // 改成了发送"）。手机软键盘的回车是 `TextInputAction.newline`，
+            // 但个别输入法会把它当原始 Enter 键事件发上来 —— 在这里绑了就会
+            // 直接发送。手机上不绑，回车一律走输入框自己的换行。
+            shortcuts:
+                (theme.platform == TargetPlatform.android ||
+                    theme.platform == TargetPlatform.iOS)
+                ? const <ShortcutActivator, Intent>{}
+                : const {
+                    SingleActivator(LogicalKeyboardKey.enter): _SendIntent(),
+                  },
             child: Actions(
               actions: {
                 _SendIntent: CallbackAction<_SendIntent>(
@@ -3385,8 +3572,10 @@ class _ComposerState extends State<_Composer> {
                 child: TextField(
                   controller: widget.controller,
                   focusNode: widget.focusNode,
-                  minLines: 2,
-                  maxLines: 8,
+                  // 行数上限按"屏幕 - 键盘 - 卡片 - 底行"现算（见 build 里的
+                  // `inputMax`）；超出时文本在输入框**内部**滚动，不顶 AppBar。
+                  minLines: inputMax >= 2 ? 2 : 1,
+                  maxLines: inputMax,
                   textInputAction: TextInputAction.newline,
                   // ⚠ 右键「粘贴」必须换成我们自己的那条，否则它只读文本、
                   // 会把"文件路径"当内容贴进来（见 `_composerContextMenu`）
@@ -3400,6 +3589,12 @@ class _ComposerState extends State<_Composer> {
               ),
             ),
           ),
+          // 已选卡片放在**输入框下面**（用户 2026-11-08："一旦文本行数较多，
+          // 卡片信息不见了"）：输入区是"底部锚定 + 内部滚动"（reverse），
+          // 放在输入框上面的 chip 会被长文本顶出可视区；放在下面则永远贴着
+          // 底行，长文本只在输入框内部滚。
+          if (_characterCards.isNotEmpty || _styleCard != null)
+            _cardChips(theme),
           const SizedBox(height: 8),
           // 底行排版。四条用户反馈累积到这里，规矩已经收敛成两句：
           //   · **一条放不下就折行**，绝不横向滚动；
@@ -3535,14 +3730,15 @@ class _ComposerState extends State<_Composer> {
             ),
           // 布局画布（2026-11-03）：工作台是主入口，画布只是"把构图摆清楚"的那一步。
           // ⚠ 放在卡片库**后面**：两个 `dividerBefore` 挨在一起会画出一条空分隔线。
-          // 卡片库只有桌面后端有（手机侧没有这两张表）。
-          if (!widget.store.isLocal)
-            const MenuOption(
-              value: 'cards',
-              icon: Icons.alternate_email,
-              label: '角色卡 / 画风卡…',
-              dividerBefore: true,
-            ),
+          // 卡片库走桌面后端的表：**手机也能用**（连的就是桌面，`listCharacterCards`
+          // 本来就是 HTTP）—— 以前这里按 `isLocal` 藏掉，手机上 `+` 菜单里根本没有
+          // 卡片入口，只有打 `@` 才进得去（2026-11-08 真机发现）。
+          const MenuOption(
+            value: 'cards',
+            icon: Icons.alternate_email,
+            label: '角色卡 / 画风卡…',
+            dividerBefore: true,
+          ),
           // 从设定图建卡（2026-11-04）：选图 → 新会话 → AI 逐部位带图来问。
           if (!widget.store.isLocal)
             const MenuOption(
@@ -3611,7 +3807,16 @@ class _ComposerState extends State<_Composer> {
         ),
         clipBehavior: Clip.antiAlias,
         child: SizedBox(
-          height: 250,
+          // 手机上按"可用高度"给（键盘弹起时收、收起时放大；打开面板时我们
+          // 已经把键盘收掉了，所以这里通常拿到的是整屏）；电脑端没有虚拟键盘
+          // 那套问题，固定给一个舒服的高度。
+          height: (theme.platform == TargetPlatform.android ||
+                  theme.platform == TargetPlatform.iOS)
+              ? ((MediaQuery.sizeOf(context).height - _keyboardInset(context)) *
+                      0.46)
+                  .clamp(220.0, 360.0)
+                  .toDouble()
+              : 260.0,
           child: Column(
             children: [
               Row(
@@ -3662,11 +3867,23 @@ class _ComposerState extends State<_Composer> {
                 padding: const EdgeInsets.fromLTRB(10, 0, 10, 6),
                 child: TextField(
                   controller: _cardSearch,
-                  decoration: const InputDecoration(
+                  style: theme.textTheme.bodySmall,
+                  decoration: InputDecoration(
                     isDense: true,
-                    prefixIcon: Icon(Icons.search, size: 18),
+                    // 手机上这个框原来又高又宽，把整个面板吃掉一大截
+                    //（用户 2026-11-08："搜索框占了很大一部分地方"）。
+                    contentPadding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 6,
+                    ),
+                    prefixIcon: const Icon(Icons.search, size: 16),
+                    prefixIconConstraints: const BoxConstraints(
+                      minWidth: 30,
+                      minHeight: 30,
+                    ),
                     hintText: '搜卡片名 / 正文',
-                    border: OutlineInputBorder(),
+                    hintStyle: theme.textTheme.bodySmall,
+                    border: const OutlineInputBorder(),
                   ),
                   onChanged: (v) => setState(() => _cardQuery = v),
                 ),
@@ -3771,7 +3988,9 @@ class _ComposerState extends State<_Composer> {
   /// 已选中的卡：输入框上方一排 chip，点 × 取消（角色卡一张一个 chip）。
   Widget _cardChips(ThemeData theme) {
     return Padding(
-      padding: const EdgeInsets.only(bottom: 6),
+      // 和输入框贴紧一点（用户 2026-11-08 问能不能调间距）：上面 4、下面 2，
+      // 行高总预算在 `_inputMaxLines` 里按 52/行算过，收一点不会引出溢出。
+      padding: const EdgeInsets.only(top: 4, bottom: 2),
       child: Wrap(
         spacing: 8,
         runSpacing: 6,
@@ -3788,6 +4007,12 @@ class _ComposerState extends State<_Composer> {
                 style: theme.textTheme.labelSmall,
               ),
               visualDensity: VisualDensity.compact,
+              // 点 chip 看这张卡的正文（只读）—— 选中的卡是"发出去的样子"，
+              // 改它要去卡片库，所以这里只给看。
+              onPressed: () => _showCardDetail(
+                title: '画风卡 · ${_styleCard!.name}',
+                prompt: _styleCard!.prompt ?? '',
+              ),
               onDeleted: () => setState(() => _styleCard = null),
             ),
           for (final card in _characterCards)
@@ -3803,10 +4028,55 @@ class _ComposerState extends State<_Composer> {
                 style: theme.textTheme.labelSmall,
               ),
               visualDensity: VisualDensity.compact,
+              onPressed: () => _showCardDetail(
+                title: '角色卡 · ${card.name}',
+                prompt: card.prompt ?? '',
+                negative: card.negative,
+              ),
               onDeleted: () => setState(
                 () => _characterCards.removeWhere((c) => c.id == card.id),
               ),
             ),
+        ],
+      ),
+    );
+  }
+
+  /// 点已选卡片 → **只读**详情弹窗（正面 / 负面提示词原样，可选中复制）。
+  void _showCardDetail({
+    required String title,
+    required String prompt,
+    String? negative,
+  }) {
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(title),
+        content: SizedBox(
+          width: 560,
+          child: SingleChildScrollView(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text('正面提示词', style: Theme.of(ctx).textTheme.labelMedium),
+                const SizedBox(height: 4),
+                SelectableText(prompt),
+                if ((negative ?? '').trim().isNotEmpty) ...[
+                  const SizedBox(height: 12),
+                  Text('负面提示词', style: Theme.of(ctx).textTheme.labelMedium),
+                  const SizedBox(height: 4),
+                  SelectableText(negative!),
+                ],
+              ],
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('关闭'),
+          ),
         ],
       ),
     );
@@ -5097,5 +5367,227 @@ class _PendingApprovalsState extends State<_PendingApprovals> {
       _failed = !result.accepted;
       _message = result.message;
     });
+  }
+}
+
+/// 手机上的卡片选择器（**底部弹层**）。
+///
+/// 2026-11-08 用户："窗口高度太低，元素太小，很难操作" —— 把它塞回输入区
+/// 就是跟键盘抢高度，只能二选一。弹层是独立路由：自己的高度（约 2/3 屏）、
+/// 自己的滚动，键盘弹起时整体上移，列表始终能看清、点得着。
+class _CardPickerSheet extends StatefulWidget {
+  final List<CharacterCard> characters;
+  final List<StyleCard> styles;
+  final Set<int> selectedCharacterIds;
+  final int? selectedStyleId;
+  final bool initialStyleTab;
+  final bool loading;
+  final String? error;
+  final ValueChanged<CharacterCard> onPickCharacter;
+  final ValueChanged<StyleCard> onPickStyle;
+
+  const _CardPickerSheet({
+    required this.characters,
+    required this.styles,
+    required this.selectedCharacterIds,
+    required this.selectedStyleId,
+    required this.initialStyleTab,
+    required this.loading,
+    required this.error,
+    required this.onPickCharacter,
+    required this.onPickStyle,
+  });
+
+  @override
+  State<_CardPickerSheet> createState() => _CardPickerSheetState();
+}
+
+class _CardPickerSheetState extends State<_CardPickerSheet> {
+  late bool _styled = widget.initialStyleTab;
+  final TextEditingController _search = TextEditingController();
+  String _query = '';
+
+  @override
+  void dispose() {
+    _search.dispose();
+    super.dispose();
+  }
+
+  List<CharacterCard> get _characters {
+    final q = _query.trim().toLowerCase();
+    if (q.isEmpty) return widget.characters;
+    return widget.characters
+        .where((c) => '${c.name} ${c.prompt ?? ''}'.toLowerCase().contains(q))
+        .toList();
+  }
+
+  List<StyleCard> get _styles {
+    final q = _query.trim().toLowerCase();
+    if (q.isEmpty) return widget.styles;
+    return widget.styles
+        .where((c) => '${c.name} ${c.prompt ?? ''}'.toLowerCase().contains(q))
+        .toList();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final count = widget.selectedCharacterIds.length;
+    final shown = _styled ? _styles.length : _characters.length;
+    return Material(
+      color: theme.colorScheme.surfaceContainerHigh,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 8, 4, 0),
+            child: Row(
+              children: [
+                _tab(theme, '角色卡', !_styled, () => setState(() => _styled = false)),
+                _tab(theme, '画风卡', _styled, () => setState(() => _styled = true)),
+                const Spacer(),
+                if (count > 0)
+                  Text(
+                    '已选 $count 张',
+                    style: theme.textTheme.labelSmall?.copyWith(
+                      color: theme.colorScheme.primary,
+                    ),
+                  ),
+                IconButton(
+                  tooltip: '收起卡片面板',
+                  onPressed: () => Navigator.of(context).maybePop(),
+                  icon: const Icon(Icons.close, size: 18),
+                ),
+              ],
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+            child: TextField(
+              controller: _search,
+              style: theme.textTheme.bodySmall,
+              decoration: InputDecoration(
+                isDense: true,
+                contentPadding: const EdgeInsets.symmetric(
+                  horizontal: 8,
+                  vertical: 8,
+                ),
+                prefixIcon: const Icon(Icons.search, size: 16),
+                prefixIconConstraints: const BoxConstraints(
+                  minWidth: 30,
+                  minHeight: 30,
+                ),
+                hintText: '搜卡片名 / 正文',
+                hintStyle: theme.textTheme.bodySmall,
+                border: const OutlineInputBorder(),
+              ),
+              onChanged: (v) => setState(() => _query = v),
+            ),
+          ),
+          Expanded(child: _body(theme, shown)),
+        ],
+      ),
+    );
+  }
+
+  Widget _tab(ThemeData theme, String label, bool active, VoidCallback onTap) {
+    return TextButton(
+      onPressed: onTap,
+      style: TextButton.styleFrom(
+        visualDensity: VisualDensity.compact,
+        foregroundColor:
+            active ? theme.colorScheme.primary : theme.colorScheme.onSurfaceVariant,
+      ),
+      child: Text(label),
+    );
+  }
+
+  Widget _body(ThemeData theme, int shown) {
+    if (widget.loading) {
+      return const Center(child: CircularProgressIndicator());
+    }
+    if (widget.error != null) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Text(
+            widget.error!,
+            textAlign: TextAlign.center,
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.error,
+            ),
+          ),
+        ),
+      );
+    }
+    if (shown == 0) {
+      return Center(
+        child: Text(
+          _query.trim().isEmpty ? '卡片库还是空的' : '没有匹配的卡片',
+          style: theme.textTheme.bodySmall,
+        ),
+      );
+    }
+    if (_styled) {
+      final items = _styles;
+      return ListView.builder(
+        padding: const EdgeInsets.fromLTRB(4, 0, 4, 16),
+        itemCount: items.length,
+        itemBuilder: (context, i) {
+          final card = items[i];
+          return _tile(
+            theme,
+            name: card.name,
+            subtitle: card.prompt ?? '',
+            selected: widget.selectedStyleId == card.id,
+            icon: Icons.palette_outlined,
+            onTap: () => widget.onPickStyle(card),
+          );
+        },
+      );
+    }
+    final items = _characters;
+    return ListView.builder(
+      padding: const EdgeInsets.fromLTRB(4, 0, 4, 16),
+      itemCount: items.length,
+      itemBuilder: (context, i) {
+        final card = items[i];
+        return _tile(
+          theme,
+          name: card.name,
+          subtitle: card.prompt ?? '',
+          selected: widget.selectedCharacterIds.contains(card.id),
+          icon: Icons.badge_outlined,
+          onTap: () => widget.onPickCharacter(card),
+        );
+      },
+    );
+  }
+
+  Widget _tile(
+    ThemeData theme, {
+    required String name,
+    required String subtitle,
+    required bool selected,
+    required IconData icon,
+    required VoidCallback onTap,
+  }) {
+    return ListTile(
+      leading: Icon(icon, size: 20),
+      title: Text(name),
+      subtitle: Text(
+        subtitle,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: theme.textTheme.bodySmall,
+      ),
+      trailing: selected
+          ? Icon(Icons.check, color: theme.colorScheme.primary)
+          : null,
+      onTap: onTap,
+    );
   }
 }

@@ -526,14 +526,18 @@ class _SwipePageViewState extends State<SwipePageView>
   }) => Positioned.fill(
     child: Transform.translate(
       offset: Offset(dx, 0),
-      child: primary == null
-          ? PrimaryScrollController.none(
-              child: KeyedSubtree(key: ValueKey<int>(page), child: child),
-            )
-          : PrimaryScrollController(
-              controller: primary,
-              child: KeyedSubtree(key: ValueKey<int>(page), child: child),
-            ),
+      // ★ 两页同时在场时要**各自是一个独立图层**：翻页每帧只改变换矩阵，
+      //   内容不重画（否则整页图片 + 列表每帧重新栅格化，手机上必掉帧）。
+      child: RepaintBoundary(
+        child: primary == null
+            ? PrimaryScrollController.none(
+                child: KeyedSubtree(key: ValueKey<int>(page), child: child),
+              )
+            : PrimaryScrollController(
+                controller: primary,
+                child: KeyedSubtree(key: ValueKey<int>(page), child: child),
+              ),
+      ),
     ),
   );
 }

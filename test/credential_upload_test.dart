@@ -380,6 +380,29 @@ void main() {
 
       expect(find.textContaining('还没有"上行密钥"的接口'), findsWidgets);
     });
+
+    // 真机 2026-11-08 实测（PJX110，约 361dp 宽）：三个按钮排一行放不下，
+    // 「推给桌面」被裁掉 52px（界面右下角一条 RIGHT OVERFLOWED）。改成 Wrap 折行。
+    testWidgets('360dp 窄屏：三个密钥按钮折行，一个都不许被裁掉', (tester) async {
+      tester.view.physicalSize = const Size(360, 1600);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+      store['PHONE_KEY'] = 'sk-phone';
+
+      await tester.pumpWidget(await page(backend()));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('本机网关'));
+      await tester.pumpAndSettle();
+
+      expect(
+        tester.takeException(),
+        isNull,
+        reason: '360dp 下密钥区不许 RenderFlex overflow',
+      );
+      expect(find.widgetWithText(FilledButton, '保存密钥'), findsOneWidget);
+      expect(find.widgetWithText(OutlinedButton, '移除密钥'), findsOneWidget);
+      expect(find.widgetWithText(OutlinedButton, '推给桌面'), findsOneWidget);
+    });
   });
 }
 

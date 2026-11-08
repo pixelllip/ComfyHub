@@ -1765,6 +1765,11 @@ class AiWorkspaceStore extends ChangeNotifier {
     }
   }
 
+  /// 设置页「本机数据与同步」要显示的那个数：本机还有几条没推到桌面。
+  ///
+  /// 与内部那一份是同一条查询（只读本地库、不出网）；桌面（非本地源）恒 0。
+  Future<int> pendingOutboxCount() => _pendingOutbox();
+
   /// 生命周期钩子（只在手机上，且只装一次）：回到前台补推一次上行。
   AppLifecycleListener? _lifecycle;
 

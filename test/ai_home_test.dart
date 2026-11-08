@@ -7,7 +7,10 @@
 
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart'
+    show debugDefaultTargetPlatformOverride;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show LogicalKeyboardKey;
 import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
@@ -1431,23 +1434,27 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.textContaining('角色卡 · 凛'), findsOneWidget);
 
-    // 面板**不收起**：直接再点第二张角色卡（用户 2026-10-28 的 bug：以前只能 @ 一张）
-    expect(find.text('诗音'), findsOneWidget, reason: '选完第一张后面板还要留着，才能接着选');
+    // 2026-11-08 用户："@卡片不会自动收回" —— 选一张就收起，要再选就重新打开。
+    // （面板常驻会把输入区顶出屏幕，尤其是键盘弹起时。）
+    expect(
+      find.text('诗音'),
+      findsNothing,
+      reason: '选完第一张面板就该收起',
+    );
+    await openCardPicker();
     await tester.tap(find.text('诗音'));
     await tester.pumpAndSettle();
     expect(find.textContaining('角色卡 · 凛'), findsOneWidget);
     expect(find.textContaining('角色卡 · 诗音'), findsOneWidget);
-    expect(find.text('角色卡 2 张'), findsOneWidget);
 
+    await openCardPicker();
     await tester.tap(find.text('画风卡'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('物理感动画'));
     await tester.pumpAndSettle();
     expect(find.textContaining('画风卡 · 物理感动画'), findsOneWidget);
 
-    // 收起面板，再写用户自己的要求（面板里的搜索框也是 TextField，要按"收起"之后再取）
-    await tester.tap(find.byTooltip('收起卡片面板'));
-    await tester.pumpAndSettle();
+    // 面板已经收起（选卡即收），直接写用户自己的要求
     await tester.enterText(find.byType(TextField).first, '保留构图');
     await tester.tap(find.widgetWithText(FilledButton, '发送'));
     await tester.pumpAndSettle();
@@ -1519,14 +1526,191 @@ void main() {
 
     await tester.tap(find.text('凛'));
     await tester.pumpAndSettle();
+    // 选完就收：要选第二张得重新打开（用户 2026-11-08）
+    await tester.tap(find.byTooltip('添加附件 / 插入卡片（@）'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('角色卡 / 画风卡…'));
+    await tester.pumpAndSettle();
     await tester.tap(find.text('诗音'));
     await tester.pumpAndSettle();
-    expect(find.text('角色卡 2 张'), findsOneWidget);
+    expect(find.textContaining('角色卡 · 凛'), findsOneWidget);
+    expect(find.textContaining('角色卡 · 诗音'), findsOneWidget);
 
+    // 再选一次诗音 = 取消这一张
+    await tester.tap(find.byTooltip('添加附件 / 插入卡片（@）'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('角色卡 / 画风卡…'));
+    await tester.pumpAndSettle();
     await tester.tap(find.text('诗音'));
     await tester.pumpAndSettle();
     expect(find.textContaining('角色卡 · 诗音'), findsNothing);
     expect(find.textContaining('角色卡 · 凛'), findsOneWidget);
-    expect(find.text('角色卡 1 张'), findsOneWidget);
+  });
+
+  // 2026-11-08 用户："窗口高度太低，元素太小，很难操作" —— 手机上卡片选择器
+  // 改成**底部弹层**：独立路由、自己的高度与滚动，不再跟输入区抢高度。
+  testWidgets('手机：卡片选择器是底部弹层，选完自动关闭', (tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    try {
+      tester.view.physicalSize = const Size(720, 1600);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+
+      await tester.pumpWidget(await buildAiHomePage());
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byTooltip('添加附件 / 插入卡片（@）'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('角色卡 / 画风卡…'));
+      await tester.pumpAndSettle();
+
+      // 弹层里能看到卡片（说明不是被挤成一条的输入区内嵌面板）
+      expect(find.text('凛'), findsOneWidget);
+      await tester.tap(find.text('凛'));
+      await tester.pumpAndSettle();
+
+      // 选完弹层自动关：列表里那张卡不在了，chip 留了下来
+      expect(find.text('凛'), findsNothing, reason: '弹层选完就该关掉');
+      expect(find.textContaining('角色卡 · 凛'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    } finally {
+      debugDefaultTargetPlatformOverride = null;
+    }
+  });
+
+  // 用户 2026-11-08："多行文本输入仍然 overflow" —— 输入框行数必须按
+  // "输入区可用高度 - 卡片 - 底行"现算；键盘高度（viewInsets）变了也成立。
+  testWidgets('手机 + 键盘 + 卡片 + 长文本：输入区不溢出', (tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    try {
+      tester.view.physicalSize = const Size(360, 780);
+      tester.view.devicePixelRatio = 1.0;
+      tester.view.viewInsets = const FakeViewPadding(bottom: 300);
+      addTearDown(tester.view.reset);
+
+      await tester.pumpWidget(await buildAiHomePage());
+      await tester.pumpAndSettle();
+
+      // 先选一张卡（走底部弹层）
+      await tester.tap(find.byTooltip('添加附件 / 插入卡片（@）'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('角色卡 / 画风卡…'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('凛'));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('角色卡 · 凛'), findsOneWidget);
+
+      // 再塞一大段文本：超过行数上限时在输入框内部滚，不许把页面顶出去
+      await tester.enterText(
+        find.byType(TextField).first,
+        'Please keep this prompt very long to test wrapping in the composer. ' * 6,
+      );
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull, reason: '多行输入不许 overflow');
+    } finally {
+      debugDefaultTargetPlatformOverride = null;
+    }
+  });
+
+  // 用户 2026-11-08：手机端 "输入 @ → 取消 → 焦点回到输入框又弹一遍，
+  // 得取消两次才能打字"。取消时必须把行末的 `@` 摘掉，并且同一段文本不许重复弹。
+  testWidgets('手机：取消卡片弹层 → @ 被摘掉且不会重复弹', (tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    try {
+      tester.view.physicalSize = const Size(360, 780);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+
+      await tester.pumpWidget(await buildAiHomePage());
+      await tester.pumpAndSettle();
+
+      final field = find.byType(TextField).first;
+      await tester.enterText(field, '@');
+      await tester.pumpAndSettle();
+      expect(find.text('凛'), findsOneWidget, reason: '弹层出现');
+
+      // 取消（弹层右上角的 X）
+      await tester.tap(find.byTooltip('收起卡片面板'));
+      await tester.pumpAndSettle();
+      expect(find.text('凛'), findsNothing, reason: '取消后弹层关闭');
+      expect(
+        tester.widget<TextField>(field).controller!.text,
+        '',
+        reason: '行末那个 @ 要摘掉，不然接着打字会变成 "@正文"',
+      );
+
+      // 焦点回到输入框：同一段文本不许再弹一次
+      await tester.tap(field);
+      await tester.pumpAndSettle();
+      expect(find.text('凛'), findsNothing, reason: '焦点回来不许重复弹层');
+
+      await tester.enterText(field, 'hello');
+      await tester.pumpAndSettle();
+      expect(tester.widget<TextField>(field).controller!.text, 'hello');
+    } finally {
+      debugDefaultTargetPlatformOverride = null;
+    }
+  });
+
+  // 用户 2026-11-08："点击这个角色卡/画风卡，弹窗显示详细内容（只读）"
+  testWidgets('已选卡片：点 chip 打开只读详情', (tester) async {
+    tester.view.physicalSize = const Size(1200, 900);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    await tester.pumpWidget(await buildAiHomePage());
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byTooltip('添加附件 / 插入卡片（@）'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('角色卡 / 画风卡…'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('凛'));
+    await tester.pumpAndSettle();
+
+    final chip = find.byWidgetPredicate(
+      (w) =>
+          w is InputChip &&
+          w.label is Text &&
+          (w.label as Text).data == '角色卡 · 凛',
+    );
+    expect(chip, findsOneWidget);
+    await tester.tap(chip);
+    await tester.pumpAndSettle();
+
+    expect(find.text('正面提示词'), findsOneWidget);
+    expect(find.textContaining('Rin, black hair'), findsWidgets);
+    await tester.tap(find.text('关闭'));
+    await tester.pumpAndSettle();
+    expect(find.text('正面提示词'), findsNothing);
+  });
+
+  // 用户 2026-11-08："手机的回车逻辑被你改成了发送" —— 回车 = 发送只属于电脑端。
+  testWidgets('手机：回车是换行，不是发送', (tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    try {
+      tester.view.physicalSize = const Size(360, 780);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+
+      await tester.pumpWidget(await buildAiHomePage());
+      await tester.pumpAndSettle();
+
+      final field = find.byType(TextField).first;
+      await tester.enterText(field, '第一行');
+      await tester.pump();
+      // 个别输入法把软键盘回车当原始 Enter 键事件发上来 —— 手机上不许因此发送。
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await tester.pumpAndSettle();
+
+      expect(lastRunBody, isNull, reason: '手机回车不许发送');
+      expect(
+        tester.widget<TextField>(field).controller!.text,
+        '第一行',
+        reason: '没发送就不该清空输入框',
+      );
+    } finally {
+      debugDefaultTargetPlatformOverride = null;
+    }
   });
 }

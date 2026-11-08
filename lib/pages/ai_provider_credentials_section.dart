@@ -159,14 +159,17 @@ class _AiProviderCredentialsSectionState
             ),
           ),
           const SizedBox(height: 8),
-          Row(
+          // 手机上 360dp 宽时三个按钮一行放不下（实测溢出 52px）—— 用 Wrap
+          // 放不下就折行，按钮一个都不能被裁掉（AGENTS §6.1 / §6.0）。
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
             children: [
               FilledButton.icon(
                 onPressed: _busy ? null : _saveKey,
                 icon: const Icon(Icons.key, size: 18),
                 label: const Text('保存密钥'),
               ),
-              const SizedBox(width: 8),
               OutlinedButton.icon(
                 onPressed: _busy || !p.credential.configured
                     ? null
@@ -177,8 +180,7 @@ class _AiProviderCredentialsSectionState
               // 密钥上行（§14.2）：只有"手机上、且有 ref、且本机真有这把"才出现。
               // 桌面自己就是真源，没有"推给桌面"这回事（`RemoteCredentialStore.reveal` 直接抛）。
               if (widget.credentials.isLocal &&
-                  (p.credentialRef ?? '').trim().isNotEmpty) ...[
-                const SizedBox(width: 8),
+                  (p.credentialRef ?? '').trim().isNotEmpty)
                 OutlinedButton.icon(
                   onPressed: _busy || !p.credential.configured
                       ? null
@@ -186,7 +188,6 @@ class _AiProviderCredentialsSectionState
                   icon: const Icon(Icons.upload_outlined, size: 18),
                   label: const Text('推给桌面'),
                 ),
-              ],
             ],
           ),
         ],

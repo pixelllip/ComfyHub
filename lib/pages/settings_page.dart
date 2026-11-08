@@ -1,5 +1,3 @@
-import 'dart:io' show Platform;
-
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
@@ -8,6 +6,7 @@ import '../core/backend_launcher.dart';
 import '../core/backend_paths.dart';
 import '../core/formatting.dart';
 import '../core/media_cache.dart';
+import '../core/platform_caps.dart';
 import '../core/settings_store.dart';
 import '../state/library_store.dart';
 import '../state/nsfw_store.dart';
@@ -21,6 +20,7 @@ import 'settings_comfy_capture_page.dart';
 import 'settings_data_dir_page.dart';
 import 'settings_interface_page.dart';
 import 'settings_local_services_page.dart';
+import 'settings_mobile_local_page.dart';
 import 'settings_pairing_page.dart';
 
 /// 设置首页。
@@ -106,7 +106,8 @@ class _SettingsPageState extends State<SettingsPage> {
     final theme = Theme.of(context);
     final store = context.watch<LibraryStore>();
     final launcher = context.watch<BackendLauncher>();
-    final isWindowsDesktop = !kIsWeb && Platform.isWindows;
+    // 判据只有一份：`isWindowsDesktopHost`（带单测用的平台 override）。
+    final isWindowsDesktop = isWindowsDesktopHost;
 
     return SettingsScaffold(
       // 首页在 `HomeShell` 的内容区里，不需要返回箭头。
@@ -118,13 +119,30 @@ class _SettingsPageState extends State<SettingsPage> {
           estimatedHeight: 280,
           child: Column(
             children: [
-              SettingsEntryTile(
-                icon: Icons.dns_outlined,
-                title: '本地服务（后端 + 数据库）',
-                subtitle: '自动拉起 / 停止、启动与重启、日志、运行根目录、后端地址',
-                onTap: () => _push(context, const LocalServicesSettingsPage()),
-              ),
-              const SizedBox(height: 8),
+              // 「本地服务（后端 + 数据库）」只在 Windows 桌面端有意义：
+              // 手机连的是桌面后端，本机没有可拉起的 Rust exe，也没有
+              // 盘符 / 资源管理器（用户 2026-11-08 报的就是这一项又冒出来了）。
+              //
+              // 手机端换成它真正拥有的那一套（用户 2026-11-08："把那些电脑才
+              // 能用的功能，在手机端替换成手机端专用的功能"）：本机库 + 上行
+              // 队列 + 桌面连接 + 立即同步/拉取。
+              if (isWindowsDesktop) ...[
+                SettingsEntryTile(
+                  icon: Icons.dns_outlined,
+                  title: '本地服务（后端 + 数据库）',
+                  subtitle: '自动拉起 / 停止、启动与重启、日志、运行根目录、后端地址',
+                  onTap: () => _push(context, const LocalServicesSettingsPage()),
+                ),
+                const SizedBox(height: 8),
+              ] else ...[
+                SettingsEntryTile(
+                  icon: Icons.phonelink_setup,
+                  title: '本机数据与同步',
+                  subtitle: '本机会话与上行队列、桌面连接、立即同步与拉取',
+                  onTap: () => _push(context, const MobileLocalSettingsPage()),
+                ),
+                const SizedBox(height: 8),
+              ],
               SettingsEntryTile(
                 icon: Icons.qr_code_2,
                 title: '远程访问与配对',

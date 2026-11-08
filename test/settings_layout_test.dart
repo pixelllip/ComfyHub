@@ -6,6 +6,8 @@
 
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart'
+    show debugDefaultTargetPlatformOverride, TargetPlatform;
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
@@ -409,5 +411,48 @@ void main() {
       findsNothing,
       reason: '端口正常时不许常年亮一条警告',
     );
+  });
+
+  // 用户 2026-11-08（第二次报同一件事）：「手机设置出现了一些电脑才能用的功能」。
+  // 2026-11-05 把设置页拆成子界面时，「本地服务（后端 + 数据库）」这一项又变回
+  // 无条件渲染了（它在 2026-09-28 就被 `isWindowsDesktop` 挡过一次）。
+  // 判据是**平台**，不是窗口宽度：手机连的是桌面后端，本机没有可拉起的 Rust exe，
+  // 也没有盘符 / 资源管理器。
+  testWidgets('手机：设置首页没有只有电脑端才有的入口', (tester) async {
+    // ⚠ override 必须在用例体内恢复（`_verifyInvariants` 会断言它已清零），
+    // 不能只用 `addTearDown` —— 那时断言已经跑过了。
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    try {
+      tester.view.physicalSize = const Size(720, 3600);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+
+      await _pumpSettings(tester);
+
+      expect(
+        find.text('本地服务（后端 + 数据库）'),
+        findsNothing,
+        reason: '手机上不该出现本地服务入口（本机没有后端可拉）',
+      );
+      expect(
+        find.text('本机数据与同步'),
+        findsOneWidget,
+        reason: '手机端要有自己的那一项（本机库 + 同步），不是把整组藏空了事',
+      );
+      expect(
+        find.text('远程访问与配对'),
+        findsOneWidget,
+        reason: '配对是手机端真正要用的那一项，不能跟着一起藏掉',
+      );
+      expect(find.text('数据目录'), findsNothing, reason: '数据目录是桌面盘符的事');
+      expect(find.text('导出全部产物…'), findsNothing, reason: '导出写的是桌面磁盘路径');
+      expect(
+        find.text('产物缓存（本机）'),
+        findsOneWidget,
+        reason: '手机专属的那一节要还在',
+      );
+    } finally {
+      debugDefaultTargetPlatformOverride = null;
+    }
   });
 }
