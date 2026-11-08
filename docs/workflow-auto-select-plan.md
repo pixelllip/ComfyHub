@@ -206,8 +206,8 @@ T4 的提示词按拍板结果写。
 > 现在 `workflow_submit` 在预检前会摘掉广播桩（`strip_broadcast_stubs`），
 > 提交图里不再带这个零输出桩。
 >
-> ⚠ 已知 UX 缺口：手机端回执**不会自己到**，要一次 `pullChanges`
-> （重开 App / 「从桌面拉取」）才出现；坐在会话里等是等不到的。
+> 回执自动拉取已补（2026-11-09）：手机前台每 25 秒 `pullChanges`
+> （已配对、非运行中、不重叠；后台/未配对时停），桌面回执最多 25 秒内出现。
 
 ### 4.2 放权开关已落地（对应 §1.2 第 2 条与 T5）
 
@@ -224,3 +224,10 @@ T4 的提示词按拍板结果写。
 `modelQuery` 分别命中 `moss_image` / `krea2Turbo` / `silvermoonmixAnima`、
 按 `created_at` 倒序、只认 `success` 且 `raw` 非空。任务分类仍复用
 `workflow_recipe::Task` 的既有判据顺序，不另写一份。
+
+### 4.4 T1 已落地（2026-11-09）
+
+- `comfy_recent_successes`（桌面专属、`ALLOW`、只读、20s 缓存）已注册；
+  `PROMPT_VERSION` v63；全量 `cargo test --lib` 870 passed。
+- 手机端不下发（仍只有那 7 个工具）；后续按 §3 顺序继续 T3（provenance）→
+  T2（verified 绑定）→ T4（系统提示，需先拍板 T5）。
