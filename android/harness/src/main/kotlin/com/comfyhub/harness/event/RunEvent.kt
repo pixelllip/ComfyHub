@@ -46,6 +46,14 @@ object RunEventType {
     const val MESSAGE_STARTED = "message.started"
     const val REASONING_DELTA = "reasoning.delta"
     const val TEXT_DELTA = "text.delta"
+
+    /**
+     * 模型声明"进入某个环节"（2026-11-05 桌面加的）。
+     *
+     * 手机当前不按环节折叠（那是聊天页的表现层），但**事件类型清单必须与契约一致**：
+     * 少一个常量时 `RunEventContractTest` 会红，而且"手机漏掉它"这件事本身就没法被看见。
+     */
+    const val STEP_STARTED = "step.started"
     const val TOOL_REQUESTED = "tool.requested"
     const val TOOL_STARTED = "tool.started"
     const val TOOL_COMPLETED = "tool.completed"
@@ -66,7 +74,7 @@ object RunEventType {
 
     /** 全部类型（顺序与契约 §2 的表一致）。 */
     val ALL: List<String> = listOf(
-        RUN_STARTED, MESSAGE_STARTED, REASONING_DELTA, TEXT_DELTA,
+        RUN_STARTED, MESSAGE_STARTED, REASONING_DELTA, TEXT_DELTA, STEP_STARTED,
         TOOL_REQUESTED, TOOL_STARTED, TOOL_COMPLETED, TOOL_FAILED,
         USER_QUESTION, USER_QUESTION_ANSWERED, USAGE_UPDATED,
         MESSAGE_COMPLETED, CONVERSATION_UPDATED,

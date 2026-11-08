@@ -77,7 +77,9 @@ class RunEventContractTest {
             emptyList<String>(),
             (coded - documented.toSet()).sorted(),
         )
-        assertEquals("契约的事件类型个数变了（现在是 ${documented.size} 个）", 17, documented.size)
+        // 2026-11-05 桌面加了 `step.started`（环节标记），契约 §2 从 17 变 18。
+        // 手机侧原先漏了这个常量 —— 这条计数断言就是那次漂移的断路器。
+        assertEquals("契约的事件类型个数变了（现在是 ${documented.size} 个）", 18, documented.size)
     }
 
     @Test

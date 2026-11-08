@@ -35,12 +35,50 @@ class HarnessDatabase private constructor(val session: SqlSession) : AutoCloseab
 
             val current = userVersion(session)
             MobileSchema.DDL.forEach { session.exec(it) }
+            // `CREATE TABLE IF NOT EXISTS` **不会**给已经存在的表补列 —— 旧版手机升级上来时
+            // 必须在这里补。不补的后果不是报错，是"每次启动先把镜像清空、然后一行都落不回来"：
+            // 桌面 SCHEMA_VERSION 13 的行带着这些列，`applyMirrorRow` 见到不认识的列会整批拒绝。
+            migrateColumns(session)
             if (current < MobileSchema.VERSION) {
-                // 目前只有 v1；将来加列/加表时在这里按 current 逐级补（幂等写法，见 Migrate.kt）
                 session.exec("PRAGMA user_version = ${MobileSchema.VERSION}")
             }
             return HarnessDatabase(session)
         }
+
+        /**
+         * 旧库补列（幂等）：桌面 schema 加过、手机镜像还没跟上的那几列。
+         *
+         * 只加不删、不重建：镜像行由 bootstrap / changes 整行覆盖，补上列之后下一次同步就齐了。
+         * 表本身不存在时跳过（DDL 已经建好，第一次启动不需要 ALTER）。
+         */
+        private fun migrateColumns(session: SqlSession) {
+            NEW_COLUMNS.forEach { (table, columns) ->
+                val existing = session.query("PRAGMA table_info($table)")
+                    .map { it.str("name") }
+                    .toSet()
+                if (existing.isEmpty()) return@forEach
+                columns.forEach { (name, decl) ->
+                    if (name !in existing) {
+                        session.exec("ALTER TABLE $table ADD COLUMN $name $decl")
+                    }
+                }
+            }
+        }
+
+        /**
+         * `table -> (列名, 列声明)`。加列时**两边一起改**：这里的 DDL 与 [MobileSchema] 里的建表语句。
+         *
+         * 2026-11-08 补的是桌面 5..13 之间积下来的四列 + `media_collections` 那张表
+         * （表由 DDL 建，这里只补列）。
+         */
+        private val NEW_COLUMNS: Map<String, List<Pair<String, String>>> = mapOf(
+            "prompts" to listOf("negative_mode" to "TEXT NOT NULL DEFAULT 'keep'"),
+            "media_assets" to listOf(
+                "collection_id" to "INTEGER NULL REFERENCES media_collections(id) ON DELETE SET NULL",
+                "collection_opt_out" to "INTEGER NOT NULL DEFAULT 0",
+            ),
+            "ai_attachments" to listOf("origin" to "TEXT NOT NULL DEFAULT 'upload'"),
+        )
 
         private fun userVersion(session: SqlSession): Int =
             session.queryOne("PRAGMA user_version")?.int("user_version") ?: 0

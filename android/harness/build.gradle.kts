@@ -21,6 +21,12 @@ android {
 
     testOptions {
         unitTests.isReturnDefaultValues = true
+        // 用例要**现读**仓库里的 `db/schema.sqlite.sql` 与 `server-rs/src/db.rs` 来比对
+        // （镜像表逐列同形 / SCHEMA_VERSION 同值）。Gradle 测试进程的 `user.dir`
+        // 不一定落在仓库里（守护进程复用时会变），所以显式把根传进去。
+        unitTests.all { test ->
+            test.systemProperty("comfyhub.root", rootProject.projectDir.parentFile.absolutePath)
+        }
     }
 }
 

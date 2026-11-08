@@ -33,7 +33,7 @@ object MobileSchema {
 
     /**
      * 手机侧本地库的结构版本 —— ⚠ **它必须与桌面的 `SCHEMA_VERSION` 同值**
-     * （`server-rs/src/db.rs`，2026-09-27 M5 起是 **4**）。
+     * （`server-rs/src/db.rs`，2026-11-08 起是 **13**）。
      *
      * ## 这个数代表什么（2026-09-27 拍板；理由写在这里，免得两边各说各话）
      *
@@ -50,11 +50,13 @@ object MobileSchema {
      *  - "跟着桌面一起 +1"的代价只是这段注释要跟着改 —— 防线是 `HarnessDatabaseTest` 里那条
      *    **去读 `server-rs/src/db.rs` 现比**的用例：漏改一边当场变红。
      *
-     * 顺带说清"加号"对手机侧意味着什么：手机**不照号做迁移**，而是**丢镜像 + 走全量**
-     * （`SyncPullClient.MODE_BOOTSTRAP`）；本地库自己的 `PRAGMA user_version` 只是同一个数的
+     * 顺带说清"加号"对手机侧意味着什么：**表结构与镜像列先照着桌面补齐**（`MobileSchema`
+     * 的 DDL + `HarnessDatabase.migrateColumns` 的补列迁移），号对上之后走增量；
+     * 只有真的对不上（桌面又加了我们还没跟上的列）才**丢镜像 + 走全量**
+     * （`SyncPullClient.MODE_BOOTSTRAP`）。本地库自己的 `PRAGMA user_version` 是同一个数的
      * 记号（`HarnessDatabase.from` 幂等建完表之后写上它）。
      */
-    const val VERSION = 4
+    const val VERSION = 13
 
     /** 镜像表的同步范围与主键形态（`/api/sync` 那三条读端点的 apply 也按它走）。 */
     enum class PkKind { SINGLE, COMPOSITE }
@@ -77,6 +79,8 @@ object MobileSchema {
         MirrorTable("tags", listOf("id"), PkKind.SINGLE),
         MirrorTable("prompts", listOf("id"), PkKind.SINGLE),
         MirrorTable("prompt_tags", listOf("prompt_id", "tag_id"), PkKind.COMPOSITE),
+        // 集合必须排在 media_assets 之前（后者用 collection_id 引用它；外键是开着的）
+        MirrorTable("media_collections", listOf("id"), PkKind.SINGLE),
         MirrorTable("media_assets", listOf("id"), PkKind.SINGLE),
         MirrorTable("media_tags", listOf("media_id", "tag_id"), PkKind.COMPOSITE),
         MirrorTable("capture_runs", listOf("id"), PkKind.SINGLE),
@@ -154,6 +158,8 @@ object MobileSchema {
           batch_size        INTEGER NULL,
           extra_params      TEXT    NULL,
           notes             TEXT    NULL,
+          -- 2026-11-08：桌面 SCHEMA_VERSION 13 的列（位置照 db/schema.sqlite.sql）
+          negative_mode     TEXT    NOT NULL DEFAULT 'keep',
           favorite          INTEGER NOT NULL DEFAULT 0 CHECK (favorite IN (0,1)),
           source            TEXT    NULL DEFAULT 'Manual',
           source_ref        TEXT    NULL,
@@ -177,9 +183,27 @@ object MobileSchema {
         "CREATE INDEX IF NOT EXISTS idx_pt_tag ON prompt_tags(tag_id)",
 
         """
+        CREATE TABLE IF NOT EXISTS media_collections (
+          id           INTEGER PRIMARY KEY AUTOINCREMENT,
+          group_key    TEXT    NOT NULL,
+          kind         TEXT    NOT NULL DEFAULT 'IMAGE',
+          origin       TEXT    NOT NULL DEFAULT 'auto' CHECK (origin IN ('auto','manual')),
+          rule_version INTEGER NOT NULL DEFAULT 1,
+          title        TEXT    NULL,
+          created_at   TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+          updated_at   TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+        )
+        """.trimIndent(),
+        "CREATE INDEX IF NOT EXISTS idx_collections_key    ON media_collections(group_key)",
+        "CREATE INDEX IF NOT EXISTS idx_collections_origin ON media_collections(origin)",
+
+        """
         CREATE TABLE IF NOT EXISTS media_assets (
           id             INTEGER PRIMARY KEY AUTOINCREMENT,
           prompt_id      INTEGER NULL REFERENCES prompts(id) ON DELETE SET NULL,
+          -- 2026-11-08：桌面 SCHEMA_VERSION 13 的列（位置照 db/schema.sqlite.sql）
+          collection_id      INTEGER NULL REFERENCES media_collections(id) ON DELETE SET NULL,
+          collection_opt_out INTEGER NOT NULL DEFAULT 0,
           kind           TEXT    NOT NULL CHECK (kind IN ('IMAGE','VIDEO','AUDIO')),
           title          TEXT    NOT NULL DEFAULT '',
           original_name  TEXT    NOT NULL,
@@ -295,6 +319,8 @@ object MobileSchema {
           height        INTEGER NULL,
           sha256        TEXT    NULL,
           status        TEXT    NOT NULL DEFAULT 'ready',
+          -- 2026-11-08：桌面 SCHEMA_VERSION 13 的列（位置照 db/schema.sqlite.sql）
+          origin        TEXT    NOT NULL DEFAULT 'upload',
           metadata_json TEXT    NULL,
           created_at    TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
           PRIMARY KEY (id)

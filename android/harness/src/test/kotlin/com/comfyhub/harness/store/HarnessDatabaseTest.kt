@@ -163,19 +163,21 @@ class HarnessDatabaseTest {
 
     // --- 镜像表与桌面同形 --------------------------------------------------
 
-    /** 从桌面的 schema 文件里读某张表的列清单（唯一真源 = `db/schema.sqlite.sql`）。 */
-    private fun desktopColumns(table: String): List<String> {
+    /** 仓库根：优先用 Gradle 传进来的 `comfyhub.root`，否则从当前目录往上找。 */
+    private fun repoRoot(): Path {
+        System.getProperty("comfyhub.root")?.let { return Path.of(it) }
         var dir: Path? = Path.of("").toAbsolutePath()
-        var file: Path? = null
         while (dir != null) {
-            val candidate = dir.resolve("db").resolve("schema.sqlite.sql")
-            if (Files.isRegularFile(candidate)) {
-                file = candidate
-                break
-            }
+            if (Files.isRegularFile(dir.resolve("db").resolve("schema.sqlite.sql"))) return dir
             dir = dir.parent
         }
-        val text = String(Files.readAllBytes(file!!), Charsets.UTF_8)
+        error("找不到仓库根（db/schema.sqlite.sql）；请通过 Gradle 跑，或设置 -Dcomfyhub.root")
+    }
+
+    /** 从桌面的 schema 文件里读某张表的列清单（唯一真源 = `db/schema.sqlite.sql`）。 */
+    private fun desktopColumns(table: String): List<String> {
+        val file = repoRoot().resolve("db").resolve("schema.sqlite.sql")
+        val text = String(Files.readAllBytes(file), Charsets.UTF_8)
         val body = Regex(
             """CREATE TABLE IF NOT EXISTS\s+$table\s*\((.*?)\n\);""",
             setOf(RegexOption.DOT_MATCHES_ALL),
@@ -225,19 +227,10 @@ class HarnessDatabaseTest {
 
     // --- 结构版本：必须与桌面同值 -------------------------------------------
 
-    /** 从桌面的 Rust 源里读 `SCHEMA_VERSION`（唯一真源 = `server-rs/src/db.rs`）。 */
+    /** 从桌面的 Rust 源里读 `SCHEMA_VERSION`（唯一真源 = `server-rs/src/infra/db.rs`）。 */
     private fun desktopSchemaVersion(): Int {
-        var dir: Path? = Path.of("").toAbsolutePath()
-        var file: Path? = null
-        while (dir != null) {
-            val candidate = dir.resolve("server-rs").resolve("src").resolve("db.rs")
-            if (Files.isRegularFile(candidate)) {
-                file = candidate
-                break
-            }
-            dir = dir.parent
-        }
-        val text = String(Files.readAllBytes(file!!), Charsets.UTF_8)
+        val file = repoRoot().resolve("server-rs").resolve("src").resolve("infra").resolve("db.rs")
+        val text = String(Files.readAllBytes(file), Charsets.UTF_8)
         val match = Regex("""pub const SCHEMA_VERSION:\s*i64\s*=\s*(\d+)\s*;""").find(text)
             ?: error("server-rs/src/db.rs 里找不到 SCHEMA_VERSION")
         return match.groupValues[1].toInt()
