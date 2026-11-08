@@ -199,6 +199,15 @@ T4 的提示词按拍板结果写。
 > 这三条就是 T1 的**首批回归数据**：跑完后 `capture_runs` 会各留一条 `success`，
 > `raw` 里的模型文件名（`moss_image_*` / `krea2Turbo*` / `silvermoonmixAnima*`）
 > 可直接用于 `modelQuery` 的"同族"匹配。
+>
+> **2026-11-08 实测：三条都跑通。** `moss-sakura`（1217 / 1219）、
+> `anima-rooftop`（1218）、`krea-fixed`（1221）。`krea2 t2i` 原文件的
+> `Anything Everywhere`（node 36）曾让提交审核按"纯前端节点"整张拦下；
+> 现在 `workflow_submit` 在预检前会摘掉广播桩（`strip_broadcast_stubs`），
+> 提交图里不再带这个零输出桩。
+>
+> ⚠ 已知 UX 缺口：手机端回执**不会自己到**，要一次 `pullChanges`
+> （重开 App / 「从桌面拉取」）才出现；坐在会话里等是等不到的。
 
 ### 4.2 放权开关已落地（对应 §1.2 第 2 条与 T5）
 

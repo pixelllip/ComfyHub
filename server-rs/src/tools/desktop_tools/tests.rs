@@ -71,6 +71,8 @@ fn 只列真搬过来了的那些() {
             "comfy_load_workflow",
             "comfy_make_mask",
             "comfy_prune_workflow",
+            // T1（2026-11-08）：按任务 / 模型族查"上次成功"，只读
+            "comfy_recent_successes",
             // 起 / 停实例（2026-09-28 用户 bug「通过 CLI 启动 comfyui 总是失败」）：
             // 自己起就不用 comfy-cli 写项目外的那两个文件 —— 那条路必然 Errno 13。
             "comfy_start",

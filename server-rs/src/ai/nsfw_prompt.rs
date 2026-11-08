@@ -161,7 +161,7 @@ pub const VERSION: &str = "nsfw-v3";
 ///   参考图、下载成本机附件），第 26 条补第 ⑥ 款 —— 选项里的视觉关键词要先找参考图，
 ///   把 `attachmentId` 放进选项；没找到不许贴外链。用户口径："有没有办法让 AI 问场景/人物细节时，
 ///   给出选项中提到关键词的对应图片？网络搜索也行。"
-pub const PROMPT_VERSION: &str = "v62";
+pub const PROMPT_VERSION: &str = "v63";
 
 /// 第一问时按轮追加的起标题指令（`SystemPrompt.TITLE_INSTRUCTION`）。
 pub const TITLE_INSTRUCTION: &str = r#"【本次附加任务：为这个对话起标题】

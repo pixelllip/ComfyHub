@@ -260,6 +260,18 @@ pub const DESKTOP_TOOLS: &[DesktopToolSpec] = &[
         mutating: false,
     },
     DesktopToolSpec {
+        name: "comfy_recent_successes",
+        description: r#"**按任务 / 模型族查「最近一次成功跑过」的工作流**。
+用途：用户说"上次那张 anima 的图怎么跑的""用上次成功的那条再来一张"时，先来这里拿 runKey / promptId / 模型文件名；不要靠 `comfy_get_status` 的标题猜，也不要逐条 `comfy_get_run` 自己分类。
+只认真的成功过的：`capture_runs.status='success'` 且留下完整 API 图；`empty` / `error` 不算（那两种是可重试状态，见 `capture_ingest::can_reclaim`）。
+`task` 按任务过滤（t2i / i2i / edit / inpaint / upscale / video / audio）；`modelQuery` 按 raw 图里出现的模型文件名子串过滤（用于"同族"：anima / krea2 / moss）；`limit` 默认 3、最多 8。
+返回每条带 runKey / promptId / title / capturedAt / task / 模型文件名清单 / skeletonHash。**同任务 + 同族优先**：挑最近的那条，用 `comfy_submit(overrides=…)` 只改提示词与 seed，不要重搭工作流。"#,
+        input_schema: r#"{"type":"object","properties":{"task":{"type":"string","description":"只列这一类任务：t2i / i2i / edit / inpaint / upscale / video / audio；不填就全列"},"modelQuery":{"type":"string","description":"按 raw 图里的模型文件名子串过滤（大小写不敏感），例如 anima / krea2 / moss"},"limit":{"type":"integer","description":"最多几条，默认 3，最多 8"}},"additionalProperties":false}"#,
+        scope: "DESKTOP",
+        access: "ALLOW",
+        mutating: false,
+    },
+    DesktopToolSpec {
         name: "comfy_start",
         description: r#"**把本机 ComfyUI 实例起起来**（ComfyHub 自己起，不走 comfy-cli/comfy-mcp 那条路）。
 什么时候用：`comfy_get_status` 报 `comfyReachable=false`（用户说"帮我启动 comfy"就是这件）。**先查再起**：已经在跑时它不会再起第二个，直接回报"已经在跑"。

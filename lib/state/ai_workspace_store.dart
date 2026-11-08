@@ -798,7 +798,8 @@ class AiWorkspaceStore extends ChangeNotifier {
     try {
       final updated = await _api.setSkillEnabled(name, enabled);
       skills = [
-        for (final skill in skills) skill.name == updated.name ? updated : skill,
+        for (final skill in skills)
+          skill.name == updated.name ? updated : skill,
       ];
       skillsError = null;
       return (
@@ -1190,8 +1191,9 @@ class AiWorkspaceStore extends ChangeNotifier {
     // 攒着的流式通知定时器要一起收掉，否则页面都销毁了还会被回调
     _streamFlush?.cancel();
     _streamFlush = null;
-    // 上行重试与生命周期钩子同理：Store 都没了就不该再往外发东西
+    // 上行重试、前台周期拉取与生命周期钩子同理：Store 都没了就不该再往外发东西
     _cancelOutboxRetry();
+    _stopPullTimer();
     _lifecycle?.dispose();
     _lifecycle = null;
     pendingQuestionFocus.dispose();
@@ -1777,13 +1779,67 @@ class AiWorkspaceStore extends ChangeNotifier {
     if (_lifecycle != null || !_source.isLocal) return;
     try {
       _lifecycle = AppLifecycleListener(
-        onResume: () => unawaited(onAppResumed()),
+        onResume: () {
+          _startPullTimer();
+          unawaited(onAppResumed());
+        },
+        // 切后台 / 被遮住就停：不在后台轮询（省电，也不跟系统的网络休眠打架）
+        onInactive: _stopPullTimer,
+        onHide: _stopPullTimer,
+        onPause: _stopPullTimer,
       );
+      // 启动时本来就在前台：配对信息此时已读进内存，直接开始周期拉取
+      _startPullTimer();
     } catch (_) {
       // 极少数宿主（纯 Dart 单测）没有 WidgetsBinding：没有这个钩子不影响其它路 ——
       // 冷启动与 Run 收尾那两处触发照旧在
     }
   }
+
+  /// 前台周期拉取（桌面回执 / 桌面改动）的定时器。
+  ///
+  /// 为什么要有它：桌面的回执（`submit-reply-<queueId>`）就是一条普通 `ai_messages`，
+  /// 而 [pullChanges] 原来只在冷启动 / 回前台 / 手动下拉时触发 —— 用户坐在会话里
+  /// 盯着等，回执永远不来（2026-11-08 真机）。手机回到前台后补一条周期通道，
+  /// 不追求实时，只要求"坐着等也能等到"。
+  Timer? _pullTimer;
+
+  /// 25 秒一拍：回执不是实时通道，但也不该让用户等到重开 App；
+  /// 比上行重试（45s）密一点，两者撞在一起也无妨（拉本身有防重入）。
+  static const _kPullInterval = Duration(seconds: 25);
+
+  /// 周期拉取的前置：手机 + 已配对（地址与令牌都在）。
+  bool get _canAutoPull {
+    if (!_source.isLocal) return false;
+    final url = baseUrlProvider?.call().trim() ?? '';
+    final token = pairingToken?.trim() ?? '';
+    return url.isNotEmpty && token.isNotEmpty;
+  }
+
+  void _startPullTimer() {
+    if (!_canAutoPull) return;
+    _pullTimer ??= Timer.periodic(_kPullInterval, (_) {
+      // 正在跑 Run（流式回包）时不拉：别把 Live 状态搅乱；等 Run 收尾 / 回前台再拉。
+      // 未配对 / 已切后台由 `_canAutoPull` 与 onPause 管。
+      if (!_canAutoPull || running) return;
+      unawaited(pullChanges());
+    });
+  }
+
+  void _stopPullTimer() {
+    _pullTimer?.cancel();
+    _pullTimer = null;
+  }
+
+  /// 现在有没有挂着前台周期拉取（回归用例据此证明"配对后才会挂、dispose 会收"）。
+  @visibleForTesting
+  bool get pullTimerArmed => _pullTimer != null;
+
+  @visibleForTesting
+  void debugStartPullTimer() => _startPullTimer();
+
+  @visibleForTesting
+  void debugStopPullTimer() => _stopPullTimer();
 
   /// 本次会话累计推上桌面的条数（界面可以据此显示"已同步"）。
   int syncedToDesktop = 0;
@@ -2576,8 +2632,7 @@ class AiWorkspaceStore extends ChangeNotifier {
                 payload: {
                   'kind': mention.kind,
                   'name': mention.name,
-                  if (mention.modelText != null)
-                    'modelText': mention.modelText,
+                  if (mention.modelText != null) 'modelText': mention.modelText,
                   if (mention.snapshot != null) 'snapshot': mention.snapshot,
                 },
               ),

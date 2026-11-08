@@ -508,7 +508,7 @@ pub fn implemented() -> Vec<ToolView<'static>> {
 /// + **2D 布局模板**（`layout_propose`，见 [`crate::ai::layout_proposal`]，2026-11-03：
 ///   写提示词的同一轮把构图草稿交给用户预览 / 修改，改完再提交回来 —— 只出草稿，
 ///   不生成图片、不写库）。
-pub const IMPLEMENTED: [&str; 45] = [
+pub const IMPLEMENTED: [&str; 46] = [
     "ask_user_question",
     "civitai_search",
     "comfy_audit_workflow",
@@ -527,6 +527,7 @@ pub const IMPLEMENTED: [&str; 45] = [
     "comfy_load_workflow",
     "comfy_make_mask",
     "comfy_prune_workflow",
+    "comfy_recent_successes",
     "comfy_start",
     "comfy_stop",
     "comfy_submit",
@@ -687,6 +688,8 @@ pub async fn execute(
             crate::workflow::workflow_fit::tool_fit_workflow(state, arguments).await
         }
         "comfy_list_workflows" => comfy_list_workflows(state, arguments),
+        // 按任务 / 模型族查"上次成功"（T1）：只读，给无人值守的候选选择用
+        "comfy_recent_successes" => comfy_recent_successes(state, arguments),
         "comfy_list_templates" => comfy_list_templates(state, arguments),
         "comfy_get_status" => comfy_get_status(state, arguments).await,
         "comfy_sync_history" => comfy_sync_history(state).await,
@@ -1775,6 +1778,170 @@ fn comfy_list_workflows(state: &AppState, arguments: &Value) -> Result<ToolOutco
     )
     .map_err(capture_failure)?;
     Ok(ToolOutcome::new(json.to_string(), json))
+}
+
+/// `comfy_recent_successes`：按任务 / 模型族查**最近成功**的捕获记录（T1，2026-11-08）。
+///
+/// 只认 `capture_runs.status='success'` 且 `raw` 非空：`empty` / `error` 是
+/// 可重试状态（见 `capture_ingest::can_reclaim`），不算"成功过"。
+///
+/// 任务与模型文件名都走 [`crate::workflow::workflow_recipe::analyze`] ——
+/// 与 `comfy_learn_workflow` **同一条分类路**（判据顺序在 `classify`，这里不另写）。
+fn comfy_recent_successes(
+    state: &AppState,
+    arguments: &Value,
+) -> Result<ToolOutcome, ToolFailure> {
+    use crate::workflow::workflow_recipe::{analyze, Task};
+
+    let task_filter = match arguments
+        .get("task")
+        .and_then(Value::as_str)
+        .map(str::trim)
+    {
+        Some(raw) if !raw.is_empty() => Some(Task::parse(raw).ok_or_else(|| {
+            ToolFailure::new(
+                "INVALID_ARGUMENT",
+                format!(
+                    "task 不支持「{raw}」；只能是 t2i / i2i / edit / inpaint / upscale / video / audio"
+                ),
+            )
+        })?),
+        _ => None,
+    };
+    let model_query = arguments
+        .get("modelQuery")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_lowercase());
+    let limit = int_arg(arguments, "limit").unwrap_or(3).clamp(1, 8) as usize;
+
+    // 多扫一些再过滤：task / modelQuery 都要拿到 raw 才判得出。
+    // 200 与 `capture::recent_runs` 的上限同档，扫满也只是一次小查询。
+    let rows = state
+        .with(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT run_key, prompt_id, title, raw, created_at \
+                 FROM capture_runs \
+                 WHERE status = 'success' AND raw IS NOT NULL AND TRIM(raw) <> '' \
+                 ORDER BY created_at DESC, id DESC LIMIT 200",
+            )?;
+            let rows = stmt.query_map([], |row| {
+                Ok((
+                    row.get::<_, Option<String>>(0)?.unwrap_or_default(),
+                    row.get::<_, Option<i64>>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                    row.get::<_, Option<String>>(3)?.unwrap_or_default(),
+                    row.get::<_, Option<String>>(4)?,
+                ))
+            })?;
+            let mut out = Vec::new();
+            for row in rows {
+                out.push(row?);
+            }
+            Ok(out)
+        })
+        .map_err(capture_failure)?;
+
+    let mut items: Vec<Value> = Vec::new();
+    let mut scanned = 0usize;
+    let mut skipped = 0usize;
+    for (run_key, prompt_id, title, raw, created_at) in rows {
+        if items.len() >= limit {
+            break;
+        }
+        scanned += 1;
+        let parsed = serde_json::from_str::<Value>(&raw).ok();
+        let Some(graph) = parsed.as_ref().and_then(Value::as_object) else {
+            skipped += 1;
+            continue;
+        };
+        let recipe = analyze(graph, None);
+        if let Some(want) = task_filter {
+            if recipe.task != want {
+                continue;
+            }
+        }
+        let mut models: Vec<String> = recipe
+            .slots
+            .iter()
+            .map(|slot| slot.file_name.clone())
+            .filter(|name| !name.trim().is_empty())
+            .collect();
+        models.sort();
+        models.dedup();
+        if let Some(query) = &model_query {
+            if !models.iter().any(|name| name.to_lowercase().contains(query)) {
+                continue;
+            }
+        }
+
+        let mut item = serde_json::Map::new();
+        item.insert("runKey".into(), json!(run_key));
+        if let Some(id) = prompt_id {
+            item.insert("promptId".into(), json!(id));
+        }
+        if let Some(title) = title {
+            item.insert("title".into(), json!(title));
+        }
+        if let Some(at) = crate::infra::iso_time::iso_time(created_at.as_deref()) {
+            item.insert("capturedAt".into(), json!(at));
+        }
+        item.insert("task".into(), json!(recipe.task.wire()));
+        item.insert("models".into(), json!(models));
+        item.insert("skeletonHash".into(), json!(recipe.skeleton_hash));
+        items.push(Value::Object(item));
+    }
+
+    let count = items.len();
+    let mut text = String::new();
+    if items.is_empty() {
+        text.push_str("没有符合条件的成功运行。");
+        if scanned == 0 {
+            text.push_str("库里一条「success + 完整 API 图」的记录都没有。");
+        } else {
+            text.push_str(&format!(
+                "扫了 {scanned} 条成功记录，按 task / modelQuery 过滤后一条不剩。"
+            ));
+        }
+        if skipped > 0 {
+            text.push_str(&format!("另有 {skipped} 条 raw 解析失败，已跳过。"));
+        }
+        text.push_str("先确认这条工作流真的跑通过一次，或用 comfy_list_workflows 找现成的；不要凭标题猜。");
+    } else {
+        text.push_str(&format!("最近 {count} 条成功运行（同任务 + 同族优先）：\n"));
+        for item in &items {
+            let obj = item.as_object().expect("item 是对象");
+            let title = obj.get("title").and_then(Value::as_str).unwrap_or("(没有标题)");
+            let task = obj.get("task").and_then(Value::as_str).unwrap_or("unknown");
+            let models = obj
+                .get("models")
+                .and_then(Value::as_array)
+                .map(|list| {
+                    list.iter()
+                        .filter_map(Value::as_str)
+                        .collect::<Vec<_>>()
+                        .join("、")
+                })
+                .unwrap_or_default();
+            let at = obj.get("capturedAt").and_then(Value::as_str).unwrap_or("");
+            let run_key = obj.get("runKey").and_then(Value::as_str).unwrap_or("");
+            text.push_str(&format!(
+                "- {title}（{task}；模型：{}；{at}；runKey {run_key}）\n",
+                if models.is_empty() { "没记录" } else { &models }
+            ));
+        }
+        text.push_str(
+            "用法：挑最近这一条，用 comfy_submit(overrides=… ) 只改提示词与 seed；不要重搭工作流，也别逐条 comfy_get_run 自己分类。",
+        );
+    }
+
+    let payload = json!({
+        "items": items,
+        "count": count,
+        "scanned": scanned,
+    });
+    Ok(ToolOutcome::new(text, payload))
 }
 
 /// `comfy_list_templates`：列 **ComfyUI 自带的官方模板**（只读）。

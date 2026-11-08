@@ -91,12 +91,16 @@ class _FakeLocalSource implements RunEventSource, LocalSkillSource {
   final List<String?> pulledBaseUrls = [];
   final List<String?> pulledTokens = [];
 
+  /// 下行要不要挂住（测"上一趟没跑完，这一趟直接跳过"）。
+  Completer<void>? pullGate;
+
   @override
   Future<({bool ok, String mode, int applied, int cursor, String? error})>
   pullChanges({String? baseUrl, String? token}) async {
     calls.add('pullChanges');
     pulledBaseUrls.add(baseUrl);
     pulledTokens.add(token);
+    if (pullGate != null) await pullGate!.future;
     return (
       ok: pullOk,
       mode: pullMode,
@@ -1305,6 +1309,61 @@ void main() {
     final onDesktop = await desktop.syncCredentialsFromDesktop();
     expect(onDesktop, contains('不需要'));
     expect(requested, isFalse);
+  });
+
+  testWidgets('手机已配对：前台挂周期拉取，dispose 后收掉', (tester) async {
+    mockPairingChannel(token: 'tok-phone-1');
+    final source = _FakeLocalSource();
+    final store = AiWorkspaceStore(
+      api: _okApi(),
+      source: source,
+      credentials: _FakeDeviceCredentials(configured: true),
+      baseUrlProvider: () => 'http://10.0.0.5:8081',
+    );
+
+    await store.load();
+
+    expect(store.pullTimerArmed, isTrue, reason: '已配对 + 前台 → 应该挂上周期拉取');
+    store.debugStopPullTimer();
+    expect(store.pullTimerArmed, isFalse);
+    store.debugStartPullTimer();
+    expect(store.pullTimerArmed, isTrue);
+
+    store.dispose();
+    expect(store.pullTimerArmed, isFalse, reason: 'Store 都没了就不该再拉');
+  });
+
+  testWidgets('手机未配对：不挂周期拉取（不空转烧电）', (tester) async {
+    mockPairingChannel(); // 没有令牌
+    final store = AiWorkspaceStore(
+      api: _okApi(),
+      source: _FakeLocalSource(),
+      credentials: _FakeDeviceCredentials(configured: true),
+      baseUrlProvider: () => 'http://10.0.0.5:8081',
+    );
+
+    await store.load();
+    expect(store.pullTimerArmed, isFalse);
+    store.dispose();
+  });
+
+  test('下行不重叠：上一趟没跑完，这一趟直接跳过', () async {
+    final source = _FakeLocalSource()..pullGate = Completer<void>();
+    final store = AiWorkspaceStore(
+      api: _okApi(),
+      source: source,
+      credentials: _FakeDeviceCredentials(configured: true),
+      baseUrlProvider: () => 'http://10.0.0.5:8081',
+    );
+    addTearDown(store.dispose);
+
+    final first = store.pullChanges();
+    final second = await store.pullChanges();
+    expect(second, 0, reason: '上一趟还在跑 → 这一趟直接跳过');
+    source.pullGate!.complete();
+    await first;
+
+    expect(source.calls.where((c) => c == 'pullChanges').length, 1);
   });
 }
 

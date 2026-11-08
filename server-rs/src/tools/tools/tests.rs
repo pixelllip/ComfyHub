@@ -4,6 +4,21 @@
 
 use super::*;
 
+/// T1：`comfy_recent_successes` 必须是**已实现、只读、出厂 ALLOW** 的桌面工具
+/// （只读工具出厂就放行，不该让用户为每一次"查上次成功"点批准）。
+#[test]
+fn comfy_recent_successes_是只读的_allow_工具() {
+    assert!(IMPLEMENTED.contains(&"comfy_recent_successes"));
+    assert_eq!(default_access("comfy_recent_successes"), "ALLOW");
+    assert!(!is_mutating("comfy_recent_successes"));
+    assert!(
+        crate::tools::desktop_tools::DESKTOP_TOOLS
+            .iter()
+            .any(|tool| tool.name == "comfy_recent_successes"),
+        "目录里必须有它，否则 implemented() 收不到"
+    );
+}
+
 #[test]
 fn specs_only_include_implemented_tools() {
     let policy = crate::tools::policy::ToolPolicy::new(
@@ -481,6 +496,144 @@ fn 带图提问把设定图裁成附件_选项图与文字对齐() {
     let error = question_specs(&state, &bad).unwrap_err();
     assert_eq!(error.code, "INVALID_ARGUMENT");
     assert!(error.message.contains("http(s)"), "{}", error.message);
+
+    std::fs::remove_dir_all(dir).ok();
+}
+
+/// T1：`comfy_recent_successes` 只回 `status='success'` 且 `raw` 非空的行；
+/// 能按 task / modelQuery 过滤，按时间倒序，limit 截断；`error` / 空 raw 绝不算"成功过"。
+#[test]
+fn comfy_recent_successes_只回成功且可按任务与模型族过滤() {
+    use crate::web::routes::AppState;
+
+    fn t2i(model: &str) -> serde_json::Value {
+        json!({
+            "1": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": model}},
+            "2": {"class_type": "CLIPTextEncode", "inputs": {"text": "a cat", "clip": ["1", 1]}},
+            "3": {"class_type": "KSampler", "inputs": {"seed": 1, "model": ["1", 0], "positive": ["2", 0], "negative": ["2", 0], "latent_image": ["4", 0]}},
+            "4": {"class_type": "EmptyLatentImage", "inputs": {"width": 512, "height": 512, "batch_size": 1}},
+            "5": {"class_type": "VAEDecode", "inputs": {"samples": ["3", 0], "vae": ["1", 2]}},
+            "6": {"class_type": "SaveImage", "inputs": {"filename_prefix": "t", "images": ["5", 0]}}
+        })
+    }
+    fn i2i() -> serde_json::Value {
+        json!({
+            "1": {"class_type": "UNETLoader", "inputs": {"unet_name": "krea2TurboOfficialComfy_krea2TurboInt8.safetensors", "weight_dtype": "default"}},
+            "2": {"class_type": "CLIPLoader", "inputs": {"clip_name": "qwen_3_06b_base.safetensors", "type": "krea2"}},
+            "3": {"class_type": "LoadImage", "inputs": {"image": "input.png"}},
+            "4": {"class_type": "VAEEncode", "inputs": {"pixels": ["3", 0], "vae": ["5", 0]}},
+            "5": {"class_type": "VAELoader", "inputs": {"vae_name": "ae.safetensors"}},
+            "6": {"class_type": "KSampler", "inputs": {"seed": 2, "model": ["1", 0], "positive": ["7", 0], "negative": ["8", 0], "latent_image": ["4", 0]}},
+            "7": {"class_type": "CLIPTextEncode", "inputs": {"text": "x", "clip": ["2", 0]}},
+            "8": {"class_type": "CLIPTextEncode", "inputs": {"text": "", "clip": ["2", 0]}},
+            "9": {"class_type": "VAEDecode", "inputs": {"samples": ["6", 0], "vae": ["5", 0]}},
+            "10": {"class_type": "SaveImage", "inputs": {"filename_prefix": "t", "images": ["9", 0]}}
+        })
+    }
+    fn insert(
+        conn: &rusqlite::Connection,
+        key: &str,
+        status: &str,
+        raw: Option<&str>,
+        at: &str,
+        title: &str,
+    ) {
+        conn.execute(
+            "INSERT INTO capture_runs (run_key, status, title, raw, created_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            rusqlite::params![key, status, title, raw, at],
+        )
+        .unwrap();
+    }
+
+    let dir = crate::infra::testpaths::scratch("recent-successes");
+    std::fs::create_dir_all(dir.join("media")).unwrap();
+    let conn = crate::infra::db::open_memory().unwrap();
+    let schema = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("db")
+            .join("schema.sqlite.sql"),
+    )
+    .unwrap();
+    conn.execute_batch(&schema).unwrap();
+
+    insert(
+        &conn,
+        "anima-new",
+        "success",
+        Some(&t2i("silvermoonmixAnimaEvolved_v2329B_int8.safetensors").to_string()),
+        "2026-11-08T10:00:00.000Z",
+        "anima 10点",
+    );
+    insert(
+        &conn,
+        "krea-i2i",
+        "success",
+        Some(&i2i().to_string()),
+        "2026-11-08T11:00:00.000Z",
+        "krea 11点",
+    );
+    insert(
+        &conn,
+        "anima-old",
+        "success",
+        Some(&t2i("anima-base-v1.0.safetensors").to_string()),
+        "2026-11-08T09:00:00.000Z",
+        "anima 9点",
+    );
+    insert(
+        &conn,
+        "bad-error",
+        "error",
+        Some(&t2i("anima-base-v1.0.safetensors").to_string()),
+        "2026-11-08T12:00:00.000Z",
+        "error 不算",
+    );
+    insert(
+        &conn,
+        "no-raw",
+        "success",
+        None,
+        "2026-11-08T13:00:00.000Z",
+        "空 raw 不算",
+    );
+
+    let state = AppState::new(conn, ":memory:", dir.join("media"));
+
+    // 默认：最近的 3 条 success（error / 空 raw 不进），时间倒序
+    let out = comfy_recent_successes(&state, &json!({})).unwrap();
+    let items = out.payload["items"].as_array().unwrap();
+    assert_eq!(items.len(), 3);
+    assert_eq!(items[0]["runKey"], "krea-i2i");
+    assert_eq!(items[1]["runKey"], "anima-new");
+    assert_eq!(items[2]["runKey"], "anima-old");
+    assert_eq!(items[0]["task"], "i2i");
+    assert_eq!(items[1]["task"], "t2i");
+    // 模型文件名来自 raw 图（analyze 的 slots），排序后第一个是 ae
+    assert_eq!(items[0]["models"][0], "ae.safetensors");
+
+    // task 过滤
+    let out = comfy_recent_successes(&state, &json!({"task": "t2i"})).unwrap();
+    let items = out.payload["items"].as_array().unwrap();
+    assert_eq!(items.len(), 2);
+    assert_eq!(items[0]["runKey"], "anima-new");
+    assert_eq!(items[1]["runKey"], "anima-old");
+
+    // modelQuery：同族匹配（大小写不敏感）
+    let out = comfy_recent_successes(&state, &json!({"modelQuery": "KREA2"})).unwrap();
+    let items = out.payload["items"].as_array().unwrap();
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0]["runKey"], "krea-i2i");
+
+    // limit 截断
+    let out = comfy_recent_successes(&state, &json!({"task": "t2i", "limit": 1})).unwrap();
+    assert_eq!(out.payload["items"].as_array().unwrap().len(), 1);
+    assert_eq!(out.payload["items"][0]["runKey"], "anima-new");
+
+    // 非法 task 如实报错
+    let error = comfy_recent_successes(&state, &json!({"task": "nope"})).unwrap_err();
+    assert_eq!(error.code, "INVALID_ARGUMENT");
 
     std::fs::remove_dir_all(dir).ok();
 }
