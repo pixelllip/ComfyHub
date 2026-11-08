@@ -31,8 +31,11 @@
 //!    `sync::apply_one` 里**单独一个分支**，**不进 `table_of_kind`**（它不是表）。
 //! 2. **幂等**：`queue_id` 是主键，`INSERT … DO NOTHING`；同一条再推 → 回 `applied`、
 //!    **绝不重复提交**（连 worker 都不再起一个）。
-//! 3. **必须过桌面审批**：受理时写 `approval='pending'`、`state='awaiting_approval'`，
+//! 3. **默认必须过桌面审批**：受理时写 `approval='pending'`、`state='awaiting_approval'`，
 //!    worker 只**轮询库**（跨端可见）。"手机点过提交"**不是**批准（总纲 §7 待定项 2）。
+//!    **唯一例外**：这台设备在桌面上被显式打开了「自动提交」（`autoApproveSubmits`）——
+//!    此时写 `approval='auto'`，worker 直接往下走。默认关，按设备、可随时撤销，
+//!    回执里保留 `approval='auto'`，结果卡要能显示「自动提交」。
 //! 4. **批准后一条捷径都不抄**（R10）：直接调 [`crate::workflow::workflow_submit::tool_submit`] ——
 //!    同一份实现，审核 / 预检 / 提交 / 等 / `capture.captureRun()` / `mediaIds` 全在里面。
 //! 5. **拒绝 / 超时 / 重启**都不提交，而且**照样回一条**（见下 "终态一定回执"）。
@@ -215,14 +218,24 @@ pub fn accept(state: &AppState, item: &PushItem) -> Result<Accepted, Reject> {
     // 会把上一次那条的审批 / 结果 / 回执账**整行抹掉** —— 那正是"推两次提交两次"的入口）。
     let now = now_iso();
     let (queue_id, call_id) = (parsed.queue_id.clone(), parsed.call_id());
+    let requested_by = parsed.requested_by.clone();
+    let mut auto_approve = false;
+    let mut approval = "pending";
     let inserted = state
         .write(|tx| {
+            // 这台设备的「免桌面批准」开关（默认关；见 auth::DeviceRecord）。
+            // 必须在**同一个写事务**里读：受理那一刻的放权状态就是最终状态。
+            auto_approve = requested_by
+                .as_deref()
+                .map(|id| crate::mobile::auth::device_auto_approve(tx, id))
+                .unwrap_or(false);
+            approval = if auto_approve { "auto" } else { "pending" };
             let n = tx.execute(
                 "INSERT INTO submit_jobs
                    (queue_id, call_id, conversation_id, run_id, payload_json, prompt_id, source_ref,
                     overrides_json, nsfw, state, approval, reply_state, requested_at, requested_by,
                     heartbeat_at, created_at, updated_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 'pending', 'pending', ?11, ?12, ?13, ?13, ?13)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 'pending', ?12, ?13, ?14, ?14, ?14)
                  ON CONFLICT(queue_id) DO NOTHING",
                 rusqlite::params![
                     queue_id,
@@ -235,6 +248,7 @@ pub fn accept(state: &AppState, item: &PushItem) -> Result<Accepted, Reject> {
                     parsed.overrides_text,
                     if parsed.nsfw { 1 } else { 0 },
                     STATE_AWAITING_APPROVAL,
+                    approval,
                     parsed.requested_at,
                     parsed.requested_by,
                     now,
@@ -250,8 +264,10 @@ pub fn accept(state: &AppState, item: &PushItem) -> Result<Accepted, Reject> {
         return Ok(Accepted::Duplicate);
     }
     eprintln!(
-        "[submit-queue] 受理排队提交：queueId={queue_id} conversation={} promptId={:?}（等人批准）",
-        parsed.conversation_id, parsed.prompt_id
+        "[submit-queue] 受理排队提交：queueId={queue_id} conversation={} promptId={:?}（{}）",
+        parsed.conversation_id,
+        parsed.prompt_id,
+        if auto_approve { "自动提交，免桌面批准" } else { "等人批准" }
     );
     start(state, &parsed.queue_id);
     Ok(Accepted::Fresh)
@@ -490,7 +506,8 @@ async fn run_inner(state: &AppState, queue_id: &str, approval_timeout: Duration)
                     return JobReport::NotWaiting;
                 }
                 match approval.as_str() {
-                    "approved" => break,
+                    // `auto` = 这台设备开了「免桌面批准」，受理时就已是批准态。
+                    "approved" | "auto" => break,
                     "denied" => {
                         let done = finalize(
                             state,
@@ -1005,7 +1022,7 @@ fn claim(state: &AppState, queue_id: &str) -> bool {
                     SET state = ?2,
                         heartbeat_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'),
                         updated_at   = strftime('%Y-%m-%dT%H:%M:%fZ','now')
-                  WHERE queue_id = ?1 AND state = ?3 AND approval = 'approved'",
+                  WHERE queue_id = ?1 AND state = ?3 AND approval IN ('approved', 'auto')",
                 rusqlite::params![queue_id, STATE_SUBMITTING, STATE_AWAITING_APPROVAL],
             )?;
             Ok(n)
@@ -1208,7 +1225,7 @@ pub fn resolve_approval_on(
 /// | 残局 | 处置 | 为什么 |
 /// | --- | --- | --- |
 /// | `awaiting_approval` + `approval='pending'` | 按**拒绝**收尾（`APPROVAL_INTERRUPTED`）+ 回执 | 与 `expire_stale_pending_tool_calls` **同一语义**：后端重启，内存里的等待随进程消失，"永远不会有人点"。留着一张点了没用的卡才是最坏的表现 |
-/// | `awaiting_approval` + `approval='approved'` | **复起 worker**（人已经批了，只是进程在中间没了） | 认领是原子的，复起不会重复提交 |
+/// | `awaiting_approval` + `approval IN ('approved','auto')` | **复起 worker**（人已经批了 / 设备放权过，只是进程在中间没了） | 认领是原子的，复起不会重复提交 |
 /// | `submitting` | 按 `SUBMIT_INTERRUPTED` **如实**收尾，**不重投** | 送进 ComfyUI 没有、送进去跑到哪一步，都已经不知道了。重投 = 替用户多烧一轮显卡；真跑完了的话后台捕获会收进画廊 |
 pub fn resume_in_flight(state: &AppState) -> usize {
     let interrupted = state
@@ -1244,7 +1261,7 @@ pub fn resume_in_flight(state: &AppState) -> usize {
     }
 
     // ③ 人已经批过、只是进程在中间没了的：复起 worker（认领原子，不会重复提交）
-    let approved = awaiting_ids(state, "AND approval = 'approved'").unwrap_or_default();
+    let approved = awaiting_ids(state, "AND approval IN ('approved', 'auto')").unwrap_or_default();
     for queue_id in &approved {
         eprintln!("[submit-queue] 启动恢复：queueId={queue_id} 已经批准过，复起提交");
         start(state, queue_id);
@@ -1341,7 +1358,7 @@ pub fn sweep(state: &AppState) -> SweepReport {
         ),
     );
     // ④ 人已经批过、只是没人认领 → 交给调用方复起（认领是原子的，复起不会重复提交）
-    report.need_worker = awaiting_ids(state, "AND approval = 'approved'").unwrap_or_default();
+    report.need_worker = awaiting_ids(state, "AND approval IN ('approved', 'auto')").unwrap_or_default();
     // ⑤ 回执投递（终态 + 还没送达）：会话晚到 / 写库失败都在这里重试
     let delivered = deliver_pending(state);
     report.delivered = delivered;

@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io' show Socket;
 
 import 'package:http/http.dart' as http;
 
@@ -324,6 +325,52 @@ Future<SyncProbe> probeSyncEndpoint(
     );
   } finally {
     if (client == null) own.close();
+  }
+}
+
+/// 依次探测候选地址，返回第一个 **TCP 端口真的能连上** 的；一条都不通回 `null`。
+///
+/// 用途：配对二维码里同时有 IPv4 和 IPv6。校园 / 公司 Wi-Fi 常把 IPv4 在 AP
+/// 之间隔离、只留 IPv6 能通（2026-11-08 实测），所以**不能只拿 `preferredUrl`
+/// 一条去配** —— 那条很可能是连不通的 IPv4。
+///
+/// ⚠ **不能拿 `/api/health` 当探针**：配对前手机还没有令牌，而闸门开着时
+/// 非回环的 `/api/health` 也是 403（2026-11-08 实测：TCP 通、HTTP 403，
+/// 于是 5 条地址全被判死）。这里只做 TCP connect —— 它不经过应用层闸门，
+/// 只回答"这个地址有没有服务在听"。
+///
+/// `probe` 仅供测试注入；默认走 [Socket.connect]。
+Future<String?> firstReachableUrl(
+  Iterable<String> urls, {
+  Future<bool> Function(String url)? probe,
+  Duration timeout = const Duration(milliseconds: 1500),
+}) async {
+  final seen = <String>{};
+  for (final raw in urls) {
+    final url = _trimUrl(raw);
+    if (url.isEmpty || !seen.add(url)) continue;
+    final ok = probe != null
+        ? await probe(url)
+        : await _tcpReachable(url, timeout);
+    if (ok) return url;
+  }
+  return null;
+}
+
+/// 这个 URL 的 host:port 能不能建立 TCP 连接。
+///
+/// 不读任何 HTTP 响应：配对前没有令牌，任何应用层接口都可能 401/403；
+/// 能连上 TCP 就足以说明"地址对、服务在听"，剩下的交给 `pair/request` 去报真实错误。
+Future<bool> _tcpReachable(String url, Duration timeout) async {
+  final uri = Uri.tryParse(url);
+  if (uri == null || uri.host.isEmpty) return false;
+  final port = uri.hasPort ? uri.port : (uri.scheme == 'https' ? 443 : 80);
+  try {
+    final socket = await Socket.connect(uri.host, port, timeout: timeout);
+    socket.destroy();
+    return true;
+  } catch (_) {
+    return false;
   }
 }
 

@@ -21,6 +21,7 @@ import com.comfyhub.harness.store.HarnessStore
 import com.comfyhub.harness.store.MessageStatus
 import com.comfyhub.harness.store.ProviderJson
 import com.comfyhub.harness.store.ProviderStoreFailure
+import com.comfyhub.harness.store.conversationJson
 import com.comfyhub.harness.sync.SyncPullClient
 import com.comfyhub.harness.sync.SyncPushClient
 import com.comfyhub.harness.tools.BuiltinTools
@@ -510,13 +511,10 @@ class HarnessBridge(private val context: Context) :
         val s = ensureInitialized()
         return buildJsonArray {
             s.listConversations().forEach { c ->
-                add(buildJsonObject {
-                    put("id", c.id)
-                    put("title", c.title)
-                    put("providerId", c.providerId)
-                    put("modelId", c.modelId)
-                    put("updatedAt", c.updatedAt)
-                })
+                // ⚠ 字段映射在 harness 的 `conversationJson` 里（含 messageCount），
+                // `HarnessStoreTest` 盯着它：漏了 messageCount，冷启动会把有内容的
+                // 会话当成空壳删掉（2026-11-08 真机）。
+                add(conversationJson(c, s.messageCount(c.id)))
             }
         }.toString()
     }

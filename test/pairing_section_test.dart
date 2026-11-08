@@ -433,4 +433,129 @@ void main() {
     await tester.pumpWidget(const SizedBox());
     await tester.pump();
   });
+
+  testWidgets('桌面：自动提交开关默认关，打开后走 auto-approve 且不擦掉别的开关', (tester) async {
+    tester.view.physicalSize = const Size(900, 1800);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    var auto = false;
+    var allow = true; // 已允许取密钥：重建行时不许被擦掉
+    final bodies = <String>[];
+
+    final client = MockClient((request) async {
+      if (request.url.path == '/api/auth/devices/phone-1/auto-approve') {
+        bodies.add(request.body);
+        final sent = jsonDecode(request.body) as Map<String, dynamic>;
+        auto = sent['enabled'] as bool? ?? auto;
+        return _json({
+          'id': 'phone-1',
+          'name': 'OnePlus 8T',
+          'allowCredentials': allow,
+          'allowCredentialsUpload': false,
+          'autoApproveSubmits': auto,
+        });
+      }
+      if (request.url.path == '/api/auth/pair/pending') {
+        return _json({'pending': <Object>[]});
+      }
+      return _json({
+        'enabled': true,
+        'hasToken': true,
+        'devices': [
+          {
+            'id': 'phone-1',
+            'name': 'OnePlus 8T',
+            'pairedAt': '2026-09-24T08:00:00Z',
+            'allowCredentials': allow,
+            'autoApproveSubmits': auto,
+          },
+        ],
+        'pending': <Object>[],
+      });
+    });
+
+    await tester.pumpWidget(_host(client: client));
+    await tester.pump();
+
+    Finder switchOf(String title) => find.ancestor(
+      of: find.text(title),
+      matching: find.byType(SwitchListTile),
+    );
+
+    final autoSwitch = switchOf('允许这台手机自动提交（免桌面批准）');
+    expect(tester.widget<SwitchListTile>(autoSwitch).value, isFalse);
+    expect(find.textContaining('都要在桌面点一次批准'), findsOneWidget);
+
+    await tester.tap(autoSwitch);
+    await tester.pumpAndSettle();
+    expect(bodies.single, contains('"enabled":true'));
+    expect(tester.widget<SwitchListTile>(autoSwitch).value, isTrue);
+    // ★ 打开自动提交时重建行，不许把「允许取密钥」那个开关擦掉
+    expect(
+      tester.widget<SwitchListTile>(switchOf('允许把密钥发给这台设备')).value,
+      isTrue,
+      reason: '重建行要原样带上已有的两个密钥开关',
+    );
+    // 打开后必须把代价写出来（不只是"更省事"）
+    expect(find.textContaining('消耗 GPU'), findsOneWidget);
+
+    await tester.pumpWidget(const SizedBox());
+    await tester.pump();
+  });
+
+  testWidgets('桌面：旧后端不认识自动提交 → 开关画回关，并说清是版本问题', (tester) async {
+    tester.view.physicalSize = const Size(900, 1800);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    final client = MockClient((request) async {
+      if (request.url.path == '/api/auth/devices/phone-1/auto-approve') {
+        // 旧后端：回执里没有 autoApproveSubmits 这个键
+        return _json({
+          'id': 'phone-1',
+          'name': 'OnePlus 8T',
+          'allowCredentials': false,
+        });
+      }
+      if (request.url.path == '/api/auth/pair/pending') {
+        return _json({'pending': <Object>[]});
+      }
+      return _json({
+        'enabled': true,
+        'hasToken': true,
+        'devices': [
+          {
+            'id': 'phone-1',
+            'name': 'OnePlus 8T',
+            'pairedAt': '2026-09-24T08:00:00Z',
+            'allowCredentials': false,
+          },
+        ],
+        'pending': <Object>[],
+      });
+    });
+
+    await tester.pumpWidget(_host(client: client));
+    await tester.pump();
+
+    Finder switchOf(String title) => find.ancestor(
+      of: find.text(title),
+      matching: find.byType(SwitchListTile),
+    );
+
+    final autoSwitch = switchOf('允许这台手机自动提交（免桌面批准）');
+    await tester.tap(autoSwitch);
+    await tester.pumpAndSettle();
+
+    expect(
+      tester.widget<SwitchListTile>(autoSwitch).value,
+      isFalse,
+      reason: '回读没有这个键 = 没生效，不许假装开了',
+    );
+    expect(find.textContaining('还不支持"自动提交"'), findsOneWidget);
+
+    await tester.pumpWidget(const SizedBox());
+    await tester.pump();
+  });
 }

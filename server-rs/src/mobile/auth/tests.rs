@@ -20,6 +20,112 @@ fn file_enabled() -> AuthFile {
 }
 
 #[test]
+fn device_json_带_auto_approve_submits_默认_false() {
+    let device = DeviceRecord {
+        id: "phone-1".into(),
+        token: "t".into(),
+        ..Default::default()
+    };
+    assert_eq!(
+        device_json(&device)["autoApproveSubmits"],
+        Value::Bool(false)
+    );
+    let enabled = DeviceRecord {
+        auto_approve_submits: true,
+        ..device
+    };
+    assert_eq!(
+        device_json(&enabled)["autoApproveSubmits"],
+        Value::Bool(true)
+    );
+    // 旧数据（没有这个键）读出来默认关：不能让老库"看起来像开过"
+    let old: DeviceRecord =
+        serde_json::from_value(serde_json::json!({"id":"p","token":"t"})).unwrap();
+    assert!(!old.auto_approve_submits);
+}
+
+#[test]
+fn device_auto_approve_按设备读_缺省是_false() {
+    let conn = crate::infra::db::open_memory().unwrap();
+    conn.execute_batch(crate::infra::db::schema_sql()).unwrap();
+    let mut file = AuthFile::default();
+    file.devices = vec![
+        DeviceRecord {
+            id: "auto".into(),
+            token: "a".into(),
+            auto_approve_submits: true,
+            ..Default::default()
+        },
+        DeviceRecord {
+            id: "manual".into(),
+            token: "m".into(),
+            ..Default::default()
+        },
+    ];
+    save(&conn, &file).unwrap();
+    assert!(device_auto_approve(&conn, "auto"));
+    assert!(!device_auto_approve(&conn, "manual"));
+    assert!(!device_auto_approve(&conn, "missing"));
+}
+
+#[tokio::test]
+async fn set_device_auto_approve_只改指定设备() {
+    let conn = crate::infra::db::open_memory().unwrap();
+    conn.execute_batch(crate::infra::db::schema_sql())
+        .expect("建 schema");
+    let state = AppState::new(conn, ":memory:", crate::infra::testpaths::scratch("auth-auto"));
+    state
+        .with(|conn| {
+            let mut file = load(conn);
+            file.devices = vec![
+                DeviceRecord {
+                    id: "phone-1".into(),
+                    token: "t1".into(),
+                    ..Default::default()
+                },
+                DeviceRecord {
+                    id: "phone-2".into(),
+                    token: "t2".into(),
+                    ..Default::default()
+                },
+            ];
+            save(conn, &file)
+        })
+        .unwrap();
+
+    let body = set_device_auto_approve(
+        axum::extract::State(state.clone()),
+        RemoteAddr(Some("127.0.0.1".parse().unwrap())),
+        axum::extract::Path("phone-1".to_string()),
+        axum::Json(serde_json::json!({ "enabled": true })),
+    )
+    .await
+    .unwrap();
+    assert_eq!(body.0["autoApproveSubmits"], serde_json::json!(true));
+
+    let (one, two) = state
+        .with(|conn| {
+            let file = load(conn);
+            let one = file
+                .devices
+                .iter()
+                .find(|d| d.id == "phone-1")
+                .unwrap()
+                .auto_approve_submits;
+            let two = file
+                .devices
+                .iter()
+                .find(|d| d.id == "phone-2")
+                .unwrap()
+                .auto_approve_submits;
+            Ok((one, two))
+        })
+        .unwrap();
+    assert!(one);
+    assert!(!two, "不能顺手把别的设备也放权");
+}
+
+#[test]
 fn hmac_matches_rfc4231_vector() {
     // RFC 4231 Test Case 2
     let mac = hmac_sha256(b"Jefe", b"what do ya want for nothing?");

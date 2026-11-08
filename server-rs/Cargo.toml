@@ -61,6 +61,7 @@ tokio-tungstenite = { version = "0.24", default-features = false, features = ["c
 # std 没有这个能力，而这个小 crate 纯 Rust、不拖任何 TLS/系统库 ——
 # 与上面那条同一个判据：发布包要便携。
 if-addrs = "0.13"
+socket2 = "0.6.5"
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }

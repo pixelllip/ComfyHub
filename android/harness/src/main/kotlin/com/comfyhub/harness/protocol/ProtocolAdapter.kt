@@ -97,6 +97,14 @@ sealed interface StreamEvent {
         val callId: String? = null,
         val name: String? = null,
         val argumentsFragment: String? = null,
+        /**
+         * true = 这一片是**完整参数**，覆盖已经攒下的（不是追加）。
+         *
+         * OpenAI Responses 会在 `output_item.done` 里把整份 `arguments` 再发一遍；
+         * 如果和前面的 `function_call_arguments.delta` 一起按增量拼，就会得到
+         * `{…}{…}` 两份 JSON —— 工具层解析失败，报"没给 promptId"（2026-11-08 真机）。
+         */
+        val replaceArguments: Boolean = false,
     ) : StreamEvent
 }
 
@@ -126,7 +134,12 @@ class ToolCallAccumulator {
         }
         if (!delta.callId.isNullOrEmpty()) part.callId = delta.callId
         if (!delta.name.isNullOrEmpty()) part.name = delta.name
-        delta.argumentsFragment?.let { part.arguments.append(it) }
+        delta.argumentsFragment?.let {
+            if (delta.replaceArguments) {
+                part.arguments.clear()
+            }
+            part.arguments.append(it)
+        }
     }
 
     fun isEmpty(): Boolean = parts.isEmpty()

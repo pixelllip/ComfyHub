@@ -377,3 +377,103 @@ async fn 回执消息是助手消息加一个工具结果块() {
         "{args}"
     );
 }
+
+// ---------------------------------------------------------------------------
+//  免桌面批准（按设备放权，`autoApproveSubmits`）
+// ---------------------------------------------------------------------------
+
+fn seed_device(state: &AppState, id: &str, auto_approve: bool) {
+    state
+        .with(|conn| {
+            let mut file = crate::mobile::auth::load(conn);
+            file.devices.push(crate::mobile::auth::DeviceRecord {
+                id: id.to_string(),
+                token: format!("token-{id}"),
+                auto_approve_submits: auto_approve,
+                ..Default::default()
+            });
+            crate::mobile::auth::save(conn, &file)
+        })
+        .unwrap();
+}
+
+#[tokio::test]
+async fn 设备开了自动提交时_受理直接落_auto_且不再进待办() {
+    let state = state();
+    seed_device(&state, "phone-auto", true);
+    accept(
+        &state,
+        &item(json!({
+            "queueId": "q-auto",
+            "conversationId": "c1",
+            "promptId": 1438,
+            "requestedBy": "phone-auto"
+        })),
+    )
+    .unwrap();
+
+    let approval: String = state
+        .with(|conn| {
+            conn.query_row(
+                "SELECT approval FROM submit_jobs WHERE queue_id = 'q-auto'",
+                [],
+                |row| row.get(0),
+            )
+        })
+        .unwrap();
+    assert_eq!(approval, "auto", "开了自动提交就不能再挂 pending");
+    // `auto` 不是"待审批"：桌面上不该再多一张点了也没用的卡。
+    let pending = state.with(pending_approvals).unwrap();
+    assert!(pending.is_empty(), "{pending:?}");
+}
+
+#[tokio::test]
+async fn 设备没开自动提交时_仍然挂_pending() {
+    let state = state();
+    seed_device(&state, "phone-manual", false);
+    accept(
+        &state,
+        &item(json!({
+            "queueId": "q-manual",
+            "conversationId": "c1",
+            "promptId": 1438,
+            "requestedBy": "phone-manual"
+        })),
+    )
+    .unwrap();
+
+    let approval: String = state
+        .with(|conn| {
+            conn.query_row(
+                "SELECT approval FROM submit_jobs WHERE queue_id = 'q-manual'",
+                [],
+                |row| row.get(0),
+            )
+        })
+        .unwrap();
+    assert_eq!(approval, "pending", "默认必须等人批准");
+    assert!(!claim(&state, "q-manual"), "没批准不许认领");
+    let pending = state.with(pending_approvals).unwrap();
+    assert_eq!(pending.len(), 1);
+}
+
+#[tokio::test]
+async fn claim_认_approved_与_auto_不认_pending() {
+    let state = state();
+    for (queue, approval) in [("q-a", "approved"), ("q-b", "auto"), ("q-c", "pending")] {
+        state
+            .with(|conn| {
+                conn.execute(
+                    "INSERT INTO submit_jobs
+                       (queue_id, call_id, conversation_id, payload_json, state, approval)
+                     VALUES (?1, ?2, 'c1', '{}', 'awaiting_approval', ?3)",
+                    rusqlite::params![queue, format!("submit:{queue}"), approval],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+    }
+    assert!(claim(&state, "q-a"));
+    assert!(claim(&state, "q-b"), "auto 必须能被 worker 认领");
+    assert!(!claim(&state, "q-c"));
+}

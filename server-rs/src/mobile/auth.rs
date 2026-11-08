@@ -112,6 +112,14 @@ pub struct DeviceRecord {
     /// 把读打开、**顺手也把写打开了** —— 而写能让"下一次桌面自己发请求"用上别人塞的 key。
     #[serde(default, rename = "allowCredentialsUpload")]
     pub allow_credentials_upload: bool,
+    /// **免桌面批准的排队提交开关**，默认 `false`。
+    ///
+    /// 打开后，这台手机推上来的 `submit_job` 会直接以 `approval='auto'` 进队列，
+    /// 不再等桌面点「批准」（见 `mobile::submit_queue`）。代价是：拿到这台手机
+    /// （或它的配对令牌）的人可以**不经过桌面确认就消耗 GPU** —— 所以默认关、
+    /// 按设备生效、随时能撤销，界面上必须写明这句代价。
+    #[serde(default, rename = "autoApproveSubmits")]
+    pub auto_approve_submits: bool,
 }
 
 fn default_schema() -> String {
@@ -859,6 +867,10 @@ pub fn router() -> axum::Router<AppState> {
             "/api/auth/devices/{id}/credentials",
             post(set_device_credentials),
         )
+        .route(
+            "/api/auth/devices/{id}/auto-approve",
+            post(set_device_auto_approve),
+        )
         .route("/api/auth/pair/start", post(pair_start))
         .route("/api/auth/pair/request", post(pair_request))
         .route("/api/auth/pair/pending", get(pair_pending))
@@ -896,7 +908,22 @@ fn device_json(device: &DeviceRecord) -> Value {
         "allowCredentialsUpload".into(),
         Value::Bool(device.allow_credentials_upload),
     );
+    // 免桌面批准的排队提交（默认 false）。键一直回，客户端按"缺键 = 旧后端"处理。
+    obj.insert(
+        "autoApproveSubmits".into(),
+        Value::Bool(device.auto_approve_submits),
+    );
     Value::Object(obj)
+}
+
+/// 这台设备是否开了「免批准自动提交」（给 `submit_queue::accept` 用）。
+///
+/// 只读：读不到 auth 行 / 设备不存在都按 `false`（默认关，宁可不放权）。
+pub fn device_auto_approve(conn: &Connection, device_id: &str) -> bool {
+    load(conn)
+        .devices
+        .iter()
+        .any(|d| d.id == device_id && d.auto_approve_submits)
 }
 
 /// 待配对会话 → 响应对象（**6 位码在这里出现，也只在回环响应里出现**）。
@@ -1109,6 +1136,40 @@ async fn set_device_credentials(
         if let Some(upload) = allow_upload {
             device.allow_credentials_upload = upload;
         }
+        let snapshot = device.clone();
+        save(conn, &file)?;
+        Ok(Some(snapshot))
+    })?;
+    match device {
+        Some(device) => Ok(Json(device_json(&device))),
+        None => Err(ApiError::not_found(format!("没有这台设备：{id}"))),
+    }
+}
+
+/// `POST /api/auth/devices/{id}/auto-approve` `{enabled: bool}`（**仅回环**）。
+///
+/// 打开后，这台手机推上来的 `submit_job` 会直接以 `approval='auto'` 进队列，
+/// 不走「等桌面点批准」那 300 秒（见 `mobile::submit_queue::accept`）。
+///
+/// **默认关**：拿到这台手机或它的配对令牌的人，因此可以**不经过桌面确认就消耗
+/// GPU**。这是用户显式放权的一次动作 —— 按设备生效、随时能关，界面上要写明代价。
+async fn set_device_auto_approve(
+    State(state): State<AppState>,
+    RemoteAddr(remote): RemoteAddr,
+    AxumPath(id): AxumPath<String>,
+    Json(payload): Json<Value>,
+) -> Result<Json<Value>, ApiError> {
+    require_loopback(remote, "调整自动提交")?;
+    let enabled = payload
+        .get("enabled")
+        .and_then(Value::as_bool)
+        .ok_or_else(|| ApiError::bad_request("enabled 必须是 true / false"))?;
+    let device = state.with(|conn| {
+        let mut file = load(conn);
+        let Some(device) = file.devices.iter_mut().find(|d| d.id == id) else {
+            return Ok(None);
+        };
+        device.auto_approve_submits = enabled;
         let snapshot = device.clone();
         save(conn, &file)?;
         Ok(Some(snapshot))
@@ -1425,6 +1486,8 @@ async fn pair_claim(
                 allow_credentials: false,
                 // 新配对的设备两个开关都是关的：配对成功 ≠ 能拿密钥、更 ≠ 能改密钥
                 allow_credentials_upload: false,
+                // 自动提交也默认关：配对成功 ≠ 可以不经桌面确认就烧 GPU
+                auto_approve_submits: false,
             }),
         }
         if file.created_at.is_none() {

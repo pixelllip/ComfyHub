@@ -233,6 +233,45 @@ fn remote_allowed() -> bool {
     )
 }
 
+/// 远程模式下绑**双栈** socket。
+///
+/// Windows 上 `0.0.0.0` 只收 IPv4；而校园 / 家庭网络经常把 IPv4 在 AP 之间隔离、
+/// 只留 IPv6 能通（2026-11-08 实测：同一 SSID、不同 AP，手机 ping 不到桌面的
+/// IPv4，但 `ping6` 通、HTTP 也通）。`[::]` + `only_v6(false)` 一个 socket 同时收
+/// IPv4（映射成 `::ffff:…`）与 IPv6；桌面 App 仍连 `127.0.0.1`，配对闸门的
+/// `is_loopback` 已认 `::ffff:127.0.0.1`。
+fn bind_dual_stack(port: u16) -> std::io::Result<tokio::net::TcpListener> {
+    let socket = socket2::Socket::new(
+        socket2::Domain::IPV6,
+        socket2::Type::STREAM,
+        Some(socket2::Protocol::TCP),
+    )?;
+    socket.set_only_v6(false)?;
+    let addr: SocketAddr = format!("[::]:{port}")
+        .parse()
+        .unwrap_or_else(|_| panic!("IPv6 地址不合法：{port}"));
+    socket.bind(&addr.into())?;
+    socket.listen(1024)?;
+    socket.set_nonblocking(true)?;
+    let std_listener: std::net::TcpListener = socket.into();
+    tokio::net::TcpListener::from_std(std_listener)
+}
+
+/// 绑监听：远程模式且 host 是"全部网卡"时走双栈，否则按用户给的地址原样绑。
+async fn bind_listener(
+    host: &str,
+    port: u16,
+    dual_stack: bool,
+) -> std::io::Result<tokio::net::TcpListener> {
+    if dual_stack {
+        return bind_dual_stack(port);
+    }
+    let addr: SocketAddr = format!("{host}:{port}")
+        .parse()
+        .unwrap_or_else(|_| panic!("地址不合法：{host}:{port}"));
+    tokio::net::TcpListener::bind(addr).await
+}
+
 #[tokio::main]
 async fn main() {
     let args = match parse_args() {
@@ -537,13 +576,10 @@ async fn main() {
     let requested_port = args.port;
     // 候选端口被占 / 落在 Windows 保留段（Hyper-V/WSL 预留，netstat 都查不出来）时
     // **不报错退出**，改成让操作系统挑一个（Kotlin `ApiPortFile` 的那条纪律）。
-    let parse_addr = |port: u16| -> SocketAddr {
-        format!("{}:{}", args.host, port)
-            .parse()
-            .unwrap_or_else(|_| panic!("地址不合法：{}:{}", args.host, port))
-    };
+    // 远程模式（默认 host=0.0.0.0）改走双栈：见 bind_dual_stack 的注释。
+    let dual_stack = remote_allowed() && matches!(args.host.as_str(), "0.0.0.0" | "::" | "[::]");
     let mut fell_back = false;
-    let (addr, listener) = match tokio::net::TcpListener::bind(parse_addr(requested_port)).await {
+    let (addr, listener) = match bind_listener(&args.host, requested_port, dual_stack).await {
         Ok(listener) => {
             // ⚠ **实际端口从 listener 读回来**，不能用 `requested_port`：
             // 用户给 `--port 0`（"让系统挑一个"）时，那个 0 不是端口 ——
@@ -557,7 +593,7 @@ async fn main() {
                 args.host, requested_port
             );
             fell_back = true;
-            match tokio::net::TcpListener::bind(parse_addr(0)).await {
+            match bind_listener(&args.host, 0, dual_stack).await {
                 Ok(listener) => {
                     let addr = listener.local_addr().expect("本地地址");
                     (addr, listener)
@@ -581,7 +617,7 @@ async fn main() {
     state.set_port(actual_port);
 
     // 只监听回环时不要广播：手机连不上，广播只会让发现列表出现一个死地址。
-    if args.host == "0.0.0.0" {
+    if args.host == "0.0.0.0" || dual_stack {
         comfyhub_server_rs::mobile::discovery::spawn(actual_port);
     }
 

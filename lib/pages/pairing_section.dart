@@ -9,6 +9,7 @@ import '../core/formatting.dart';
 import '../core/inbound_auth_api.dart';
 import '../core/pairing_payload.dart';
 import '../core/pairing_token.dart';
+import '../core/sync_endpoints.dart';
 import '../widgets/pairing_qr.dart';
 import 'scan_pairing_page.dart';
 
@@ -306,10 +307,17 @@ class _PairingSectionState extends State<PairingSection> {
     try {
       final list = await api.pending();
       if (!mounted) return;
+      final before = _pending.map((p) => p.requestId).toSet();
+      final after = list.map((p) => p.requestId).toSet();
+      final claimed = before.difference(after).isNotEmpty;
       setState(() {
         _pending = list;
         _pendingError = null;
       });
+      // 待配对少了一条 = 手机刚点完「配对」。设备列表要立刻跟上，
+      // 否则桌面上「已配对设备」要等用户手动重进这一页才出现
+      // （2026-11-08 真机：手机已连上，桌面还只显示旧设备）。
+      if (claimed) unawaited(_loadStatus());
     } catch (e) {
       if (!mounted) return;
       // 拉不到就不再每 2 秒撞一次（旧后端没有这个端点时尤其明显），
@@ -422,6 +430,9 @@ class _PairingSectionState extends State<PairingSection> {
                 lastIp: x.lastIp,
                 allowCredentials: updated.allowCredentials,
                 allowCredentialsUpload: updated.allowCredentialsUpload,
+                // 这个接口不动自动提交，但重建行时**必须原样带上**：漏掉就是
+                // "点一下密钥开关，自动提交被悄悄关掉"。
+                autoApproveSubmits: x.autoApproveSubmits,
               )
             else
               x,
@@ -441,6 +452,59 @@ class _PairingSectionState extends State<PairingSection> {
           _message = updated.allowCredentials
               ? '已允许「$name」取密钥。'
               : '已禁止「$name」取密钥。';
+        }
+      });
+    } catch (e) {
+      if (mounted) setState(() => _error = '设置失败，$e');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  /// 改这台设备的「自动提交」开关（免桌面批准，默认关）。
+  ///
+  /// 打开后，这台手机排队提交的 `submit_job` 会直接以 `approval='auto'` 进队列，
+  /// 不再等桌面点批准。代价：拿到这台手机或它的配对令牌的人可以**不经过桌面确认
+  /// 就消耗 GPU** —— 文案必须把这句写出来，而不是只写"更省事"。
+  Future<void> _setDeviceAutoApprove(PairedDevice d, bool enabled) async {
+    final api = _api;
+    if (api == null) return;
+    final name = d.name.isEmpty ? d.id : d.name;
+    setState(() {
+      _busy = true;
+      _error = null;
+      _message = null;
+    });
+    try {
+      final updated = await api.setAutoApproveSubmits(d.id, enabled);
+      if (!mounted) return;
+      setState(() {
+        _devices = [
+          for (final x in _devices)
+            if (x.id == d.id)
+              PairedDevice(
+                id: x.id,
+                name: x.name,
+                pairedAt: x.pairedAt,
+                lastSeenAt: x.lastSeenAt,
+                lastIp: x.lastIp,
+                allowCredentials: x.allowCredentials,
+                allowCredentialsUpload: x.allowCredentialsUpload,
+                autoApproveSubmits: updated.autoApproveSubmits,
+              )
+            else
+              x,
+        ];
+        if (enabled && !updated.autoApproveSubmits) {
+          // 回读为 false = 这台后端不认识这个开关（旧版本）—— 如实说，别假装开了
+          _error =
+              '这台后端还不支持"自动提交"（旧版本），开关没有生效。'
+              '升级桌面后端之后再来勾这一项。';
+        } else {
+          _message = updated.autoApproveSubmits
+              ? '已允许「$name」免桌面批准自动提交。这台手机之后排队的图会直接跑，'
+                    '不再等你点批准；随时可以在这里关掉。'
+              : '已恢复「$name」的提交需要桌面批准。';
         }
       });
     } catch (e) {
@@ -530,12 +594,19 @@ class _PairingSectionState extends State<PairingSection> {
     if (payload == null || !mounted) return;
     // ⚠ 不能拿 `urls.first`：桌面的候选列表里回环（`127.0.0.1`）天然排在最前，
     // 手机上连它等于连自己 —— 扫码 + 验证码全对，界面只报"连接失败"。
-    // 优先用二维码里**非回环**的地址；一条都没有时，如果用户已经手填了一个
-    // 非回环地址就沿用它，否则当场说清楚，不再拿一个注定连不上的地址去配。
-    final preferred = payload.preferredUrl;
-    if (preferred != null) {
-      _baseUrlController.text = preferred;
-    } else if (payload.urls.isNotEmpty) {
+    //
+    // 也不能只拿 `preferredUrl`：校园 / 公司 Wi-Fi 常把 IPv4 在 AP 之间隔离、
+    // 只留 IPv6 能通（2026-11-08 实测）。二维码里两条都有时，逐条真探，
+    // 哪条 `/api/health` 通就用哪条。
+    final candidates = <String>[
+      if (payload.preferredUrl != null) payload.preferredUrl!,
+      ...payload.urls,
+    ];
+    final working = await firstReachableUrl(candidates);
+    if (!mounted) return;
+    if (working != null) {
+      _baseUrlController.text = working;
+    } else {
       final typed = _baseUrlController.text.trim();
       final typedHost = Uri.tryParse(typed)?.host ?? '';
       final typedUsable =
@@ -545,11 +616,13 @@ class _PairingSectionState extends State<PairingSection> {
       if (!typedUsable) {
         setState(
           () => _error =
-              '二维码里只有回环地址（127.0.0.1），手机连不到桌面。'
-              '请在桌面上重新生成二维码（选局域网地址），或先在上面的输入框手填桌面地址再扫。',
+              '二维码里的地址都连不上（试了 ${candidates.length} 条，含 IPv6）。'
+              '确认手机和电脑在同一个 Wi-Fi，或电脑的 IPv6 可达；'
+              '也可以先在上面的输入框手填桌面地址再扫。',
         );
         return;
       }
+      // 用户手填的地址可用：沿用它继续配对。
     }
     await _pair(scanned: payload);
   }
@@ -1231,6 +1304,22 @@ class _PairingSectionState extends State<PairingSection> {
               onChanged: _busy
                   ? null
                   : (v) => _setDeviceCredentials(d, allowUpload: v),
+            ),
+          ),
+          // ★ 第三个开关：**免桌面批准自动提交**（默认关，2026-11-08）。
+          //   打开后手机排队的 submit_job 直接跑，不再等桌面点批准 ——
+          //   代价是拿到这台手机（或它的令牌）的人可以不确认就烧 GPU，
+          //   所以文案把代价写出来，而不是只写"更省事"。
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 8),
+            child: _switchRow(
+              title: '允许这台手机自动提交（免桌面批准）',
+              subtitle: d.autoApproveSubmits
+                  ? '已开启：这台手机排队的图会直接跑，不再等你点批准。'
+                        '拿到这台手机的人因此可以不经过桌面确认就消耗 GPU。'
+                  : '未开启（默认）：每次排队提交都要在桌面点一次批准。',
+              value: d.autoApproveSubmits,
+              onChanged: _busy ? null : (v) => _setDeviceAutoApprove(d, v),
             ),
           ),
         ],

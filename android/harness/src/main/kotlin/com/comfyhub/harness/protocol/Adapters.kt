@@ -541,8 +541,10 @@ class OpenAiResponsesAdapter : ProtocolAdapter {
                 type == "response.reasoning_text.delta" -> {
                 root.str("delta")?.takeIf { it.isNotEmpty() }?.let { out += StreamEvent.ReasoningDelta(it) }
             }
-            // 工具调用出现：item.id 是流内关联键，item.call_id 才是要回传的 id
-            type == "response.output_item.added" || type == "response.output_item.done" -> {
+            // 工具调用出现：item.id 是流内关联键，item.call_id 才是要回传的 id。
+            // `added` 只拿元信息 —— 参数随后由 `function_call_arguments.delta` 增量给；
+            // 这里若把 `item.arguments` 也当增量拼，会和 `done` 里的整份再叠一次。
+            type == "response.output_item.added" -> {
                 val item = root.raw("item") ?: return emptyList()
                 if (item.str("type") == "function_call") {
                     out += StreamEvent.ToolCallDelta(
@@ -550,7 +552,22 @@ class OpenAiResponsesAdapter : ProtocolAdapter {
                         key = item.str("id"),
                         callId = item.str("call_id"),
                         name = item.str("name"),
-                        argumentsFragment = item.str("arguments")?.takeIf { it.isNotEmpty() },
+                    )
+                }
+            }
+            // `done` 里的 `item.arguments` 是**完整**参数：覆盖前面攒的增量，
+            // 而不是追加（否则得到 `{…}{…}`，工具层解析失败、报"没给 promptId"）。
+            type == "response.output_item.done" -> {
+                val item = root.raw("item") ?: return emptyList()
+                if (item.str("type") == "function_call") {
+                    val full = item.str("arguments")?.takeIf { it.isNotEmpty() }
+                    out += StreamEvent.ToolCallDelta(
+                        index = root.int("output_index") ?: 0,
+                        key = item.str("id"),
+                        callId = item.str("call_id"),
+                        name = item.str("name"),
+                        argumentsFragment = full,
+                        replaceArguments = full != null,
                     )
                 }
             }

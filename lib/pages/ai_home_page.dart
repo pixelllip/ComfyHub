@@ -20,12 +20,14 @@ import '../models/ai_models.dart';
 import '../models/layout_embed.dart';
 import '../models/layout_spec.dart';
 import '../state/ai_workspace_store.dart';
+import '../widgets/ai_pending_banner.dart';
 import '../widgets/app_menu.dart';
 import '../widgets/attachment_preview.dart';
 import '../widgets/common.dart' show FilterChipRow;
 import '../widgets/layout_templates_card.dart';
 import '../widgets/markdown_view.dart';
 import '../widgets/nsfw_blur.dart';
+import '../widgets/submit_result_card.dart';
 import '../widgets/workflow_picker.dart';
 import '../widgets/workflow_viewer.dart';
 import '../widgets/zoomable_image_view.dart';
@@ -397,8 +399,7 @@ class _AiHomePageState extends State<AiHomePage> {
       onShowStatus: showPanel ? null : () => _showContextSheet(context),
       onJumpToBottom: _jumpToBottom,
       onSubmitted: submit,
-      onLayoutResubmit: (text) =>
-          submit(store, OutgoingMessage.plain(text)),
+      onLayoutResubmit: (text) => submit(store, OutgoingMessage.plain(text)),
     );
 
     if (wide) {
@@ -592,8 +593,13 @@ class _Thread extends StatelessWidget {
               store: store,
               onShowStatus: onShowStatus,
               // 工作流库只在桌面后端有：手机上不给这个入口（给了也只会弹"读不到"）。
-              onPickWorkflow: store.isLocal ? null : () => _pickWorkflow(context),
+              onPickWorkflow: store.isLocal
+                  ? null
+                  : () => _pickWorkflow(context),
             ),
+            // 「有人等你点批准」的全局提示：钉在对话顶部，只有桌面画
+            // （手机上审批归桌面）。没有待办时它自己返回空，不占位。
+            if (!store.isLocal) _PendingApprovalBanner(store: store),
             Expanded(
               child: Stack(
                 children: [
@@ -1387,6 +1393,23 @@ class _MessageBubble extends StatelessWidget {
   ///  ② 同一环节名再次开组时标「续」，让人一眼看出这是同一个环节的第二段操作。
   List<Widget> _orderedBody(BuildContext context, ThemeData theme) {
     final m = message;
+    // 手机排队提交的回执（后端 id 形如 `submit-reply-<queueId>`）：
+    // 画成**独立的提交结果卡**（成功带产物缩略图、失败带原因原文），
+    // 不再按普通 Markdown 正文混在聊天里 —— 否则失败和一句解释长得一样，
+    // 用户点了批准却以为"没反应"（2026-11-08 真机）。
+    if (m.id.startsWith('submit-reply-')) {
+      return [
+        SubmitResultCard(
+          message: m,
+          mediaThumbUrlOf: mediaThumbUrlOf,
+          onOpenMedia: (mediaId) => Navigator.of(context).push(
+            MaterialPageRoute<void>(
+              builder: (_) => MediaDetailPage(mediaId: mediaId),
+            ),
+          ),
+        ),
+      ];
+    }
     final streaming = m.status == 'streaming';
     final blocks = <Widget>[];
     final placed = <String>{};
@@ -2893,47 +2916,47 @@ class _EmptyThread extends StatelessWidget {
           child: Center(
             child: ConstrainedBox(
               constraints: const BoxConstraints(maxWidth: 560),
-        child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Icon(
-                Icons.auto_awesome_outlined,
-                size: 40,
-                color: theme.colorScheme.primary,
-              ),
-              const SizedBox(height: 12),
-              Text('AI 工作台', style: theme.textTheme.titleLarge),
-              const SizedBox(height: 6),
-              Text(
-                '生图 / 生视频需求的澄清、提示词设计与进度跟进。\n'
-                '输入 / 可以调出 Skills 目录，也可以把文件拖进来当附件。',
-                textAlign: TextAlign.center,
-                style: theme.textTheme.bodyMedium?.copyWith(
-                  color: theme.colorScheme.outline,
-                ),
-              ),
-              if (!store.hasProvider) ...[
-                const SizedBox(height: 16),
-                Card(
-                  child: Padding(
-                    padding: const EdgeInsets.all(12),
-                    child: Text(
-                      '还没有配置 Provider。请到「设置 → AI 模型」添加协议、Base URL 和模型目录，'
-                      'API Key 只写不读，不会出现在界面或日志里。',
-                      style: theme.textTheme.bodySmall,
+              child: Padding(
+                padding: const EdgeInsets.all(24),
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(
+                      Icons.auto_awesome_outlined,
+                      size: 40,
+                      color: theme.colorScheme.primary,
                     ),
-                  ),
+                    const SizedBox(height: 12),
+                    Text('AI 工作台', style: theme.textTheme.titleLarge),
+                    const SizedBox(height: 6),
+                    Text(
+                      '生图 / 生视频需求的澄清、提示词设计与进度跟进。\n'
+                      '输入 / 可以调出 Skills 目录，也可以把文件拖进来当附件。',
+                      textAlign: TextAlign.center,
+                      style: theme.textTheme.bodyMedium?.copyWith(
+                        color: theme.colorScheme.outline,
+                      ),
+                    ),
+                    if (!store.hasProvider) ...[
+                      const SizedBox(height: 16),
+                      Card(
+                        child: Padding(
+                          padding: const EdgeInsets.all(12),
+                          child: Text(
+                            '还没有配置 Provider。请到「设置 → AI 模型」添加协议、Base URL 和模型目录，'
+                            'API Key 只写不读，不会出现在界面或日志里。',
+                            style: theme.textTheme.bodySmall,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ],
                 ),
-              ],
-            ],
-          ),
-        ),
-      ),
+              ),
             ),
           ),
         ),
+      ),
     );
   }
 }
@@ -3091,7 +3114,8 @@ class _ComposerState extends State<_Composer> {
   ///
   /// 失败不冒充"没有卡"：面板里如实显示错误（[`_cardsError`]）。
   Future<void> _openCards({bool style = false}) async {
-    final phone = Theme.of(context).platform == TargetPlatform.android ||
+    final phone =
+        Theme.of(context).platform == TargetPlatform.android ||
         Theme.of(context).platform == TargetPlatform.iOS;
     if (phone) {
       // 手机：**底部弹层**。面板不参与输入区排版，键盘弹起也不会把
@@ -3300,9 +3324,7 @@ class _ComposerState extends State<_Composer> {
       );
     }
     if (invoked != null) {
-      mentions.add(
-        OutgoingMention(kind: 'skill', name: invoked.name),
-      );
+      mentions.add(OutgoingMention(kind: 'skill', name: invoked.name));
     }
 
     final displayText = bodyText.trim();
@@ -3339,10 +3361,7 @@ class _ComposerState extends State<_Composer> {
     final query = _slashQuery;
     if (query == null) return const [];
     final all = widget.store.skills
-        .where(
-          (s) =>
-              s.enabled && s.userInvocable && s.validationError == null,
-        )
+        .where((s) => s.enabled && s.userInvocable && s.validationError == null)
         .toList();
     if (query.isEmpty) return all;
     final q = query.toLowerCase();
@@ -3483,11 +3502,12 @@ class _ComposerState extends State<_Composer> {
                 //（真机 2026-11-08 实测 `BOTTOM OVERFLOWED BY 17 PIXELS`）。
                 // 跟着可用高度收一收，最多仍是 180。
                 constraints: BoxConstraints(
-                  maxHeight: ((MediaQuery.sizeOf(context).height -
-                              _keyboardInset(context)) *
-                          0.28)
-                      .clamp(110.0, 180.0)
-                      .toDouble(),
+                  maxHeight:
+                      ((MediaQuery.sizeOf(context).height -
+                                  _keyboardInset(context)) *
+                              0.28)
+                          .clamp(110.0, 180.0)
+                          .toDouble(),
                 ),
                 // 底色必须由 Material 给：用 Container 的 decoration 会盖掉
                 // ListTile 的水波纹（Flutter 会直接抛断言）
@@ -3810,12 +3830,13 @@ class _ComposerState extends State<_Composer> {
           // 手机上按"可用高度"给（键盘弹起时收、收起时放大；打开面板时我们
           // 已经把键盘收掉了，所以这里通常拿到的是整屏）；电脑端没有虚拟键盘
           // 那套问题，固定给一个舒服的高度。
-          height: (theme.platform == TargetPlatform.android ||
+          height:
+              (theme.platform == TargetPlatform.android ||
                   theme.platform == TargetPlatform.iOS)
               ? ((MediaQuery.sizeOf(context).height - _keyboardInset(context)) *
-                      0.46)
-                  .clamp(220.0, 360.0)
-                  .toDouble()
+                        0.46)
+                    .clamp(220.0, 360.0)
+                    .toDouble()
               : 260.0,
           child: Column(
             children: [
@@ -5446,8 +5467,18 @@ class _CardPickerSheetState extends State<_CardPickerSheet> {
             padding: const EdgeInsets.fromLTRB(12, 8, 4, 0),
             child: Row(
               children: [
-                _tab(theme, '角色卡', !_styled, () => setState(() => _styled = false)),
-                _tab(theme, '画风卡', _styled, () => setState(() => _styled = true)),
+                _tab(
+                  theme,
+                  '角色卡',
+                  !_styled,
+                  () => setState(() => _styled = false),
+                ),
+                _tab(
+                  theme,
+                  '画风卡',
+                  _styled,
+                  () => setState(() => _styled = true),
+                ),
                 const Spacer(),
                 if (count > 0)
                   Text(
@@ -5498,8 +5529,9 @@ class _CardPickerSheetState extends State<_CardPickerSheet> {
       onPressed: onTap,
       style: TextButton.styleFrom(
         visualDensity: VisualDensity.compact,
-        foregroundColor:
-            active ? theme.colorScheme.primary : theme.colorScheme.onSurfaceVariant,
+        foregroundColor: active
+            ? theme.colorScheme.primary
+            : theme.colorScheme.onSurfaceVariant,
       ),
       child: Text(label),
     );
@@ -5588,6 +5620,51 @@ class _CardPickerSheetState extends State<_CardPickerSheet> {
           ? Icon(Icons.check, color: theme.colorScheme.primary)
           : null,
       onTap: onTap,
+    );
+  }
+}
+
+/// 「待审批」横幅的**轮询壳**：自己每 5 秒拉一次 `GET /api/ai/pending`。
+///
+/// 不依赖右侧栏那个 watcher：窄屏 / 上下文面板收起时它根本没起，用户就看不到
+/// "有人等你点批准"（2026-11-08 真机就这样错过了 300 秒，提交超时被拒）。
+///
+/// 只读 store 的公开字段（`pendingOverview` / `refreshPending`），
+/// **不改 store**（另一个子代理正在改它的会话列表）。
+class _PendingApprovalBanner extends StatefulWidget {
+  final AiWorkspaceStore store;
+
+  const _PendingApprovalBanner({required this.store});
+
+  @override
+  State<_PendingApprovalBanner> createState() => _PendingApprovalBannerState();
+}
+
+class _PendingApprovalBannerState extends State<_PendingApprovalBanner> {
+  Timer? _timer;
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(widget.store.refreshPending());
+    _timer = Timer.periodic(
+      const Duration(seconds: 5),
+      (_) => unawaited(widget.store.refreshPending()),
+    );
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final store = context.watch<AiWorkspaceStore>();
+    return AiPendingBanner(
+      approvals: store.pendingOverview.approvals,
+      onOpen: (a) => unawaited(store.openConversation(a.conversationId)),
     );
   }
 }

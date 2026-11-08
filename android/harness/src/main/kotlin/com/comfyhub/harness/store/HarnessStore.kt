@@ -102,6 +102,19 @@ class HarnessStore(private val session: SqlSession) {
         return session.query(sql, listOf(limit.toLong())).map { it.toConversation() }
     }
 
+    /**
+     * 这条会话有多少条消息。
+     *
+     * 桥列会话时必须带上它：Dart 侧 `AiConversation.messageCount` 缺省是 0，
+     * 冷启动的"空壳复用 / 清理"一旦只看这个字段，就会把**有内容的会话**当成
+     * 空壳删掉（2026-11-08 真机：一条 12 条消息的会话被删）。
+     */
+    fun messageCount(conversationId: String): Int =
+        session.queryOne(
+            "SELECT COUNT(*) AS c FROM ai_messages WHERE conversation_id = ?",
+            listOf(conversationId),
+        )?.int("c") ?: 0
+
     /** 改标题（桌面赢 LWW 的另一半：手机只在"自己起的会话"上改名）。 */
     fun renameConversation(id: String, title: String, queue: Boolean = true) {
         val now = Timestamps.now()

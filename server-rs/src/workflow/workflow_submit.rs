@@ -889,6 +889,30 @@ fn model_inventory(
     crate::comfy::comfy_models::inventory(object_info, Some(&project_root), &model_dirs)
 }
 
+/// 摘掉 `Anything Everywhere` 一族的广播桩。
+///
+/// API 图里这些节点是**零输出**的：`workflow_load` 的前端模拟已经把它们的
+/// 消费者改写成直连。留着这个桩，审核会按"纯前端节点"把整张图拦下
+/// （`krea2 t2i` 的 node 36，2026-11-08 真机），提交上去 ComfyUI 也会把它
+/// 当未知类。只删这一类，不动显示节点与真节点。
+fn strip_broadcast_stubs(graph: &Value) -> Value {
+    let Some(nodes) = graph.as_object() else {
+        return graph.clone();
+    };
+    let mut out = serde_json::Map::new();
+    for (id, node) in nodes {
+        let class = node
+            .get("class_type")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        if crate::workflow::workflow_audit::is_broadcast(class) {
+            continue;
+        }
+        out.insert(id.clone(), node.clone());
+    }
+    Value::Object(out)
+}
+
 /// 三道预检：返回（**阻断性**的拒因，**提示性**的警告，**这份图认不认负面提示词**）。
 ///
 /// 图是**最终那张**（`overrides` / `connections` 都应用完之后），与 Kotlin 的位置一致。
@@ -1274,6 +1298,11 @@ pub async fn tool_submit(
     let (patched, applied_connections) = WorkflowEdit::apply_connections(&overridden, &connections)
         .map_err(|message| ToolFailure::new("INVALID_ARGUMENT", message))?;
     applied.extend(applied_connections);
+
+    // Anything Everywhere 一族的广播桩在服务端是零输出；`workflow_load` 的前端
+    // 模拟已经把消费者改写成直连，留着这个桩只会让审核按"纯前端节点"误拦，
+    // 提交上去也会被 ComfyUI 当成未知类（2026-11-08 真机 krea2）。
+    let patched = strip_broadcast_stubs(&patched);
 
     // 这次提示词是谁写的：caller（模型自己写完传 positivePrompt）/ text-generate（本地生成）
     // / literal（图里写死的文本）。**写进结果**，工具卡上就能看见 —— 静默失效才查得出来。

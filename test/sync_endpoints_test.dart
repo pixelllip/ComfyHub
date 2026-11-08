@@ -125,4 +125,25 @@ void main() {
     expect(calls, 0, reason: '连不上就是连不上，别为一个畸形地址发请求');
     expect(picked.probe?.error, contains('http://'));
   });
+
+  test('配对时逐条探测：IPv4 不通会继续试 IPv6', () async {
+    final picked = await firstReachableUrl(
+      [
+        'http://192.168.1.9:8080',
+        'http://[2001:da8:2018:2232:230e:97fa:98a:1026]:8080',
+      ],
+      probe: (url) async =>
+          url.contains('2001:da8:2018:2232:230e:97fa:98a:1026'),
+    );
+
+    expect(picked, 'http://[2001:da8:2018:2232:230e:97fa:98a:1026]:8080');
+  });
+
+  test('配对候选全不通 → null（不拿死地址去配）', () async {
+    final picked = await firstReachableUrl([
+      'http://192.168.1.9:8080',
+      'http://[2001:da8::1]:8080',
+    ], probe: (_) async => false);
+    expect(picked, isNull);
+  });
 }

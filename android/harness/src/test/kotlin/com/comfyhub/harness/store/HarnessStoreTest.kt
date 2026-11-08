@@ -1,6 +1,9 @@
 package com.comfyhub.harness.store
 
 import com.comfyhub.harness.event.RunEventType
+import kotlinx.serialization.json.boolean
+import kotlinx.serialization.json.int
+import kotlinx.serialization.json.jsonPrimitive
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -55,6 +58,26 @@ class HarnessStoreTest {
         // 另一个会话自己从 1 开始
         val other = store.createConversation()
         assertEquals(1, store.appendMessage(other.id, "user", "另起").seq)
+    }
+
+    @Test
+    fun `messageCount 按会话数消息（桥列会话时必须带上）`() {
+        val a = store.createConversation()
+        store.appendMessage(a.id, "user", "一")
+        store.appendMessage(a.id, "assistant", "二")
+        val b = store.createConversation()
+        assertEquals(2, store.messageCount(a.id))
+        assertEquals(0, store.messageCount(b.id))
+    }
+
+    @Test
+    fun `列会话的 JSON 必须带 messageCount 与 archived（漏了冷启动会删掉有内容的会话）`() {
+        val c = store.createConversation()
+        store.appendMessage(c.id, "user", "一")
+        val json = conversationJson(store.getConversation(c.id)!!, store.messageCount(c.id))
+        assertEquals(1, json["messageCount"]?.jsonPrimitive?.int)
+        assertEquals(c.id, json["id"]?.jsonPrimitive?.content)
+        assertEquals(false, json["archived"]?.jsonPrimitive?.boolean)
     }
 
     @Test

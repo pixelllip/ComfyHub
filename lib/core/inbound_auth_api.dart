@@ -170,6 +170,26 @@ class InboundAuthApi {
     ),
   );
 
+  /// `POST /api/auth/devices/{id}/auto-approve` `{enabled}` ——
+  /// 这台手机排队提交是否**免桌面批准**（默认 `false`）。
+  ///
+  /// ⚠ 打开后，拿到这台手机（或它的配对令牌）的人可以**不经过桌面确认就消耗 GPU**。
+  /// 这是用户显式放权的一次动作：按设备生效、随时能关，界面上必须写明代价。
+  Future<PairedDevice> setAutoApproveSubmits(
+    String deviceId,
+    bool enabled, {
+    String? token,
+  }) async => PairedDevice.fromJson(
+    _asMap(
+      await _send(
+        'POST',
+        '/api/auth/devices/${Uri.encodeComponent(deviceId)}/auto-approve',
+        {'enabled': enabled},
+        token: token,
+      ),
+    ),
+  );
+
   /// `PUT /api/ai/credentials` —— **密钥上行**：把手机上配的 key 推给桌面（§14.2）。
   ///
   /// 三条纪律：
@@ -367,6 +387,7 @@ class PairedDevice {
     this.lastIp,
     this.allowCredentials = false,
     this.allowCredentialsUpload = false,
+    this.autoApproveSubmits = false,
   });
 
   final String id;
@@ -384,6 +405,13 @@ class PairedDevice {
   /// **别**把它当成"用户没开"（两者的处置完全不同）。
   final bool allowCredentialsUpload;
 
+  /// 这台设备排队提交时是否**免桌面批准**（默认 `false`）。
+  ///
+  /// 打开后 `comfy_queue_submit` 推上来的提交会直接以 `approval='auto'` 进队列，
+  /// 不再等桌面点批准。代价是：拿到这台手机或它的配对令牌的人可以不经过桌面
+  /// 确认就消耗 GPU —— 所以这个开关必须由桌面用户显式打开、按设备、可随时撤销。
+  final bool autoApproveSubmits;
+
   factory PairedDevice.fromJson(Map<String, dynamic> json) => PairedDevice(
     id: (json['id'] ?? '').toString(),
     name: (json['name'] ?? '').toString(),
@@ -392,6 +420,7 @@ class PairedDevice {
     lastIp: json['lastIp']?.toString(),
     allowCredentials: json['allowCredentials'] == true,
     allowCredentialsUpload: json['allowCredentialsUpload'] == true,
+    autoApproveSubmits: json['autoApproveSubmits'] == true,
   );
 }
 

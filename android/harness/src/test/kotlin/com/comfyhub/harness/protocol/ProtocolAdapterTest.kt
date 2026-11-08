@@ -366,6 +366,47 @@ class ProtocolAdapterTest {
     }
 
     @Test
+    fun `openai-responses 工具参数：deltas 与 done 不会拼成两份 JSON`() {
+        val responses = OpenAiResponsesAdapter()
+        val acc = ToolCallAccumulator()
+        listOf(
+            SseAccumulator.Frame(
+                "response.output_item.added",
+                """{"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","id":"item_1","call_id":"call_9","name":"comfy_queue_submit","arguments":""}}""",
+            ),
+            SseAccumulator.Frame(
+                "response.function_call_arguments.delta",
+                """{"type":"response.function_call_arguments.delta","output_index":0,"item_id":"item_1","delta":"{\"promptId\":1434,"}""",
+            ),
+            SseAccumulator.Frame(
+                "response.function_call_arguments.delta",
+                """{"type":"response.function_call_arguments.delta","output_index":0,"item_id":"item_1","delta":"\"seed\":7788}"}""",
+            ),
+            SseAccumulator.Frame(
+                "response.output_item.done",
+                """{"type":"response.output_item.done","output_index":0,"item":{"type":"function_call","id":"item_1","call_id":"call_9","name":"comfy_queue_submit","arguments":"{\"promptId\":1434,\"seed\":7788}"}}""",
+            ),
+        ).flatMap { responses.interpret(it) }.forEach { acc.apply(it as StreamEvent.ToolCallDelta) }
+
+        val draft = acc.drafts().single()
+        assertEquals("""{"promptId":1434,"seed":7788}""", draft.arguments)
+    }
+
+    @Test
+    fun `openai-responses 只有 done 时也能拿到完整参数`() {
+        val responses = OpenAiResponsesAdapter()
+        val acc = ToolCallAccumulator()
+        responses.interpret(
+            SseAccumulator.Frame(
+                "response.output_item.done",
+                """{"type":"response.output_item.done","output_index":0,"item":{"type":"function_call","id":"item_1","call_id":"call_9","name":"comfy_queue_submit","arguments":"{\"promptId\":1434}"}}""",
+            ),
+        ).forEach { acc.apply(it as StreamEvent.ToolCallDelta) }
+
+        assertEquals("""{"promptId":1434}""", acc.drafts().single().arguments)
+    }
+
+    @Test
     fun `附件内联：图片按协议各自的结构发出去，未实现的模态直接抛`() {
         val image = ChatAttachment(AttachmentKindRef.IMAGE, "image/png", "QUJD")
         val video = ChatAttachment(AttachmentKindRef.VIDEO, "video/mp4", "QUJD")
