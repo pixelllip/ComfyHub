@@ -98,6 +98,7 @@ class MobileToolsTest {
         askGate: MobileAskGate = MobileAskGate(),
         emitted: MutableList<Pair<String, JsonObject>> = mutableListOf(),
         conversationId: String = "c1",
+        remoteSkills: RemoteSkills? = null,
     ) = ToolContext(
         runId = "r1",
         conversationId = conversationId,
@@ -107,6 +108,7 @@ class MobileToolsTest {
         files = files,
         askGate = askGate,
         emit = { type, payload -> emitted += type to payload },
+        remoteSkills = remoteSkills,
     )
 
     // --- R13：只宣称真实现了的 ---------------------------------------------
@@ -335,6 +337,86 @@ class MobileToolsTest {
         val loaded = LoadSkillTool().invoke(buildJsonObject { put("name", "r2i-prompt") }, ctx)
         assertTrue(loaded.ok)
         assertTrue("读到的是目录版正文", loaded.content.contains("正文（目录版）"))
+    }
+
+    /** 假桌面：只认 [bodies] 里有的名字；[unreachable] 模拟"连不上"。 */
+    private class FakeRemoteSkills(
+        private val bodies: Map<String, String> = emptyMap(),
+        private val unreachable: Boolean = false,
+        private val listed: List<RemoteSkill> = emptyList(),
+    ) : RemoteSkills {
+        var bodyCalls = 0
+
+        override suspend fun names(): List<RemoteSkill>? = if (unreachable) null else listed
+
+        override suspend fun body(name: String): RemoteSkillBody {
+            bodyCalls++
+            if (unreachable) return RemoteSkillBody.Unreachable
+            return bodies[name]?.let { RemoteSkillBody.Found(it) } ?: RemoteSkillBody.Missing
+        }
+    }
+
+    @Test
+    fun `load_skill：本机没有就去桌面取（用户在电脑上写的 skill 也能用）`() = runBlocking {
+        val remote = FakeRemoteSkills(bodies = mapOf("my-prompt" to "桌面上的正文"))
+        val loaded = LoadSkillTool().invoke(
+            buildJsonObject { put("name", "my-prompt") },
+            context(remoteSkills = remote),
+        )
+        assertTrue(loaded.ok)
+        assertTrue("拿到的应当是桌面那份正文", loaded.content.contains("桌面上的正文"))
+        assertEquals("本机没有才去桌面", 1, remote.bodyCalls)
+    }
+
+    @Test
+    fun `load_skill：桌面没有是 NOT_FOUND，连不上是 UNREACHABLE（两句话不能混）`() = runBlocking {
+        val missing = LoadSkillTool().invoke(
+            buildJsonObject { put("name", "nope") },
+            context(remoteSkills = FakeRemoteSkills()),
+        )
+        assertEquals("SKILL_NOT_FOUND", missing.errorCode)
+
+        val offline = LoadSkillTool().invoke(
+            buildJsonObject { put("name", "nope") },
+            context(remoteSkills = FakeRemoteSkills(unreachable = true)),
+        )
+        assertEquals("连不上不能报成没有", "SKILL_UNREACHABLE", offline.errorCode)
+
+        // 这次 Run 压根没连过桌面：既不能编正文，也不许说成"桌面上没有"
+        val noDesktop = LoadSkillTool().invoke(buildJsonObject { put("name", "nope") }, context())
+        assertEquals("SKILL_NOT_FOUND", noDesktop.errorCode)
+        assertTrue("要说清是没连过桌面", noDesktop.content.contains("没连过桌面"))
+    }
+
+    @Test
+    fun `list_skills：本机与桌面并起来，连不上时如实说只列了本机`() = runBlocking {
+        files.skillsDir.mkdirs()
+        File(files.skillsDir, "local-one.md").writeText(
+            "---\nname: local-one\ndescription: 本机的\n---\n正文",
+            Charsets.UTF_8,
+        )
+        val listing = ListSkillsTool().invoke(
+            buildJsonObject { },
+            context(
+                remoteSkills = FakeRemoteSkills(
+                    listed = listOf(
+                        RemoteSkill("remote-one", "桌面的", "3"),
+                        // 同名：本机已经列过，桌面上那份不该再列一遍
+                        RemoteSkill("local-one", "同一份"),
+                    ),
+                ),
+            ),
+        )
+        assertTrue(listing.content.contains("local-one"))
+        assertTrue(listing.content.contains("remote-one"))
+        assertEquals("同名只列一次", 2, listing.content.split("local-one").size)
+        assertTrue("桌面那几份要说明正文在电脑上", listing.content.contains("正文在电脑上"))
+
+        val offline = ListSkillsTool().invoke(
+            buildJsonObject { },
+            context(remoteSkills = FakeRemoteSkills(unreachable = true)),
+        )
+        assertTrue("连不上要写明只有本机的", offline.content.contains("桌面连不上"))
     }
 
     // --- R7：出网内容 ------------------------------------------------------

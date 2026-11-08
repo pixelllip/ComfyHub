@@ -25,6 +25,7 @@ import com.comfyhub.harness.sync.SyncPullClient
 import com.comfyhub.harness.sync.SyncPushClient
 import com.comfyhub.harness.tools.BuiltinTools
 import com.comfyhub.harness.tools.DefaultHarnessFiles
+import com.comfyhub.harness.tools.DesktopSkills
 import com.comfyhub.harness.tools.MobileAskGate
 import com.comfyhub.harness.tools.MobileToolRegistry
 import io.flutter.plugin.common.BinaryMessenger
@@ -82,6 +83,12 @@ class HarnessBridge(private val context: Context) :
     private val transport = UrlConnectionTransport()
     private val credentials = KeystoreCredentials(context)
     private val bus = RunEventBus()
+
+    /**
+     * 桌面那份 skill 的只读客户端：`load_skill` 在本机找不到时用它去取。
+     * 地址与令牌在每次"连桌面"的动作里更新（取 run-kit / 上行 / 下行）。
+     */
+    private val desktopSkills = DesktopSkills(transport)
 
     private var database: HarnessDatabase? = null
     private var store: HarnessStore? = null
@@ -158,6 +165,7 @@ class HarnessBridge(private val context: Context) :
             //    "没配"与"解不开"必须分开（AIH-015）—— 前者是正常状态（免密钥 / 匿名通道照搜），
             //    后者要如实报码让人去重填。合成一个 `null` 就是静默降级。
             secretLookup = { ref -> credentials.lookup(ref.orEmpty()) },
+            remoteSkills = desktopSkills,
             scope = scope,
         )
         database = db
@@ -225,6 +233,8 @@ class HarnessBridge(private val context: Context) :
                     ensureInitialized().deleteConversation(call.argument<String>("conversationId").orEmpty()),
                 )
                 "listParts" -> result.success(listParts(call.argument<String>("messageId").orEmpty()))
+                // 本机投放口里的 skill：桌面连不上时界面靠它列列表与 `/技能`
+                "localSkills" -> result.success(localSkills())
                 "conversationTitle" -> result.success(
                     store?.getConversation(call.argument<String>("conversationId").orEmpty())?.title,
                 )
@@ -319,6 +329,11 @@ class HarnessBridge(private val context: Context) :
         val s = ensureInitialized()
         val baseUrl = call.argument<String>("baseUrl").orEmpty()
         val token = call.argument<String>("token")
+        // 记下桌面地址与令牌：本次 Run 里 `load_skill` 若在本机找不到，要拿它去桌面取正文
+        if (baseUrl.isNotBlank()) {
+            desktopSkills.baseUrl = baseUrl
+            desktopSkills.token = token
+        }
         val providerId = call.argument<String>("providerId")
         val modelId = call.argument<String>("modelId")
         val cache = RunKitCache(s)
@@ -538,6 +553,31 @@ class HarnessBridge(private val context: Context) :
     }
 
     /**
+     * `localSkills()` —— **本机投放口**里的 skill（JSON 数组字符串）。
+     *
+     * 为什么要有它：界面的 skill 列表与 `/技能` 菜单一直只问桌面（`GET /api/ai/skills`），
+     * 桌面一离线整块就是空的 —— 而手机上明明有随包种进来的那几份（见 `SkillSeeder`）。
+     * 所以界面在远端失败时回落到这里。
+     *
+     * 只回**能直接用的字段**：名字 / 描述 / 校验错误。`enabled`、`userInvocable` 这些是
+     * 桌面的开关（手机本地没有这套状态），由界面按默认值处理 —— 不在这里编。
+     */
+    private fun localSkills(): String {
+        val skills = com.comfyhub.harness.tools.SkillCatalog(
+            DefaultHarnessFiles(context.filesDir).skillsDir,
+        ).scan()
+        return buildJsonArray {
+            skills.forEach { s ->
+                add(buildJsonObject {
+                    put("name", s.name)
+                    put("description", s.description)
+                    s.validationError?.let { put("validationError", it) }
+                })
+            }
+        }.toString()
+    }
+
+    /**
      * 崩溃恢复：把上次没跑完的 Run 按 **R6** 收尾。
      *
      * 手机上前台服务有 6h/24h 配额、后台随时被杀（总纲 §7 风险表），
@@ -585,6 +625,9 @@ class HarnessBridge(private val context: Context) :
                 put("reason", "还不知道桌面地址（本机没有连过桌面）")
             }.toString()
         }
+        // 顺手记下来：这次 Run 之后 `load_skill` 要去桌面取正文时用的就是它
+        desktopSkills.baseUrl = baseUrl
+        desktopSkills.token = token
         val outcome = SyncPushClient(s, transport).push(baseUrl.trimEnd('/'), token)
         return buildJsonObject {
             // `ok` 的口径：这一批**没有留下暂时性失败**才算成功
@@ -626,6 +669,9 @@ class HarnessBridge(private val context: Context) :
                 put("error", "还不知道桌面地址（本机没有连过桌面）")
             }.toString()
         }
+        // 同 syncNow：记住这次连的是哪台桌面，供 `load_skill` 去取正文
+        desktopSkills.baseUrl = baseUrl
+        desktopSkills.token = token
         val outcome = SyncPullClient(s, transport).pullOnce(baseUrl.trimEnd('/'), token)
         return buildJsonObject {
             put("ok", outcome.ok)

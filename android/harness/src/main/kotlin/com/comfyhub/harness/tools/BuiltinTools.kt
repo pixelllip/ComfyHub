@@ -302,28 +302,58 @@ class SkillCatalog(private val dir: File) {
     }
 }
 
-/** `list_skills`：列出本地 skill（**只列，不写**）。 */
+/**
+ * `list_skills`：列出 skill（**只列，不写**）。
+ *
+ * 本机投放口 + 桌面那份**一起列**：手机本地只有随包那几份（[SkillSeeder]），
+ * 而系统提示里的目录是桌面渲染的 —— 只列本机的话，模型会以为"提示里说的 skill 都不存在"。
+ * 桌面连不上就**只列本机并如实说明**（不能把"没连上"说成"桌面上也没有"）。
+ */
 class ListSkillsTool : MobileTool {
     override val name = "list_skills"
 
     override suspend fun invoke(args: JsonObject, ctx: ToolContext): ToolOutcome {
-        val skills = SkillCatalog(ctx.files.skillsDir).scan()
-        if (skills.isEmpty()) {
+        val local = SkillCatalog(ctx.files.skillsDir).scan()
+        // 桌面那份拿不到就是 null（`RemoteSkills.names` 的三态约定）；网络异常也按"没连上"算
+        val remote = runCatching { ctx.remoteSkills?.names() }.getOrNull()
+        if (local.isEmpty() && remote.isNullOrEmpty()) {
             return ToolOutcome.success("本机还没有 skill。skill 目录：${ctx.files.skillsDir.absolutePath}")
         }
+        val remoteOnly = remote.orEmpty().filter { r -> local.none { it.name.equals(r.name, true) } }
         val text = buildString {
-            append("本机 skill（${skills.size} 个）：\n")
-            skills.forEach { s ->
-                append("- ${s.name}：${s.description.ifBlank { "（没有 description）" }}")
-                s.validationError?.let { append("  ⚠ ${it}（不可加载）") }
-                append('\n')
+            if (local.isNotEmpty()) {
+                append("本机 skill（${local.size} 个）：\n")
+                local.forEach { s ->
+                    append("- ${s.name}：${s.description.ifBlank { "（没有 description）" }}")
+                    s.validationError?.let { append("  ⚠ ${it}（不可加载）") }
+                    append('\n')
+                }
+            }
+            if (remoteOnly.isNotEmpty()) {
+                append("桌面上还有（${remoteOnly.size} 个，正文在电脑上，load_skill 会自动去取）：\n")
+                remoteOnly.forEach { r ->
+                    val version = r.version?.takeIf { it.isNotBlank() }?.let { "（v$it）" }.orEmpty()
+                    append("- ${r.name}$version：${r.description.ifBlank { "（没有 description）" }}\n")
+                }
+            }
+            if (remote == null && ctx.remoteSkills != null) {
+                append("（桌面连不上，这里只列了本机的 ${local.size} 个）")
+            }
+            if (remote == null && ctx.remoteSkills == null) {
+                append("（还没连过桌面，只列了本机的 ${local.size} 个）")
             }
         }
         return ToolOutcome.success(ToolResults.truncate(text))
     }
 }
 
-/** `load_skill`：读正文（正文真源在磁盘，**不缓存**）。 */
+/**
+ * `load_skill`：读正文（正文真源在磁盘，**不缓存**）。
+ *
+ * 先看本机投放口；本机没有就**问桌面**（用户自建的、或桌面随包带的另外几份都在那里）。
+ * 三态必须分开说：本机没有 + 桌面有 → 用桌面的；本机没有 + 桌面明确没有 → `SKILL_NOT_FOUND`；
+ * 本机没有 + 桌面连不上 → 也要说清楚是**连不上**（不然用户会以为这个 skill 不存在）。
+ */
 class LoadSkillTool : MobileTool {
     override val name = "load_skill"
 
@@ -332,12 +362,30 @@ class LoadSkillTool : MobileTool {
             ?: return ToolOutcome.failure("INVALID_ARGUMENT", "load_skill 需要 name 参数")
         val catalog = SkillCatalog(ctx.files.skillsDir)
         val summary = catalog.find(wanted)
-            ?: return ToolOutcome.failure("SKILL_NOT_FOUND", "没有名为 $wanted 的 skill（可用 list_skills 看看）")
-        summary.validationError?.let {
-            return ToolOutcome.failure("SKILL_INVALID", "skill ${summary.name} 的 frontmatter 非法：$it")
+        if (summary != null) {
+            summary.validationError?.let {
+                return ToolOutcome.failure("SKILL_INVALID", "skill ${summary.name} 的 frontmatter 非法：$it")
+            }
+            val body = summary.file.readText(Charsets.UTF_8)
+            return ToolOutcome.success(ToolResults.truncate(body))
         }
-        val body = summary.file.readText(Charsets.UTF_8)
-        return ToolOutcome.success(ToolResults.truncate(body))
+        val remote = runCatching { ctx.remoteSkills?.body(wanted) }.getOrNull()
+        return when (remote) {
+            is RemoteSkillBody.Found -> ToolOutcome.success(ToolResults.truncate(remote.body))
+            RemoteSkillBody.Missing -> ToolOutcome.failure(
+                "SKILL_NOT_FOUND",
+                "本机与桌面都没有名为 $wanted 的 skill（可用 list_skills 看看）",
+            )
+            RemoteSkillBody.Unreachable -> ToolOutcome.failure(
+                "SKILL_UNREACHABLE",
+                "本机没有「$wanted」，去桌面取的时候连不上电脑（手机离线或桌面没开）。"
+                    + "先把电脑那边连上再试，或者让用户把正文发过来。",
+            )
+            null -> ToolOutcome.failure(
+                "SKILL_NOT_FOUND",
+                "本机没有名为 $wanted 的 skill，这次 Run 也没连过桌面（可用 list_skills 看看本机有哪些）",
+            )
+        }
     }
 }
 

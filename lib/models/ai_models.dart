@@ -1414,8 +1414,15 @@ class AiSkill {
 
   bool get isBuiltin => source == 'builtin';
 
-  /// 列表上的来源徽标：内置 / 用户。
-  String get sourceLabel => isBuiltin ? '内置' : '用户';
+  /// 列表上的来源徽标：内置 / 本机 / 用户。
+  ///
+  /// `local` = 手机本机投放口里那份（桌面连不上时的回落）。它不是"用户自建"——
+  /// 用户自建的 skill 在电脑上，手机只读副本；两者的处置（能不能改、能不能删）不一样。
+  String get sourceLabel => switch (source) {
+    'builtin' => '内置',
+    'local' => '本机',
+    _ => '用户',
+  };
 
   /// 有没有需要提醒用户的问题（不合法或冲突）。
   bool get hasWarning =>

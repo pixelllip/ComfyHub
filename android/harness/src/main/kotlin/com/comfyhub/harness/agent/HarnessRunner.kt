@@ -169,6 +169,12 @@ class HarnessRunner(
      * 否则一次"密钥坏了"会退化成莫名其妙的 401。
      */
     private val secretLookup: (String?) -> SecretLookup = { SecretLookup.Missing },
+    /**
+     * 桌面上那份 skill（手机本地没有时 `load_skill` 去取）。
+     *
+     * `null` = 这台手机还没连过桌面：那时只认本机投放口，取不到的会**如实说**原因。
+     */
+    private val remoteSkills: com.comfyhub.harness.tools.RemoteSkills? = null,
     private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
     private val upstream: UpstreamClient = UpstreamClient(transport),
 ) {
@@ -595,6 +601,8 @@ class HarnessRunner(
                     // 出网工具（web_search / civitai_search）的 key 从这里取：
                     // **同一个 lambda**，不另开一个口子（凭据只在 Run 开始时快照一次）。
                     lookupSecret = secretLookup,
+                    // 本机没有的 skill 去桌面取（只读 GET；"没有"与"连不上"分开报）
+                    remoteSkills = remoteSkills,
                 )
                 calls.forEach { call ->
                     emit(RunEventType.TOOL_STARTED, EventPayloads.toolStarted(call.id, call.name))

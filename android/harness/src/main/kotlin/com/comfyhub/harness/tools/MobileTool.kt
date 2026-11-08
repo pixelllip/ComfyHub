@@ -158,6 +158,13 @@ class ToolContext(
      * 没配是正常状态（免密钥 / 匿名通道照搜），解不开要**如实报码**让人去重填。
      */
     val lookupSecret: (String?) -> SecretLookup = { SecretLookup.Missing },
+    /**
+     * 桌面上那份 skill（手机本地没有时去拿）。
+     *
+     * `null` = 这次 Run 不知道该连哪台桌面（没取过 run-kit / 没同步过）——
+     * 那时 `load_skill` 只认本机投放口，并**如实说**"没连过桌面"。
+     */
+    val remoteSkills: RemoteSkills? = null,
 ) {
     /** 一次 Run 里 AI 最多新增几条记忆（与桌面 `MemoryStore.MAX_ENTRIES_PER_RUN` 同值）。 */
     var memoryWrites: Int = 0

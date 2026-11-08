@@ -282,6 +282,13 @@ class _ContextPanelState extends State<_ContextPanel> {
                             'Skills 加载失败，${store.skillsError}',
                             style: theme.textTheme.bodySmall,
                           ),
+                        // 回落取证：下面列的是**手机本机**那几份，不是桌面上的全集。
+                        // 不说这一句，用户会以为电脑上的 skill 被删了。
+                        if (store.skillsLocalOnly)
+                          Text(
+                            '桌面连不上，这里只列了手机本机的 skill。',
+                            style: theme.textTheme.bodySmall,
+                          ),
                       ],
                     ),
                   ),

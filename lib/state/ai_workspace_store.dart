@@ -445,6 +445,12 @@ class AiWorkspaceStore extends ChangeNotifier {
   List<AiSkill> skills = const [];
   String? skillsError;
 
+  /// 这份 [skills] 是不是**手机本机投放口**里的（桌面连不上时的回落）。
+  ///
+  /// 界面据此说一句"只列了手机本机的"：数量少是有原因的，不能让用户以为
+  /// 桌面上的 skill 被删了。
+  bool skillsLocalOnly = false;
+
   /// skills 投放口的位置（把 skill 拷进这个文件夹就算装好）。
   AiSkillRoots? skillRoots;
 
@@ -700,6 +706,10 @@ class AiWorkspaceStore extends ChangeNotifier {
 
   /// 拉一次 skills 列表。失败**不抛异常**（右侧栏不该因为 skills 挂了就整页报错），
   /// 只把原因记进 [skillsError]。
+  ///
+  /// 桌面连不上时**回落本机投放口**（手机专有）：随包种进来的那几份提示词 skill
+  /// 本来就在手机上，`/技能` 与右侧栏不该因此变空。回落成功就置
+  /// [skillsLocalOnly]，界面据此如实说明"只列了本机的"；本机也空才报错。
   Future<void> reloadSkills() async {
     skillsBusy = true;
     skillsError = null;
@@ -708,11 +718,34 @@ class AiWorkspaceStore extends ChangeNotifier {
       // 投放口路径只问一次（它是后端算出来的绝对路径，运行期不会变）
       skillRoots ??= await _api.skillRoots();
       skills = await _api.listSkills();
+      skillsLocalOnly = false;
     } catch (e) {
-      skillsError = '$e';
+      final local = await _localSkillsOrEmpty();
+      if (local.isNotEmpty) {
+        skills = local;
+        skillsLocalOnly = true;
+      } else {
+        skillsError = '$e';
+      }
     } finally {
       skillsBusy = false;
       notifyListeners();
+    }
+  }
+
+  /// 本机投放口（桌面离线时的回落）：非本地源 / 桥没答都返回空表。
+  Future<List<AiSkill>> _localSkillsOrEmpty() async {
+    final local = _source;
+    // 注意：`RunEventSource` 与 `LocalSkillSource` **互不继承**（远端源没有本机 skill 这回事），
+    // 所以这里必须显式转型 —— `is` 只会把变量收窄到"声明类型的子类型"，收不到无关接口。
+    if (local is! LocalSkillSource) return const [];
+    try {
+      return await (local as LocalSkillSource).localSkills();
+    } catch (e) {
+      // 桥这边也炸了：把回落失败的这件事留在日志里，界面上仍然显示"拉取失败"的原话，
+      // 而不是假装"本机一个 skill 都没有"。
+      debugPrint('[M5] 本机 skill 列表也读不出来：$e');
+      return const [];
     }
   }
 

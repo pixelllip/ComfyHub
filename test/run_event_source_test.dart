@@ -240,6 +240,29 @@ void main() {
     expect(assistant.parts[1].toolArguments, '{}');
   });
 
+  test('localSkills 把本机投放口读成 AiSkill（source=local，桌面离线时界面用）', () async {
+    mockMethods((call) async {
+      expect(call.method, 'localSkills');
+      return jsonEncode([
+        {'name': 'r2i-prompt', 'description': '扩写提示词'},
+        // 没有名字的条目画不出卡片，界面不该收到
+        {'name': '', 'description': '没有名字'},
+        {
+          'name': 'broken',
+          'description': '',
+          'validationError': 'frontmatter 缺少 description',
+        },
+      ]);
+    });
+
+    final skills = await source().localSkills();
+    expect(skills.map((s) => s.name).toList(), ['r2i-prompt', 'broken']);
+    // 来源不能写成"用户自建"：用户自建的那份在电脑上，这份只是手机的副本
+    expect(skills.first.source, 'local');
+    expect(skills.first.sourceLabel, '本机');
+    expect(skills.last.validationError, 'frontmatter 缺少 description');
+  });
+
   test('fetchRunKit 把 {ok=false, reason} 原样带回来（拿不到规则就不许开跑）', () async {
     mockMethods((call) async {
       expect(call.method, 'fetchRunKit');

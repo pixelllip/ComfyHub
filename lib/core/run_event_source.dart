@@ -236,6 +236,18 @@ abstract class RunEventSource {
   });
 }
 
+/// 手机上**本机投放口**里的 skill（桌面连不上时的回落）。
+///
+/// 为什么不并进 [RunEventSource]：远端源没有"本机 skill"这回事，让它实现一个恒返回
+/// 空表的同名方法，只会让后来的人以为"桌面也有本机技能"这个概念。
+///
+/// 手机上的投放口出厂由随包那几份提示词 skill 种进去（`SkillSeeder`），
+/// 所以桌面离线时 `/技能` 与右侧栏**不该是空的**。
+abstract class LocalSkillSource {
+  /// 本机投放口里的 skill（磁盘即真源，每次现读）。
+  Future<List<AiSkill>> localSkills();
+}
+
 /// 桌面实现：转发给 `AiApiClient`（远端 SSE）。
 class RemoteRunEventSource implements RunEventSource {
   RemoteRunEventSource(this._api);
@@ -344,7 +356,7 @@ class RemoteRunEventSource implements RunEventSource {
 ///
 /// ⚠ **规则类输入一条都不在这里**：系统提示、工具描述、安全横幅全部由桌面的 run-kit 下发
 /// （红线 R13）。这个类只负责"搬"，不负责"定"。
-class LocalHarnessRunEventSource implements RunEventSource {
+class LocalHarnessRunEventSource implements RunEventSource, LocalSkillSource {
   LocalHarnessRunEventSource({
     MethodChannel? methodChannel,
     EventChannel? eventChannel,
@@ -487,6 +499,32 @@ class LocalHarnessRunEventSource implements RunEventSource {
     await _method.invokeMethod<String>('listParts', {'messageId': messageId}) ??
         '[]',
   );
+
+  /// 本机投放口里的 skill（**桌面连不上时**界面靠它列列表与 `/技能`）。
+  ///
+  /// `source` 固定写 `local`：这些既不是桌面随包的内置（`builtin`，那份在电脑上），
+  /// 也不是用户自己注册的（`user`，注册要写桌面磁盘）—— 界面据此显示「本机」，
+  /// 而不是把手机的副本说成"用户自建"。
+  ///
+  /// 启停 / 用户可调用这两组开关是**桌面的状态**，手机本地没有：按"能用"处理，
+  /// 不在这里编一个可能过期的值（与 `listProviders` 不编 `credential` 同一条纪律）。
+  @override
+  Future<List<AiSkill>> localSkills() async {
+    final rows = _list(
+      await _method.invokeMethod<String>('localSkills') ?? '[]',
+    );
+    return rows
+        .map(
+          (row) => AiSkill(
+            name: (row['name'] ?? '').toString(),
+            description: (row['description'] ?? '').toString(),
+            source: 'local',
+            validationError: row['validationError']?.toString(),
+          ),
+        )
+        .where((skill) => skill.name.isNotEmpty)
+        .toList();
+  }
 
   /// 拉一条会话的消息，**把 `parts` 并进来**。
   ///

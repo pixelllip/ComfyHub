@@ -28,10 +28,19 @@ import 'package:viewer/models/ai_models.dart';
 import 'package:viewer/state/ai_workspace_store.dart';
 
 /// 假的**本地**事件源：记录每一次调用，证明界面真的从它这里走。
-class _FakeLocalSource implements RunEventSource {
+class _FakeLocalSource implements RunEventSource, LocalSkillSource {
   final List<String> calls = [];
   final List<RunStartRequest> starts = [];
   final List<String> listedConversations = [];
+
+  /// 本机投放口里的 skill（桌面连不上时界面回落到它）。
+  List<AiSkill> localSkillsResult = const [];
+
+  @override
+  Future<List<AiSkill>> localSkills() async {
+    calls.add('localSkills');
+    return localSkillsResult;
+  }
 
   @override
   bool get isLocal => true;
@@ -330,6 +339,39 @@ void main() {
     expect(source.starts.single.credentialRef, 'PHONE_KEY');
 
     expect(remoteCalls, isEmpty, reason: '本地源一个远端请求都不该打：$remoteCalls');
+  });
+
+  test('桌面连不上时 skills 回落到本机投放口（手机上的 /技能 不再是空的）', () async {
+    // 远端一律 500（桌面不在线）
+    final api = AiApiClient(
+      'http://127.0.0.1:8080',
+      client: MockClient((request) async => http.Response('offline', 500)),
+    );
+    final source = _FakeLocalSource()
+      ..localSkillsResult = const [
+        AiSkill(name: 'r2i-prompt', description: '扩写提示词', source: 'local'),
+      ];
+    final store = AiWorkspaceStore(api: api, source: source);
+
+    await store.reloadSkills();
+
+    expect(store.skills.map((s) => s.name).toList(), ['r2i-prompt']);
+    expect(store.skillsLocalOnly, isTrue, reason: '界面要能说明这里只有本机的');
+    expect(store.skillsError, isNull, reason: '回落成功就不该报"加载失败"');
+    // 来源徽标不能写成"用户自建"（那份在电脑上）
+    expect(store.skills.single.sourceLabel, '本机');
+
+    // 本机也一份都没有 → 仍然如实报错，不许假装加载成功
+    final emptyStore = AiWorkspaceStore(
+      api: AiApiClient(
+        'http://127.0.0.1:8080',
+        client: MockClient((request) async => http.Response('offline', 500)),
+      ),
+      source: _FakeLocalSource(),
+    );
+    await emptyStore.reloadSkills();
+    expect(emptyStore.skillsError, isNotNull);
+    expect(emptyStore.skillsLocalOnly, isFalse);
   });
 
   test('手机冷启动：桌面离线也能进聊天页（会话来自本地库，不报"连接后端失败"）', () async {

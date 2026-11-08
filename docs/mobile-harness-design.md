@@ -110,7 +110,7 @@
 | **系统提示词**（含工具清单、NSFW 开关、不可信数据禁令、Skills 摘要、长期记忆） | `SystemPrompt.render(version)`；版本常量 `SystemPrompt.VERSION`（改提示必须 bump，AGENTS §10） | `GET /api/ai/run-kit` 一次性取回 |
 | **工具 schema**（名称 / 描述 / 参数 JSON Schema） | **唯一真源** `ToolRegistry.kt` 的 `tools` 列表；`GET /api/ai/tools` 已经是它的派生出口 | 同上（按 `ToolScope` 过滤成手机可执行子集） |
 | **模型能力目录**（模态、工具、思考方言、上下文窗口） | `AiSeedCatalog` 的 classpath 冻结副本 + `ModelCapabilityCatalog` | 同上（可只带用户实际用的若干模型） |
-| **Skills + 长期记忆** | `<storage>\ai\skills` 与 `memory.md`（磁盘即真源，刻意不缓存） | 长期记忆随系统提示下发；**skill 正文不随同步走**（它是文件，不在同步白名单里）：系统提示里只有名字与描述，手机要正文得读**本机投放口** `<filesDir>/ai/skills`。出厂投放口是空的，所以随包的那几份**提示词类** skill（`r2i-prompt` / `card-writer` / `krea-2` / `moss-image`）在第一次启动时由 `SkillSeeder` 从 APK assets 种进去（只种一次、绝不覆盖用户改过的；见 §4.2 与 `android/harness/.../tools/SkillSeeder.kt`）。桌面上的其余 skill（含用户自己写的）手机上**取不到正文**，`load_skill` 会如实报 `SKILL_NOT_FOUND` |
+| **Skills + 长期记忆** | `<storage>\ai\skills` 与 `memory.md`（磁盘即真源，刻意不缓存） | 长期记忆随系统提示下发；**skill 正文不随同步走**（它是文件，不在同步白名单里）：系统提示里只有名字与描述，手机要正文得读**本机投放口** `<filesDir>/ai/skills`。出厂投放口是空的，所以随包的那几份**提示词类** skill（`r2i-prompt` / `card-writer` / `krea-2` / `moss-image`）在第一次启动时由 `SkillSeeder` 从 APK assets 种进去（只种一次、绝不覆盖用户改过的；见 §4.2 与 `android/harness/.../tools/SkillSeeder.kt`）。桌面上的其余 skill（含用户自己写的）由 `load_skill` **按需去桌面取正文**（`DesktopSkills`，只读 `GET /api/ai/skills/{name}`；`list_skills` 把本机与桌面两份并起来列）。三条边界：① 没连过桌面 / 连不上时按**「连不上」**如实说（`SKILL_UNREACHABLE`），**不许**说成「没有这个 skill」；② 桌面的启停与 `user-invocable` 是那台电脑的状态，手机不复刻；③ 界面的 skill 列表与 `/技能` 在远端失败时**回落到本机投放口**（`LocalSkillSource` + `skillsLocalOnly`，右侧栏会明说「只列了手机本机的」） |
 
 **再加一份文本工件：** `untrustedBanner()` 那段"不可信数据"横幅文案（RSK-004 的防线）。
 它是**文本**，由桌面下发 —— 手机**不要自己写一份**。
