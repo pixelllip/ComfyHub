@@ -40,6 +40,13 @@
     **卡本身不进成品**：画风卡是锁定渲染规格，面部 / 身体 / 头发 / 衣物的具体渲染写进对应部位的句子，
     结尾只留 ≤25 词总括；参考图的表情按可见面部配置如实写出；成品正文放进三反引号 text 围栏）。
   这些 Skill 随发布包一起分发。
+
+  **手机端只有其中四份**：`r2i-prompt` / `card-writer` / `krea-2` / `moss-image`
+  会在 App 第一次启动时由 `SkillSeeder` 从 APK 资源种进本机投放口
+  （`<filesDir>/ai/skills`，只种一次、绝不覆盖用户改过的文件）。其余几份要 ComfyUI
+  在场上，手机本地既不能跑也不该假装能跑 —— 所以**不种**。改名 / 换清单要同步改
+  `android/harness/src/main/kotlin/com/comfyhub/harness/tools/SkillSeeder.kt` 的
+  `SEEDED_SKILLS`。
 - 用户自己的 Skill **不放这里**：拷进投放口 `<storage>\ai\skills` 就算装好
   （后端启动时 / 点「重新扫描」会自动给没有 frontmatter 的文件补登记）。
 

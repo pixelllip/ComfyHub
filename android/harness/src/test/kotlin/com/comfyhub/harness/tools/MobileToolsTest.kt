@@ -303,6 +303,40 @@ class MobileToolsTest {
         assertFalse(ListSkillsTool().invoke(buildJsonObject { }, ctx).content.contains("anima-prompt"))
     }
 
+    @Test
+    fun `目录版 skill 也能列能读（随包内置的那种布局）`() = runBlocking {
+        // 仓库根的 `skills/builtin/<name>/SKILL.md` 就是这种布局：手机把内置那几份
+        // 种进投放口之后，走的正是这条路径。目录名当 name（不能被读成 "SKILL"）。
+        val bundle = File(files.skillsDir, "r2i-prompt")
+        bundle.mkdirs()
+        File(bundle, "SKILL.md").writeText(
+            "---\nname: r2i-prompt\ndescription: 把参考图扩写成提示词\n---\n正文（目录版）",
+            Charsets.UTF_8,
+        )
+        // 同名平铺文件：**目录版胜出**（与桌面同一条规则）
+        File(files.skillsDir, "r2i-prompt.md").writeText(
+            "---\nname: r2i-prompt\ndescription: 平铺版\n---\n正文（平铺版）",
+            Charsets.UTF_8,
+        )
+        // 没有 frontmatter 的目录版：用**目录名**兜底
+        val bare = File(files.skillsDir, "no-frontmatter")
+        bare.mkdirs()
+        File(bare, "SKILL.md").writeText("只有正文", Charsets.UTF_8)
+        // 目录里没有 SKILL.md 的不算 skill
+        File(files.skillsDir, "not-a-skill").mkdirs()
+
+        val ctx = context()
+        val listed = ListSkillsTool().invoke(buildJsonObject { }, ctx)
+        assertTrue("目录版要列出来", listed.content.contains("r2i-prompt"))
+        assertTrue("同一份只出现一次", listed.content.split("r2i-prompt").size == 2)
+        assertTrue("空目录不算 skill", !listed.content.contains("not-a-skill"))
+        assertTrue("没有 frontmatter 时用目录名", listed.content.contains("no-frontmatter"))
+
+        val loaded = LoadSkillTool().invoke(buildJsonObject { put("name", "r2i-prompt") }, ctx)
+        assertTrue(loaded.ok)
+        assertTrue("读到的是目录版正文", loaded.content.contains("正文（目录版）"))
+    }
+
     // --- R7：出网内容 ------------------------------------------------------
 
     @Test

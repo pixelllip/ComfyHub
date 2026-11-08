@@ -113,8 +113,38 @@ class HarnessBridge(private val context: Context) :
     //  初始化
     // -----------------------------------------------------------------------
 
+    /**
+     * 把 APK 里那几份提示词 skill 种进 `<filesDir>/ai/skills`。
+     *
+     * 为什么手机需要它：skill 正文的真源是**桌面**磁盘，而手机 `load_skill` 读的是本机投放口。
+     * 不种的话，系统提示里列着的 skill 一个都加载不到 —— 用户看到的 `/技能` 只有一个名字。
+     *
+     * 失败只记日志、不拦启动：`list_skills` 会如实说本机没有，比"假装装好了"好。
+     */
+    private fun seedBuiltinSkills() {
+        val target = File(context.filesDir, "ai/skills")
+        runCatching {
+            val result = com.comfyhub.harness.tools.SkillSeeder.seed(
+                AssetsSkillSource(context),
+                target,
+            )
+            if (result.failed > 0) {
+                android.util.Log.w(
+                    "ComfyHub",
+                    "内置 skill 有 ${result.failed} 份没种进去（投放口：${target.absolutePath}）",
+                )
+            }
+        }.onFailure {
+            android.util.Log.w("ComfyHub", "内置 skill 种植失败：${it.message}")
+        }
+    }
+
     private fun ensureInitialized(): HarnessStore {
         store?.let { return it }
+        // 先把随包内置的提示词 skill 种进本机投放口（只种一次、绝不覆盖）。
+        // 放在建库之前、且失败**不拦启动**：少几份 skill 只是 AI 少一套规则，
+        // 而库起不来就什么都做不了了。
+        seedBuiltinSkills()
         val db = HarnessDatabase.open(File(context.filesDir, HarnessDatabase.DB_FILE).absolutePath)
         val s = HarnessStore(db.session)
         val r = HarnessRunner(

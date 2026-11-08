@@ -38,6 +38,16 @@ android {
             signingConfig = signingConfigs.getByName("debug")
         }
     }
+
+    // 随包内置的 skills（仓库根的 `skills/`）直接进 APK 的 assets：
+    // 手机第一次启动时由 `HarnessBridge.seedBuiltinSkills()` 种进
+    // `<filesDir>/ai/skills`（见 `SkillSeeder`）。
+    //
+    // 为什么用 srcDir 而不是把文件拷进 android/app/src/main/assets：
+    // 拷一份就等于仓库里有两份 skill 正文，改一份忘一份 —— 表现是"桌面改了、手机还是旧规则"。
+    sourceSets.getByName("main") {
+        assets.srcDir("${rootProject.projectDir}/../skills")
+    }
 }
 
 // 内建 Kotlin 下的编译选项 DSL（旧写法 android.kotlinOptions{} 已废弃）。

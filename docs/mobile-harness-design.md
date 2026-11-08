@@ -110,7 +110,7 @@
 | **系统提示词**（含工具清单、NSFW 开关、不可信数据禁令、Skills 摘要、长期记忆） | `SystemPrompt.render(version)`；版本常量 `SystemPrompt.VERSION`（改提示必须 bump，AGENTS §10） | `GET /api/ai/run-kit` 一次性取回 |
 | **工具 schema**（名称 / 描述 / 参数 JSON Schema） | **唯一真源** `ToolRegistry.kt` 的 `tools` 列表；`GET /api/ai/tools` 已经是它的派生出口 | 同上（按 `ToolScope` 过滤成手机可执行子集） |
 | **模型能力目录**（模态、工具、思考方言、上下文窗口） | `AiSeedCatalog` 的 classpath 冻结副本 + `ModelCapabilityCatalog` | 同上（可只带用户实际用的若干模型） |
-| **Skills + 长期记忆** | `<storage>\ai\skills` 与 `memory.md`（磁盘即真源，刻意不缓存） | 走同步通道（当普通可同步数据） |
+| **Skills + 长期记忆** | `<storage>\ai\skills` 与 `memory.md`（磁盘即真源，刻意不缓存） | 长期记忆随系统提示下发；**skill 正文不随同步走**（它是文件，不在同步白名单里）：系统提示里只有名字与描述，手机要正文得读**本机投放口** `<filesDir>/ai/skills`。出厂投放口是空的，所以随包的那几份**提示词类** skill（`r2i-prompt` / `card-writer` / `krea-2` / `moss-image`）在第一次启动时由 `SkillSeeder` 从 APK assets 种进去（只种一次、绝不覆盖用户改过的；见 §4.2 与 `android/harness/.../tools/SkillSeeder.kt`）。桌面上的其余 skill（含用户自己写的）手机上**取不到正文**，`load_skill` 会如实报 `SKILL_NOT_FOUND` |
 
 **再加一份文本工件：** `untrustedBanner()` 那段"不可信数据"横幅文案（RSK-004 的防线）。
 它是**文本**，由桌面下发 —— 手机**不要自己写一份**。
@@ -171,7 +171,11 @@
 
 - 全部 `comfy_*` 工具、`comfy-mcp` 的 39 个工具
 - 文件工具（`read_file`/`write_file`/`list_dir`）—— 手机没有"项目根"这个概念
-- `register_skill` / `delete_skill`（要写磁盘；手机侧最多是"只读加载"）
+- `register_skill` / `delete_skill`（要写磁盘；手机侧最多是"只读加载"）——**但"只读加载"要能加载**：
+  手机投放口出厂由 `SkillSeeder` 从 APK assets 种进那几份提示词 skill（`r2i-prompt` /
+  `card-writer` / `krea-2` / `moss-image`），否则系统提示里列着的 skill 一个都打不开。
+  出图 / 工作流类的 skill（`comfy-*` / `lora-training` / `inpaint-composite`）**不种**：
+  它们要 ComfyUI 在场上，手机本地既不能跑也不该假装能跑
 - `WorkflowAudit` / `WorkflowFit` / `WorkflowConvert` / `FrontendNodes`（≈130KB）
   —— 工作流校验是**提交前**的事，由桌面的 `comfy_submit` 负责
 - `ModelCapabilityCatalog` 的**发现/探测**逻辑（`CapabilityRefresh`）—— 手机只用下发的目录

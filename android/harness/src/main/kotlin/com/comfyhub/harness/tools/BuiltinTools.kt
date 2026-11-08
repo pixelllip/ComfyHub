@@ -200,12 +200,32 @@ data class SkillSummary(
  */
 class SkillCatalog(private val dir: File) {
 
+    /**
+     * 扫两种布局（与桌面 `skills.rs` 的查找顺序一致）：
+     *
+     * ```
+     * <dir>/<name>/SKILL.md   —— 随包内置 / 从桌面整个拷过来的那种（可以带 references/）
+     * <dir>/<name>.md         —— 用户手写的平铺文件
+     * ```
+     *
+     * **同名时目录版胜出**：桌面那条规则是"bundle > 平铺"，两边不一致就会出现
+     * "桌面上看到的正文与手机上加载的不是同一份"。
+     */
     fun scan(): List<SkillSummary> {
         if (!dir.isDirectory) return emptyList()
-        return dir.listFiles { f -> f.isFile && f.name.endsWith(".md") }
+        val bundles = dir.listFiles { f -> f.isDirectory }
             .orEmpty()
             .sortedBy { it.name }
-            .map { parse(it) }
+            .mapNotNull { d ->
+                // 目录里没有 SKILL.md 的（比如刚建的空目录）不算 skill
+                File(d, "SKILL.md").takeIf { it.isFile }?.let { parse(it, fallbackName = d.name) }
+            }
+        val flat = dir.listFiles { f -> f.isFile && f.name.endsWith(".md") }
+            .orEmpty()
+            .sortedBy { it.name }
+            .map { parse(it, fallbackName = it.nameWithoutExtension) }
+        val taken = bundles.mapTo(mutableSetOf()) { it.name.lowercase() }
+        return (bundles + flat.filter { taken.add(it.name.lowercase()) }).sortedBy { it.name }
     }
 
     fun find(name: String): SkillSummary? =
@@ -226,12 +246,13 @@ class SkillCatalog(private val dir: File) {
          * 两个与真实文件有关的细节：
          *  - `description: |` 这种 **YAML 块标量**必须能读（真实 `SKILL.md` 大量这么写），
          *    进提示前压成一行；
-         *  - 没有 frontmatter 的文件：用**文件名**当 name、正文首行当 description
-         *    （后端启动时会给它补齐 frontmatter，手机侧只读，所以这里只做兜底展示）。
+         *  - 没有 frontmatter 的文件：用 `fallbackName`（平铺文件取文件名，
+         *    目录版取**目录名** —— `SKILL.md` 本身当名字会是 "SKILL"）当 name、
+         *    正文首行当 description（后端启动时会给它补齐 frontmatter，手机侧只读，
+         *    所以这里只做兜底展示）。
          */
-        fun parse(file: File): SkillSummary {
+        fun parse(file: File, fallbackName: String = file.nameWithoutExtension): SkillSummary {
             val text = runCatching { file.readText(Charsets.UTF_8) }.getOrDefault("")
-            val fallbackName = file.nameWithoutExtension
             if (!text.startsWith("---")) {
                 val firstLine = text.lines().firstOrNull { it.trim().isNotEmpty() }?.trim().orEmpty()
                 return SkillSummary(fallbackName, firstLine.take(120), file)
