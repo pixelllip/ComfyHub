@@ -586,3 +586,28 @@ fn 正面条件是否由_text_generate_生成() {
     });
     assert!(!positive_prompt_is_generated(&literal));
 }
+
+/// T2（2026-11-09）：已验证回写**只认槽位键** —— 旋钮（步数 / 提示词）不是"这个模型能用"的证据。
+#[test]
+fn 已验证回写只认槽位键_不把旋钮当成模型验证() {
+    let recipe =
+        crate::workflow::workflow_recipe::analyze(graph().as_object().unwrap(), None);
+    let mut overrides = Map::new();
+    overrides.insert("4.ckpt_name".into(), json!("new.safetensors"));
+    overrides.insert("3.steps".into(), json!(30));
+    overrides.insert("6.text".into(), json!("新提示词"));
+    overrides.insert("4.莫名输入".into(), json!("不是槽位"));
+    let entries = verified_entries(&recipe, &overrides, "run-1", Some("2026-11-09T02:00:00Z".into()));
+    assert_eq!(entries.len(), 1, "只有槽位键算验证：{entries:?}");
+    assert_eq!(entries[0].override_key, "4.ckpt_name");
+    assert_eq!(entries[0].model, "new.safetensors");
+    assert_eq!(entries[0].role, "checkpoints");
+    assert_eq!(entries[0].run_key, "run-1");
+    assert_eq!(entries[0].at.as_deref(), Some("2026-11-09T02:00:00Z"));
+
+    // 没改槽位（只改参数）= 没验证任何模型；空白文件名同样不算
+    assert!(verified_entries(&recipe, &Map::new(), "run-2", None).is_empty());
+    let mut blank = Map::new();
+    blank.insert("4.ckpt_name".into(), json!("   "));
+    assert!(verified_entries(&recipe, &blank, "run-3", None).is_empty());
+}

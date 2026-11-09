@@ -102,7 +102,11 @@ pub const SCHEMA_SQL: &str = include_str!("../../../db/schema.sqlite.sql");
 /// ② 升级到 11 的那一次把 `tag_prompt` 转成一段自然语言灌进 `prompt`
 ///    （见 [`migrate_card_tags_to_prompt`]）——**只填 prompt 为空的卡**，
 ///    已经有自然语言版的卡一个字都不动。
-pub const SCHEMA_VERSION: i64 = 14;
+///
+/// 2026-11-09 由 14 提到 15：**配方的已验证绑定** —— `workflow_recipes` 加 `verified_json`
+/// （`comfy_submit` 跑通之后回写"这一族骨架 × 这个模型"的验证记录，下次同模型直接优先）。
+/// 又是一个**列**（走 [`NEW_COLUMNS`]）——只加列、不改表，老库补上之后全是 `'[]'`。
+pub const SCHEMA_VERSION: i64 = 15;
 
 /// **"这一列必须存在"的声明式清单**（2026-09-30 起）。
 ///
@@ -185,6 +189,16 @@ const NEW_COLUMNS: &[(&str, &str, &str)] = &[
         "capture_runs",
         "recipe_id",
         "ALTER TABLE capture_runs ADD COLUMN recipe_id INTEGER NULL",
+    ),
+    // 配方的**已验证绑定**（2026-11-09，T2）：元素形如
+    // `{"model":"…","role":"diffusion_models","overrideKey":"55.unet_name","runKey":"…","at":"…"}`。
+    // 带默认值 `'[]'` → 符合加列规矩；老库补上之后一条验证记录都没有（这是对的：
+    // 以前的跑没有留过 provenance，不能凭"它跑过"倒推）。
+    // ⚠ 回写只有一处（`workflow_submit` 的成功路径），**失败 / 超时 / 取消绝不记**。
+    (
+        "workflow_recipes",
+        "verified_json",
+        "ALTER TABLE workflow_recipes ADD COLUMN verified_json TEXT NOT NULL DEFAULT '[]'",
     ),
 ];
 

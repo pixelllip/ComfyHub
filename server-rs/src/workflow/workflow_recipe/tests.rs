@@ -1270,6 +1270,7 @@ fn bind_with(
         "krea2 编辑",
         complete,
         force,
+        &[],
     )
 }
 
@@ -1694,3 +1695,168 @@ fn 配方连底模槽位都没有时要说清楚要带什么() {
     );
     assert!(binding.override_key.is_none());
 }
+
+// -----------------------------------------------------------------------
+//  已验证绑定（T2，2026-11-09）
+// -----------------------------------------------------------------------
+
+/// 一条验证记录（测试里手搓，省得每次都要起一次真提交）。
+fn verified(model: &str, key: &str, run_key: &str) -> Verified {
+    Verified {
+        model: model.to_string(),
+        role: "diffusion_models".to_string(),
+        override_key: key.to_string(),
+        run_key: run_key.to_string(),
+        at: Some("2026-11-09T02:00:00Z".to_string()),
+    }
+}
+
+/// 回写：同槽位 + 同模型只刷新凭据（不堆行），换模型才是新的一条；读回来能渲染。
+#[test]
+fn 已验证回写按槽位与模型去重_且不会抹掉别的组合() {
+    let conn = conn();
+    let id = save_row(
+        &conn,
+        &sample_write("krea2 编辑", Some("file:abc"), None, true, &[]),
+    )
+    .unwrap()
+    .0;
+    assert!(verified_in(&conn, id).unwrap().is_empty(), "新配方没有验证记录");
+
+    // 第一次跑通
+    let written = record_verified(
+        &conn,
+        id,
+        &[verified("krea2_turbo_v11.safetensors", "1.ckpt_name", "run-a")],
+    )
+    .unwrap();
+    assert_eq!(written, 1);
+    let list = verified_in(&conn, id).unwrap();
+    assert_eq!(list.len(), 1);
+    assert_eq!(list[0].run_key, "run-a");
+
+    // 同一个组合又跑通一次：**只刷新 runKey / 时间**，不新增
+    record_verified(
+        &conn,
+        id,
+        &[verified("krea2_turbo_v11.safetensors", "1.ckpt_name", "run-b")],
+    )
+    .unwrap();
+    let list = verified_in(&conn, id).unwrap();
+    assert_eq!(list.len(), 1, "同一个槽位配同一个模型只该有一条");
+    assert_eq!(list[0].run_key, "run-b", "要刷新成最近那次");
+
+    // 换了个模型：新的一条，排在最前；旧的那条**一个字都不动**
+    record_verified(
+        &conn,
+        id,
+        &[verified("krea2_turbo_v20.safetensors", "1.ckpt_name", "run-c")],
+    )
+    .unwrap();
+    let list = verified_in(&conn, id).unwrap();
+    assert_eq!(list.len(), 2);
+    assert_eq!(list[0].model, "krea2_turbo_v20.safetensors");
+    assert_eq!(list[1].run_key, "run-b");
+
+    // 落库的形状与 DTO 读出来的形状是同一份（列表 / 绑定 / 端点都从这里取）
+    let row = get(&conn, id).unwrap().unwrap();
+    assert_eq!(row.verified.as_array().unwrap().len(), 2);
+    assert_eq!(row.verified[0]["overrideKey"], "1.ckpt_name");
+    assert_eq!(row.verified[0]["role"], "diffusion_models");
+    let summary = verified_summary(&verified_of(&row.verified)).unwrap();
+    assert!(summary.contains("1.ckpt_name=krea2_turbo_v20.safetensors"), "{summary}");
+}
+
+/// 重新学一份（`save_row` 走 UPDATE）**不许清掉**已验证记录 ——
+/// 那是"这族骨架跑通过"的事实，与这次归纳出来的槽位无关。
+#[test]
+fn 重新学一份不会清掉已验证记录() {
+    let conn = conn();
+    let id = save_row(
+        &conn,
+        &sample_write("krea2 编辑", Some("file:abc"), None, true, &[]),
+    )
+    .unwrap()
+    .0;
+    record_verified(&conn, id, &[verified("a.safetensors", "1.ckpt_name", "r1")]).unwrap();
+    save_row(
+        &conn,
+        &sample_write("krea2 编辑", Some("file:abc"), None, true, &[]),
+    )
+    .unwrap();
+    assert_eq!(verified_in(&conn, id).unwrap().len(), 1);
+}
+
+/// 绑定输出里标注"已验证跑通"，并且**不改**能不能自动写覆盖键的判据（仍然只有 exact）。
+#[test]
+fn 已验证的组合在绑定结果里标出来_但不放松写键的判据() {
+    let recipe = edit_recipe();
+    let inv = inventory(vec![local(
+        "krea2_turbo_v11.safetensors",
+        "diffusion_models",
+        true,
+    )]);
+    let proven = [verified("krea2_turbo_v11.safetensors", "55.unet_name", "r1")];
+    let report = bind(
+        &recipe,
+        &[request("krea2_turbo_v11.safetensors")],
+        Some(&inv),
+        Some(7),
+        "krea2 编辑",
+        true,
+        false,
+        &proven,
+    );
+    assert!(report.bindings[0].verified);
+    assert_eq!(
+        report.bindings[0].verified_at.as_deref(),
+        Some("2026-11-09T02:00:00Z")
+    );
+    assert!(report.render().contains("✔ 已验证跑通"), "{}", report.render());
+    assert!(
+        report.render().contains("已经跑通过"),
+        "要有「直接开跑」的结论：{}",
+        report.render()
+    );
+    let json = report.to_json();
+    assert_eq!(json["bindings"][0]["verified"], json!(true));
+    assert_eq!(json["bindings"][0]["verifiedAt"], "2026-11-09T02:00:00Z");
+
+    // 没有记录的组合：同一套槽位、没验证过的文件 —— 判据不变，但文案要说"第一跑"
+    let report = bind_with(
+        &recipe,
+        &[request("krea2_turbo_v11.safetensors")],
+        Some(&inv),
+        true,
+        false,
+    );
+    assert!(!report.bindings[0].verified);
+    assert!(report.render().contains("还没跑通过"), "{}", report.render());
+}
+
+/// 别人给的文件名写法不同（大小写 / 分隔符）时，仍要认出"这就是上次跑通的那个"。
+#[test]
+fn 已验证记录按词根集合比模型名_不因写法不同而失效() {
+    let recipe = edit_recipe();
+    let inv = inventory(vec![local(
+        "krea2-turbo-v11.safetensors",
+        "diffusion_models",
+        true,
+    )]);
+    let proven = [verified("krea2_turbo_v11.safetensors", "55.unet_name", "r1")];
+    let report = bind(
+        &recipe,
+        &[request("krea2-turbo-v11.safetensors")],
+        Some(&inv),
+        Some(7),
+        "krea2 编辑",
+        true,
+        false,
+        &proven,
+    );
+    assert!(
+        report.bindings[0].verified,
+        "同一个文件的另一种写法不该被当成没跑过"
+    );
+}
+

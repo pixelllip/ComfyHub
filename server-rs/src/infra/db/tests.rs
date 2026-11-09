@@ -60,6 +60,76 @@ fn temp_path(label: &str) -> std::path::PathBuf {
         .join("comfyhub.db")
 }
 
+/// T2（2026-11-09）：老库补 `workflow_recipes.verified_json`，默认 `'[]'`，重复打开幂等。
+///
+/// 这条防的是"列不在、绑定却以为自己有验证记录"：`CREATE TABLE IF NOT EXISTS` 不给老表补列，
+/// 只 bump 版本号不做 `NEW_COLUMNS` 的话，老库上那句 `SELECT verified_json` 会直接炸
+/// （或者更糟：被当成空列表，界面上永远是"没验证过"而**不报错**）。
+#[test]
+fn 老库补_workflow_recipes_verified_json_且重复打开不炸() {
+    let path = temp_path("t2-verified");
+    let _ = std::fs::remove_file(&path);
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    {
+        let conn = Connection::open(&path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE workflow_recipes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                task TEXT NOT NULL,
+                skeleton_hash TEXT NOT NULL,
+                recipe_version INTEGER NOT NULL DEFAULT 1,
+                source_kind TEXT NOT NULL DEFAULT 'file',
+                source_ref TEXT NULL,
+                source_path TEXT NULL,
+                prompt_id INTEGER NULL,
+                node_count INTEGER NOT NULL DEFAULT 0,
+                class_count INTEGER NOT NULL DEFAULT 0,
+                image_inputs INTEGER NOT NULL DEFAULT 0,
+                has_mask INTEGER NOT NULL DEFAULT 0,
+                complete INTEGER NOT NULL DEFAULT 1,
+                slots_json TEXT NOT NULL DEFAULT '[]',
+                knobs_json TEXT NOT NULL DEFAULT '[]',
+                classes_json TEXT NOT NULL DEFAULT '[]',
+                edges_json TEXT NOT NULL DEFAULT '[]',
+                outputs_json TEXT NOT NULL DEFAULT '[]',
+                warnings_json TEXT NOT NULL DEFAULT '[]',
+                gaps_json TEXT NOT NULL DEFAULT '[]',
+                notes TEXT NULL,
+                created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+                updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+            );
+            INSERT INTO workflow_recipes (name, task, skeleton_hash) VALUES ('老配方','t2i','abc');
+            PRAGMA user_version = 14;",
+        )
+        .unwrap();
+    }
+    let conn = open_or_create(&path).expect("老库要能打开并补列");
+    let cols: Vec<String> = conn
+        .prepare("PRAGMA table_info(workflow_recipes)")
+        .unwrap()
+        .query_map([], |row| row.get::<_, String>(1))
+        .unwrap()
+        .map(|row| row.unwrap())
+        .collect();
+    assert!(
+        cols.contains(&"verified_json".to_string()),
+        "要补 verified_json"
+    );
+    let raw: String = conn
+        .query_row(
+            "SELECT verified_json FROM workflow_recipes WHERE id = 1",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(raw, "[]", "老配方不能凭空多出验证记录");
+    drop(conn);
+    // 第二次打开：补列那段再来一遍不炸
+    let conn = open_or_create(&path).expect("第二次打开不炸");
+    drop(conn);
+}
+
 /// **首次运行要能自己建库**（切流的硬要求）：目录不存在、库文件不存在 → 建目录 + 建表 + 写版本号。
 #[test]
 fn open_or_create_makes_a_fresh_database() {

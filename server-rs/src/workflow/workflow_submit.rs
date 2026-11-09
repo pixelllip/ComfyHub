@@ -208,6 +208,74 @@ fn now_iso() -> String {
     crate::infra::iso_time::from_system_time(std::time::SystemTime::now())
 }
 
+/// T2（2026-11-09）：`comfy_submit` **跑通之后**把"这条配方 × 这组槽位覆盖"记成已验证。
+///
+/// 为什么只在这里写：失败 / 超时 / 取消记下来的话，"已验证"就退化成"试过"，
+/// 而床上场景（`docs/workflow-auto-select-plan.md` §1.2 第 ② 档）正是靠这一档
+/// 决定**能不能不打扰用户直接开跑** —— 一次假绿灯就是一次白烧显卡。
+///
+/// 三条边界：
+///  * 对不上配方（用户随手跑的工作流 / 没学过它）→ **不记**（那不是配方验证）；
+///  * 只记**这次真的写进 overrides 且属于槽位键**的那几个值（旋钮键不算"这个模型能用"）；
+///  * 落库失败只打日志：验证是**下一次**的复利，不该影响这一次已经成功的提交。
+fn record_verified_binding(
+    state: &AppState,
+    recipe_id: Option<i64>,
+    overrides: &Map<String, Value>,
+    run_key: &str,
+) {
+    use crate::workflow::workflow_recipe::record_verified;
+    let Some(recipe_id) = recipe_id else {
+        return;
+    };
+    let row = match state.with(|conn| crate::workflow::workflow_recipe::get(conn, recipe_id)) {
+        Ok(Some(row)) => row,
+        Ok(None) => return,
+        Err(error) => {
+            eprintln!("[comfy_submit] 读配方失败，跳过已验证回写：{}", error.human());
+            return;
+        }
+    };
+    let entries = verified_entries(&row.to_recipe(), overrides, run_key, Some(now_iso()));
+    if entries.is_empty() {
+        return;
+    }
+    if let Err(error) = state.write(|conn| Ok(record_verified(conn, recipe_id, &entries)?)) {
+        eprintln!("[comfy_submit] 已验证回写失败（这次提交本身不受影响）：{error:?}");
+    }
+}
+
+/// 从"这次真的提交的 overrides"里挑出**属于模型槽位**的那几条，变成验证记录。
+///
+/// 只认槽位键：旋钮（提示词 / 步数 / seed）改了不代表"这个模型能用"，
+/// 而 `overrides` 里还可能有 `positivePrompt` 派生出来的键 —— 都不该冒充验证。
+fn verified_entries(
+    recipe: &crate::workflow::workflow_recipe::Recipe,
+    overrides: &Map<String, Value>,
+    run_key: &str,
+    at: Option<String>,
+) -> Vec<crate::workflow::workflow_recipe::Verified> {
+    let mut entries = Vec::new();
+    for slot in &recipe.slots {
+        let key = slot.override_key();
+        let Some(raw) = overrides.get(&key) else {
+            continue;
+        };
+        let model = scalar_text(raw).trim().to_string();
+        if model.is_empty() {
+            continue;
+        }
+        entries.push(crate::workflow::workflow_recipe::Verified {
+            model,
+            role: slot.role.clone(),
+            override_key: key,
+            run_key: run_key.to_string(),
+            at: at.clone(),
+        });
+    }
+    entries
+}
+
 // ---------------------------------------------------------------------------
 //  工作流改写（`ComfySubmitter.WorkflowEdit` 的逐条移植）
 // ---------------------------------------------------------------------------
@@ -1453,6 +1521,11 @@ pub async fn tool_submit(
                     break;
                 }
                 Ok(result) => {
+                    // 这一跑**真的跑通了**吗？判据是"没报错 + 捕获那条路认了这次结果"——
+                    // 产物与已有文件重复（duplicates）也算跑通：那次运行确实出图了，
+                    // 只是文件早就在库里。**"完成但没有产物文件"不算**（没东西证明它跑出了什么）。
+                    let ran_ok = !failed
+                        && (result.imported > 0 || result.duplicates > 0 || result.already_captured);
                     // T3：把这次提交的来源档 / 配方记在 capture_runs 上（外部捕获那条路不动）。
                     // `COALESCE` 保证"缺省不落"：没声明的列保持原值（默认 'ComfyUI'）。
                     if source_kind.is_some() || recipe_id.is_some() {
@@ -1466,6 +1539,10 @@ pub async fn tool_submit(
                         }) {
                             eprintln!("[comfy_submit] provenance 写入失败：{error:?}");
                         }
+                    }
+                    // T2：跑通了就把"这条配方 × 这组槽位覆盖"记成已验证（失败 / 超时 / 取消不记）。
+                    if ran_ok {
+                        record_verified_binding(state, recipe_id, &overrides, &run_key);
                     }
                     submission.status = if failed {
                         "error".to_string()

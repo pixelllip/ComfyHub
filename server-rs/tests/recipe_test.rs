@@ -643,6 +643,7 @@ async fn 配方五条端点的形状与状态码() {
             "sourceRef",
             "task",
             "updatedAt",
+            "verified",
             "warnings",
         ],
         "少一个键 = 界面上少一块内容；多一个 null 键 = 与 Kotlin 不是同一个形状"

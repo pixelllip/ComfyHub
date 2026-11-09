@@ -1177,6 +1177,11 @@ pub struct WorkflowRecipeDto {
     pub outputs: Value,
     pub gaps: Vec<String>,
     pub warnings: Vec<String>,
+    /// 已验证绑定（T2）：这一族骨架配这些模型**真跑通过**的记录。
+    ///
+    /// 元素形如 `{model, role, overrideKey, runKey, at}`，只由 `comfy_submit` 的成功路径回写
+    /// （见 [`record_verified`]）。老库里是 `[]` —— "以前的跑没留过证据"不能倒推成"验证过"。
+    pub verified: Value,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub notes: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1270,8 +1275,8 @@ impl JsonStr for Map<String, Value> {
 
 const COLS: &str = "id, name, task, skeleton_hash, recipe_version, source_kind, source_ref, \
      source_path, prompt_id, node_count, class_count, image_inputs, has_mask, complete, slots_json, \
-     knobs_json, classes_json, edges_json, outputs_json, warnings_json, gaps_json, notes, \
-     created_at, updated_at";
+     knobs_json, classes_json, edges_json, outputs_json, warnings_json, gaps_json, verified_json, \
+     notes, created_at, updated_at";
 
 /// 坏 JSON 按空数组处理：一条配方的一格坏掉不该让整个列表 500。
 fn json_array(raw: Option<String>) -> Value {
@@ -1330,6 +1335,7 @@ fn row_to_dto(row: &Row<'_>) -> rusqlite::Result<WorkflowRecipeDto> {
         outputs: json_array(row.get("outputs_json")?),
         gaps: json_string_list(row.get("gaps_json")?),
         warnings: json_string_list(row.get("warnings_json")?),
+        verified: json_array(row.get("verified_json")?),
         notes: row.get("notes")?,
         created_at: iso_time(created.as_deref()),
         updated_at: iso_time(updated.as_deref()),
@@ -2272,6 +2278,179 @@ fn sha256_hex(bytes: &[u8]) -> String {
 }
 
 // ===========================================================================
+//  三·五、已验证绑定（T2，2026-11-09）
+// ===========================================================================
+
+/// 一份配方最多留几条验证记录。
+///
+/// 同一族骨架可能试过很多模型 / 很多槽位组合；这只是一份"哪个配哪个跑通过"的凭据，
+/// 不是审计日志（真正的账在 `capture_runs` 与 `prompts`）。给模型看的列表最多带几条，
+/// 所以留 40 条足够，也不会把一列长文本撑爆。
+pub const MAX_VERIFIED: usize = 40;
+
+/// 一条"这一族骨架配这个模型（这组槽位覆盖）**真跑通过**"的记录。
+///
+/// `workflow_recipes.verified_json` 的元素形状。**只由 `comfy_submit` 的成功路径回写**：
+/// 失败 / 超时 / 取消绝不记 —— 那会把"试过"冒充成"跑通过"，而床上场景正是靠这一档
+/// 决定"能不能直接开跑"（`docs/workflow-auto-select-plan.md` §1.2 第 ② 档）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Verified {
+    /// 绑上去的模型文件名（这次实际生效的那个值）
+    pub model: String,
+    /// 槽位角色（`diffusion_models` / `loras` …；`override_key` 才是准的，角色只帮人认）
+    pub role: String,
+    /// `comfy_submit(overrides=…)` 的键（`节点id.输入名`）
+    pub override_key: String,
+    /// 跑通那一次的 `capture_runs.run_key`（= ComfyUI 的 prompt_id）
+    pub run_key: String,
+    /// 跑通的时间（ISO-8601）；解析不出来就不出现
+    pub at: Option<String>,
+}
+
+impl Verified {
+    pub fn to_json(&self) -> Value {
+        let mut m = Map::new();
+        m.insert("model".into(), json!(self.model));
+        m.insert("role".into(), json!(self.role));
+        m.insert("overrideKey".into(), json!(self.override_key));
+        m.insert("runKey".into(), json!(self.run_key));
+        if let Some(at) = &self.at {
+            m.insert("at".into(), json!(at));
+        }
+        Value::Object(m)
+    }
+
+    /// 从库里的 JSON 还原；缺 `overrideKey` 的一律**跳过**（没有键就说不出"哪个槽位验证过"）。
+    pub fn from_json(raw: &Value) -> Option<Verified> {
+        let o = raw.as_object()?;
+        let model = o.json_str("model")?.trim().to_string();
+        let override_key = o.json_str("overrideKey")?.trim().to_string();
+        if model.is_empty() || override_key.is_empty() {
+            return None;
+        }
+        Some(Verified {
+            model,
+            role: o.json_str("role").unwrap_or_default(),
+            override_key,
+            run_key: o.json_str("runKey").unwrap_or_default(),
+            at: o.json_str("at"),
+        })
+    }
+
+    /// 这段验证说的是不是"这个槽位配这个文件"。
+    ///
+    /// 模型名按 [`crate::comfy::comfy_models::ModelName::same`] 比（词根集合相等）——
+    /// 与绑定那条判据**同一把尺子**：不然"我明明绑的同一个文件，它却说没验证过"。
+    pub fn matches(&self, override_key: &str, model: &str) -> bool {
+        self.override_key == override_key
+            && crate::comfy::comfy_models::ModelName::same(&self.model, model)
+    }
+}
+
+/// 把库里的 `verified_json`（已经解析成 `Value`）摊成结构体列表。
+pub fn verified_of(value: &Value) -> Vec<Verified> {
+    value
+        .as_array()
+        .map(|items| items.iter().filter_map(Verified::from_json).collect())
+        .unwrap_or_default()
+}
+
+/// 读一条配方的已验证列表（绑定与列表两条路共用）。
+pub fn verified_in(conn: &Connection, recipe_id: i64) -> rusqlite::Result<Vec<Verified>> {
+    let raw: Option<String> = conn
+        .query_row(
+            "SELECT verified_json FROM workflow_recipes WHERE id = ?1",
+            params![recipe_id],
+            |row| row.get(0),
+        )
+        .optional()?
+        .flatten();
+    Ok(verified_of(&json_array(raw)))
+}
+
+/// 回写"已验证"（`comfy_submit` 的成功路径**唯一**的写入口）。
+///
+/// 三条纪律：
+///  * **按 `(overrideKey, 模型名)` 去重**：同一个槽位配同一个文件跑第二遍只刷新 `runKey` / `at`，
+///    不会一行一行堆起来；换了模型才是新的一条。
+///  * **新的排在最前**（最近的验证最有用），只用 [`MAX_VERIFIED`] 条。
+///  * **只增不改**别的槽位 / 别的模型 —— 用户跑一条别的组合不该抹掉之前的结论。
+///
+/// 返回真正写进去几条（0 = 没有新东西，配置也就不用写库）。
+pub fn record_verified(
+    conn: &Connection,
+    recipe_id: i64,
+    entries: &[Verified],
+) -> rusqlite::Result<usize> {
+    if entries.is_empty() {
+        return Ok(0);
+    }
+    let existing_raw: Option<String> = conn
+        .query_row(
+            "SELECT verified_json FROM workflow_recipes WHERE id = ?1",
+            params![recipe_id],
+            |row| row.get(0),
+        )
+        .optional()?
+        .flatten();
+    let mut list: Vec<Verified> = verified_of(&json_array(existing_raw));
+    let mut written = 0usize;
+    // **倒着插到最前**：`entries` 里靠前的在结果里也靠前（同一次提交里多个槽位时保持稳定）
+    for entry in entries.iter().rev() {
+        if entry.override_key.trim().is_empty() || entry.model.trim().is_empty() {
+            continue;
+        }
+        if let Some(found) = list
+            .iter_mut()
+            .find(|item| item.matches(&entry.override_key, &entry.model))
+        {
+            // 同一个组合再跑通一次：只刷新凭据，不新增一行
+            *found = entry.clone();
+        } else {
+            list.insert(0, entry.clone());
+        }
+        written += 1;
+    }
+    if written == 0 {
+        return Ok(0);
+    }
+    list.truncate(MAX_VERIFIED);
+    let encoded = Value::Array(list.iter().map(Verified::to_json).collect()).to_string();
+    conn.execute(
+        "UPDATE workflow_recipes SET verified_json = ?1 WHERE id = ?2",
+        params![encoded, recipe_id],
+    )?;
+    Ok(written)
+}
+
+/// 给模型/界面看的一句话：这条配方在哪些模型上跑通过。
+///
+/// 空列表返回 `None`（**不出现**这一行，而不是写"没验证过"—— 那会把"没记录"说成"试过失败"）。
+pub fn verified_summary(verified: &[Verified]) -> Option<String> {
+    if verified.is_empty() {
+        return None;
+    }
+    let parts: Vec<String> = verified
+        .iter()
+        .take(6)
+        .map(|item| {
+            let at = item
+                .at
+                .as_deref()
+                .map(|at| format!("，{at}"))
+                .unwrap_or_default();
+            format!("{}={}{at}", item.override_key, item.model)
+        })
+        .collect();
+    let more = if verified.len() > 6 {
+        format!("（共 {} 条）", verified.len())
+    } else {
+        String::new()
+    };
+    Some(format!("已验证跑通：{}{more}", parts.join("、")))
+}
+
+// ===========================================================================
 //  四、绑定（`WorkflowRecipeBinder.kt`）
 // ===========================================================================
 
@@ -2342,6 +2521,13 @@ pub struct Binding {
     /// 人话：为什么是这个结论、下一步该做什么
     pub note: String,
     pub candidates: Vec<String>,
+    /// 这个槽位配这个文件**已经跑通过**（`workflow_recipes.verified_json` 里有记录）。
+    ///
+    /// 它是"经验"不是"保证"：验证的是那个骨架 / 那次提交的图，不是"这一次一定成"。
+    /// 所以只在文案与排序上用它，**不改变**能不能自动写覆盖键的判据（那仍然只有 `exact`）。
+    pub verified: bool,
+    /// 跑通那一次的时间（有记录时才有）
+    pub verified_at: Option<String>,
 }
 
 impl Binding {
@@ -2402,6 +2588,10 @@ impl Report {
                 m.insert("to".into(), json!(b.to));
                 m.insert("status".into(), json!(b.status.wire()));
                 m.insert("applied".into(), json!(b.applied()));
+                m.insert("verified".into(), json!(b.verified));
+                if let Some(at) = &b.verified_at {
+                    m.insert("verifiedAt".into(), json!(at));
+                }
                 m.insert("note".into(), json!(b.note));
                 if !b.candidates.is_empty() {
                     m.insert("candidates".into(), strings_json(&b.candidates));
@@ -2433,6 +2623,10 @@ impl Report {
         });
         for binding in &self.bindings {
             out.push_str("  · ");
+            if binding.verified {
+                // 已验证跑通的排在最前面读起来才顺：结论（能信到什么程度）放在绑定结果之前
+                out.push_str("✔ 已验证跑通　");
+            }
             out.push_str(&binding.to);
             out.push_str(" [");
             out.push_str(binding.status.wire());
@@ -2449,6 +2643,9 @@ impl Report {
             }
             out.push('：');
             out.push_str(&binding.note);
+            if let Some(at) = &binding.verified_at {
+                out.push_str(&format!("（上次跑通：{at}）"));
+            }
             out.push('\n');
             if !binding.candidates.is_empty() {
                 out.push_str("      候选：");
@@ -2496,6 +2693,8 @@ impl Report {
 ///
 /// `inventory`：本机模型清单；`None` = 拿不到（结论一律 [`Status::Unchecked`]，
 /// 只有 `force` 才写键）。`force`：调用方**指名的文件**是否照写。
+/// `verified`：这条配方的已验证记录（[`Verified`]）—— 只影响文案与提示，
+/// **不改**"能不能自动写覆盖键"的判据（那仍然只有 `exact`）。
 pub fn bind(
     recipe: &Recipe,
     requests: &[Request],
@@ -2504,11 +2703,21 @@ pub fn bind(
     recipe_name: &str,
     complete: bool,
     force: bool,
+    verified: &[Verified],
 ) -> Report {
     let mut bindings: Vec<Binding> = Vec::new();
     let mut overrides: Vec<(String, String)> = Vec::new();
     let mut used_keys: HashSet<String> = HashSet::new();
     let mut warnings: Vec<String> = Vec::new();
+
+    // "这个槽位配这个文件跑通过没有" —— 一条小查询，五次以内的线性查找不值得建索引
+    let hit = |key: Option<&str>, file: &str| -> Option<Verified> {
+        let key = key?;
+        verified
+            .iter()
+            .find(|item| item.matches(key, file))
+            .cloned()
+    };
 
     for request in requests {
         match resolve_slot(recipe, request, inventory) {
@@ -2520,6 +2729,8 @@ pub fn bind(
                 status: Status::NotInRecipe,
                 note,
                 candidates: Vec::new(),
+                verified: false,
+                verified_at: None,
             }),
             SlotLookup::Ambiguous(role, keys) => bindings.push(Binding {
                 override_key: None,
@@ -2535,6 +2746,8 @@ pub fn bind(
                     keys.first().cloned().unwrap_or_default()
                 ),
                 candidates: Vec::new(),
+                verified: false,
+                verified_at: None,
             }),
             SlotLookup::One { slot, assumed } => {
                 let verdict = verify(&request.file_name, &slot.role, inventory);
@@ -2548,6 +2761,7 @@ pub fn bind(
                 // 只有两档写得出覆盖键：**同名且实例可见**（唯一能自动绑的一档），
                 // 或者调用方显式 `force`（"我知道我在做什么"，最后仍由提交前预检守门）
                 let can_apply = verdict.status == Status::Exact || force;
+                let proven = hit(Some(&slot.override_key()), &request.file_name);
                 let binding = Binding {
                     override_key: if can_apply {
                         Some(slot.override_key())
@@ -2558,8 +2772,18 @@ pub fn bind(
                     from: Some(slot.file_name.clone()),
                     to: request.file_name.clone(),
                     status: verdict.status,
-                    note: verdict.note,
+                    note: match (&proven, verdict.status) {
+                        // 已验证 + 本机可见：这是整条链上最可信的一格，文案要说出来
+                        (Some(_), Status::Exact) => {
+                            "本机有同名文件，当前实例能加载 —— 而且这个组合**已经跑通过**，\
+                             直接绑（只改提示词与 seed 就能开跑）。"
+                                .to_string()
+                        }
+                        _ => verdict.note,
+                    },
                     candidates: verdict.candidates,
+                    verified: proven.is_some(),
+                    verified_at: proven.as_ref().and_then(|item| item.at.clone()),
                 };
                 if binding.applied() {
                     let key = binding.override_key.clone().unwrap_or_default();
@@ -2648,6 +2872,21 @@ pub fn bind(
         .iter()
         .map(|(key, value)| format!("\"{key}\":\"{value}\""))
         .collect();
+    // 经验档的措辞（T2）：**跑通过**与**没跑过**要给模型不同的开跑信心 ——
+    // 前者就是床上场景"同任务 + 同模型族的最近一次成功"那一档，后者要它先自己确认。
+    let applied: Vec<&Binding> = bindings.iter().filter(|b| b.applied()).collect();
+    if !applied.is_empty() && applied.iter().all(|b| b.verified) {
+        hints.push(
+            "这组槽位覆盖**已经跑通过**：直接 comfy_submit 开跑，只改提示词与 seed，不要重搭工作流。"
+                .to_string(),
+        );
+    } else if applied.iter().any(|b| !b.verified) {
+        hints.push(
+            "这组覆盖还没跑通过（第一跑）：提交前把易错项（尺寸 / 步数 / 提示词风格）自己核一遍；\
+             跑通之后会自动记成已验证，下次同模型直接优先。"
+                .to_string(),
+        );
+    }
     hints.push(format!(
         "绑完用 comfy_submit(promptId=…, overrides={{{}}}) 提交；\
          promptId 从 comfy_load_workflow(path=…) 拿（配方里那条源文件与它是同一把钥匙）。",
@@ -3026,6 +3265,7 @@ pub async fn bind_and_report(
         &row.name,
         row.complete,
         force,
+        &verified_of(&row.verified),
     )))
 }
 
@@ -3186,6 +3426,13 @@ pub fn tool_list_recipes(state: &AppState, arguments: &Value) -> Result<ToolOutc
                     .join("；")
             ));
         }
+        // T2：哪几个（槽位, 模型）跑通过 —— 换模型时它是"这一族配这个模型能不能直接开跑"的依据
+        let verified = verified_of(&row.verified);
+        if let Some(line) = verified_summary(&verified) {
+            text.push_str("   ");
+            text.push_str(&line);
+            text.push('\n');
+        }
         if let Some(path) = &row.source_path {
             text.push_str(&format!("   路径：{path}\n"));
         }
@@ -3208,6 +3455,15 @@ pub fn tool_list_recipes(state: &AppState, arguments: &Value) -> Result<ToolOutc
             o.insert("nodeCount".into(), json!(row.node_count));
             o.insert("slots".into(), row.slots.clone());
             o.insert("gaps".into(), strings_json(&row.gaps));
+            // 已验证列表原样带出去（键名与库里那几列一致：模型 / 角色 / 覆盖键 / runKey / 时间）
+            let verified = verified_of(&row.verified);
+            o.insert(
+                "verified".into(),
+                Value::Array(verified.iter().map(Verified::to_json).collect()),
+            );
+            if !verified.is_empty() {
+                o.insert("verifiedCount".into(), json!(verified.len()));
+            }
             if let Some(path) = &row.source_path {
                 o.insert("sourcePath".into(), json!(path));
             }

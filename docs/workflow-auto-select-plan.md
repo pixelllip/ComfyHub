@@ -239,3 +239,23 @@ T4 的提示词按拍板结果写。
 - `comfy_submit` 可选 `sourceKind` / `recipeId`；`recipeId` 缺省按 `promptId` 推；
   `comfy_get_run` / `comfy_get_status` 返回来源档；轮询捕获路径一个字没动。
 - `cargo test --lib` 872 passed；下一步 T2（verified 绑定）→ T4（系统提示）。
+
+### 4.6 T2 已落地（2026-11-09）
+
+- `workflow_recipes` 加 `verified_json`（默认 `'[]'`），schema v15（幂等 `ALTER`；
+  ⚠ `workflow_recipes` 这张表**只在 SQLite 那份 schema 里**，MySQL 两份早停了，所以这条只改 sqlite 那份）。
+  元素形状 `{model, role, overrideKey, runKey, at}`。
+- 回写只有一处：`workflow_submit` 里 `comfy_submit` **跑通之后**
+  （`!failed && (imported>0 || duplicates>0 || already_captured)`）。
+  失败 / 超时 / 取消不记；对不上配方（`recipeId` 推不出来）不记；
+  只记**这次真的写进 overrides 且属于槽位键**的那几条（旋钮不算"这个模型能用"）。
+- 去重键是 `(overrideKey, 模型名)`（模型名按 `ModelName::same` 的同一把尺子比）：
+  同一组合再跑通只刷新 `runKey` / `at`，新组合插到最前，只留 40 条。
+  `save_row`（重新学一份）**不动**这一列 —— 验证是事实，不随这次归纳的槽位变。
+- `comfy_bind_recipe`：命中已验证时 `bindings[].verified` / `verifiedAt` 为真，
+  正文带 `✔ 已验证跑通`，并给"直接开跑"的结论；**能不能自动写覆盖键的判据仍然只有 `exact`**
+  （已验证只影响文案与提示，不放松写权限）。
+- `comfy_list_recipes`：每条带 `verified[]` / `verifiedCount`，正文多一行"已验证跑通：…"。
+- 回归：`workflow_recipe/tests.rs`（去重 / 不被重新学习清掉 / 绑定标注 / 写法不同仍认出）、
+  `workflow_submit/tests.rs`（只认槽位键）、`db/tests.rs`（老库补列幂等）、
+  `recipe_test.rs`（列表键集合多一个 `verified`）。`cargo test --lib` 878 passed。

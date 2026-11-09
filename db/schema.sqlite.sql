@@ -537,6 +537,7 @@ CREATE TABLE IF NOT EXISTS workflow_recipes (
   outputs_json    TEXT    NOT NULL DEFAULT '[]',  -- 输出节点
   warnings_json   TEXT    NOT NULL DEFAULT '[]',
   gaps_json       TEXT    NOT NULL DEFAULT '[]',  -- 转换缺口（摘掉的节点类 / 悬空输入）
+  verified_json   TEXT    NOT NULL DEFAULT '[]',  -- 已验证投稿（{model, role, overrideKey, runKey, at}）
   notes           TEXT    NULL,
   created_at      TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
   updated_at      TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
@@ -893,4 +894,7 @@ BEGIN INSERT INTO _sync_log(tbl,pk,op,at) VALUES ('ai_tool_calls', OLD.id, 'dele
 -- （upload / crop / search），供缓存统计与"只清理没有被任何消息 / 提问引用的图"。
 -- 2026-11-09 由 13 提到 14：**提交来源** —— `capture_runs` 加 `source_kind`
 -- （user / recipe / recent / template / ComfyUI）与 `recipe_id`（可空配方 id）。
-PRAGMA user_version = 14;
+-- 2026-11-09 由 14 提到 15：**配方的已验证绑定** —— `workflow_recipes` 加 `verified_json`
+-- （这一族骨架配这个模型**真跑通过**的记录，`comfy_submit` 成功后才回写；下次同模型优先）。
+-- 加列 → 必须同时写进 `infra::db` 的 `NEW_COLUMNS`（`CREATE TABLE IF NOT EXISTS` 补不了老表）。
+PRAGMA user_version = 15;
