@@ -1935,6 +1935,11 @@ class _SelectionBar extends StatelessWidget {
     required this.onDelete,
   });
 
+  /// 这一条**窄屏放不下五个带文字的按钮**（2026-11-09 真机：360dp 上
+  /// 「移到集合…」被裁掉，右边还挂着一条溢出条纹）。判据与 `PageBar` 同一个数：
+  /// 够宽给文字，不够宽退回图标 + tooltip —— 不是"缩字号"，那样中文会挤成两行。
+  static const double _kTextMinWidth = 520;
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -1944,40 +1949,75 @@ class _SelectionBar extends StatelessWidget {
         color: theme.colorScheme.surfaceContainerHigh,
         border: Border(top: BorderSide(color: theme.dividerColor)),
       ),
-      child: Row(
-        children: [
-          Text('$count 张', style: theme.textTheme.titleSmall),
-          const Spacer(),
-          TextButton.icon(
-            onPressed: onLink,
-            icon: const Icon(Icons.link),
-            label: const Text('关联提示词'),
-          ),
-          TextButton.icon(
-            onPressed: onFavorite,
-            icon: const Icon(Icons.star_border),
-            label: const Text('收藏'),
-          ),
-          // 归类纠错（2026-10-18）：可以整组拖出去，也可以整批塞进另一个集合
-          TextButton.icon(
-            onPressed: onMove,
-            icon: const Icon(Icons.drive_file_move_outline),
-            label: const Text('移到集合…'),
-          ),
-          TextButton.icon(
-            onPressed: onDetach,
-            icon: const Icon(Icons.call_split),
-            label: const Text('移出集合'),
-          ),
-          TextButton.icon(
-            onPressed: onDelete,
-            icon: const Icon(Icons.delete_outline),
-            label: const Text('删除'),
-            style: TextButton.styleFrom(
-              foregroundColor: theme.colorScheme.error,
-            ),
-          ),
-        ],
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final withText = constraints.maxWidth >= _kTextMinWidth;
+          Widget action({
+            required IconData icon,
+            required String label,
+            required Future<void> Function() onPressed,
+            Color? color,
+          }) {
+            if (withText) {
+              return TextButton.icon(
+                onPressed: onPressed,
+                icon: Icon(icon),
+                label: Text(label),
+                style: TextButton.styleFrom(foregroundColor: color),
+              );
+            }
+            // 窄屏只要图标：`Tooltip` 保住可读性，语义上也仍然有名字。
+            // ⚠ 还必须把按钮自己的最小宽度压下来：M3 的 `TextButton` 默认
+            // `minimumSize: Size(64, 40)`，光去掉文字仍是 64dp 一个 —— 五个就是 320dp，
+            // 加计数与内边距在 360dp 上照样溢出（2026-11-09 真机 + 用例同时抓到）。
+            return Tooltip(
+              message: label,
+              child: TextButton(
+                onPressed: onPressed,
+                style: TextButton.styleFrom(
+                  foregroundColor: color,
+                  minimumSize: const Size(44, 40),
+                  padding: const EdgeInsets.symmetric(horizontal: 6),
+                ),
+                child: Icon(icon),
+              ),
+            );
+          }
+
+          return Row(
+            children: [
+              Text('$count 张', style: theme.textTheme.titleSmall),
+              const Spacer(),
+              action(
+                icon: Icons.link,
+                label: '关联提示词',
+                onPressed: onLink,
+              ),
+              action(
+                icon: Icons.star_border,
+                label: '收藏',
+                onPressed: onFavorite,
+              ),
+              // 归类纠错（2026-10-18）：可以整组拖出去，也可以整批塞进另一个集合
+              action(
+                icon: Icons.drive_file_move_outline,
+                label: '移到集合…',
+                onPressed: onMove,
+              ),
+              action(
+                icon: Icons.call_split,
+                label: '移出集合',
+                onPressed: onDetach,
+              ),
+              action(
+                icon: Icons.delete_outline,
+                label: '删除',
+                onPressed: onDelete,
+                color: theme.colorScheme.error,
+              ),
+            ],
+          );
+        },
       ),
     );
   }

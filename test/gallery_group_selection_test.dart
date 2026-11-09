@@ -204,6 +204,31 @@ void main() {
     expect(find.text('已选 1 张'), findsOneWidget);
   });
 
+  testWidgets('360dp 下多选操作栏不溢出：文字按钮退回图标', (tester) async {
+    // 2026-11-09 真机：手机上长按进入多选后，底栏右边挂着一条黄黑溢出条纹，
+    // 「移到集合…」被裁掉一半。判据是"窄屏只放图标、宽屏才放文字"。
+    tester.view.physicalSize = const Size(360, 800);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+
+    final (store, settings) = await _seed();
+    await tester.pumpWidget(_app(store, settings));
+    await tester.pumpAndSettle();
+
+    await tester.longPress(find.byType(MediaThumb));
+    await tester.pumpAndSettle();
+
+    expect(
+      tester.takeException(),
+      isNull,
+      reason: '多选栏在 360dp 上不许溢出（真机 2026-11-09 是黄黑条纹）',
+    );
+    // 图标还在（五个动作一个都不能少），文字标签让位给 tooltip
+    expect(find.byIcon(Icons.drive_file_move_outline), findsOneWidget);
+    expect(find.byIcon(Icons.delete_outline), findsOneWidget);
+    expect(find.text('移到集合…'), findsNothing);
+  });
+
   testWidgets('再点一次同一格 = 取消选中，整组一起退出', (tester) async {
     final (store, settings) = await _seed();
     await tester.pumpWidget(_app(store, settings));
