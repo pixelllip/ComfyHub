@@ -1,13 +1,15 @@
 import 'package:flutter/material.dart';
 
-/// 设置项里的开关行。
+/// 设置项里的开关行：标题 + 说明（左），开关（右）。
 ///
-/// `SwitchListTile` 自己的 `contentPadding` 是零，直接放进卡片里的话，
-/// 标题会顶到卡片左边缘、开关顶到右边缘，跟同卡片里输入框的留白对不上 ——
-/// 所以统一给一点内边距。
+/// ⚠ 2026-11-09 起**不再用 `SwitchListTile`**：`ListTile` 的固有高度
+/// （`computeMaxIntrinsicHeight`）是按"单行 / 两行 / 三行"给的常数，**不认
+/// 副标题折行**。首页的 NSFW / 库统计要做成等高的并排两栏，外层 `IntrinsicHeight`
+/// 量到的 NSFW 高度会比真实布局少一行，结果卡片撑不下、直接 overflow 15px。
+/// 自己用 `Row` + `Column` + `Text` 拼，固有高度就按真实文字量算。
 ///
-/// ⚠ 不要再往它外面套一层带底色的 `Material` / `Container`：M3 的 ListTile 本来
-/// 就该直接坐在卡片上，套一层会变成"卡中卡"（2026-11-05 已去掉）。
+/// 样式对齐 M3 的 `ListTile`：标题 `bodyLarge` / 说明 `bodyMedium`（次要色），
+/// 开关那一侧留 12 的间距；整行可点 = 切换开关。
 class SettingsSwitchRow extends StatelessWidget {
   final bool value;
   final ValueChanged<bool>? onChanged;
@@ -24,15 +26,46 @@ class SettingsSwitchRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 8),
-      child: SwitchListTile(
-        contentPadding: const EdgeInsets.symmetric(horizontal: 4),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        value: value,
-        onChanged: onChanged,
-        title: Text(title),
-        subtitle: Text(subtitle),
+    final theme = Theme.of(context);
+    final enabled = onChanged != null;
+    final titleColor = enabled
+        ? theme.colorScheme.onSurface
+        : theme.colorScheme.onSurface.withValues(alpha: 0.38);
+    final subtitleColor = enabled
+        ? theme.colorScheme.onSurfaceVariant
+        : theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.38);
+    return InkWell(
+      onTap: enabled ? () => onChanged!(!value) : null,
+      borderRadius: BorderRadius.circular(12),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 6),
+        child: Row(
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    title,
+                    style: theme.textTheme.bodyLarge?.copyWith(
+                      color: titleColor,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    subtitle,
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      color: subtitleColor,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 12),
+            Switch(value: value, onChanged: onChanged),
+          ],
+        ),
       ),
     );
   }

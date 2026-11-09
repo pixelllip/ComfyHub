@@ -24,6 +24,9 @@ import 'package:viewer/core/theme.dart';
 import 'package:viewer/pages/settings_page.dart';
 import 'package:viewer/state/library_store.dart';
 import 'package:viewer/state/nsfw_store.dart';
+import 'package:viewer/widgets/settings_scaffold.dart';
+import 'package:viewer/widgets/settings_switch_row.dart';
+import 'package:viewer/widgets/settings_tile.dart';
 
 MockClient _mockClient() {
   return MockClient((request) async {
@@ -163,24 +166,27 @@ void main() {
     await tester.tap(find.text('本地服务（后端 + 数据库）'));
     await tester.pumpAndSettle();
     const switchTitle = '启动 App 时自动拉起服务';
-    final tile = find
+    final row = find
         .ancestor(
           of: find.text(switchTitle),
-          matching: find.byType(SwitchListTile),
+          matching: find.byType(SettingsSwitchRow),
         )
         .first;
     final card = find
         .ancestor(of: find.text(switchTitle), matching: find.byType(Card))
         .first;
-    final tileRect = tester.getRect(tile);
+    final titleRect = tester.getRect(find.text(switchTitle));
+    final switchRect = tester.getRect(
+      find.descendant(of: row, matching: find.byType(Switch)),
+    );
     final cardRect = tester.getRect(card);
     expect(
-      tileRect.left - cardRect.left,
+      titleRect.left - cardRect.left,
       greaterThanOrEqualTo(20),
       reason: '左侧要有留白，不能贴到卡片边缘',
     );
     expect(
-      cardRect.right - tileRect.right,
+      cardRect.right - switchRect.right,
       greaterThanOrEqualTo(20),
       reason: '右侧（开关那一侧）也要有留白',
     );
@@ -246,29 +252,95 @@ void main() {
     );
   });
 
-  // 用户 2026-11-05："窗口宽度较大时依然允许多列排布"。
-  // 另外：工具权限与模型/凭据平级，同组同列、紧挨着排在它后面。
-  testWidgets('设置首页：宽窗口多列；AI 工具权限与模型/凭据同组', (tester) async {
+  // 用户 2026-11-05："窗口宽度较大时依然允许多列排布。"
+  // 用户 2026-11-09："多列时不同列高度不一，视觉失衡" —— 于是首页入口改成
+  // **等高磁贴**（同一行拉平）；状态区按用户草图做成 4:6 两栏，也用
+  // IntrinsicHeight 拉平下边缘。多列只发生在"一行之内真的等高"的地方。
+  testWidgets('设置首页：入口是等高磁贴，状态区 4:6 两栏等高', (tester) async {
     tester.view.physicalSize = const Size(1700, 1200);
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
 
     await _pumpSettings(tester);
 
-    // 列数 = 宽度 / 550 → 1700 宽（减去左右 32 的 padding）≈ 3 列。
-    // 服务组与 AI 组因此起点 x 不同；单列时它们会完全对齐。
-    final services = tester.getTopLeft(find.text('服务'));
-    final aiSection = tester.getTopLeft(find.text('AI'));
-    expect(
-      (services.dx - aiSection.dx).abs(),
-      greaterThan(100),
-      reason: '宽窗口必须多列排布（用户 2026-11-05）',
+    Rect tileRect(String title) => tester.getRect(
+      find.ancestor(of: find.text(title), matching: find.byType(Card)).first,
     );
 
-    final ai = tester.getTopLeft(find.text('AI 模型与凭据'));
-    final tools = tester.getTopLeft(find.text('AI 工具权限'));
-    expect(tools.dx, ai.dx, reason: '同一组必须落在同一列');
-    expect(tools.dy, greaterThan(ai.dy), reason: '工具权限紧挨在模型与凭据之后');
+    final local = tileRect('本地服务（后端 + 数据库）');
+    final pair = tileRect('远程访问与配对');
+    final model = tileRect('AI 模型与凭据');
+    final tools = tileRect('AI 工具权限');
+    final capture = tileRect('ComfyUI 自动捕获');
+
+    // 1700 宽窗 → 正文 ≈1668（上限 1680）→ 4 列：前四个一行、第五个换行。
+    expect(pair.top, closeTo(local.top, 0.5), reason: '第一行的磁贴顶边对齐');
+    expect(pair.height, closeTo(local.height, 0.5), reason: '同一行必须等高');
+    expect(model.top, closeTo(local.top, 0.5));
+    expect(model.height, closeTo(local.height, 0.5));
+    expect(tools.top, closeTo(local.top, 0.5), reason: '第四个还在第一行');
+    expect(capture.top, greaterThan(local.top + 20), reason: '第五个换到第二行');
+    expect(capture.left, closeTo(local.left, 0.5), reason: '换行后回到第一列');
+    expect(capture.width, closeTo(local.width, 0.5), reason: '每列宽度恒定');
+
+    // 状态区：宽屏 4:6 两栏（用户 2026-11-09 的草图）—— 两栏等高、左窄右宽。
+    Rect cardOf(String text) => tester.getRect(
+      find.ancestor(of: find.text(text), matching: find.byType(Card)).first,
+    );
+    final nsfwCard = cardOf('NSFW 模式');
+    final statsCard = cardOf('提示词');
+    expect(nsfwCard.top, closeTo(statsCard.top, 0.5), reason: '两栏顶边对齐');
+    expect(nsfwCard.height, closeTo(statsCard.height, 0.5), reason: '两栏必须等高');
+    expect(
+      nsfwCard.width / statsCard.width,
+      closeTo(4 / 6, 0.01),
+      reason: 'NSFW 40% + 库统计 60%',
+    );
+
+    // 平级关系不变：工具权限与模型/凭据都是首页的入口磁贴。
+    expect(find.byType(SettingsTile), findsNWidgets(8));
+    expect(
+      find.byType(SettingsEntryTile),
+      findsNothing,
+      reason: '宽屏不该再混进手机那套入口行',
+    );
+  });
+
+  // 中等宽度（内容宽 820~1200）：两个**等宽**面板，仍然等高。
+  testWidgets('中等宽度：NSFW 与库统计等宽两栏、等高', (tester) async {
+    tester.view.physicalSize = const Size(1100, 1400);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    await _pumpSettings(tester);
+
+    Rect cardOf(String text) => tester.getRect(
+      find.ancestor(of: find.text(text), matching: find.byType(Card)).first,
+    );
+    final nsfwCard = cardOf('NSFW 模式');
+    final statsCard = cardOf('提示词');
+    expect(nsfwCard.width, closeTo(statsCard.width, 1), reason: '等宽两栏');
+    expect(nsfwCard.height, closeTo(statsCard.height, 0.5), reason: '两栏必须等高');
+  });
+
+  // 用户 2026-11-09："手机端的排版是对的"、"电脑端窄屏应该恢复成手机那种排版"。
+  // 判据与导航形态同一个数字（kWideLayoutMinWidth = 900）：低于它就是手机形态，
+  // 电脑窗口拉窄也一样 —— 分组入口行 + 单列卡片，不是磁贴。
+  testWidgets('电脑端窄屏（< 900）用手机那套分组入口，不是磁贴', (tester) async {
+    tester.view.physicalSize = const Size(800, 1600);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    await _pumpSettings(tester);
+
+    expect(find.text('服务'), findsOneWidget);
+    expect(find.text('AI'), findsOneWidget);
+    expect(find.byType(SettingsEntryTile), findsWidgets);
+    expect(
+      find.byType(SettingsTile),
+      findsNothing,
+      reason: '窄屏不该出现宽屏的磁贴网格',
+    );
   });
 
   // NSFW 两个开关放一起（用户要求），而且模糊选项**从属于**开关：
@@ -283,11 +355,11 @@ void main() {
     expect(find.text('NSFW 内容'), findsOneWidget);
     final master = find.ancestor(
       of: find.text('NSFW 模式'),
-      matching: find.byType(SwitchListTile),
+      matching: find.byType(SettingsSwitchRow),
     );
     final blur = find.ancestor(
       of: find.text('NSFW 内容模糊显示'),
-      matching: find.byType(SwitchListTile),
+      matching: find.byType(SettingsSwitchRow),
     );
     expect(master, findsOneWidget);
     expect(blur, findsOneWidget);
@@ -303,9 +375,9 @@ void main() {
     );
 
     // 主开关关着 → 模糊那一项不可点
-    expect(tester.widget<SwitchListTile>(master).value, isFalse);
+    expect(tester.widget<SettingsSwitchRow>(master).value, isFalse);
     expect(
-      tester.widget<SwitchListTile>(blur).onChanged,
+      tester.widget<SettingsSwitchRow>(blur).onChanged,
       isNull,
       reason: 'NSFW 模式没开时模糊选项应当置灰',
     );

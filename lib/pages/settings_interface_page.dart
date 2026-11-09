@@ -43,7 +43,6 @@ class InterfaceSettingsPage extends StatelessWidget {
                 vertical: 8,
               ),
               title: const Text('明暗模式'),
-              subtitle: const Text('深色 / 浅色 / 跟随系统'),
               trailing: SegmentedButton<AppThemeMode>(
                 segments: [
                   for (final mode in AppThemeMode.values)
@@ -66,54 +65,65 @@ class InterfaceSettingsPage extends StatelessWidget {
           child: Card(
             child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  ListTile(
-                    contentPadding: EdgeInsets.zero,
-                    onTap: () => _redetectAccent(context),
-                    leading: Container(
-                      width: 12,
-                      height: 12,
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        color: SystemAccent.color ?? AppTheme.defaultSeed,
-                        border: Border.all(
-                          color: theme.colorScheme.outlineVariant,
+              child: LayoutBuilder(
+                builder: (context, constraints) {
+                  // 宽度够就把三段选择器放到标题行右侧（和「明暗模式」一个样），
+                  // 宽屏时才不会"左边一坨字、右边一大片空"；
+                  // 320dp 那档放不进 trailing，仍另起一行（否则 SegmentedButton 溢出）。
+                  final wide = constraints.maxWidth >= 720;
+                  final buttons = SegmentedButton<AppAccentMode>(
+                    segments: [
+                      for (final mode in AppAccentMode.values)
+                        ButtonSegment(value: mode, label: Text(mode.label)),
+                    ],
+                    selected: {settings.accentMode},
+                    onSelectionChanged: (picked) =>
+                        settings.setAccentMode(picked.first),
+                    showSelectedIcon: false,
+                    style: const ButtonStyle(
+                      visualDensity: VisualDensity.compact,
+                    ),
+                  );
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      ListTile(
+                        contentPadding: EdgeInsets.zero,
+                        onTap: () => _redetectAccent(context),
+                        leading: Container(
+                          width: 12,
+                          height: 12,
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            color: SystemAccent.color ?? AppTheme.defaultSeed,
+                            border: Border.all(
+                              color: theme.colorScheme.outlineVariant,
+                            ),
+                          ),
+                        ),
+                        title: const Text('取色档位'),
+                        subtitle: Text(
+                          SystemAccent.available
+                              ? '${SystemAccent.sourceLabel}。点这一行重新检测。'
+                              : '${SystemAccent.sourceLabel}（换台设备 / 升级系统后点这一行再试）。',
+                        ),
+                        trailing: wide ? buttons : null,
+                      ),
+                      if (!wide)
+                        Align(
+                          alignment: Alignment.centerLeft,
+                          child: buttons,
+                        ),
+                      const SizedBox(height: 8),
+                      Text(
+                        settings.accentMode.description,
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: theme.colorScheme.onSurfaceVariant,
                         ),
                       ),
-                    ),
-                    title: const Text('取色档位'),
-                    subtitle: Text(
-                      SystemAccent.available
-                          ? '${SystemAccent.sourceLabel}。点这一行重新检测。'
-                          : '${SystemAccent.sourceLabel}（换台设备 / 升级系统后点这一行再试）。',
-                    ),
-                  ),
-                  Align(
-                    alignment: Alignment.centerLeft,
-                    child: SegmentedButton<AppAccentMode>(
-                      segments: [
-                        for (final mode in AppAccentMode.values)
-                          ButtonSegment(value: mode, label: Text(mode.label)),
-                      ],
-                      selected: {settings.accentMode},
-                      onSelectionChanged: (picked) =>
-                          settings.setAccentMode(picked.first),
-                      showSelectedIcon: false,
-                      style: const ButtonStyle(
-                        visualDensity: VisualDensity.compact,
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    settings.accentMode.description,
-                    style: theme.textTheme.bodySmall?.copyWith(
-                      color: theme.colorScheme.onSurfaceVariant,
-                    ),
-                  ),
-                ],
+                    ],
+                  );
+                },
               ),
             ),
           ),

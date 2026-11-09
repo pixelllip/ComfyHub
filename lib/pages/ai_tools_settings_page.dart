@@ -5,7 +5,6 @@ import '../core/ai_api_client.dart';
 import '../core/formatting.dart';
 import '../core/settings_store.dart';
 import '../models/ai_models.dart';
-import '../widgets/adaptive_layout.dart';
 import '../widgets/settings_scaffold.dart';
 
 /// AI 工具权限（M4 / AIH-031 ~ AIH-036 / AIH-049）。
@@ -292,15 +291,19 @@ class _AiToolsSettingsPageState extends State<AiToolsSettingsPage> {
                     ),
                   ),
                 Expanded(
-                  // 卡片高度差几倍（默认策略一段、白名单两段、工具清单很长），
-                  // 按 AGENTS §6 用 AdaptiveColumns 的瀑布流而不是单列。
+                  // 2026-11-09：设置正文统一**单列**（与其它设置子页同一套骨架、
+                  // 同一个宽度上限）。以前这里按卡片高度分栏，卡片高矮差几倍，
+                  // 两列必然一列长一列短；单列读起来是连续的一份表单。
                   child: SingleChildScrollView(
                     padding: const EdgeInsets.all(16),
-                    child: AdaptiveColumns(
-                      sections: [
-                        AdaptiveSection(_defaultBanner(), estimatedHeight: 120),
-                        AdaptiveSection(_budgetCard(), estimatedHeight: 220),
-                        AdaptiveSection(
+                    child: Center(
+                      child: ConstrainedBox(
+                        constraints: const BoxConstraints(
+                          maxWidth: kSettingsContentMaxWidth,
+                        ),
+                        child: _stackedCards([
+                          _defaultBanner(),
+                          _budgetCard(),
                           _rootsCard(
                             title: '写白名单',
                             hint: '这些目录里的文件，工具才允许创建 / 覆盖 / 删除。',
@@ -309,9 +312,6 @@ class _AiToolsSettingsPageState extends State<AiToolsSettingsPage> {
                             onAdd: _addWriteRoot,
                             onRemove: _removeWriteRoot,
                           ),
-                          estimatedHeight: 280,
-                        ),
-                        AdaptiveSection(
                           _rootsCard(
                             title: '读白名单',
                             hint: '这些目录里的文件，工具才允许读取（写白名单内的目录默认可读）。',
@@ -320,23 +320,12 @@ class _AiToolsSettingsPageState extends State<AiToolsSettingsPage> {
                             onAdd: _addReadRoot,
                             onRemove: _removeReadRoot,
                           ),
-                          estimatedHeight: 280,
-                        ),
-                        if (_policy.autoReadRoots.isNotEmpty)
-                          AdaptiveSection(
-                            _autoReadCard(),
-                            estimatedHeight: 160,
-                          ),
-                        AdaptiveSection(_webSearchCard(), estimatedHeight: 320),
-                        AdaptiveSection(
+                          if (_policy.autoReadRoots.isNotEmpty) _autoReadCard(),
+                          _webSearchCard(),
                           _attachmentCacheCard(),
-                          estimatedHeight: 240,
-                        ),
-                        AdaptiveSection(
                           _toolsEntryCard(),
-                          estimatedHeight: 160,
-                        ),
-                      ],
+                        ]),
+                      ),
                     ),
                   ),
                 ),
@@ -344,6 +333,17 @@ class _AiToolsSettingsPageState extends State<AiToolsSettingsPage> {
             ),
     );
   }
+
+  /// 单列排布：卡片之间统一 24 的间距（与 [SettingsScaffold] 的块间距一致）。
+  Widget _stackedCards(List<Widget> cards) => Column(
+    crossAxisAlignment: CrossAxisAlignment.stretch,
+    children: [
+      for (var i = 0; i < cards.length; i++) ...[
+        if (i > 0) const SizedBox(height: 24),
+        cards[i],
+      ],
+    ],
+  );
 
   /// 默认状态要**大声说清楚**：不然用户会以为"没配就是随便写"。
   Widget _defaultBanner() {

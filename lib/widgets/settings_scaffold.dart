@@ -1,17 +1,31 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 
-import 'adaptive_layout.dart';
 import 'scroll_linked_title.dart';
+
+/// **设置正文的宽度上限**（逻辑像素）。
+///
+/// 2026-11-09 起设置家族**不再分栏**：多列时高度差 2–4 倍的块并排，底边永远
+/// 参差（就算按估算高度切得再准也一样），而设置是"读 + 改"的表单，不是画廊。
+/// 所以正文统一单列；宽屏多出来的空间交给**行内的控件与首页的等高磁贴**
+/// （[SettingsTileGrid]），而不是再放第二列设置。
+///
+/// 超宽屏的规则是"**停在 1680、居中**"，不是继续铺满：
+///   · 1495 逻辑宽（用户那台）时正文就是全宽（1375），和改之前一样；
+///   · 1920 时 1680，两侧各 76；再宽（2560 / 3440）也只到 1680，多出来的留白。
+/// 理由：设置行的可读宽度由"标签 ↔ 右端控件"的距离决定，超过 ~1700 就开始
+/// 来回找；而"再宽一列"正是这次要消掉的高度参差。**别再往上抬**，也别在
+/// 超宽屏加第二列设置 —— 那两件事都会把问题带回来。
+const double kSettingsContentMaxWidth = 1680;
 
 /// 设置类页面的统一骨架：顶栏 + 可滚动内容。
 ///
 /// 2026-11-05 起设置首页只放"入口"，具体配置都进了子页 —— 子页与首页共用
 /// 这一套骨架，标题层级、左右留白、分列规则才不会各写各的。
 ///
-/// **宽窗口仍然多列**（用户 2026-11-05 明确要求）：分列交给
-/// [AdaptiveColumns]（列数 = 可用宽度 / 550，最多 4 列），窄窗口自动退回单列。
-/// 所以页面内容要按"块"（[SettingsSection]）组织，块内是标题 + 一张卡；
-/// 分列时整块一起走，不会出现"标题在左列、卡片在右列"。
+/// **正文单列**（2026-11-09）：块（[SettingsSection]）从上到下依次排，块内是
+/// 标题 + 一张卡。不再用 `AdaptiveColumns` 分栏 —— 见 [kSettingsContentMaxWidth]。
 class SettingsScaffold extends StatefulWidget {
   final String title;
   final List<SettingsSection> sections;
@@ -51,56 +65,64 @@ class _SettingsScaffoldState extends State<SettingsScaffold> {
   @override
   Widget build(BuildContext context) {
     final phone = useCollapsingPageTitle;
-    return Scaffold(
-      appBar: SettingsAppBar(
-        title: widget.title,
-        showBack: widget.showBack,
-        progress: _progress,
-      ),
-      body: SafeArea(
-        top: false,
-        child: Column(
-          children: [
-            // 手机端：大标题属于正文，随滚动**上移 + 淡出、高度收掉**，
-            // 同一个标题在 AppBar 里按同一个进度淡入（AGENTS §6.3）；
-            // 电脑端：标题始终在 AppBar 上，正文里不再重复一个大标题。
-            if (phone)
-              CollapsingPageTitle(
-                title: widget.title,
-                progress: _progress,
-                height: _pageTitleHeight,
-                leftPadding: _pageTitleLeft,
-              ),
-            Expanded(
-              child: ScrollTitleListener(
-                progress: _progress,
-                child: SingleChildScrollView(
-                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 48),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      // 设置卡比列表行窄，550 的标准列宽会让"其实放得下两列"的窗口退回
-                      // 单列（实测 1140 逻辑宽时 content≈1030 → 除以 550 只剩 1 列）。
-                      // 460 是"标题 + 一句说明 + 箭头"这一行的舒适宽度，窗口一到 ~1000
-                      // 逻辑宽就能并排两列。
-                      AdaptiveColumns(
-                        minColumnWidth: 460,
-                        sections: [
-                          for (final section in widget.sections)
-                            AdaptiveSection(
-                              section,
-                              estimatedHeight: section.estimatedHeight,
-                            ),
-                        ],
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        // 首页没有返回键，标题就当成"内容区的页头"：把它挪到正文那一列的左边缘，
+        // 免得宽窗口下标题贴在最左边、正文却居中，中间空出一大截。
+        // 有返回键的子页保持"返回键 + 标题"贴左（那是系统级的页头，不跟着正文走）。
+        final indent = (phone || widget.showBack)
+            ? 0.0
+            : math.max(
+                0.0,
+                (constraints.maxWidth - kSettingsContentMaxWidth - 32) / 2,
+              );
+        return Scaffold(
+          appBar: SettingsAppBar(
+            title: widget.title,
+            showBack: widget.showBack,
+            progress: _progress,
+            titleIndent: indent,
+          ),
+          body: SafeArea(
+            top: false,
+            child: Column(
+              children: [
+                // 手机端：大标题属于正文，随滚动**上移 + 淡出、高度收掉**，
+                // 同一个标题在 AppBar 里按同一个进度淡入（AGENTS §6.3）；
+                // 电脑端：标题始终在 AppBar 上，正文里不再重复一个大标题。
+                if (phone)
+                  CollapsingPageTitle(
+                    title: widget.title,
+                    progress: _progress,
+                    height: _pageTitleHeight,
+                    leftPadding: _pageTitleLeft,
+                  ),
+                Expanded(
+                  child: ScrollTitleListener(
+                    progress: _progress,
+                    child: SingleChildScrollView(
+                      padding: const EdgeInsets.fromLTRB(16, 8, 16, 48),
+                      child: Center(
+                        child: ConstrainedBox(
+                          constraints: const BoxConstraints(
+                            maxWidth: kSettingsContentMaxWidth,
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: _withSectionGaps([
+                              for (final section in widget.sections) section,
+                            ]),
+                          ),
+                        ),
                       ),
-                    ],
+                    ),
                   ),
                 ),
-              ),
+              ],
             ),
-          ],
-        ),
-      ),
+          ),
+        );
+      },
     );
   }
 }
@@ -124,6 +146,13 @@ class SettingsAppBar extends StatelessWidget implements PreferredSizeWidget {
   /// 大标题 → 顶栏标题的联动进度（手机端用；电脑端忽略）。
   final ScrollTitleProgress progress;
 
+  /// 标题额外向右缩进（逻辑像素）。
+  ///
+  /// 只给"没有返回键的首页"用：宽窗口下正文是居中的一列，标题若仍贴在
+  /// 最左边就会和正文差出一大截。子页保持 0 —— 返回键与标题是一个整体，
+  /// 不跟着正文的列走。
+  final double titleIndent;
+
   const SettingsAppBar({
     super.key,
     required this.title,
@@ -131,6 +160,7 @@ class SettingsAppBar extends StatelessWidget implements PreferredSizeWidget {
     this.showBack = true,
     this.onBack,
     this.actions = const [],
+    this.titleIndent = 0,
   });
 
   @override
@@ -147,8 +177,9 @@ class SettingsAppBar extends StatelessWidget implements PreferredSizeWidget {
       scrolledUnderElevation: phone ? 0 : null,
       automaticallyImplyLeading: false,
       leading: showBack ? _circleBackButton(theme, onPressed: onBack) : null,
-      // 返回键在 leading 槽里时，标题从槽后开始；首页没有返回键时与正文的 16 对齐。
-      titleSpacing: showBack ? 0 : 16,
+      // 返回键在 leading 槽里时，标题从槽后开始；首页没有返回键时与正文的左边缘对齐
+      // （正文是一列限宽居中的卡片，`titleIndent` 由 SettingsScaffold 按同一个宽度算）。
+      titleSpacing: showBack ? 0 : 16 + titleIndent,
       title: phone
           ? FadingAppBarTitle(title: title, progress: progress)
           : Text(title, maxLines: 1, overflow: TextOverflow.ellipsis),
@@ -259,46 +290,72 @@ class _SettingsPageScaffoldState extends State<SettingsPageScaffold> {
 
 /// 设置页的一块 = 小标题 + 卡片。
 ///
-/// [estimatedHeight] 只用于分列时"把下一块放进当前最矮的一列"的均衡，
-/// 不用精确（估小了最多某列长一点，不会错位）。
+/// [estimatedHeight] **已经不参与布局**（正文单列后没有"把下一块放进最矮的
+/// 那一列"这件事了）。字段保留是因为不少子页还在传它；将来要恢复分栏时
+/// 它仍然是均衡的输入。
 class SettingsSection extends StatelessWidget {
   final String title;
   final Widget child;
   final double estimatedHeight;
+
+  /// 放在**等高的并排行**里时置 true：卡片撑满这一行剩下的高度。
+  ///
+  /// 设置首页的状态区是 4:6 的 NSFW / 库统计两栏（用户 2026-11-09 的草图），
+  /// 两张卡的下边缘必须齐平。平时纵向排布时保持 false —— `Expanded` 在没有
+  /// 高度约束的 `Column` 里会直接断言失败。
+  final bool fill;
 
   const SettingsSection({
     super.key,
     required this.title,
     required this.child,
     this.estimatedHeight = 280,
+    this.fill = false,
   });
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final header = title.isEmpty
+        ? null
+        : Padding(
+            padding: const EdgeInsets.only(left: 4, bottom: 8),
+            child: Text(
+              title,
+              style: theme.textTheme.titleSmall?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          );
+    // 首页第一组（入口磁贴）不需要小标题，传空串即可 —— 不渲染空标题行。
+    if (header == null && !fill) return child;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Padding(
-          padding: const EdgeInsets.only(left: 4, bottom: 8),
-          child: Text(
-            title,
-            style: theme.textTheme.titleSmall?.copyWith(
-              color: theme.colorScheme.onSurfaceVariant,
-              fontWeight: FontWeight.w700,
-            ),
-          ),
-        ),
-        child,
-      ],
+      children: [?header, if (fill) Expanded(child: child) else child],
     );
   }
 }
+
+/// 相邻两块之间的间距（与旧分栏里的 `runSpacing` 一致）。
+const double _sectionGap = 24;
+
+List<Widget> _withSectionGaps(List<Widget> sections) => [
+  for (var i = 0; i < sections.length; i++) ...[
+    if (i > 0) const SizedBox(height: _sectionGap),
+    sections[i],
+  ],
+];
 
 /// 设置首页（以及子页里的跳转项）的**入口行**：图标 + 标题 + 一句说明 + 箭头。
 ///
 /// 用户 2026-11-05 的要求：一张卡里超过两项的配置不要摊在首页，收进子界面；
 /// 首页只留这种"能点进去"的行。
+///
+/// ⚠ 2026-11-09：**手机 / 窄窗口仍然用它**（用户："手机端的排版是对的"、
+/// "电脑端窄屏应该恢复成手机那种排版"）。宽屏首页才换成 [SettingsTileGrid]
+/// 的等高磁贴 —— 两套并存的判据在 `settings_page.dart`（宽度 ≥
+/// `kWideLayoutMinWidth`）。
 class SettingsEntryTile extends StatelessWidget {
   final IconData icon;
   final String title;
