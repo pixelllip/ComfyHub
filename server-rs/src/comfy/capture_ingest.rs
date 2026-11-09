@@ -26,6 +26,7 @@
 //! `empty` / `error` 收尾时 `prompt_id` 写的是 **NULL**（Kotlin 同）：那一次运行没有产物，
 //! 也就不该在库里留下一条空提示词。
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use rusqlite::params;
@@ -1198,28 +1199,63 @@ pub async fn poll_once(state: &AppState, config: &CaptureConfig) -> Value {
     let mut checked = 0i64;
     let mut new_runs = 0i64;
     let mut new_media = 0i64;
-    // history 按提交顺序返回（旧 → 新），这里**从最新往回**处理
-    for (run_key, entry) in entries.iter().rev() {
-        if checked >= config.max_per_poll.max(1) {
-            break;
-        }
+
+    // history 按提交顺序返回（旧 → 新），**必须顺着这个顺序收**。
+    //
+    // ⚠ 2026-11-09 修：以前是 `entries.iter().rev()`（先收最新的），于是"用户在 ComfyUI
+    // 界面里自己跑的一批"会被**倒着**入库 —— 画廊按 `created_at DESC` 排，最后看到的是
+    // 整批反过来（真库 11-09 那批 `test_01452_`…`test_01469_` 的 id 就是 1469→1452）。
+    // 反着收只是想"最新的先看见"，代价却是**顺序错乱**；`max_per_poll` 本来就把单轮
+    // 处理量卡住了，顺着收最多让更新的那几条等下一轮（默认 4 秒），不该拿顺序换。
+    //
+    // ⚠ 但**不能无条件顺着收重试项**：`empty` / `error` 是可以反复重抢的（见
+    // [`can_reclaim`]），一批永远出不了图的老记录会霸占 `max_per_poll`，把后面新跑出来的
+    // 运行**永久饿死**。所以分两段：先按时间顺序收"库里还没见过的运行"，剩下的额度才用来
+    // 重试 `empty` / `error` / 卡死的 `running`（`existing_runs` 只查这 ≤100 个 key）。
+    let existing = existing_runs(state, entries.keys().map(String::as_str));
+    let ready = |entry: &Value| -> bool {
         let status_object = entry.get("status").and_then(Value::as_object);
         let completed = status_object
             .and_then(|s| s.get("completed"))
             .and_then(Value::as_bool)
             .unwrap_or(false);
-        let status_str = status_object
+        let is_error = status_object
             .and_then(|s| s.get("status_str"))
             .and_then(Value::as_str)
-            .map(str::to_string);
+            == Some("error");
         let has_outputs = entry
             .get("outputs")
             .and_then(Value::as_object)
             .map(|o| !o.is_empty())
             .unwrap_or(false);
-        if !completed && status_str.as_deref() != Some("error") && !has_outputs {
+        completed || is_error || has_outputs
+    };
+    let mut queue: Vec<(&String, &Value)> = Vec::new();
+    for (run_key, entry) in entries.iter() {
+        if ready(entry) && !existing.contains_key(run_key) {
+            queue.push((run_key, entry));
+        }
+    }
+    for (run_key, entry) in entries.iter() {
+        if !ready(entry) {
             continue;
         }
+        match existing.get(run_key).map(String::as_str) {
+            Some("empty") | Some("error") | Some("running") => queue.push((run_key, entry)),
+            _ => {}
+        }
+    }
+
+    for (run_key, entry) in queue {
+        if checked >= config.max_per_poll.max(1) {
+            break;
+        }
+        let status_str = entry
+            .get("status")
+            .and_then(Value::as_object)
+            .and_then(|s| s.get("status_str"))
+            .and_then(Value::as_str)
+            .map(str::to_string);
         let claim = match begin_run(state, run_key, "ComfyUI", Some(entry), false) {
             Ok(claim) => claim,
             Err(_) => continue,
@@ -1246,6 +1282,38 @@ pub async fn poll_once(state: &AppState, config: &CaptureConfig) -> Value {
     result.insert("newRuns".into(), json!(new_runs));
     result.insert("newMedia".into(), json!(new_media));
     Value::Object(result)
+}
+
+/// 这 ≤100 个 history key 在库里已经是什么状态（**只读**）。
+///
+/// 用 `IN (...)` 分块查，走 `capture_runs.run_key` 的唯一索引；查不到（或库暂时读不了）
+/// 一律当"没见过" —— 宁可让 [`begin_run`] 再判一次，也不要把新运行误当重试。
+fn existing_runs<'a>(
+    state: &AppState,
+    keys: impl Iterator<Item = &'a str>,
+) -> HashMap<String, String> {
+    let keys: Vec<&str> = keys.collect();
+    let mut out = HashMap::new();
+    for chunk in keys.chunks(50) {
+        let marks = vec!["?"; chunk.len()].join(",");
+        let sql = format!("SELECT run_key, status FROM capture_runs WHERE run_key IN ({marks})");
+        let rows: Result<Vec<(String, String)>, ApiError> = state.with(|conn| {
+            let mut stmt = conn.prepare(&sql)?;
+            let rows = stmt
+                .query_map(rusqlite::params_from_iter(chunk.iter()), |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, Option<String>>(1)?.unwrap_or_default(),
+                    ))
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok(rows)
+        });
+        if let Ok(rows) = rows {
+            out.extend(rows);
+        }
+    }
+    out
 }
 
 // ---------------------------------------------------------------------------

@@ -62,13 +62,16 @@ const COLS: &str =
 
 /// 列表排序用的 `ORDER BY` 片段（**不许直接拼用户输入**，只认这几档）。
 fn order_clause(sort: Option<&str>) -> &'static str {
+    // `created_at` 只到毫秒：同一批入库（一次运行里几张图、或一次轮询收几条）很容易撞在
+    // 同一个毫秒上。**必须带 id 兜底**，否则同毫秒的几条在翻页 / 刷新之间顺序不稳定，
+    // 用户看到的是"图在乱跳"。（2026-11-09 查入库顺序时一起补的。）
     match sort {
-        Some("oldest") => "m.created_at ASC",
-        Some("updated") => "m.updated_at DESC",
-        Some("name") => "m.original_name ASC",
-        Some("largest") => "m.size_bytes DESC",
-        Some("favorite") => "m.favorite DESC, m.created_at DESC",
-        _ => "m.created_at DESC",
+        Some("oldest") => "m.created_at ASC, m.id ASC",
+        Some("updated") => "m.updated_at DESC, m.id DESC",
+        Some("name") => "m.original_name ASC, m.id ASC",
+        Some("largest") => "m.size_bytes DESC, m.id DESC",
+        Some("favorite") => "m.favorite DESC, m.created_at DESC, m.id DESC",
+        _ => "m.created_at DESC, m.id DESC",
     }
 }
 

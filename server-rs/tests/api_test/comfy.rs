@@ -1096,6 +1096,192 @@ async fn poll_captures_a_run_into_prompts_and_media() {
     std::fs::remove_dir_all(&root).ok();
 }
 
+/// **未经过本项目提交**的运行（用户直接在 ComfyUI 里跑）由轮询入库时，必须按**生成顺序**
+/// 入库（2026-11-09 用户："调查未开启本项目进行生图的情况下，产物的入库顺序问题"）。
+///
+/// 以前 `poll_once` 是 `entries.iter().rev()`（先收最新的），画廊按 `created_at DESC` 排，
+/// 整批图的顺序就是**反的**。真库 11-09 那批 `test_01452_`…`test_01469_` 的 media id
+/// 是 1469→1452，就是这条的直接证据。
+#[tokio::test]
+async fn poll_ingests_external_runs_in_generation_order() {
+    use comfyhub_server_rs::comfy::capture_ingest;
+    let state = state();
+    let root = state.project_root();
+    let output_dir = root.join("comfyui").join("output");
+    std::fs::create_dir_all(&output_dir).unwrap();
+
+    let names = ["first.png", "second.png", "third.png"];
+    let mut history = serde_json::Map::new();
+    for (index, name) in names.iter().enumerate() {
+        // 每一张内容都要不同：入库按**内容 sha256** 判重，同一份字节只会留一条
+        let png = tiny_png(8 + index as u32, 6);
+        std::fs::write(output_dir.join(name), &png).unwrap();
+        // 键的插入顺序就是 ComfyUI `/history` 的提交顺序（旧 → 新）
+        history.insert(
+            format!("external-run-{index}"),
+            serde_json::json!({
+                "prompt": {
+                    "3": {"class_type":"KSampler","inputs":{"seed": 100 + index as i64, "steps": 4}},
+                    "6": {"class_type":"CLIPTextEncode","inputs":{"text":"order test"}},
+                    "9": {"class_type":"SaveImage","inputs":{}}
+                },
+                "outputs": {"9": {"images":[{"filename": name, "type":"output"}]}},
+                "status": {"completed": true, "status_str": "success"}
+            }),
+        );
+    }
+    let history: &'static str = Box::leak(
+        serde_json::Value::Object(history)
+            .to_string()
+            .into_boxed_str(),
+    );
+    // 本地 output 目录里三份文件都在 → 这条路不下载，`/view` 只是假服务器必须回点什么
+    let view: &'static [u8] = Box::leak(tiny_png(4, 4).into_boxed_slice());
+    let (url, handle) = fake_comfy(history, view).await;
+
+    let config = comfyhub_server_rs::comfy::capture::CaptureConfig {
+        comfy_url: url.clone(),
+        output_dir: Some(output_dir.display().to_string()),
+        auto_tag: "ComfyUI".to_string(),
+        ..Default::default()
+    };
+    comfyhub_server_rs::comfy::capture::save_capture_config(&state, config).unwrap();
+    let config = comfyhub_server_rs::comfy::capture::capture_config(&state).unwrap();
+
+    let result = capture_ingest::poll_once(&state, &config).await;
+    assert_eq!(result["checked"], 3, "{result}");
+    assert_eq!(result["newMedia"], 3, "{result}");
+
+    // 产物 id 的顺序 = 生成顺序；画廊按 created_at DESC 排之后，新图才在上面
+    let stored: Vec<String> = state
+        .with(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT original_name FROM media_assets
+                  WHERE original_name IN ('first.png','second.png','third.png')
+                  ORDER BY id",
+            )?;
+            let rows = stmt
+                .query_map([], |row| row.get::<_, String>(0))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok(rows)
+        })
+        .unwrap();
+    assert_eq!(
+        stored,
+        vec!["first.png", "second.png", "third.png"],
+        "入库顺序必须与 ComfyUI 的提交顺序一致"
+    );
+
+    // 运行记录也按同一个顺序（`begin_run` 的 created_at 就是入库时刻）
+    let runs: Vec<String> = state
+        .with(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT run_key FROM capture_runs WHERE run_key LIKE 'external-run-%' ORDER BY id",
+            )?;
+            let rows = stmt
+                .query_map([], |row| row.get::<_, String>(0))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok(rows)
+        })
+        .unwrap();
+    assert_eq!(
+        runs,
+        vec!["external-run-0", "external-run-1", "external-run-2"]
+    );
+
+    handle.abort();
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// **可重试的老记录不许饿死新运行**（2026-11-09 改入库顺序时一起钉住的）。
+///
+/// `empty` / `error` 每轮都能重抢；如果无条件按 history 顺序收，前两条永远出不了图的
+/// 老记录就会占满 `maxPerPoll`，后面新跑出来的那条**永远轮不到**。轮询必须先收
+/// "库里没见过的运行"，剩下的额度才拿去重试。
+#[tokio::test]
+async fn poll_does_not_starve_new_runs_behind_retryable_ones() {
+    use comfyhub_server_rs::comfy::capture_ingest;
+    let state = state();
+    let root = state.project_root();
+    let output_dir = root.join("comfyui").join("output");
+    std::fs::create_dir_all(&output_dir).unwrap();
+    let png = tiny_png(6, 6);
+    std::fs::write(output_dir.join("fresh.png"), &png).unwrap();
+
+    // 两条老记录：库里已经是 empty（上次收过、没有产物）
+    state
+        .with(|conn| {
+            conn.execute(
+                "INSERT INTO capture_runs (run_key, status, created_at) VALUES
+                   ('dead-1','empty','2026-11-09T09:00:00.000Z'),
+                   ('dead-2','empty','2026-11-09T09:01:00.000Z')",
+                [],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+
+    let mut history = serde_json::Map::new();
+    for key in ["dead-1", "dead-2"] {
+        history.insert(
+            key.to_string(),
+            serde_json::json!({
+                "prompt": {"3": {"class_type":"KSampler","inputs":{"seed":1}}},
+                "outputs": {},
+                "status": {"completed": true, "status_str": "success"}
+            }),
+        );
+    }
+    history.insert(
+        "fresh-run".into(),
+        serde_json::json!({
+            "prompt": {
+                "3": {"class_type":"KSampler","inputs":{"seed":9,"steps":4}},
+                "6": {"class_type":"CLIPTextEncode","inputs":{"text":"fresh"}},
+                "9": {"class_type":"SaveImage","inputs":{}}
+            },
+            "outputs": {"9": {"images":[{"filename":"fresh.png","type":"output"}]}},
+            "status": {"completed": true, "status_str": "success"}
+        }),
+    );
+    let history: &'static str = Box::leak(
+        serde_json::Value::Object(history)
+            .to_string()
+            .into_boxed_str(),
+    );
+    let view: &'static [u8] = Box::leak(tiny_png(4, 4).into_boxed_slice());
+    let (url, handle) = fake_comfy(history, view).await;
+
+    let config = comfyhub_server_rs::comfy::capture::CaptureConfig {
+        comfy_url: url.clone(),
+        output_dir: Some(output_dir.display().to_string()),
+        auto_tag: "ComfyUI".to_string(),
+        max_per_poll: 2,
+        ..Default::default()
+    };
+    comfyhub_server_rs::comfy::capture::save_capture_config(&state, config).unwrap();
+    let config = comfyhub_server_rs::comfy::capture::capture_config(&state).unwrap();
+
+    let result = capture_ingest::poll_once(&state, &config).await;
+    assert_eq!(
+        result["newMedia"], 1,
+        "新运行必须被收进来，不能被两条 empty 老记录挤掉：{result}"
+    );
+    let fresh: i64 = state
+        .with(|conn| {
+            conn.query_row(
+                "SELECT COUNT(*) FROM media_assets WHERE original_name = 'fresh.png'",
+                [],
+                |row| row.get(0),
+            )
+        })
+        .unwrap();
+    assert_eq!(fresh, 1, "fresh.png 要真的入库");
+
+    handle.abort();
+    std::fs::remove_dir_all(&root).ok();
+}
+
 /// 产物**本地没有**时走 HTTP 下载兜底（`GET /view`），而且 `empty` 能重试。
 #[tokio::test]
 async fn poll_downloads_missing_outputs_and_retries_empty_runs() {
