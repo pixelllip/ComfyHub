@@ -284,5 +284,13 @@ T4 的提示词按拍板结果写。
 ### 4.9 本轮收尾（2026-11-09）
 
 - T1 / T3 / T2 / T6 / T4 全部落地；**T5 按 A 档**（不改审批闸门语义，B 档等用户拍板）。
-- §3 第 3 条的回归待跑（都不出网）：`cargo test`（全量，含集成）、
-  `e2e-submit-test.ps1`、`e2e-capture-test.ps1`、`e2e-recipe-test.ps1`（改了配方链路）。
+- 回归结果：
+  - `cargo test` **全量绿**：lib 878、api_test 174、recipe 7、submit 9、submit_queue 8、
+    watch_stdin 2 等（`confinement_probe` / `spot_check` / `live_submit_shapes` /
+    `train_mcp_live` 是 `#[ignore]` 的活体用例，按设计不跑）。
+  - `scripts\e2e-recipe-test.ps1` **32 项全通过**（离线；配方链路改了所以必须跑）。
+    第 1 幕需要一份 API 格式工作流，仓库不再随包带模板，用
+    `-ApiWorkflow server-rs\tests\fixtures\api_inpaint_fixture.json` 那份
+    （3 槽位 + 遮罩链 → task=inpaint，恰好覆盖脚本的断言）。
+  - `e2e-submit-test.ps1` / `e2e-capture-test.ps1` **本轮没跑**：用户 2026-11-09 明确说
+    "我先玩游戏，不进行实际跑图测试"。这两条要驱动 ComfyUI / 占显卡，等用户方便时再补。
