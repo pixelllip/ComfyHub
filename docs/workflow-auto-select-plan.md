@@ -231,3 +231,11 @@ T4 的提示词按拍板结果写。
   `PROMPT_VERSION` v63；全量 `cargo test --lib` 870 passed。
 - 手机端不下发（仍只有那 7 个工具）；后续按 §3 顺序继续 T3（provenance）→
   T2（verified 绑定）→ T4（系统提示，需先拍板 T5）。
+
+### 4.5 T3 已落地（2026-11-09）
+
+- `capture_runs` 加 `source_kind`（默认 `ComfyUI`）/ `recipe_id`，schema v14
+  （幂等 `ALTER`，`schema.sqlite.sql` / `schema.sql` / `migrate.sql` 同步）。
+- `comfy_submit` 可选 `sourceKind` / `recipeId`；`recipeId` 缺省按 `promptId` 推；
+  `comfy_get_run` / `comfy_get_status` 返回来源档；轮询捕获路径一个字没动。
+- `cargo test --lib` 872 passed；下一步 T2（verified 绑定）→ T4（系统提示）。
