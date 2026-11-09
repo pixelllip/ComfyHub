@@ -32,8 +32,10 @@ async fn run_kit_ships_every_rule_the_phone_needs() {
         body["schemaVersion"], 1,
         "与 /api/sync/manifest 的 user_version 同一个数"
     );
-    // v62：新增 `comfy_list_templates`（列 ComfyUI 自带的官方模板）。
-    assert_eq!(body["promptVersion"], "v62");
+    // v64（2026-11-09）：第 27 条（自动选工作流顺序）+ 已验证绑定 / 实例地址的输出变化。
+    // ⚠ 这份夹具**当前没有编进测试**（`tests/api_test/` 下没有入口文件，`cargo test` 不会跑它），
+    //   下面的 `schemaVersion: 1` 也是旧口径；版本号跟着改只是别让它比真源更旧。
+    assert_eq!(body["promptVersion"], "v64");
     assert_eq!(body["nsfwEnabled"], false, "夹具里没开 NSFW");
     assert_eq!(body["inlineBudget"]["perImageBytes"], 8388608, "单图 8MB");
     assert_eq!(body["inlineBudget"]["totalBytes"], 20971520, "合计 20MB");

@@ -259,3 +259,16 @@ T4 的提示词按拍板结果写。
 - 回归：`workflow_recipe/tests.rs`（去重 / 不被重新学习清掉 / 绑定标注 / 写法不同仍认出）、
   `workflow_submit/tests.rs`（只认槽位键）、`db/tests.rs`（老库补列幂等）、
   `recipe_test.rs`（列表键集合多一个 `verified`）。`cargo test --lib` 878 passed。
+
+### 4.7 T4 已落地（2026-11-09；T5 按 A 档写）
+
+- 系统提示**追加第 27 条**（不动既有编号）：优先级链（用户点名 > 配方 `exact` 绑定 /
+  `✔ 已验证跑通` 优先 > 上次成功 > 官方模板 + fit）、哪档不成**自动落下一档并如实记账**、
+  无人值守（手机遥控）时"问用户 = 卡死"、`check_inputs` 过不掉的候选直接跳过、
+  前提是事前把 `comfy_submit` 放进放权档。
+- **T5 按 A 档落地**（§2 T5 的倾向 A）：机制一个字没改，提示词只写"无人值守前请确认已放权"；
+  B 档（授权窗口语义）**没有做** —— 那要改审批闸门语义，须用户明确拍板。
+- `PROMPT_VERSION` v63 → **v64**，`run_kit/tests.rs` 与
+  `tests/api_test/ai_run_kit.rs` 的版本断言同步。
+- 同一条里也写了 T2 / T6 带来的输出变化（verified 标注、instanceUrl），
+  因为"模型看到的能力"确实变了，一次 bump 覆盖这三项。
