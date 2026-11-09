@@ -30,6 +30,7 @@ import com.comfyhub.harness.tools.MobileToolRegistry
 import com.comfyhub.harness.tools.SecretLookup
 import com.comfyhub.harness.tools.ToolCallRequest
 import com.comfyhub.harness.tools.ToolContext
+import com.comfyhub.harness.tools.ToolOutcome
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -568,12 +569,23 @@ class HarnessRunner(
                 step++
                 val calls = drafts.map { ToolCallRef(it.callId, it.name, it.arguments) }
                 toolTurns += ChatTurn("assistant", "", toolCalls = calls)
-                parts.add(
-                    PartType.TOOL_CALL,
-                    text = null,
-                    toolCallId = calls.joinToString(",") { it.id },
-                    jsonPayload = buildJsonArrayOfCalls(calls),
-                )
+                // **一次调用一个 `tool_call` 块**，与桌面后端的形状逐字一致
+                // （`{name, arguments}` + `toolCallId` = 那个 callId）。
+                //
+                // ⚠ 以前是一个块里塞 `[{id,name}, …]`（一整轮的调用挤在一起）：
+                // 共享的 Flutter 界面按 `payload['name']` 取名字、按 `toolCallId` 配结果，
+                // 于是多工具那一轮全部显示成「未知工具 · 失败」的空卡（2026-11-09 真机，
+                // MOSS 那轮同时调了 `load_skill` + `list_skills`）。参数也确实丢了 ——
+                // 数组里只有 id 与 name。桌面同步下来的历史行照旧由
+                // `AiToolCallState.listFromParts` 兼容展开。
+                calls.forEach { call ->
+                    parts.add(
+                        PartType.TOOL_CALL,
+                        text = null,
+                        toolCallId = call.id,
+                        jsonPayload = toolCallPayload(call),
+                    )
+                }
                 calls.forEach { call ->
                     // 手机侧的工具都不需要审批（没有桌面写操作），所以 approval 恒为 not_required；
                     // **键名与桌面逐字一致**，否则共享的 Flutter 界面读不到参数/审批态
@@ -635,7 +647,7 @@ class HarnessRunner(
                         PartType.TOOL_RESULT,
                         text = outcome.content,
                         toolCallId = call.id,
-                        jsonPayload = outcome.jsonPayload?.toString(),
+                        jsonPayload = toolResultPayload(call.name, outcome, elapsed),
                     )
                     val (type, body) = EventPayloads.forToolOutcome(
                         callId = call.id,
@@ -800,18 +812,42 @@ class HarnessRunner(
         return ReasoningRequest.of(request.reasoningEffort, declared, levelMap, format)
     }
 
-    /** 工具卡片的 payload：逐个调用的 id/name（界面据此渲染，**不掺正文**）。 */
-    private fun buildJsonArrayOfCalls(calls: List<ToolCallRef>): String =
-        kotlinx.serialization.json.buildJsonArray {
-            calls.forEach { call ->
-                add(
-                    kotlinx.serialization.json.buildJsonObject {
-                        put("id", call.id)
-                        put("name", call.name)
-                    }
-                )
-            }
-        }.toString()
+    /**
+     * 工具卡片的 payload：一个调用一块（名字 + 参数），**与桌面后端同形**。
+     *
+     * 以前这里返回的是 `[{id, name}, …]`（一整轮挤在一个块里），界面按
+     * `payload['name']` 解不出来 → 多工具轮次全是「未知工具 · 失败」的空卡，
+     * 而且参数根本不在里面（2026-11-09 真机）。见上面写 `PartType.TOOL_CALL` 处。
+     */
+    private fun toolCallPayload(call: ToolCallRef): String = buildJsonObject {
+        put("name", call.name)
+        put("arguments", call.arguments)
+    }.toString()
+
+    /**
+     * `tool_result` 块的 payload：**与桌面 `executor.rs::push_tool_result` 同形**。
+     *
+     * 桌面那块至少带 `name` / `ok`（另有 `code` / `elapsedMs` / `approval`），界面靠 `ok`
+     * 判断成败、靠 `name` 显示标题。手机以前只写工具自己的结果 JSON（连 `ok` 都没有），
+     * 于是重开 App / 在桌面上看那段历史时，**所有手机跑过的工具卡都显示「失败」**
+     * （2026-11-09 真机：`load_skill` / `list_skills` 明明成功了）。
+     *
+     * 工具自己的字段（`mediaIds` / `question` / `askedAll` / `layoutTemplates`）原样并进去 ——
+     * 那几个是"重开 App 之后卡片还要能画出来"的数据，不能留在外面。
+     */
+    private fun toolResultPayload(
+        name: String,
+        outcome: ToolOutcome,
+        elapsedMs: Long,
+    ): String = buildJsonObject {
+        put("name", name)
+        put("ok", outcome.ok)
+        outcome.errorCode?.let { put("code", it) }
+        outcome.error?.let { put("error", it) }
+        put("elapsedMs", elapsedMs)
+        put("approval", "not_required")
+        outcome.jsonPayload?.forEach { (k, v) -> put(k, v) }
+    }.toString()
 
     companion object {
         /** 会话还没起名时的默认标题（与 schema 的 `DEFAULT '新对话'` 同值）。 */

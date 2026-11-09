@@ -833,12 +833,22 @@ class AiMessagePart {
   final String? toolCallId;
   final Map<String, dynamic>? payload;
 
+  /// `jsonPayload` 解码后的**原文**（Map 或 List 都可能是）。
+  ///
+  /// 为什么不能只看 [payload]：手机 harness 在一个"多工具轮次"里把**全部调用**
+  /// 塞进同一个 `tool_call` 块（`[{id,name}, …]`），而 `payload` 只收 Map ——
+  /// 于是那一块永远解不出名字，界面上就是两张「未知工具 · 失败」的空卡
+  /// （2026-11-09 真机，MOSS 那轮同时调了 `load_skill` + `list_skills`）。
+  /// 见 [AiToolCallState.listFromParts]：数组形状在那里被展开成多张卡。
+  final Object? rawPayload;
+
   const AiMessagePart({
     required this.type,
     this.text,
     this.attachmentId,
     this.toolCallId,
     this.payload,
+    this.rawPayload,
   });
 
   factory AiMessagePart.fromJson(Map<String, dynamic> json) => AiMessagePart(
@@ -852,7 +862,20 @@ class AiMessagePart {
     // 只认 Map 的话，手机上每条 `tool_call` 的 `payload` 都是 null，
     // 表现是**工具卡上的工具名与参数永远空着**（正文还在，所以看着像"只是没显示全"）。
     payload: _payloadOf(json['jsonPayload']),
+    rawPayload: _decodePayload(json['jsonPayload']),
   );
+
+  static Object? _decodePayload(Object? raw) {
+    if (raw is Map || raw is List) return raw;
+    if (raw is String && raw.trim().isNotEmpty) {
+      try {
+        return jsonDecode(raw);
+      } catch (_) {
+        // 坏 payload 不能影响整条消息的解析
+      }
+    }
+    return null;
+  }
 
   static Map<String, dynamic>? _payloadOf(Object? raw) {
     if (raw is Map) return Map<String, dynamic>.from(raw);
@@ -2302,6 +2325,28 @@ class AiToolCallState {
     final indexOf = <String, int>{};
     for (final part in parts) {
       if (part.type == 'tool_call') {
+        // **手机 harness 的多工具轮次**（旧数据与桌面上同步下来的行都是这个形状）：
+        // 一个 `tool_call` 块里装着 `[{id, name}, …]`。不展开就是一张空卡
+        // （名字解不出 → 界面写「未知工具」，结果也配不上 → 显示「失败」）。
+        final raw = part.rawPayload;
+        if (raw is List) {
+          for (final item in raw) {
+            if (item is! Map) continue;
+            final m = Map<String, dynamic>.from(item);
+            final id = (m['id'] ?? '').toString();
+            if (id.isEmpty) continue;
+            indexOf[id] = out.length;
+            out.add(
+              AiToolCallState(
+                callId: id,
+                name: (m['name'] ?? '').toString(),
+                arguments: (m['arguments'] ?? '').toString(),
+                reason: m['reason']?.toString(),
+              ),
+            );
+          }
+          continue;
+        }
         final id = part.toolCallId ?? '';
         final map = part.payload ?? const <String, dynamic>{};
         indexOf[id] = out.length;
@@ -2316,7 +2361,15 @@ class AiToolCallState {
       } else if (part.type == 'tool_result') {
         final id = part.toolCallId ?? '';
         final map = part.payload ?? const <String, dynamic>{};
+        final hasOk = map.containsKey('ok');
         final ok = map['ok'] == true;
+        // **旧手机数据没有 `ok` 键**（harness 以前只写工具自己的结果 JSON）。
+        // 不能一律当失败 —— 真机上那会让"明明跑成功了的 load_skill"显示「失败」。
+        // 判据只有一条：失败的正文一定以 `[工具失败:<码>] ` 开头（`ToolOutcome.failure`），
+        // 没这个前缀就按成功画。写端已经改成与桌面同形（带 `ok`），这段只为历史数据。
+        final legacyOk =
+            !hasOk && !((part.text ?? '').startsWith('[工具失败:'));
+        final succeeded = hasOk ? ok : legacyOk;
         final approval = (map['approval'] ?? '').toString();
         final i = indexOf[id];
         final prev = i == null ? null : out[i];
@@ -2343,14 +2396,14 @@ class AiToolCallState {
           name: (map['name'] ?? prev?.name ?? '').toString(),
           arguments: prev?.arguments ?? '',
           reason: prev?.reason,
-          status: ok
+          status: succeeded
               ? AiToolCallStatus.ok
               : (approval == 'denied'
                     ? AiToolCallStatus.denied
                     : AiToolCallStatus.failed),
           // tool_result.text 就是完整输出（后端已截断到 MAX_RESULT_CHARS）
           preview: part.text,
-          error: ok
+          error: succeeded
               ? null
               : (map['code']?.toString() ?? map['error']?.toString()),
           elapsedMs: (map['elapsedMs'] as num?)?.toInt() ?? 0,
