@@ -612,6 +612,14 @@ fn comfy_recent_successes_只回成功且可按任务与模型族过滤() {
     assert_eq!(items[1]["task"], "t2i");
     // 模型文件名来自 raw 图（analyze 的 slots），排序后第一个是 ae
     assert_eq!(items[0]["models"][0], "ae.safetensors");
+    // T6：带回**当前实例**地址（记录本身不区分实例，要人自己核）
+    let url = out.payload["instanceUrl"].as_str().unwrap();
+    assert!(url.starts_with("http"), "instanceUrl 是个地址：{url}");
+    assert!(
+        out.content.contains(url) && out.content.contains("不区分实例"),
+        "正文要说清这些记录不区分实例：{}",
+        out.content
+    );
 
     // task 过滤
     let out = comfy_recent_successes(&state, &json!({"task": "t2i"})).unwrap();

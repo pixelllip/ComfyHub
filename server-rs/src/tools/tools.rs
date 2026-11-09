@@ -1894,6 +1894,17 @@ fn comfy_recent_successes(
     }
 
     let count = items.len();
+    // T6（2026-11-09）：把**当前实例**的地址带出去。
+    //
+    // 为什么要它：`capture_runs` 里没记"那次成功是在哪个实例上跑通的"，所以同一个
+    // ComfyUI 根（模型目录）换了实例、或用户来回切了两台机器时，这条"上次成功"
+    // **不一定**还是同一个实例能跑的 —— 让人（和模型）自己看一眼地址再决定，
+    // 比现在猜"应该一样"要诚实。结构性字段（每行记实例）留到以后。
+    let instance_url = crate::comfy::capture::capture_config(state)
+        .ok()
+        .map(|config| config.comfy_url.trim().trim_end_matches('/').to_string())
+        .filter(|url| !url.is_empty());
+
     let mut text = String::new();
     if items.is_empty() {
         text.push_str("没有符合条件的成功运行。");
@@ -1934,14 +1945,25 @@ fn comfy_recent_successes(
         text.push_str(
             "用法：挑最近这一条，用 comfy_submit(overrides=… ) 只改提示词与 seed；不要重搭工作流，也别逐条 comfy_get_run 自己分类。",
         );
+        let instance_note = match &instance_url {
+            Some(url) => format!(
+                "\n当前实例是 {url}。这些记录不区分实例，换过实例的话先确认它还能跑再照抄。"
+            ),
+            None => {
+                "\n不知道当前实例地址（没配置 ComfyUI），这些记录来自哪个实例无法核对。".to_string()
+            }
+        };
+        text.push_str(&instance_note);
     }
 
-    let payload = json!({
-        "items": items,
-        "count": count,
-        "scanned": scanned,
-    });
-    Ok(ToolOutcome::new(text, payload))
+    let mut payload = serde_json::Map::new();
+    payload.insert("items".into(), json!(items));
+    payload.insert("count".into(), json!(count));
+    payload.insert("scanned".into(), json!(scanned));
+    if let Some(url) = &instance_url {
+        payload.insert("instanceUrl".into(), json!(url));
+    }
+    Ok(ToolOutcome::new(text, Value::Object(payload)))
 }
 
 /// `comfy_list_templates`：列 **ComfyUI 自带的官方模板**（只读）。

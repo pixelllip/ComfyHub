@@ -272,3 +272,17 @@ T4 的提示词按拍板结果写。
   `tests/api_test/ai_run_kit.rs` 的版本断言同步。
 - 同一条里也写了 T2 / T6 带来的输出变化（verified 标注、instanceUrl），
   因为"模型看到的能力"确实变了，一次 bump 覆盖这三项。
+
+### 4.8 T6 已落地（2026-11-09）
+
+- `comfy_recent_successes` 的返回值多一个 `instanceUrl`（当前实例地址），正文末尾写清
+  "这些记录不区分实例，换过实例的话先确认它还能跑再照抄"；
+  工具描述同步这一句（模型可见 —— 与 T4 的 v64 是同一次 bump）。
+- `capture_runs` 仍然**不记**每行属于哪个实例（结构性字段以后再说）。
+- 回归：`tools/tools/tests.rs` 断言 `instanceUrl` 与那句说明。
+
+### 4.9 本轮收尾（2026-11-09）
+
+- T1 / T3 / T2 / T6 / T4 全部落地；**T5 按 A 档**（不改审批闸门语义，B 档等用户拍板）。
+- §3 第 3 条的回归待跑（都不出网）：`cargo test`（全量，含集成）、
+  `e2e-submit-test.ps1`、`e2e-capture-test.ps1`、`e2e-recipe-test.ps1`（改了配方链路）。
