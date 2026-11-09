@@ -102,7 +102,7 @@ pub const SCHEMA_SQL: &str = include_str!("../../../db/schema.sqlite.sql");
 /// ② 升级到 11 的那一次把 `tag_prompt` 转成一段自然语言灌进 `prompt`
 ///    （见 [`migrate_card_tags_to_prompt`]）——**只填 prompt 为空的卡**，
 ///    已经有自然语言版的卡一个字都不动。
-pub const SCHEMA_VERSION: i64 = 13;
+pub const SCHEMA_VERSION: i64 = 14;
 
 /// **"这一列必须存在"的声明式清单**（2026-09-30 起）。
 ///
@@ -171,6 +171,20 @@ const NEW_COLUMNS: &[(&str, &str, &str)] = &[
         "ai_attachments",
         "origin",
         "ALTER TABLE ai_attachments ADD COLUMN origin TEXT NOT NULL DEFAULT 'upload'",
+    ),
+    // 提交来源（2026-11-09，T3）：这一跑是哪一档挑出来的（user / recipe / recent / template）。
+    // 带默认值 'ComfyUI' → 外部在 ComfyUI 里跑的保持原义；只有 `comfy_submit` 显式声明
+    // 时才改成四档之一（缺省不落 = 不 UPDATE，停在默认值）。
+    (
+        "capture_runs",
+        "source_kind",
+        "ALTER TABLE capture_runs ADD COLUMN source_kind TEXT NOT NULL DEFAULT 'ComfyUI'",
+    ),
+    // 这一跑用的是哪条配方（`workflow_recipes.id`）。可空 → 符合加列规矩；外部捕获为 NULL。
+    (
+        "capture_runs",
+        "recipe_id",
+        "ALTER TABLE capture_runs ADD COLUMN recipe_id INTEGER NULL",
     ),
 ];
 

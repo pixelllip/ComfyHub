@@ -174,6 +174,8 @@ CREATE TABLE IF NOT EXISTS capture_runs (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
   run_key     TEXT    NOT NULL,
   source      TEXT    NOT NULL DEFAULT 'ComfyUI',
+  source_kind TEXT    NOT NULL DEFAULT 'ComfyUI',
+  recipe_id   INTEGER NULL,
   prompt_id   INTEGER NULL REFERENCES prompts(id) ON DELETE SET NULL,
   status      TEXT    NOT NULL DEFAULT 'success',
   media_count INTEGER NOT NULL DEFAULT 0,
@@ -889,4 +891,6 @@ BEGIN INSERT INTO _sync_log(tbl,pk,op,at) VALUES ('ai_tool_calls', OLD.id, 'dele
 -- `option_images_json`（题目配图 / 选项示意图），供"按设定图逐部位确认"那条流程用。
 -- 2026-11-04 由 12 提到 13：**附件来源** —— `ai_attachments` 加 `origin`
 -- （upload / crop / search），供缓存统计与"只清理没有被任何消息 / 提问引用的图"。
-PRAGMA user_version = 13;
+-- 2026-11-09 由 13 提到 14：**提交来源** —— `capture_runs` 加 `source_kind`
+-- （user / recipe / recent / template / ComfyUI）与 `recipe_id`（可空配方 id）。
+PRAGMA user_version = 14;

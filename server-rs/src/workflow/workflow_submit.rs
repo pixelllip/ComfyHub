@@ -1212,6 +1212,29 @@ pub async fn tool_submit(
         .filter(|t| !t.is_empty())
         .map(|t| t.to_string());
 
+    // 来源档（T3，2026-11-09）：**缺省不落** —— 只有显式声明才写
+    // `capture_runs.source_kind`；外部在 ComfyUI 里跑的保持列默认 `'ComfyUI'`。
+    let source_kind = match arguments.get("sourceKind") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(raw)) => {
+            let kind = raw.trim();
+            if !matches!(kind, "user" | "recipe" | "recent" | "template") {
+                return Err(ToolFailure::new(
+                    "INVALID_ARGUMENT",
+                    "sourceKind 只能是 user / recipe / recent / template 之一",
+                ));
+            }
+            Some(kind.to_string())
+        }
+        Some(_) => {
+            return Err(ToolFailure::new(
+                "INVALID_ARGUMENT",
+                "sourceKind 要是一个字符串：user / recipe / recent / template",
+            ))
+        }
+    };
+    let recipe_id = arguments.get("recipeId").and_then(arg_i64);
+
     let mut prompt_id = arguments.get("promptId").and_then(arg_i64);
     let path = arguments
         .get("workflowPath")
@@ -1249,6 +1272,23 @@ pub async fn tool_submit(
         }
     }
     let prompt_id = prompt_id.unwrap_or_default();
+
+    // 配方 id 尽量由后端按 promptId 推（对得上就填）；调用方显式给的优先。
+    let recipe_id = recipe_id.or_else(|| {
+        state
+            .with(|conn| {
+                Ok(conn
+                    .query_row(
+                        "SELECT id FROM workflow_recipes WHERE prompt_id = ?1 \
+                         ORDER BY id DESC LIMIT 1",
+                        rusqlite::params![prompt_id],
+                        |row| row.get::<_, i64>(0),
+                    )
+                    .ok())
+            })
+            .ok()
+            .flatten()
+    });
 
     // R10：只认 API 格式节点图（取不到就如实报，绝不猜着造一张）
     let graph = crate::comfy::capture::prompt_api_graph(state, prompt_id)
@@ -1413,6 +1453,20 @@ pub async fn tool_submit(
                     break;
                 }
                 Ok(result) => {
+                    // T3：把这次提交的来源档 / 配方记在 capture_runs 上（外部捕获那条路不动）。
+                    // `COALESCE` 保证"缺省不落"：没声明的列保持原值（默认 'ComfyUI'）。
+                    if source_kind.is_some() || recipe_id.is_some() {
+                        if let Err(error) = state.write(|tx| {
+                            tx.execute(
+                                "UPDATE capture_runs SET source_kind = COALESCE(?1, source_kind), \
+                                 recipe_id = COALESCE(?2, recipe_id) WHERE run_key = ?3",
+                                rusqlite::params![&source_kind, recipe_id, run_key],
+                            )?;
+                            Ok(())
+                        }) {
+                            eprintln!("[comfy_submit] provenance 写入失败：{error:?}");
+                        }
+                    }
                     submission.status = if failed {
                         "error".to_string()
                     } else if result.imported > 0 {
@@ -1479,6 +1533,13 @@ pub async fn tool_submit(
     );
     out.insert("appliedOverrides".into(), json!(applied));
     out.insert("promptSource".into(), json!(prompt_source));
+    // T3：这一跑是哪一档挑出来的（缺省不落 = 不出现这个键）。
+    if let Some(kind) = &source_kind {
+        out.insert("sourceKind".into(), json!(kind));
+    }
+    if let Some(id) = recipe_id {
+        out.insert("recipeId".into(), json!(id));
+    }
     if !system_prompt_targets.is_empty() {
         out.insert("systemPromptApplied".into(), json!(system_prompt_targets));
     }

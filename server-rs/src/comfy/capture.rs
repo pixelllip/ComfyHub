@@ -265,6 +265,10 @@ pub struct CaptureRunInfo {
     pub title: Option<String>,
     pub error: Option<String>,
     pub captured_at: Option<String>,
+    /// 这一跑来自哪一档（`user` / `recipe` / `recent` / `template` / 外部 `ComfyUI`）。
+    pub source_kind: String,
+    /// 这一跑用的配方（`workflow_recipes.id`）；外部捕获或没配方时为 None。
+    pub recipe_id: Option<i64>,
 }
 
 impl CaptureRunInfo {
@@ -286,6 +290,14 @@ impl CaptureRunInfo {
         if let Some(at) = &self.captured_at {
             out.insert("capturedAt".into(), serde_json::json!(at));
         }
+        // 来源档（列 NOT NULL DEFAULT 'ComfyUI'）：始终给；配方 id 可空则整键省略。
+        out.insert(
+            "sourceKind".into(),
+            serde_json::json!(self.source_kind),
+        );
+        if let Some(id) = self.recipe_id {
+            out.insert("recipeId".into(), serde_json::json!(id));
+        }
         serde_json::Value::Object(out)
     }
 }
@@ -296,7 +308,7 @@ pub fn find_run(state: &AppState, run_key: &str) -> Result<Option<CaptureRunInfo
     state.with(|conn| {
         Ok(conn
             .query_row(
-                "SELECT run_key, prompt_id, status, media_count, title, error, created_at \
+                "SELECT run_key, prompt_id, status, media_count, title, error, created_at, source_kind, recipe_id \
                  FROM capture_runs WHERE run_key = ?1",
                 rusqlite::params![key],
                 row_to_run_info,
@@ -316,7 +328,7 @@ pub fn find_run_by_prompt_id(
     state.with(|conn| {
         Ok(conn
             .query_row(
-                "SELECT run_key, prompt_id, status, media_count, title, error, created_at \
+                "SELECT run_key, prompt_id, status, media_count, title, error, created_at, source_kind, recipe_id \
                  FROM capture_runs WHERE prompt_id = ?1 ORDER BY id DESC LIMIT 1",
                 rusqlite::params![prompt_id],
                 row_to_run_info,
@@ -340,6 +352,10 @@ fn row_to_run_info(row: &rusqlite::Row<'_>) -> rusqlite::Result<CaptureRunInfo> 
         // ⚠ 时间列走 `iso_time`（Kotlin 是"先解析再按 Java `Instant.toString()` 重排"），
         // 不是原样透传：`.000Z` 在那边发出来是**没有小数点**的（P4 第 21 步实测）
         captured_at: crate::infra::iso_time::iso_time(created.as_deref()),
+        source_kind: row
+            .get::<_, Option<String>>(7)?
+            .unwrap_or_else(|| "ComfyUI".to_string()),
+        recipe_id: row.get(8)?,
     })
 }
 
@@ -348,7 +364,7 @@ pub fn recent_runs(state: &AppState, limit: i64) -> Result<Vec<CaptureRunInfo>, 
     let limit = limit.clamp(1, 200);
     state.with(|conn| {
         let mut stmt = conn.prepare(
-            "SELECT run_key, prompt_id, status, media_count, title, error, created_at \
+            "SELECT run_key, prompt_id, status, media_count, title, error, created_at, source_kind, recipe_id \
              FROM capture_runs ORDER BY id DESC LIMIT ?1",
         )?;
         let rows = stmt.query_map([limit], row_to_run_info)?;

@@ -4,6 +4,34 @@
 
 use super::*;
 
+/// T3（2026-11-09）：来源档始终给、配方 id 可空则省略（Java `explicitNulls=false` 的老规矩）。
+#[test]
+fn provenance_to_json_带来源档_配方可空则省略() {
+    let info = CaptureRunInfo {
+        run_key: "run-1".into(),
+        prompt_id: Some(1456),
+        status: "success".into(),
+        media_count: 1,
+        title: None,
+        error: None,
+        captured_at: None,
+        source_kind: "recipe".into(),
+        recipe_id: Some(7),
+    };
+    let json = info.to_json();
+    assert_eq!(json["sourceKind"], "recipe");
+    assert_eq!(json["recipeId"], 7);
+
+    let info = CaptureRunInfo {
+        source_kind: "ComfyUI".into(),
+        recipe_id: None,
+        ..info
+    };
+    let json = info.to_json();
+    assert_eq!(json["sourceKind"], "ComfyUI", "外部捕获默认值要能读出来");
+    assert!(json.get("recipeId").is_none(), "没有配方就不出现这个键");
+}
+
 #[test]
 fn normalize_clamps_and_trims_like_kotlin() {
     let cfg = normalize(CaptureConfig {

@@ -64,6 +64,8 @@ BEGIN
     id          BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
     run_key     VARCHAR(191)    NOT NULL COMMENT '来源侧唯一键（ComfyUI prompt_id / import:<sha256>）',
     source      VARCHAR(32)     NOT NULL DEFAULT 'ComfyUI',
+    source_kind VARCHAR(16)     NOT NULL DEFAULT 'ComfyUI' COMMENT 'user / recipe / recent / template / ComfyUI',
+    recipe_id   BIGINT UNSIGNED NULL,
     prompt_id   BIGINT UNSIGNED NULL,
     status      VARCHAR(32)     NOT NULL DEFAULT 'success' COMMENT 'success / error / running',
     media_count INT             NOT NULL DEFAULT 0,

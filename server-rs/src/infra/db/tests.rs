@@ -4,6 +4,56 @@
 
 use super::*;
 
+/// T3（2026-11-09）：老库补 `capture_runs.source_kind` / `recipe_id` 两列，且重复打开幂等。
+#[test]
+fn 老库补_capture_runs_的_provenance_两列_且重复打开不炸() {
+    let path = temp_path("t3-provenance");
+    let _ = std::fs::remove_file(&path);
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    {
+        let conn = Connection::open(&path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE capture_runs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                run_key TEXT NOT NULL,
+                source TEXT NOT NULL DEFAULT 'ComfyUI',
+                prompt_id INTEGER NULL,
+                status TEXT NOT NULL DEFAULT 'success',
+                media_count INTEGER NOT NULL DEFAULT 0,
+                title TEXT NULL,
+                error TEXT NULL,
+                raw TEXT NULL,
+                created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+            );
+            INSERT INTO capture_runs (run_key, source) VALUES ('old-run', 'ComfyUI');
+            PRAGMA user_version = 13;",
+        )
+        .unwrap();
+    }
+    let conn = open_or_create(&path).expect("老库要能打开并补列");
+    let cols: Vec<String> = conn
+        .prepare("PRAGMA table_info(capture_runs)")
+        .unwrap()
+        .query_map([], |row| row.get::<_, String>(1))
+        .unwrap()
+        .map(|row| row.unwrap())
+        .collect();
+    assert!(cols.contains(&"source_kind".to_string()), "要补 source_kind");
+    assert!(cols.contains(&"recipe_id".to_string()), "要补 recipe_id");
+    let kind: String = conn
+        .query_row(
+            "SELECT source_kind FROM capture_runs WHERE run_key = 'old-run'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(kind, "ComfyUI", "老行要拿到列默认值（外部捕获）");
+    drop(conn);
+    // 第二次打开：补列那段再来一遍不炸
+    let conn = open_or_create(&path).expect("第二次打开不炸");
+    drop(conn);
+}
+
 fn temp_path(label: &str) -> std::path::PathBuf {
     crate::infra::testpaths::scratch(&format!("db-{label}"))
         .join("nested")
