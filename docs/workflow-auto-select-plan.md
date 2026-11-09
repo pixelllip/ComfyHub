@@ -335,3 +335,75 @@ T4 的提示词按拍板结果写。
   集成 `family_only_submission_picks_a_workflow_and_writes_the_prompt`（假 ComfyUI 全链路：
   挑选 → 写提示词 → 入库 → 回执 → `source_kind=recent`）、T1 真库形状回归、
   Kotlin `:harness:testDebugUnitTest` 263 例 0 失败。
+
+### 4.11 真机测试（2026-11-09）：三族各出一张，抓出 5 个只在真机上才现形的问题
+
+**环境**：桌面 release App + 真 ComfyUI 0.44.2（`127.0.0.1:8188`，8GB 显存），
+手机 OnePlus 8T（KB2000，已配对、`autoApproveSubmits=true`），
+手机在 App 里只说一句（英文句子，因为 adb 输入法限制；语义与中文那句一样）。
+
+**跑通的链路**（三族都走了 §1.2 的 ① 档，`source_kind=recent`）：
+
+| 说的话 | 挑中的工作流 | 产物 | 分辨率（工作流自己的构图，没动） | 回执 |
+| --- | --- | --- | --- | --- |
+| use anima to draw … convenience store | `anima-cafe` | media 1234 | 1368×960 | `submit-reply-bb8bdf65…` |
+| use moss to draw … rooftop city | `moss-rainy` | media 1235 | 832×1248 | `submit-reply-e9e2e379…` |
+| use krea2 to draw … neon alley | `krea-fixed` | media 1236 | 1184×1776 | `submit-reply-66e49865…` |
+
+三条都是"手机排队 → 桌面自动批准（按设备放权）→ 选工作流 → 写提示词 → 真出图 → 入库 → 回执回到手机"，
+**全程没有一次问用户**，提示词是手机那边的模型自己写的（`comfy_submit` 的 `positivePrompt`）。
+
+**真机上才发现的问题与处置**：
+
+1. **冷启动第一屏就是 `需要配对令牌（X-ComfyHub-Token）`，手点刷新才恢复**（稳定复现）。
+   根因：令牌只在 `AiWorkspaceStore._doLoad()` 里读，而画廊 / 提示词 / NSFW 的数据请求
+   在启动闸门放开后**同时**开跑，那时 `PairingTokenCache` 还是空 —— 局域网请求一律 403。
+   修法：`lib/main.dart` 在 **`runApp` 之前**（仅 Android）`await PairingTokenStore().read()`；
+   `AiWorkspaceStore` 里那次读取保留（幂等）。
+2. **桌面回执已经到了本机库，界面却停在"2 条消息"，手点刷新才刷出来**。
+   根因：`pullChanges()` 只记"同步了几条"，从不重读打开着的会话。
+   修法：`applied > 0` 且没在跑 Run 时重读会话列表 + 当前会话消息并 `notifyListeners`；
+   没拉到东西时不重读（每 25 秒空转一次重读太贵）。回归：
+   `ai_offline_source_test.dart` 的两条（拉到就重读 / 没拉到不重读）。
+3. **回执卡与「生成的产物」卡上的缩略图全是破图**（画廊里的同一张好好的）。
+   根因：`/api/media/{id}/thumb` 要 `X-ComfyHub-Token`，而这两张卡直接 `Image.network(url)`
+   没带头；桌面是回环所以一直没暴露，手机走局域网必然 403。画廊没事是因为它走
+   `MediaCache`（带令牌下载）。
+   修法：`AiApiClient.imageHeaders`（只有令牌）+ 两张卡透传 `headers`；附件缩略图那两处
+   同样补上（`attachmentPreviewHeaders()`）。回归：`submit_result_card_test.dart` 断言
+   `NetworkImage.headers` 带令牌。
+4. **手机上画廊进多选，底部操作栏溢出**（右边一条黄黑条纹，「移到集合…」被裁半截）。
+   360dp 上五个带文字的按钮放不下。
+   修法：`_SelectionBar` 按 520 宽分叉 —— 够宽给文字，不够宽退回**图标 + tooltip**，
+   并把 `TextButton` 的 64dp 最小宽度压到 44dp（只去文字仍是 64，照样溢出）。
+   回归：`gallery_group_selection_test.dart` 的「360dp 不溢出」。
+5. **一轮里调两个工具时，工具卡全是「未知工具 · 失败」**（真机 MOSS 那轮同时调了
+   `load_skill` + `list_skills`，两个都成功了，界面上两张空卡）。
+   根因是**两处形状不对**：手机 harness 把一个 `tool_call` 块写成整轮调用的数组
+   （`[{id,name},…]`，连参数都没有），`tool_result` 块又只写工具自己的结果 JSON（没有 `ok`）。
+   共享界面按 `payload['name']` / `payload['ok']` 读，于是名字空、状态一律判失败。
+   修法两边一起：
+   - **写端**（`HarnessRunner`）改成与桌面同形：一次调用一个 `tool_call` 块（`{name, arguments}`）、
+     `tool_result` 块带 `name` / `ok` / `elapsedMs` / `approval` 并并入 `mediaIds` 等原字段；
+   - **读端**（`AiToolCallState.listFromParts`）兼容旧数据：数组块展开成多张卡；
+     结果块没有 `ok` 键时按"失败正文以 `[工具失败:` 开头"判（不一律画成失败）。
+   回归：`test/tool_call_parts_test.dart` 四条。
+
+**顺带修掉的两处既有红用例**（与本轮改动无关，但一直红着）：
+
+- `ai_pending_approvals_test.dart`：顶部横幅那句「…其中 N 项是手机排队的提交」也含
+  「手机排队的提交」，`textContaining` 于是命中两处 —— 断言收紧成行文案「手机排队的提交 ·」。
+- `ai_tools_ui_test.dart` (i)(j)：回车 = 发送是**电脑端**行为（手机软键盘回车只换行），
+  而 `flutter test` 默认平台是 android —— 用例改成显式按 `TargetPlatform.windows` 渲染。
+- 同时把待批轮询收成**一份**：顶部横幅与右侧栏各起一个 5 秒定时器 = 每 5 秒问后端两遍；
+  现在按"谁在看"计数共用一份，且横幅**和右侧栏一样先等启动闸门**（以前它会抢在
+  闸门之前打 `/api/ai/pending`，失败还会留在界面上）。
+
+**回归**：`flutter test` 全量 781 passed；`flutter analyze` 无问题；
+Kotlin `:harness:testDebugUnitTest` 全绿。Rust 这轮**没有改动**，上一轮的
+`cargo test` / 三条 e2e（submit / capture / recipe / ai-tools）结果仍然有效。
+
+**这一轮真库留下的数据**：配方 3（anima-cafe，已验证 5 槽位）、promptId 1480–1482、
+media 1234–1236，以及 `submit_jobs` 里三条 `done`。要清就清，不清也不影响后续
+（它们正是 ① 档要用的"最近成功"）。
+
