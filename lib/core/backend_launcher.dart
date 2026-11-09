@@ -278,6 +278,10 @@ class BackendLauncher extends ChangeNotifier {
       _log('运行根目录: ${resolved.root}');
       final data = dataDirOf(resolved.root);
       if (data != resolved.root) _log('数据目录:   $data');
+      final storage = resolvedStorageDirOf(data);
+      if (storage != dataStorageDirOf(data)) {
+        _log('产物目录:   $storage（按实际布局识别，不是标准的 storage 子目录）');
+      }
       if (resolved.exe != null) {
         _log('后端程序:   ${resolved.exe}（来源：${resolved.exeSource}）');
       } else {
@@ -377,12 +381,14 @@ class BackendLauncher extends ChangeNotifier {
     final data = dataDirOf(root);
     final exe = serverExe!;
 
-    // 目录先备好：后端会自己建库目录，但 `.run` / `storage` 缺失会让它多打几句警告
-    for (final dir in [
-      runDirOf(root),
-      dataStorageDirOf(data),
-      dataDbParentOf(data),
-    ]) {
+    // 产物目录按**磁盘上的实际布局**认：标准是 `<数据目录>\storage`，
+    // 但也可能是旧版套出来的 `storage\storage`，或用户手动挪成的扁平布局
+    // （产物直接在数据目录里）。别在这里硬拼 `storage`，否则界面能看到库、
+    // 却读不到任何一张图（2026-11-09 用户报的"软件不认这个目录的内容"）。
+    final storage = resolvedStorageDirOf(data);
+
+    // 目录先备好：后端会自己建库目录，但 `.run` / 产物目录缺失会让它多打几句警告
+    for (final dir in [runDirOf(root), storage, dataDbParentOf(data)]) {
       try {
         Directory(dir).createSync(recursive: true);
       } catch (_) {}
@@ -391,7 +397,6 @@ class BackendLauncher extends ChangeNotifier {
     await _normalizeIntegrity(exe);
 
     final dbFile = dataDbFileOf(data);
-    final storage = dataStorageDirOf(data);
     final bindHost = _settings.allowRemoteBackend ? '0.0.0.0' : '127.0.0.1';
     // **先要回上一次那个端口**（2026-10-13）：`--port 0` 让系统挑，代价是重启就换
     // 端口，而**手机存的是 `http://<局域网IP>:<端口>`** —— 端口一变那条地址就废了，

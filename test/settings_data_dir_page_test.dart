@@ -211,15 +211,83 @@ void main() {
     expect(readDataDirOverride(root.path), isNull);
   });
 
-  testWidgets('目标里已经有一份数据：拒绝并指向「备份与恢复」，那是换库不是搬家', (tester) async {
+  testWidgets('目标里已经有一份数据：说清会备份+覆盖，确认后才动手', (tester) async {
     _write(target, ['.db', 'comfyhub.db'], 'another db');
     await pumpPage(tester);
 
     await pickTarget(tester);
 
+    expect(find.text('把数据搬到新位置？'), findsOneWidget);
+    expect(find.textContaining('已经有一份库'), findsOneWidget);
+    expect(find.textContaining('它那份库会先备份到 backups'), findsOneWidget);
+    expect(launcher.stopCalls, 0, reason: '用户还没确认，不许先停服务');
+
+    await tapWithIo(tester, find.widgetWithText(FilledButton, '开始搬'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('搬好了'), findsOneWidget);
+    expect(find.textContaining('原来的库已经备份到'), findsOneWidget);
+    expect(
+      File([target.path, '.db', 'comfyhub.db'].join(Platform.pathSeparator))
+          .readAsStringSync(),
+      'db',
+    );
+    final backups = Directory(
+      [root.path, 'backups'].join(Platform.pathSeparator),
+    ).listSync().whereType<Directory>().toList();
+    expect(backups, hasLength(1));
+    expect(
+      File([backups.single.path, 'comfyhub.db'].join(Platform.pathSeparator))
+          .readAsStringSync(),
+      'another db',
+      reason: '覆盖之前必须把目标原来那份库备份下来',
+    );
+
+    await tester.tap(find.widgetWithText(TextButton, '先留着'));
+    await tester.pumpAndSettle();
+  });
+
+  testWidgets('扁平布局：产物就在数据目录里，说清楚不再套一层', (tester) async {
+    expect(writeDataDirOverride(root.path, target.path), isTrue);
+    _write(target, ['.db', 'comfyhub.db'], 'db');
+    _write(target, ['media', 'a.png'], 'img');
+    await pumpPage(tester);
+
+    expect(find.text('产物在 ${target.path}'), findsOneWidget);
+    expect(find.textContaining('没有再套一层'), findsOneWidget);
+    expect(find.text('搬回程序目录'), findsOneWidget, reason: '数据在别处，仍然给搬回去的入口');
+  });
+
+  testWidgets('storage 命名的扁平目录：给「整理成标准布局」入口', (tester) async {
+    final parent = Directory(
+      [root.path, 'tidy'].join(Platform.pathSeparator),
+    )..createSync();
+    final storage = Directory(
+      [parent.path, 'storage'].join(Platform.pathSeparator),
+    )..createSync();
+    expect(writeDataDirOverride(root.path, storage.path), isTrue);
+    _write(storage, ['.db', 'comfyhub.db'], 'db');
+    _write(storage, ['media', 'a.png'], 'img');
+    await pumpPage(tester);
+
+    expect(find.text('产物在 ${storage.path}'), findsOneWidget);
+    expect(find.text('整理成标准布局'), findsOneWidget);
+  });
+
+  testWidgets('选了 storage 文件夹：按上一级算，不会再套 storage\\storage', (tester) async {
+    // 把 `<根>\storage` 选成目标：归一后就是根目录，也就是"当前数据目录"。
+    picker.directory = dataStorageDirOf(root.path);
+    await pumpPage(tester);
+
+    await pickTarget(tester);
+
     expect(find.text('不能搬到这个目录'), findsOneWidget);
-    expect(find.textContaining('备份与恢复'), findsOneWidget);
-    expect(launcher.stopCalls, 0);
+    expect(
+      find.textContaining('数据已经在这个目录里'),
+      findsOneWidget,
+      reason: '归一成上一级后，才不会出现 storage\\storage',
+    );
+    expect(find.text('把数据搬到新位置？'), findsNothing);
   });
 
   testWidgets('搬成功：复制 + 落指针 + 问旧数据删不删；默认「先留着」就一个都不删', (tester) async {

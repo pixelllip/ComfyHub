@@ -234,7 +234,7 @@ class _SettingsPageState extends State<SettingsPage> {
               title: '数据目录',
               subtitle: launcher.dataDir == null
                   ? '未定位到数据目录'
-                  : dataStorageDirOf(launcher.dataDir!),
+                  : resolvedStorageDirOf(launcher.dataDir!),
               onTap: () => _push(context, const DataDirSettingsPage()),
             ),
           ),

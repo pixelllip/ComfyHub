@@ -314,8 +314,73 @@ String dataDbParentOf(String dataDir) =>
     [dataDir, '.db'].join(Platform.pathSeparator);
 
 /// 数据目录里的产物 / AI 数据目录（`<数据目录>\storage`）。
+///
+/// 这是**标准布局**的落点。磁盘上实际是哪一层由 [resolvedStorageDirOf] 判 ——
+/// 旧版可能把 `storage` 文件夹本身当数据目录用过，也可能被手动挪成扁平布局。
 String dataStorageDirOf(String dataDir) =>
     [dataDir, 'storage'].join(Platform.pathSeparator);
+
+/// 产物目录里**算内容**的那几个子目录（识别布局 / 迁移共用）。
+const List<String> kStorageContentDirs = <String>[
+  'media',
+  'thumbs',
+  'ai',
+  'ai-attachments',
+  'ai-thumbs',
+];
+
+/// 这个目录像不像一个**产物目录**（下面有 `media` / `thumbs` / `ai` … 且不是空的）。
+///
+/// 判据刻意用"实际有内容"，不用"目录存在"：`storage\media` 这类空壳会被后端 /
+/// 启动代码建出来，拿空壳当布局判据会把真正的产物目录挡在外面。
+bool looksLikeStorageDir(String dir) {
+  for (final name in kStorageContentDirs) {
+    final sub = Directory([dir, name].join(Platform.pathSeparator));
+    try {
+      if (sub.existsSync() && sub.listSync(followLinks: false).isNotEmpty) {
+        return true;
+      }
+    } catch (_) {
+      // 读不动的目录当"没有"：布局判断不该被一次权限问题整个打断
+    }
+  }
+  return false;
+}
+
+/// **产物目录实际在哪** —— 三种布局都认（2026-11-09 用户报的 bug）。
+///
+/// | 布局 | 长什么样 | 来历 |
+/// | --- | --- | --- |
+/// | 标准 | `<数据目录>\storage\media` | 默认，也是迁移写出来的样子 |
+/// | 双层 | `<数据目录>\storage\storage\media` | 旧版把 `storage` 文件夹选成数据目录 |
+/// | 扁平 | `<数据目录>\media` | 用户把里层 `storage` 的内容挪到数据目录本身 |
+///
+/// 顺序是"标准 → 双层 → 扁平"：标准布局有内容时永远优先，免得两套目录并存时
+/// 读到旧的那一套。三种都不像就回标准路径，由调用方去建。
+String resolvedStorageDirOf(String dataDir) {
+  final canonical = dataStorageDirOf(dataDir);
+  if (looksLikeStorageDir(canonical)) return canonical;
+
+  final nested = [canonical, 'storage'].join(Platform.pathSeparator);
+  if (looksLikeStorageDir(nested)) return nested;
+
+  if (looksLikeStorageDir(dataDir)) return dataDir;
+  return canonical;
+}
+
+/// 产物是不是直接放在数据目录里（扁平布局）。
+bool isFlatStorageLayout(String dataDir) =>
+    _samePath(resolvedStorageDirOf(dataDir), dataDir);
+
+String _pathLower(String path) {
+  var value = path.replaceAll('/', Platform.pathSeparator);
+  while (value.length > 1 && value.endsWith(Platform.pathSeparator)) {
+    value = value.substring(0, value.length - 1);
+  }
+  return value.toLowerCase();
+}
+
+bool _samePath(String a, String b) => _pathLower(a) == _pathLower(b);
 
 String runDirOf(String root) => [root, '.run'].join(Platform.pathSeparator);
 

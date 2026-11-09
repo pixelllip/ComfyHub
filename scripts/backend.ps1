@@ -89,6 +89,35 @@ function Resolve-DataDir {
     return $ProjectRoot
 }
 
+<#  产物目录**实际**在哪。**与 lib\core\backend_paths.dart 的 `resolvedStorageDirOf` 同一份约定**：
+
+      标准：`<数据目录>\storage`
+      双层：`<数据目录>\storage\storage`（旧版把 storage 文件夹选成了数据目录）
+      扁平：`<数据目录>` 本身（用户把里层 storage 的内容挪到了上一级）
+
+    判据是"哪个目录里真的有内容"，空目录不算 —— 启动代码会建空壳。 #>
+function Test-StorageContent {
+    param([string]$Path)
+    if (-not $Path) { return $false }
+    foreach ($name in @('media', 'thumbs', 'ai', 'ai-attachments', 'ai-thumbs')) {
+        $dir = Join-Path $Path $name
+        if (-not (Test-Path -LiteralPath $dir -PathType Container)) { continue }
+        $items = @(Get-ChildItem -LiteralPath $dir -Force -ErrorAction SilentlyContinue)
+        if ($items.Count -gt 0) { return $true }
+    }
+    return $false
+}
+
+function Resolve-StorageDir {
+    param([string]$DataDir)
+    $canonical = Join-Path $DataDir 'storage'
+    if (Test-StorageContent -Path $canonical) { return $canonical }
+    $nested = Join-Path $canonical 'storage'
+    if (Test-StorageContent -Path $nested) { return $nested }
+    if (Test-StorageContent -Path $DataDir) { return $DataDir }
+    return $canonical
+}
+
 <#  后端 exe 在哪。**顺序即优先级**，与 `lib\core\backend_paths.dart` 一字不差：
       ① $env:COMFYHUB_SERVER_EXE  —— 显式覆盖（把后端映像挪出受限目录也是用这个）
       ② <根>\backend\             —— release 产物：后端是 App 自己的资产
@@ -307,8 +336,9 @@ function Do-Start {
     }
 
     $DataDir = Resolve-DataDir -ProjectRoot $ProjectRoot
+    $StorageDir = Resolve-StorageDir -DataDir $DataDir
     New-Item -ItemType Directory -Force -Path (Join-Path $DataDir '.db') | Out-Null
-    New-Item -ItemType Directory -Force -Path (Join-Path $DataDir 'storage') | Out-Null
+    New-Item -ItemType Directory -Force -Path $StorageDir | Out-Null
     New-Item -ItemType Directory -Force -Path (Join-Path $ProjectRoot '.run') | Out-Null
 
     # 起之前先把 Low 完整性标签修回 Medium（只动标签，不动位置；详见 Repair-LaunchImages）
@@ -317,7 +347,7 @@ function Do-Start {
     # 端口状态与工具权限的基准：后端认这个环境变量（App 起它时也是这么传的）
     $env:COMFYHUB_PROJECT_ROOT = $ProjectRoot
     $argLine = "--db `"$(Join-Path $DataDir '.db\comfyhub.db')`" " +
-        "--storage `"$(Join-Path $DataDir 'storage')`" " +
+        "--storage `"$StorageDir`" " +
         "--host $BindHost --port 0"
 
     Write-Host "==> 启动后端（$BindHost，端口自动）exe=$exe" -ForegroundColor Cyan

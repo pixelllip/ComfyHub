@@ -9,9 +9,14 @@
 ///
 ///   · `.db\comfyhub.db`（连同 `-wal` / `-shm`：后端停掉之后它们应当已经收尾，
 ///     但"应当"不是判据 —— 文件在就一起搬，缺了下次打开库会少最后几个事务）；
-///   · `storage\`（产物 / 缩略图 / 附件 / Skills / 记忆 / MCP 运行时）。
+///   · 产物目录（产物 / 缩略图 / 附件 / Skills / 记忆 / MCP 运行时）。
 ///
-/// **不搬**：`storage\tmp`（24 小时就清的中转文件）、`storage\app-support`
+/// **源目录的产物层按实际布局认**（`backend_paths.dart` 的 `resolvedStorageDirOf`）：
+/// 标准是 `<数据目录>\storage`，旧版把 `storage` 当数据目录会套成
+/// `storage\storage`，用户手动挪过则是"扁平"（产物直接在数据目录里）。
+/// 搬过去一律写成**标准布局** —— 双层顺手压平，扁平落进目标目录的 `storage\`。
+///
+/// **不搬**：`tmp`（24 小时就清的中转文件）、`app-support`
 /// （偏好已经搬到 `<根>\app-support`，那是程序目录的东西，不跟着数据走）。
 ///
 /// # 三条纪律
@@ -21,6 +26,8 @@
 ///     **不写** `data-dir.json` —— 半份数据比不搬更糟。
 ///  3. **失败 / 取消都如实说**：目标目录里会留下已经拷完的部分，告诉用户它在哪、
 ///     可以删掉重来，别假装什么都没发生。
+///  4. **覆盖旧库之前一定先备份**：目标里已经有一份库（"搬回程序目录"）时，
+///     先把它放进 `<根>\backups\`；备份不成就一个字节都不动。
 ///
 /// # 谁停后端
 ///
@@ -52,15 +59,23 @@ class DataDirCheck {
     required this.ok,
     this.message = '',
     this.source = DataDirUsage.empty,
+    this.replacesTarget = false,
   });
 
   final bool ok;
 
-  /// 不通过时给用户看的一句人话（通过时为空）。
+  /// 给用户看的一句人话：不通过时是原因；通过但目标里已经有库时是提醒。
   final String message;
 
   /// 当前数据目录的规模（给确认弹窗用）。
   final DataDirUsage source;
+
+  /// 目标目录里已经有一份库，搬过去会**覆盖**它（迁移会先把它备份到 `backups`）。
+  ///
+  /// 2026-11-09：用户把数据搬到别处、又想搬回来时，旧目录里的库还在 ——
+  /// 以前一律拒绝并让人去「备份与恢复」，可那份备份根本不存在。现在改成
+  /// "先备份、再覆盖"，并在确认弹窗里把这件事说清楚。
+  final bool replacesTarget;
 }
 
 /// 迁移进度（界面画进度条用）。
@@ -95,6 +110,7 @@ class MigrationResult {
     required this.message,
     this.cancelled = false,
     this.pointerWritten = false,
+    this.backupPath,
   });
 
   final bool ok;
@@ -106,6 +122,9 @@ class MigrationResult {
 
   /// 指针文件写成功 = 下次起后端就会用新目录。
   final bool pointerWritten;
+
+  /// 目标里原来的库备份到了哪（没有覆盖旧库时是 null）。
+  final String? backupPath;
 }
 
 // ---------------------------------------------------------------------------
@@ -133,6 +152,10 @@ class _Entry {
 
 /// 列出"迁移要搬的文件"。读不动的目录**直接报错**，不静默跳过 ——
 /// 少搬一个目录，用户看到的就是"产物少了一批"。
+///
+/// 目标里一律写成**标准布局**（`.db\…` 与 `storage\…`），源目录是扁平 / 双层
+/// 布局时也先归一到这两条路径上 —— 于是"双层搬一次就压平"、"扁平的产物
+/// 搬完会落进 `storage\`"，不用额外分支。
 Future<List<_Entry>> _collectEntries(String dataDir) async {
   final entries = <_Entry>[];
 
@@ -153,25 +176,50 @@ Future<List<_Entry>> _collectEntries(String dataDir) async {
   }
 
   // 产物 / AI 数据：跳过 tmp（中转）与 app-support（偏好，已经不在数据目录里了）。
-  final storage = Directory(dataStorageDirOf(dataDir));
-  if (storage.existsSync()) {
-    await for (final entity in storage.list(
-      recursive: true,
-      followLinks: false,
-    )) {
-      if (entity is! File) continue;
-      final relative = _relativeParts(dataDir, entity.path);
-      if (relative.length >= 2 &&
-          (relative[1].toLowerCase() == 'tmp' ||
-              relative[1].toLowerCase() == 'app-support')) {
-        continue;
+  final storageRoot = resolvedStorageDirOf(dataDir);
+  if (_samePath(storageRoot, dataDir)) {
+    // 扁平布局：只认那几个"产物"子目录，别把 `.db` / 程序文件也扫进去。
+    for (final name in kStorageContentDirs) {
+      final dir = Directory([storageRoot, name].join(Platform.pathSeparator));
+      if (!dir.existsSync()) continue;
+      await _addFiles(dir, ['storage', name], entries);
+    }
+  } else {
+    final storage = Directory(storageRoot);
+    if (storage.existsSync()) {
+      await for (final entity in storage.list(
+        recursive: true,
+        followLinks: false,
+      )) {
+        if (entity is! File) continue;
+        final relative = _relativeParts(storageRoot, entity.path);
+        if (relative.isNotEmpty && _isTransient(relative.first)) continue;
+        final stat = entity.statSync();
+        entries.add(_Entry(['storage', ...relative], entity.path, stat.size));
       }
-      final stat = entity.statSync();
-      entries.add(_Entry(relative, entity.path, stat.size));
     }
   }
 
   return entries;
+}
+
+/// 把 [dir] 下的文件按 [prefix] 前缀收进 [out]（扁平布局专用）。
+Future<void> _addFiles(
+  Directory dir,
+  List<String> prefix,
+  List<_Entry> out,
+) async {
+  await for (final entity in dir.list(recursive: true, followLinks: false)) {
+    if (entity is! File) continue;
+    final relative = _relativeParts(dir.path, entity.path);
+    final stat = entity.statSync();
+    out.add(_Entry([...prefix, ...relative], entity.path, stat.size));
+  }
+}
+
+bool _isTransient(String name) {
+  final lower = name.toLowerCase();
+  return lower == 'tmp' || lower == 'app-support';
 }
 
 /// `D:\data\storage\media\a.png` → `['storage', 'media', 'a.png']`
@@ -208,6 +256,36 @@ bool _isInside(String child, String parent) {
   );
 }
 
+/// 目录里有东西就算（读不动当"有"，宁可多问一句也不静默覆盖）。
+bool _dirHasContent(String path) {
+  try {
+    final dir = Directory(path);
+    return dir.existsSync() && dir.listSync(followLinks: false).isNotEmpty;
+  } catch (_) {
+    return true;
+  }
+}
+
+/// 选中的文件夹是不是就叫 `storage`。
+bool isStorageNamedDir(String path) {
+  final norm = _normalize(path);
+  if (norm.isEmpty) return false;
+  return norm.split(Platform.pathSeparator).last.toLowerCase() == 'storage';
+}
+
+/// 把用户选中的目录**归一到数据目录**。
+///
+/// 数据目录 = "库 + 一个 `storage` 子目录"的容器。用户常直接选 `…\storage`
+/// （他想要的是"产物放这儿"），照原样用就会得到 `…\storage\storage` ——
+/// 2026-11-09 报上来的嵌套 bug 就是这么来的。选中 `storage` 文件夹时按它的
+/// 上一级算：产物仍然落在用户点的那个文件夹里，只是不再多套一层。
+String normalizeDataDirTarget(String target) {
+  final norm = _normalize(target.trim());
+  if (norm.isEmpty || !isStorageNamedDir(norm)) return norm;
+  final parent = Directory(norm).parent.path;
+  return _samePath(parent, norm) ? norm : parent;
+}
+
 // ---------------------------------------------------------------------------
 //  查
 // ---------------------------------------------------------------------------
@@ -217,7 +295,7 @@ Future<DataDirCheck> checkDataDirTarget({
   required String target,
   required String current,
 }) async {
-  final trimmed = target.trim();
+  final trimmed = _normalize(target.trim());
   if (trimmed.isEmpty) {
     return const DataDirCheck(ok: false, message: '先选一个目录。');
   }
@@ -237,29 +315,43 @@ Future<DataDirCheck> checkDataDirTarget({
       source: source,
     );
   }
-  if (_isInside(current, trimmed)) {
-    return DataDirCheck(
-      ok: false,
-      message: '新目录不能是当前数据目录的上一级，会一边搬一边把旧目录也搬进去。',
-      source: source,
-    );
-  }
 
-  // 目标里已经有一份 ComfyHub 数据：这不是"迁移"，是"换一份库"。
-  // 允许它等于让用户以为在搬数据、实际切到了另一份库（产物还在旧目录）。
-  final targetHasDb = File(dataDbFileOf(trimmed)).existsSync();
-  final targetStorage = Directory(dataStorageDirOf(trimmed));
+  final targetDb = File(dataDbFileOf(trimmed)).existsSync();
+  final targetStorage = dataStorageDirOf(trimmed);
   final targetHasStorage =
-      targetStorage.existsSync() &&
-      targetStorage.listSync(followLinks: false).isNotEmpty;
-  if (targetHasDb || targetHasStorage) {
-    return DataDirCheck(
-      ok: false,
-      message:
-          '这个目录里已经有一份 ComfyHub 的数据了。换过去等于换一份库，'
-          '不是搬家 —— 要恢复旧数据请用「本地服务 → 备份与恢复」。',
-      source: source,
-    );
+      _dirHasContent(targetStorage) || looksLikeStorageDir(trimmed);
+  final targetHasData = targetDb || targetHasStorage;
+
+  final sourceStorage = resolvedStorageDirOf(current);
+  // 产物本来就已经在目标目录的 `storage` 里（用户把数据目录选成了 `…\storage`），
+  // 或者当前数据目录**就是**目标的 `storage`（双层布局往上压平）：
+  // 这次"搬"其实只是把库挪到上一级，产物不用换地方。
+  final artifactsInPlace =
+      _samePath(targetStorage, sourceStorage) ||
+      _samePath(targetStorage, current);
+
+  if (_isInside(current, trimmed)) {
+    // 上一级 / 更上一级：只允许"直接上一级且产物已经在位"，或者目标本来是干净的。
+    // 更远的上级目录里什么都有（用户自己的文件），不能拿它当数据目录。
+    final parent = Directory(_normalize(current)).parent.path;
+    if (!_samePath(parent, trimmed)) {
+      return DataDirCheck(
+        ok: false,
+        message:
+            '新目录不能是当前数据目录的更上一级。要往上搬就选它的上一级，'
+            '或者换一个别的目录。',
+        source: source,
+      );
+    }
+    if (targetHasData && !artifactsInPlace) {
+      return DataDirCheck(
+        ok: false,
+        message:
+            '上一级里已经有一份别的数据，搬过去会和它混在一起。'
+            '先把那份数据移走再搬。',
+        source: source,
+      );
+    }
   }
 
   // 写探针：建目录 + 写一个文件再删掉（建不出目录 / 只读盘当场说清楚）。
@@ -279,10 +371,27 @@ Future<DataDirCheck> checkDataDirTarget({
     );
   }
 
-  // 目标就是运行根目录 = "搬回默认位置"，允许；但根目录里若有 `.db` / `storage`
-  // 残留（上面已经拦过），这里只剩正常的程序文件，不拦。
+  // 目标里已经有一份数据：不是"不能搬"，而是"搬过去要先备份、再覆盖"。
+  // 用户 2026-11-09 报的"搬回程序目录被踢去备份与恢复、可我没备份过"就是这里。
+  final String message;
+  if (targetDb) {
+    message =
+        '这个目录里已经有一份库。它那份库会先备份到 backups，'
+        '然后换成现在的；同名产物会被覆盖。';
+  } else if (targetHasStorage) {
+    message =
+        '这个目录里已经有一份产物。搬过去会覆盖同名文件，'
+        '多出来的旧文件会留着。';
+  } else {
+    message = '';
+  }
 
-  return DataDirCheck(ok: true, source: source);
+  return DataDirCheck(
+    ok: true,
+    source: source,
+    replacesTarget: targetDb,
+    message: message,
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -293,6 +402,10 @@ Future<DataDirCheck> checkDataDirTarget({
 ///
 /// **调用前必须先停掉本地服务**（见文件头）。[isCancelled] 每搬一个文件问一次，
 /// 返回 true 就停手（已经拷完的部分留在目标目录，不写指针）。
+///
+/// 目标目录里已经有一份库时（"搬回程序目录"最常见）：**先把它备份到
+/// `<根>\backups\`，再覆盖**。以前这里直接拒绝，用户被指去「备份与恢复」，
+/// 可那次搬家根本没做过备份 —— 2026-11-09 卡住的现场。
 Future<MigrationResult> migrateDataDir({
   required String source,
   required String target,
@@ -300,6 +413,17 @@ Future<MigrationResult> migrateDataDir({
   void Function(MigrationProgress progress)? onProgress,
   bool Function()? isCancelled,
 }) async {
+  if (_samePath(source, target)) {
+    return const MigrationResult(ok: false, message: '新目录就是当前目录，不用搬。');
+  }
+  if (isCancelled?.call() == true) {
+    return const MigrationResult(
+      ok: false,
+      cancelled: true,
+      message: '已取消。旧数据没动。',
+    );
+  }
+
   final List<_Entry> entries;
   try {
     entries = await _collectEntries(source);
@@ -315,6 +439,48 @@ Future<MigrationResult> migrateDataDir({
       ok: false,
       message: '还有一次库恢复没完成。先重启一次本地服务让它做完，再来改数据目录。',
     );
+  }
+
+  // 目标里已经有一份库：先备份再让开。**备份失败就什么都不动** ——
+  // 覆盖一份没备份的库是不可接受的。
+  String? backupPath;
+  if (File(dataDbFileOf(target)).existsSync()) {
+    try {
+      backupPath = _backupTargetDb(root, target);
+    } catch (e) {
+      return MigrationResult(
+        ok: false,
+        message: '目标目录里有一份库，但备份它失败了（$e）。旧数据没动。',
+      );
+    }
+    // 备份已经落盘、还没删目标那份库：这时取消仍然算"什么都没动"。
+    if (isCancelled?.call() == true) {
+      return MigrationResult(
+        ok: false,
+        cancelled: true,
+        message: '已取消。旧数据没动；目标里原来的库已经备份到 $backupPath。',
+        backupPath: backupPath,
+      );
+    }
+    try {
+      for (final name in [
+        'comfyhub.db-wal',
+        'comfyhub.db-shm',
+        'comfyhub.db',
+      ]) {
+        final file = File(
+          [dataDbParentOf(target), name].join(Platform.pathSeparator),
+        );
+        if (file.existsSync()) file.deleteSync();
+      }
+    } catch (e) {
+      return MigrationResult(
+        ok: false,
+        message:
+            '目标里那份库已经备份到 $backupPath，但没能把它从原处移开（$e）。'
+            '旧数据没动，可以重试一次。',
+      );
+    }
   }
 
   final totalBytes = entries.fold<int>(0, (sum, e) => sum + e.length);
@@ -349,13 +515,24 @@ Future<MigrationResult> migrateDataDir({
         return MigrationResult(
           ok: false,
           cancelled: true,
-          message: '已取消。旧数据没动；新目录里留着一部分拷完的文件，可以整个删掉重来。',
+          message:
+              '已取消。旧数据没动；新目录里留着一部分拷完的文件，可以整个删掉重来。'
+              '${_backupNote(backupPath)}',
+          backupPath: backupPath,
         );
       }
       final destination = [
         target,
         ...entry.relative,
       ].join(Platform.pathSeparator);
+      // 产物本来就在目标位置（把 `…\storage` 选成数据目录后再搬到上一级）：
+      // 源和目标是同一个文件，拷自己会报错，跳过即可。
+      if (_samePath(entry.source, destination)) {
+        copiedFiles++;
+        copiedBytes += entry.length;
+        report(entry.relative.join(Platform.pathSeparator));
+        continue;
+      }
       final parent = Directory(File(destination).parent.path);
       if (!parent.existsSync()) parent.createSync(recursive: true);
       File(entry.source).copySync(destination);
@@ -366,7 +543,10 @@ Future<MigrationResult> migrateDataDir({
   } catch (e) {
     return MigrationResult(
       ok: false,
-      message: '复制到一半失败了（$e）。旧数据没动；新目录里的副本不完整，可以删掉重来。',
+      message:
+          '复制到一半失败了（$e）。旧数据没动；新目录里的副本不完整，可以删掉重来。'
+          '${_backupNote(backupPath)}',
+      backupPath: backupPath,
     );
   }
 
@@ -380,7 +560,10 @@ Future<MigrationResult> migrateDataDir({
     if (!file.existsSync()) {
       return MigrationResult(
         ok: false,
-        message: '校验没通过：${entry.relative.join('\\')} 没拷过去。旧数据没动。',
+        message:
+            '校验没通过：${entry.relative.join('\\')} 没拷过去。旧数据没动。'
+            '${_backupNote(backupPath)}',
+        backupPath: backupPath,
       );
     }
     final size = file.lengthSync();
@@ -389,17 +572,20 @@ Future<MigrationResult> migrateDataDir({
         ok: false,
         message:
             '校验没通过：${entry.relative.join('\\')} 大小对不上'
-            '（应该是 ${entry.length} 字节，实际 $size）。旧数据没动。',
+            '（应该是 ${entry.length} 字节，实际 $size）。旧数据没动。'
+            '${_backupNote(backupPath)}',
+        backupPath: backupPath,
       );
     }
   }
 
   if (!writeDataDirOverride(root, target)) {
-    return const MigrationResult(
+    return MigrationResult(
       ok: false,
       message:
           '数据已经复制并校验好了，但"记住新位置"没写成（<根>\\data-dir.json）。'
-          '旧目录还在用，可以重试一次。',
+          '旧目录还在用，可以重试一次。${_backupNote(backupPath)}',
+      backupPath: backupPath,
     );
   }
 
@@ -416,8 +602,48 @@ Future<MigrationResult> migrateDataDir({
   return MigrationResult(
     ok: true,
     pointerWritten: true,
-    message: '搬完了，共 $totalFiles 个文件。',
+    message: '搬完了，共 $totalFiles 个文件。${_backupNote(backupPath)}',
+    backupPath: backupPath,
   );
+}
+
+/// 覆盖旧库之后给用户的一句提醒（没覆盖时为空）。
+String _backupNote(String? backupPath) =>
+    backupPath == null ? '' : '目标里原来的库备份在 $backupPath。';
+
+/// 把目标目录里现成的库文件（含 `-wal` / `-shm`）备份到 `<根>\backups\`。
+String _backupTargetDb(String root, String target) {
+  final stamp = _timestamp();
+  final backups = Directory([root, 'backups'].join(Platform.pathSeparator));
+  var backup = Directory(
+    [backups.path, 'data-dir-$stamp'].join(Platform.pathSeparator),
+  );
+  var suffix = 1;
+  while (backup.existsSync()) {
+    backup = Directory(
+      [
+        backups.path,
+        'data-dir-$stamp-${suffix++}',
+      ].join(Platform.pathSeparator),
+    );
+  }
+  backup.createSync(recursive: true);
+
+  final dbDir = dataDbParentOf(target);
+  for (final name in ['comfyhub.db', 'comfyhub.db-wal', 'comfyhub.db-shm']) {
+    final file = File([dbDir, name].join(Platform.pathSeparator));
+    if (!file.existsSync()) continue;
+    file.copySync([backup.path, name].join(Platform.pathSeparator));
+  }
+  return backup.path;
+}
+
+String _timestamp() {
+  final now = DateTime.now();
+  String two(int value) => value.toString().padLeft(2, '0');
+  final ms = now.millisecond.toString().padLeft(3, '0');
+  return '${now.year}${two(now.month)}${two(now.day)}-'
+      '${two(now.hour)}${two(now.minute)}${two(now.second)}-$ms';
 }
 
 // ---------------------------------------------------------------------------
@@ -426,6 +652,9 @@ Future<MigrationResult> migrateDataDir({
 
 /// 删掉旧数据目录里的数据（`.db\` 与 `storage\`），**不碰程序目录里的任何东西**。
 ///
+/// [newStorageDir] 是迁移后的产物目录。搬到上一级时旧数据目录**就是**新产物目录
+/// （`…\storage` 原样留着），这时只删它里面的旧 `.db`，产物一个都不许动。
+///
 /// 永远不会删 [oldDataDir] 本身之外的路径：`backups\` / `.run\` / `comfyui\` /
 /// `skills\builtin\` 都不在删除范围里。删不掉的文件如实列出。
 ///
@@ -433,8 +662,9 @@ Future<MigrationResult> migrateDataDir({
 /// 但"刚升级、还没重启"的进程可能仍把它当活文件在用（热重载不会重跑 `main()`）；
 /// 删掉它 = 下次启动读不到偏好。它只有几十 KB，留着不碍事。
 Future<({int freedBytes, int deletedFiles, List<String> failed})> deleteOldData(
-  String oldDataDir,
-) async {
+  String oldDataDir, {
+  String? newStorageDir,
+}) async {
   var bytes = 0;
   var files = 0;
   final failed = <String>[];
@@ -450,10 +680,21 @@ Future<({int freedBytes, int deletedFiles, List<String> failed})> deleteOldData(
     }
   }
 
-  for (final dirPath in [
+  final canonicalStorage = dataStorageDirOf(oldDataDir);
+  // 旧数据目录本身就是新产物目录（搬到上一级）：产物原地留着，只清旧库。
+  final oldIsNewStorage =
+      newStorageDir != null && _samePath(oldDataDir, newStorageDir);
+  final dirs = <String>[
     dataDbParentOf(oldDataDir),
-    dataStorageDirOf(oldDataDir),
-  ]) {
+    if (newStorageDir == null || !_samePath(canonicalStorage, newStorageDir))
+      canonicalStorage,
+    // 扁平布局：产物直接放在数据目录里，旧的那份要清掉（但也别碰新产物目录）。
+    if (!oldIsNewStorage && isFlatStorageLayout(oldDataDir))
+      for (final name in [...kStorageContentDirs, 'tmp'])
+        [oldDataDir, name].join(Platform.pathSeparator),
+  ];
+
+  for (final dirPath in dirs) {
     final dir = Directory(dirPath);
     if (!dir.existsSync()) continue;
     await for (final entity in dir.list(recursive: true, followLinks: false)) {
@@ -468,9 +709,10 @@ Future<({int freedBytes, int deletedFiles, List<String> failed})> deleteOldData(
     }
     // 还有 app-support 时不能用 recursive（会把保留的那份也删掉）；
     // 这时目录删不掉是预期内的，不算失败。
-    final keepAppSupport = Directory(
-      '${dataStorageDirOf(oldDataDir)}${Platform.pathSeparator}app-support',
-    ).existsSync();
+    final keepAppSupport =
+        _samePath(dirPath, canonicalStorage) &&
+        Directory('$canonicalStorage${Platform.pathSeparator}app-support')
+            .existsSync();
     try {
       await dir.delete(recursive: !keepAppSupport);
     } catch (e) {

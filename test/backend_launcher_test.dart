@@ -287,6 +287,41 @@ void main() {
     launcher.dispose();
   });
 
+  test('启动：数据目录本身就是产物目录时 --storage 指它，不再硬拼 storage', () async {
+    writeApiJson(await deadPort());
+    final settings = await loadSettings();
+    final data = Directory('${root.path}${Platform.pathSeparator}flat-data')
+      ..createSync(recursive: true);
+    // 扁平布局：产物直接在数据目录里（2026-11-09 用户手挪后的样子）
+    final media = Directory('${data.path}${Platform.pathSeparator}media')
+      ..createSync();
+    File('${media.path}${Platform.pathSeparator}a.png').writeAsStringSync('x');
+    expect(writeDataDirOverride(root.path, data.path), isTrue);
+    final launcher = BackendLauncher(settings);
+    installStarter();
+
+    await launcher.ensureRunning();
+
+    final sep = Platform.pathSeparator;
+    expect(spawns.single.args, [
+      '--db',
+      '${data.path}$sep.db${sep}comfyhub.db',
+      '--storage',
+      data.path,
+      '--host',
+      '127.0.0.1',
+      '--port',
+      '0',
+      '--watch-stdin',
+    ]);
+    expect(
+      Directory('${data.path}${sep}storage').existsSync(),
+      isFalse,
+      reason: '认了扁平布局就不该再建一个空的 storage 子目录',
+    );
+    launcher.dispose();
+  });
+
   test('启动：开了「允许局域网」就 --host 0.0.0.0 + COMFYHUB_ALLOW_REMOTE=1', () async {
     writeApiJson(await deadPort());
     final settings = await loadSettings(allowRemote: true);

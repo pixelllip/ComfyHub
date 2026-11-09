@@ -245,6 +245,68 @@ void main() {
     });
   });
 
+  // 产物目录的实际位置（2026-11-09）：
+  //   · 标准 = `<数据目录>\storage`；
+  //   · 扁平 = 数据目录本身（用户把里层 storage 的内容挪到了上一级）；
+  //   · 双层 = `<数据目录>\storage\storage`（旧版把 storage 当成数据目录）。
+  // 判据只能是"哪个目录里真的有内容"，空壳不算。
+  group('resolvedStorageDirOf：三种布局都认', () {
+    void writeFile(String base, List<String> parts) {
+      final file = File(p([base, ...parts]));
+      file.parent.createSync(recursive: true);
+      file.writeAsStringSync('x');
+    }
+
+    test('空目录 → 标准路径（由调用方去建）', () {
+      final data = p([root.path, 'data']);
+      Directory(data).createSync();
+      expect(resolvedStorageDirOf(data), dataStorageDirOf(data));
+      expect(isFlatStorageLayout(data), isFalse);
+      expect(looksLikeStorageDir(data), isFalse);
+    });
+
+    test('扁平：产物直接在数据目录里（本例就是用户手挪后的样子）', () {
+      final data = p([root.path, 'data']);
+      writeFile(data, ['media', 'a.png']);
+      expect(resolvedStorageDirOf(data), data);
+      expect(isFlatStorageLayout(data), isTrue);
+      expect(looksLikeStorageDir(data), isTrue);
+    });
+
+    test('标准布局有内容时优先（哪怕旁边还躺着扁平的那一套）', () {
+      final data = p([root.path, 'data']);
+      writeFile(data, ['media', 'old.png']);
+      writeFile(data, ['storage', 'media', 'a.png']);
+      expect(resolvedStorageDirOf(data), dataStorageDirOf(data));
+      expect(isFlatStorageLayout(data), isFalse);
+    });
+
+    test('空的标准目录 + 扁平内容：认扁平，不被空壳挡住', () {
+      final data = p([root.path, 'data']);
+      Directory(p([data, 'storage', 'media'])).createSync(recursive: true);
+      writeFile(data, ['media', 'a.png']);
+      expect(resolvedStorageDirOf(data), data);
+      expect(isFlatStorageLayout(data), isTrue);
+    });
+
+    test('双层：旧版套出来的 storage\\storage 也认', () {
+      final data = p([root.path, 'data']);
+      writeFile(data, ['storage', 'storage', 'media', 'a.png']);
+      expect(
+        resolvedStorageDirOf(data),
+        p([dataStorageDirOf(data), 'storage']),
+      );
+      expect(isFlatStorageLayout(data), isFalse);
+    });
+
+    test('只有 tmp / 空目录不算内容', () {
+      final data = p([root.path, 'data']);
+      writeFile(data, ['storage', 'tmp', 'junk.bin']);
+      Directory(p([data, 'media'])).createSync(recursive: true);
+      expect(resolvedStorageDirOf(data), dataStorageDirOf(data));
+    });
+  });
+
   group('readPortFile：启动与退出的关键路径，绝不能抛', () {
     test('没有文件回 null', () {
       expect(readPortFile(root.path), isNull);

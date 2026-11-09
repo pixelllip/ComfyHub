@@ -36,6 +36,19 @@ class _DataDirSettingsPageState extends State<DataDirSettingsPage> {
     final root = launcher.projectRoot;
     final dataDir = launcher.dataDir;
     final isDefault = root != null && dataDir == root;
+    // 产物按**磁盘上实际在哪**显示：标准是 `<数据目录>\storage`，旧版套成
+    // `storage\storage`，用户手动挪过则是"扁平"（产物就在数据目录里）。
+    final storageDir = dataDir == null ? null : resolvedStorageDirOf(dataDir);
+    final flatStorage = dataDir != null && isFlatStorageLayout(dataDir);
+    // `…\storage` 被当成数据目录时（产物在它里面、或它里面又套了一层 storage），
+    // 直接给一个"整理"入口：把库挪到上一级，产物原地不动。
+    final tidyTarget = dataDir == null || !isStorageNamedDir(dataDir)
+        ? null
+        : Directory(dataDir).parent.path;
+    final needsTidy =
+        dataDir != null &&
+        tidyTarget != null &&
+        resolvedStorageDirOf(dataDir) != dataStorageDirOf(dataDir);
 
     return SettingsScaffold(
       title: '数据目录',
@@ -53,14 +66,21 @@ class _DataDirSettingsPageState extends State<DataDirSettingsPage> {
                     dataDir ?? '还没定位到数据目录',
                     style: theme.textTheme.bodyMedium,
                   ),
-                  if (dataDir != null) ...[
+                  if (storageDir != null) ...[
                     const SizedBox(height: 4),
                     Text(
-                      '产物在 ${dataStorageDirOf(dataDir)}',
+                      '产物在 $storageDir',
                       style: theme.textTheme.bodySmall?.copyWith(
                         color: theme.colorScheme.onSurfaceVariant,
                       ),
                     ),
+                    if (flatStorage)
+                      Text(
+                        '产物直接放在这个目录里，没有再套一层 storage。',
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: theme.colorScheme.onSurfaceVariant,
+                        ),
+                      ),
                   ],
                   const SizedBox(height: 6),
                   Text(
@@ -93,6 +113,24 @@ class _DataDirSettingsPageState extends State<DataDirSettingsPage> {
                         ),
                         label: const Text('更改位置…'),
                       ),
+                      if (needsTidy)
+                        TextButton.icon(
+                          onPressed: _busy
+                              ? null
+                              : () => _migrateTo(
+                                  launcher,
+                                  tidyTarget,
+                                  note:
+                                      '数据目录会改成上一级 '
+                                      '${Directory(tidyTarget).absolute.path}，'
+                                      '产物原地不动。',
+                                ),
+                          icon: const Icon(
+                            Icons.cleaning_services_outlined,
+                            size: 18,
+                          ),
+                          label: const Text('整理成标准布局'),
+                        ),
                       if (!isDefault)
                         TextButton.icon(
                           onPressed: _busy
@@ -121,6 +159,9 @@ class _DataDirSettingsPageState extends State<DataDirSettingsPage> {
                 '换位置时会先把本地服务停下来，再把库和产物复制过去；'
                 '复制完会逐个文件核对，核对通过才切换。旧目录不会自动删除，'
                 '搬完会问你一次。\n'
+                '选目录时如果选的是 storage 文件夹，会按它的上一级算，'
+                '免得再套出一层 storage。\n'
+                '目标里本来就有库时，会先把那份库备份到 backups 再覆盖。\n'
                 '库备份（backups）、运行日志（.run）、ComfyUI 工作流目录和设置文件'
                 '留在程序目录里，不跟着数据走。',
                 style: theme.textTheme.bodySmall?.copyWith(
@@ -161,7 +202,12 @@ class _DataDirSettingsPageState extends State<DataDirSettingsPage> {
   Future<void> _changeLocation(BackendLauncher launcher) async {
     final picked = await FilePicker.getDirectoryPath(dialogTitle: '选择数据目录');
     if (picked == null || !mounted) return;
-    await _migrateTo(launcher, picked);
+    // 用户常直接选 `…\storage`：按它的上一级算，否则又会套成 `storage\storage`。
+    final target = normalizeDataDirTarget(picked);
+    final note = isStorageNamedDir(picked)
+        ? '你选的是 storage 文件夹，数据目录按它的上一级 ${Directory(target).absolute.path} 算。'
+        : '';
+    await _migrateTo(launcher, target, note: note);
   }
 
   Future<void> _moveBackToDefault(BackendLauncher launcher) async {
@@ -170,7 +216,11 @@ class _DataDirSettingsPageState extends State<DataDirSettingsPage> {
     await _migrateTo(launcher, root);
   }
 
-  Future<void> _migrateTo(BackendLauncher launcher, String target) async {
+  Future<void> _migrateTo(
+    BackendLauncher launcher,
+    String target, {
+    String note = '',
+  }) async {
     final root = launcher.projectRoot;
     final current = launcher.dataDir;
     if (root == null || current == null) {
@@ -193,6 +243,7 @@ class _DataDirSettingsPageState extends State<DataDirSettingsPage> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            if (note.isNotEmpty) ...[Text(note), const SizedBox(height: 8)],
             Text('从  $current'),
             const SizedBox(height: 4),
             Text('搬到  ${Directory(target).absolute.path}'),
@@ -203,6 +254,15 @@ class _DataDirSettingsPageState extends State<DataDirSettingsPage> {
                   : '一共 ${check.source.files} 个文件，'
                         '约 ${_size(check.source.bytes)}。',
             ),
+            if (check.message.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              Text(
+                check.message,
+                style: Theme.of(dialogContext).textTheme.bodySmall?.copyWith(
+                  color: Theme.of(dialogContext).colorScheme.error,
+                ),
+              ),
+            ],
             const SizedBox(height: 8),
             const Text('搬的时候本地服务会先停下来，搬完自动重启。旧目录不会自动删除。'),
           ],
@@ -390,6 +450,10 @@ class _DataDirSettingsPageState extends State<DataDirSettingsPage> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text('数据现在在 $to，本地服务已经用新目录跑起来了。'),
+            if (result.backupPath != null) ...[
+              const SizedBox(height: 8),
+              Text('目标里原来的库已经备份到 ${result.backupPath}。'),
+            ],
             const SizedBox(height: 12),
             Text('旧目录还在：$from'),
             const SizedBox(height: 8),
@@ -410,7 +474,11 @@ class _DataDirSettingsPageState extends State<DataDirSettingsPage> {
     );
 
     if (remove == true) {
-      final report = await deleteOldData(from);
+      // 搬到上一级时"旧数据目录"就是新产物目录：只清旧库，产物原地留着。
+      final report = await deleteOldData(
+        from,
+        newStorageDir: resolvedStorageDirOf(to),
+      );
       if (!mounted) return;
       if (report.failed.isEmpty) {
         _toast(

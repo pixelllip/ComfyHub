@@ -80,6 +80,9 @@ app.*.map.json
 # 库备份（`VACUUM INTO` 出来的 .db）：属于运行期数据，每台机器各一份
 /backups/
 
+# 数据目录覆盖（库 + 产物被搬到别的盘时才有）：路径每台机器不同，属于运行期数据
+/data-dir.json
+
 # 演示用媒体（可由 scripts/make-sample-media.ps1 重新生成）
 /samples/
 
