@@ -33,8 +33,6 @@ async fn run_kit_ships_every_rule_the_phone_needs() {
         "与 /api/sync/manifest 的 user_version 同一个数"
     );
     // v64（2026-11-09）：第 27 条（自动选工作流顺序）+ 已验证绑定 / 实例地址的输出变化。
-    // ⚠ 这份夹具**当前没有编进测试**（`tests/api_test/` 下没有入口文件，`cargo test` 不会跑它），
-    //   下面的 `schemaVersion: 1` 也是旧口径；版本号跟着改只是别让它比真源更旧。
     assert_eq!(body["promptVersion"], "v64");
     assert_eq!(body["nsfwEnabled"], false, "夹具里没开 NSFW");
     assert_eq!(body["inlineBudget"]["perImageBytes"], 8388608, "单图 8MB");
@@ -469,6 +467,8 @@ async fn tool_policy_and_nsfw_endpoints() {
             "comfy_make_mask",
             // 摘节点 / 拼节点（P4 第 63 步，用户建议 ②）：改好的图是**内联**返回的
             "comfy_prune_workflow",
+            // 按任务 / 模型族查"上次成功"（自动选工作流 T1，2026-11-08）：只读、出厂 allow
+            "comfy_recent_successes",
             // 起 / 停实例（2026-09-28 用户 bug「通过 CLI 启动 comfyui 总是失败」）：
             // ComfyHub 自己用工作区的 `.venv\python.exe` 起 —— comfy-cli 那条路要写
             // `%LOCALAPPDATA%\comfy-cli\config.ini` 与 `<ComfyUI>\user\comfyui_8188.log`，

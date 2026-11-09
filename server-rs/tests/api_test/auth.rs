@@ -294,6 +294,8 @@ async fn auth_pair_flow_hands_out_a_device_token_exactly_once() {
             [
                 "allowCredentials",
                 "allowCredentialsUpload",
+                // 按设备放权提交（2026-11-09 §4.2）：默认关，值就是"这台设备能不能免审批提交"
+                "autoApproveSubmits",
                 "id",
                 "lastIp",
                 "lastSeenAt",
