@@ -156,10 +156,27 @@
   "payload": {
     "queueId": "…", "conversationId": "…", "runId": "…",
     "promptId": 310, "sourceRef": "file:<sha256>",
+    "task": "t2i", "modelFamily": "anima", "positivePrompt": "…",
+    "width": 832, "height": 1216,
     "overrides": { "6.text": "…" }, "nsfw": false,
     "requestedAt": "2026-09-27T…Z", "requestedBy": "phone-7f3a…"
   } }
 ```
+
+**两条"给它工作流"的路**（2026-11-09 加，`docs/workflow-auto-select-plan.md` §1.2）：
+
+| 路 | 键 | 桌面做什么 |
+| --- | --- | --- |
+| **精确指定** | `promptId` / `sourceRef` | 今天的行为，一个字没变（`sourceRef` 在受理时解析成 `promptId`） |
+| **只说族** | `task` + `modelFamily`（可选 `positivePrompt` / `width` / `height`） | 桌面按 **① 同任务同族的最近成功 → ② 配方的已验证绑定** 自己挑一份，把提示词写进去再跑；挑不到就回一条 `NO_WORKFLOW_MATCH`（列出试过哪两档），**不猜** |
+
+- **`promptId` / `sourceRef` 与"只说族"互斥地优先**：给了前两者就按精确的那份走，族只用来记账。
+- **`task` 只认七档**（t2i / i2i / edit / inpaint / upscale / video / audio）；`width` / `height`
+  只认 64~8192 —— 形状错是**永久性**拒绝（重推一万次也一样）。
+- **默认不改构图分辨率**：`width` / `height` 不给就沿用目标工作流自己的宽高；
+  给了才写进那份工作流自己的 `width` / `height` 键（它没有就如实写在回执里）。
+- 走① / ② 那一路时，`capture_runs.source_kind` 记成 `recent` / `recipe`
+  （精确指定的不声明，保持列默认 `'ComfyUI'`）。
 
 四条硬约束：
 

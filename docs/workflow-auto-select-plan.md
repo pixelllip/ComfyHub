@@ -296,3 +296,42 @@ T4 的提示词按拍板结果写。
     （12:37 补跑，都是假 ComfyUI / 假网关，不占显卡、不出网）、
     `scripts\e2e-ai-tools-test.ps1` **111 项 0 失败**（改了系统提示，顺带过一遍上下文拼装）。
     跑完已 `backend.ps1 stop`，端口文件与自动捕获配置都还原了。
+
+### 4.10 T7 已落地（2026-11-09）：手机只说族就能出图
+
+**用户口径**："在手机提到用哪个模型家族生图，这样应该可以快速筛选工作流并把提示词写入和运行"、
+"也可以用 krea2、moss image 画，但是要控制构图分辨率一致"。
+
+- **`submit_job` 多了一条"只说族"的路**（契约 §4.1 已同步）：
+  `task` + `modelFamily` + `positivePrompt`（可选 `width` / `height`）。
+  给了 `promptId` / `sourceRef` 就还是精确的那份，一个字没变。
+- **桌面侧挑选**（`workflow/auto_select.rs`）只有两档，与 §1.2 的 ① ② 对应：
+  ① 同任务 + 同族的最近成功（`capture_runs` 的 success + API 图）；
+  ② 配方的已验证绑定（T2 的 `verified_json`，按那条 runKey 带上**同一次跑的**槽位覆盖）。
+  再往下（没跑过的配方 / 换族重绑 / 官方模板）**不自动继续** —— 挑不到就回一条
+  `NO_WORKFLOW_MATCH`，把"试过哪两档"原样写进回执（§1.2 第 1 条：不许停在"问"上，
+  但也不许猜）。
+- **"同族"的判据只有一份**：两边都去掉非字母数字、转小写之后子串匹配 ——
+  `moss image` / `moss_image` / `Moss-Image` 是同一个族，`krea 2` 能命中 `krea2Turbo…`。
+  `comfy_recent_successes` 的 `modelQuery` 与它同源。
+- **提示词写进工作流**：走 `comfy_submit(positivePrompt=…)`（找出正面编码器、把 TextGenerate
+  那一支从这次提交的图里摘掉）；认不出正面编码器时**退一步写进那个字面量旋钮**，
+  并在回执里写明"写进了哪个键"。
+- **构图 / 分辨率默认一个字节都不改**：各家族工作流自己的宽高就是它的构图；只有手机明确给了
+  `width` / `height` 才写进那份工作流自己的宽高键，它没有就如实写进回执。
+- **来源档落账**：走 ① / ② 时以 `comfy_submit(sourceKind=recent|recipe)` 提交 ——
+  手机排队那一路此前一律记成 `ComfyUI`，T3 的账对不上，这次补上了。
+- ⚠ **顺带修掉一个真 bug**：`capture_runs.raw` 在真库里是**整条 `/history` 条目**
+  （`{"prompt":[…], "outputs":…}`），而 T1 的 `comfy_recent_successes` 只认裸节点图 ——
+  真库上它会"一条都扫不出来"且不报错。现在两处共用 `auto_select::graph_of_raw`，
+  T1 的用例补了真库形状的回归。
+- **手机侧**（`android/harness`）：`comfy_queue_submit` 收 `task` / `modelFamily` /
+  `positivePrompt` / `width` / `height` 并摊平；自由文本 `prompt` 不再拒，当作
+  `positivePrompt` 传（用户那句话一个字都不吞）。**只有提示词 / 名字不算"说清了要哪份"**。
+  同时补上 T3 漏掉的镜像列（`capture_runs.source_kind` / `recipe_id`），
+  `MobileSchema.VERSION` 13 → 15（与桌面 `SCHEMA_VERSION` 同值）。
+- `PROMPT_VERSION` v64 → **v65**（手机工具 schema 与描述都变了）。
+- 回归：`auto_select` 6 例、`submit_queue` 17 例（新增"只说族能受理"/"task 与宽高形状错"）、
+  集成 `family_only_submission_picks_a_workflow_and_writes_the_prompt`（假 ComfyUI 全链路：
+  挑选 → 写提示词 → 入库 → 回执 → `source_kind=recent`）、T1 真库形状回归、
+  Kotlin `:harness:testDebugUnitTest` 263 例 0 失败。
