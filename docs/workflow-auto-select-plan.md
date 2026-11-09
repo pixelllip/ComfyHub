@@ -292,5 +292,7 @@ T4 的提示词按拍板结果写。
     第 1 幕需要一份 API 格式工作流，仓库不再随包带模板，用
     `-ApiWorkflow server-rs\tests\fixtures\api_inpaint_fixture.json` 那份
     （3 槽位 + 遮罩链 → task=inpaint，恰好覆盖脚本的断言）。
-  - `e2e-submit-test.ps1` / `e2e-capture-test.ps1` **本轮没跑**：用户 2026-11-09 明确说
-    "我先玩游戏，不进行实际跑图测试"。这两条要驱动 ComfyUI / 占显卡，等用户方便时再补。
+  - `scripts\e2e-submit-test.ps1` **41 项全通过**、`scripts\e2e-capture-test.ps1` **全通过**
+    （12:37 补跑，都是假 ComfyUI / 假网关，不占显卡、不出网）、
+    `scripts\e2e-ai-tools-test.ps1` **111 项 0 失败**（改了系统提示，顺带过一遍上下文拼装）。
+    跑完已 `backend.ps1 stop`，端口文件与自动捕获配置都还原了。
