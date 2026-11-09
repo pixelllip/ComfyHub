@@ -78,6 +78,14 @@ class HarnessDatabase private constructor(val session: SqlSession) : AutoCloseab
                 "collection_opt_out" to "INTEGER NOT NULL DEFAULT 0",
             ),
             "ai_attachments" to listOf("origin" to "TEXT NOT NULL DEFAULT 'upload'"),
+            // 提交来源（T3，2026-11-09）：桌面 schema v14 给 `capture_runs` 加了两列。
+            // ⚠ 顺序照桌面那份（`source` 之后、`prompt_id` 之前），`HarnessDatabaseTest`
+            //   会逐列比对两端 —— 漏掉这里就是"手机镜像少两列"，而同步是整行覆盖的，
+            //   少了列的表现是那条捕获记录在手机上少一块内容（不报错）。
+            "capture_runs" to listOf(
+                "source_kind" to "TEXT NOT NULL DEFAULT 'ComfyUI'",
+                "recipe_id" to "INTEGER NULL",
+            ),
         )
 
         private fun userVersion(session: SqlSession): Int =

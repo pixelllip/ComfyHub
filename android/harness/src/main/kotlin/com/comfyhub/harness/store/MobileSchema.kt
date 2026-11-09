@@ -33,7 +33,7 @@ object MobileSchema {
 
     /**
      * 手机侧本地库的结构版本 —— ⚠ **它必须与桌面的 `SCHEMA_VERSION` 同值**
-     * （`server-rs/src/db.rs`，2026-11-08 起是 **13**）。
+     * （`server-rs/src/db.rs`，2026-11-09 起是 **15**）。
      *
      * ## 这个数代表什么（2026-09-27 拍板；理由写在这里，免得两边各说各话）
      *
@@ -56,7 +56,7 @@ object MobileSchema {
      * （`SyncPullClient.MODE_BOOTSTRAP`）。本地库自己的 `PRAGMA user_version` 是同一个数的
      * 记号（`HarnessDatabase.from` 幂等建完表之后写上它）。
      */
-    const val VERSION = 13
+    const val VERSION = 15
 
     /** 镜像表的同步范围与主键形态（`/api/sync` 那三条读端点的 apply 也按它走）。 */
     enum class PkKind { SINGLE, COMPOSITE }
@@ -244,6 +244,8 @@ object MobileSchema {
           id          INTEGER PRIMARY KEY AUTOINCREMENT,
           run_key     TEXT    NOT NULL,
           source      TEXT    NOT NULL DEFAULT 'ComfyUI',
+          source_kind TEXT    NOT NULL DEFAULT 'ComfyUI',
+          recipe_id   INTEGER NULL,
           prompt_id   INTEGER NULL REFERENCES prompts(id) ON DELETE SET NULL,
           status      TEXT    NOT NULL DEFAULT 'success',
           media_count INTEGER NOT NULL DEFAULT 0,

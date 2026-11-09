@@ -464,15 +464,19 @@ class AskUserQuestionTool(private val newId: () -> String = { com.comfyhub.harne
  *
  * ## ⚠ 入队前必须**摊平**（契约 §4.1，M5）
  *
- * 桌面只认**扁平的顶层键**（`promptId` / `sourceRef` / `overrides` / `nsfw` / `requestedAt`）；
- * 整包塞在一个 `args` 子对象里推上去，桌面按**永久性** `MISSING_WORKFLOW` 拒，
- * 手机再把永久失败那行丢掉 —— 用户看到的是"点了提交，**什么都没发生**"。
+ * 桌面只认**扁平的顶层键**（`promptId` / `sourceRef` / `task` / `modelFamily` / `positivePrompt` /
+ * `overrides` / `nsfw` / `requestedAt`）；整包塞在一个 `args` 子对象里推上去，桌面按**永久性**
+ * `MISSING_WORKFLOW` 拒，手机再把永久失败那行丢掉 —— 用户看到的是"点了提交，**什么都没发生**"。
  *
- * 所以这里**摊不平就不排队**，并且当场把"该给什么"回给模型（[SubmitJobPayload.flatten]）：
- *  - 工作流只能用 `promptId`（数字）或 `sourceRef`（`file:<sha256>` 那种运行键）指定 ——
- *    手机这边没有那份工作流库（`prompts` 由桌面产生），**名字解析不出 id**；
- *  - 想改参数要用 `overrides`（键 = `节点id.输入名`）—— 手机看不到节点图，
- *    替模型猜一个键名就是编造；给自由文本 `prompt` 的也在这里当场退回。
+ * ## 两条路给它工作流（2026-11-09 起）
+ *
+ * 1. **精确指定**：`promptId`（数字）或 `sourceRef`（`file:<sha256>` 那种运行键）——
+ *    手机这边没有那份工作流库，名字解析不出 id，所以名字类参数一律当场退回；
+ * 2. **只说族**：`task` + `modelFamily` + `positivePrompt` —— 桌面按"同任务同族的最近成功 →
+ *    已验证的配方"自己挑一份，把提示词写进去再跑。用户说"用 anima / krea2 / moss 画…"就是这条，
+ *    也是床上场景（`docs/workflow-auto-select-plan.md` §1.2）唯一说得清的说法。
+ *    ⚠ **不要**自己设 `width` / `height`：构图与分辨率是各家族工作流自己的属性。
+ * 想改参数仍然要用 `overrides`（键 = `节点id.输入名`）—— 手机看不到节点图，替模型猜键名就是编造。
  */
 class ComfyQueueSubmitTool : MobileTool {
     override val name = "comfy_queue_submit"

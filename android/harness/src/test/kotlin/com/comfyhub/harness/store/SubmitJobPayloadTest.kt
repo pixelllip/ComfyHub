@@ -148,15 +148,34 @@ class SubmitJobPayloadTest {
     }
 
     /**
-     * 自由文本 `prompt` → 摊不平，**绝不静默丢掉用户那句话**。
-     *
-     * overrides 的键是 `节点id.输入名`，而手机看不到节点图 —— 猜一个键名就是编造。
+     * 自由文本 `prompt` **不再拒**（2026-11-09）：它是"手机写好的最终提示词"，
+     * 摊成 `positivePrompt` 交给桌面写进工作流。用户那句话**一个字都不能被吞**。
      */
     @Test
-    fun `自由文本 prompt 摊不平，并告诉模型用 overrides`() {
-        val reason = bad("""{"promptId":1,"prompt":"赛博朋克少女"}""")
-        assertTrue(reason, reason.contains("overrides"))
-        assertTrue("要把原文带上（用户那句话不能被吞）：$reason", reason.contains("赛博朋克少女"))
+    fun `自由文本 prompt 摊成 positivePrompt`() {
+        val payload = ok("""{"promptId":1,"prompt":"赛博朋克少女"}""")
+        assertEquals("赛博朋克少女", payload["positivePrompt"]!!.jsonPrimitive.content)
+    }
+
+    /** 只说族：`task` + `modelFamily` + `positivePrompt` 就能摊平（不需要 promptId）。 */
+    @Test
+    fun `只说族也能摊平_并带上宽高`() {
+        val payload = ok(
+            """{"task":"t2i","modelFamily":"anima","positivePrompt":"雨夜便利店","width":832,"height":1216}""",
+        )
+        assertEquals("t2i", payload["task"]!!.jsonPrimitive.content)
+        assertEquals("anima", payload["modelFamily"]!!.jsonPrimitive.content)
+        assertEquals("雨夜便利店", payload["positivePrompt"]!!.jsonPrimitive.content)
+        assertEquals(832L, payload["width"]!!.jsonPrimitive.content.toLong())
+        assertEquals(1216L, payload["height"]!!.jsonPrimitive.content.toLong())
+        assertFalse("只给族时不该编出 promptId", payload.containsKey("promptId"))
+    }
+
+    /** 宽高超出合理区间 → 当场退回（别让它一路传到 ComfyUI 再炸）。 */
+    @Test
+    fun `宽高不合理摊不平`() {
+        assertTrue(bad("""{"modelFamily":"anima","width":1}""").contains("width=1"))
+        assertTrue(bad("""{"modelFamily":"anima","height":99999}""").contains("height=99999"))
     }
 
     @Test

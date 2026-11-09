@@ -18,9 +18,17 @@ import kotlinx.serialization.json.put
  * ```json
  * { "queueId": "…", "conversationId": "…", "runId": "…",
  *   "promptId": 310, "sourceRef": "file:<sha256>",
+ *   "task": "t2i", "modelFamily": "anima", "positivePrompt": "…", "width": 832, "height": 1216,
  *   "overrides": { "6.text": "…" }, "nsfw": false,
  *   "requestedAt": "…Z", "requestedBy": "phone-7f3a…" }
  * ```
+ *
+ * ## 两条"给它工作流"的路（2026-11-09 起）
+ *
+ * 1. **精确指定**：`promptId`（数字）或 `sourceRef`（`file:<sha256>` 那种运行键）；
+ * 2. **只说族**：`task` + `modelFamily` + `positivePrompt` —— 桌面按"同任务同族的最近成功 →
+ *    已验证的配方"自己挑一份，把提示词写进去再跑（`docs/workflow-auto-select-plan.md` §1.2）。
+ *    手机**看不到**桌面的工作流库，所以"只说族"是床上场景唯一说得清的说法。
  *
  * ## ⚠ 为什么必须摊平（这是最容易踩的一条）
  *
@@ -29,16 +37,11 @@ import kotlinx.serialization.json.put
  * （它不可能重试成功），而手机把永久失败那行 outbox **丢掉** ——
  * 用户看到的是"我点了提交，**什么都没发生**"。所以摊平这件事没有任何余地。
  *
- * ## 两条它自己不能做的事（要如实报错，不许猜）
+ * ## 自由文本 `prompt` 现在**不再拒**（2026-11-09）
  *
- * 1. **工作流由 `promptId` 或 `sourceRef` 指定**（`prompts.id` / `file:<sha256>` 那种运行键）。
- *    模型给一个"工作流名字"是**没法解析**的 —— 手机侧没有那本库（`prompts` 由桌面产生，
- *    契约 §4 明写手机不许创建它）。所以这种情况**当场失败**，并把"该给什么"写进人话；
- * 2. **自由文本 `prompt` 不能变成 `overrides`**：overrides 的键是 `节点id.输入名`，
- *    而手机看不到节点图。硬塞一个键名就是编造 —— 所以同样当场失败，让模型换成
- *    `overrides`（例如 `{"6.text": "赛博朋克"}`）。
- *
- * 这两条一起保证：**进 `_outbox` 的 `submit_job` 一定是摊平的、能受理的**。
+ * 它会被当作 `positivePrompt` 摊平出去：桌面会把最终提示词写进工作流（`positivePrompt` 那条路
+ * 会找出正面编码器，并把 TextGenerate 那一支从这次提交的图里摘掉）。**手机不扩写、不改写**——
+ * 模型写什么就传什么，写错了在回执里看得见。
  */
 object SubmitJobPayload {
 
@@ -56,6 +59,17 @@ object SubmitJobPayload {
     private const val ARG_OVERRIDES = "overrides"
     private const val ARG_NSFW = "nsfw"
     private const val ARG_PROMPT = "prompt"
+
+    // ---- 2026-11-09：只说族那一路（床上场景 §1.2）----
+    private const val ARG_TASK = "task"
+    private const val ARG_MODEL_FAMILY = "modelFamily"
+    private const val ARG_POSITIVE_PROMPT = "positivePrompt"
+    private const val ARG_WIDTH = "width"
+    private const val ARG_HEIGHT = "height"
+
+    /** 宽高的合理区间（与桌面 `submit_queue::parse_payload` 同一条判据）。 */
+    private const val MIN_SIZE = 64L
+    private const val MAX_SIZE = 8192L
 
     /**
      * 把一次 `comfy_queue_submit` 的意图摊平成线上形状。
@@ -85,12 +99,29 @@ object SubmitJobPayload {
                 sourceRef = rawWorkflow
             }
         }
-        if (promptId == null && sourceRef == null) {
+
+        // ---- 只说族那一路：task / modelFamily / positivePrompt（可选宽高）----
+        val task = textOf(args[ARG_TASK])?.lowercase()
+        val family = textOf(args[ARG_MODEL_FAMILY])
+        val positivePrompt = textOf(args[ARG_POSITIVE_PROMPT]) ?: textOf(args[ARG_PROMPT])
+        val width = intOf(args[ARG_WIDTH])
+        val height = intOf(args[ARG_HEIGHT])
+        for ((key, value) in listOf("width" to width, "height" to height)) {
+            if (value != null && (value < MIN_SIZE || value > MAX_SIZE)) {
+                return Flattened.Bad("$key=$value 不合理：要在 $MIN_SIZE~$MAX_SIZE 之间（像素）")
+            }
+        }
+        // ⚠ **只有提示词不算"说清了要哪份工作流"**：族 / 任务才是选择依据。
+        //   拿提示词当判据会让"只说提示词"变成"随便挑最近那份"——那正是"不猜"要挡住的东西。
+        val canPick = task != null || family != null
+
+        if (promptId == null && sourceRef == null && !canPick) {
             return Flattened.Bad(
-                "不知道该提交哪条工作流：要给我 `promptId`（提示词 id，数字）或者 " +
-                    "`sourceRef`（运行键，形如 `file:<sha256>`）。" +
+                "不知道该提交哪条工作流：要么给我 `promptId`（提示词 id，数字）或 " +
+                    "`sourceRef`（运行键，形如 `file:<sha256>`），要么给 `task` + `modelFamily` " +
+                    "（让桌面按\"同任务同族的最近成功 → 已验证的配方\"自己挑）。" +
                     "只给一个工作流名字不行 —— 手机这边没有那份工作流库（它由桌面产生），" +
-                    "名字解析不出 id；请让用户先选定一份工作流，或改用 `sourceRef`。" +
+                    "名字解析不出 id。" +
                     (if (rawWorkflow != null) "（收到的是 workflow=\"$rawWorkflow\"）" else ""),
             )
         }
@@ -113,17 +144,6 @@ object SubmitJobPayload {
             )
         }
 
-        // ---- 自由文本 prompt：**不许静默丢掉用户那句话** ----
-        val looseText = textOf(args[ARG_PROMPT])
-        if (looseText != null) {
-            return Flattened.Bad(
-                "`prompt` 这个自由文本我没法放进提交里：要改参数得用 `overrides`" +
-                    "（键 = `节点id.输入名`，例如 {\"6.text\": \"$looseText\"}）—— " +
-                    "手机这边看不到节点图，替你猜一个键名就是编造。" +
-                    "如果那句话只是想告诉用户要做什么，就直接在回复里说，别塞进提交参数。",
-            )
-        }
-
         return Flattened.Ok(
             buildJsonObject {
                 put("queueId", queueId)
@@ -131,6 +151,12 @@ object SubmitJobPayload {
                 runId?.takeIf { it.isNotBlank() }?.let { put("runId", it) }
                 promptId?.let { put("promptId", it) }
                 sourceRef?.takeIf { it.isNotBlank() }?.let { put("sourceRef", it) }
+                // 只说族那一路（与精确指定**可以同时给**：精确指定优先，桌面不会用族覆盖它）
+                task?.let { put(ARG_TASK, it) }
+                family?.let { put(ARG_MODEL_FAMILY, it) }
+                positivePrompt?.let { put(ARG_POSITIVE_PROMPT, it) }
+                width?.let { put(ARG_WIDTH, it) }
+                height?.let { put(ARG_HEIGHT, it) }
                 // 空对象与"没给"等价（桌面 `accept` 里 overrides 空 = 不改任何参数），省掉这个键
                 overrides?.takeIf { it.isNotEmpty() }?.let { put("overrides", it) }
                 // `nsfw` 永远写出来（契约 §4.1 有这个键；缺省 = false，与桌面 `accept` 同义）
@@ -172,7 +198,10 @@ object SubmitJobPayload {
         }
 
         // 新形状：只补两个"推送时才定得下来"的键
-        if (intOf(stored["promptId"]) == null && textOf(stored["sourceRef"]) == null) return null
+        val hasAuto = textOf(stored[ARG_TASK]) != null ||
+            textOf(stored[ARG_MODEL_FAMILY]) != null ||
+            textOf(stored[ARG_POSITIVE_PROMPT]) != null
+        if (intOf(stored["promptId"]) == null && textOf(stored["sourceRef"]) == null && !hasAuto) return null
         return withRequestedBy(
             buildJsonObject {
                 put("queueId", queueId)
@@ -180,6 +209,11 @@ object SubmitJobPayload {
                 textOf(stored["runId"])?.let { put("runId", it) }
                 intOf(stored["promptId"])?.let { put("promptId", it) }
                 textOf(stored["sourceRef"])?.let { put("sourceRef", it) }
+                textOf(stored[ARG_TASK])?.let { put(ARG_TASK, it) }
+                textOf(stored[ARG_MODEL_FAMILY])?.let { put(ARG_MODEL_FAMILY, it) }
+                textOf(stored[ARG_POSITIVE_PROMPT])?.let { put(ARG_POSITIVE_PROMPT, it) }
+                intOf(stored[ARG_WIDTH])?.let { put(ARG_WIDTH, it) }
+                intOf(stored[ARG_HEIGHT])?.let { put(ARG_HEIGHT, it) }
                 (stored["overrides"] as? JsonObject)?.takeIf { it.isNotEmpty() }?.let { put("overrides", it) }
                 put("nsfw", boolOf(stored["nsfw"]) ?: false)
                 put("requestedAt", textOf(stored["requestedAt"]) ?: Timestamps.now())
