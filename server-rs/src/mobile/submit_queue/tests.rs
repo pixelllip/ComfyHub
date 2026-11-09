@@ -51,6 +51,62 @@ async fn 既没有_prompt_id_也没有_source_ref_是永久性拒绝() {
     )
     .unwrap_err();
     assert_eq!(failure.code, "MISSING_WORKFLOW");
+    // 拒绝时要把**两条路**都说出来（只说"缺 promptId"会让手机 AI 一直来试名字）
+    assert!(failure.message.contains("sourceRef"), "{}", failure.message);
+    assert!(failure.message.contains("modelFamily"), "{}", failure.message);
+}
+
+/// 只说族（`task` + `modelFamily` + `positivePrompt`）**能受理**，而且那三项要进账 ——
+/// 受理时不在这里挑工作流（挑是异步的，挑不到也要回一条"需要你确认"）。
+#[tokio::test]
+async fn 只说族也能受理_三项写进账上() {
+    let state = state();
+    let accepted = accept(
+        &state,
+        &item(json!({
+            "queueId": "q-family",
+            "conversationId": "c1",
+            "task": "t2i",
+            "modelFamily": "anima",
+            "positivePrompt": "雨夜便利店，暖光",
+            "width": 832,
+            "height": 1216
+        })),
+    )
+    .expect("形状是对的");
+    assert_eq!(accepted, Accepted::Fresh);
+    let job = load(&state, "q-family").expect("受理过就该读得到");
+    assert!(job.prompt_id.is_none(), "只是说族，还不知道是哪份工作流");
+    assert_eq!(job.auto.task.as_deref(), Some("t2i"));
+    assert_eq!(job.auto.family.as_deref(), Some("anima"));
+    assert_eq!(job.auto.positive_prompt.as_deref(), Some("雨夜便利店，暖光"));
+    assert_eq!(job.auto.width, Some(832));
+    assert_eq!(job.auto.height, Some(1216));
+}
+
+/// `task` 只认那七档、宽高只认 64~8192：形状错**永久性**拒绝（重推一万次也一样）。
+#[tokio::test]
+async fn 任务不认识与宽高不合理都是永久性拒绝() {
+    let state = state();
+    let bad_task = accept(
+        &state,
+        &item(json!({
+            "queueId": "q1", "conversationId": "c1", "task": "draw", "modelFamily": "anima"
+        })),
+    )
+    .unwrap_err();
+    assert_eq!(bad_task.code, "BAD_PAYLOAD");
+    assert!(bad_task.message.contains("task"), "{}", bad_task.message);
+
+    let bad_size = accept(
+        &state,
+        &item(json!({
+            "queueId": "q2", "conversationId": "c1", "modelFamily": "anima", "width": 40000
+        })),
+    )
+    .unwrap_err();
+    assert_eq!(bad_size.code, "BAD_PAYLOAD");
+    assert!(bad_size.message.contains("width"), "{}", bad_size.message);
 }
 
 // ⚠ 一律 `#[tokio::test]`：`accept` 会起后台任务（`tokio::spawn`），

@@ -134,6 +134,9 @@ pub mod code {
 
 /// 受理时按字符截断的几处上限（手机给的字符串不能无限长）。
 const MAX_ID_CHARS: usize = 200;
+/// 手机写好的**最终提示词**上限（提示词可以很长；一条 t2i 的正向文本 8k 字符足够，
+/// 超出就截断 —— 截断这件事会写进回执，不静默）。
+const MAX_PROMPT_CHARS: usize = 8_000;
 /// `payload_json` 原样存的截断上限（只是排查用的痕迹，别让一行撑爆库）。
 const MAX_PAYLOAD_CHARS: usize = 16_000;
 
@@ -162,6 +165,8 @@ pub struct Job {
     pub source_ref: Option<String>,
     pub overrides: Map<String, Value>,
     pub nsfw: bool,
+    /// 手机只说了"用哪一族画"时的三件事（见 [`AutoPick`]）；给了 `promptId` 就不用它们
+    pub auto: AutoPick,
     pub state: String,
     pub approval: String,
     pub ok: Option<bool>,
@@ -171,6 +176,50 @@ pub struct Job {
     pub elapsed_ms: i64,
     pub reply_state: String,
     pub reply_error: Option<String>,
+}
+
+/// "手机只说族"那一路的参数（`docs/workflow-auto-select-plan.md` §1.2）。
+///
+/// ⚠ 它**代替不了** `promptId` 的精确性：这是一条**经验**路径（同任务同族的最近成功 /
+/// 已验证的配方），选中的工作流会写进回执 —— 选错了让用户一眼看得出来。
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct AutoPick {
+    /// 任务类型（t2i / i2i / edit / inpaint / upscale / video / audio）
+    pub task: Option<String>,
+    /// 模型族（用户口语：anima / krea2 / moss image …）
+    pub family: Option<String>,
+    /// 手机侧 AI 写好的最终提示词（桌面负责写进工作流）
+    pub positive_prompt: Option<String>,
+    /// 可选：明确要的构图宽高（**不给就一个字节都不改**，沿用工作流自己的分辨率）
+    pub width: Option<i64>,
+    pub height: Option<i64>,
+}
+
+impl AutoPick {
+    /// 这几样里有没有一样**足以决定"提交哪份工作流"**。
+    ///
+    /// ⚠ **只有提示词不算**：`positivePrompt` 决定不了用哪份图（族 / 任务才是选择依据），
+    /// 拿它当判据会让"只说提示词"变成"随便挑最近那份" —— 那正是"不猜"要挡住的东西。
+    fn can_pick(&self) -> bool {
+        self.task.is_some() || self.family.is_some()
+    }
+
+    fn from_payload(obj: &Map<String, Value>) -> Self {
+        let text = |key: &str, limit: usize| -> Option<String> {
+            obj.get(key)
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|v| !v.is_empty())
+                .map(|v| truncate_chars(v, limit))
+        };
+        Self {
+            task: text("task", 32).map(|t| t.to_lowercase()),
+            family: text("modelFamily", MAX_ID_CHARS),
+            positive_prompt: text("positivePrompt", MAX_PROMPT_CHARS),
+            width: arg_i64(obj.get("width")),
+            height: arg_i64(obj.get("height")),
+        }
+    }
 }
 
 /// **受理一条 `submit_job`**（`POST /api/sync/push` 里那个分支的唯一入口）。
@@ -199,17 +248,22 @@ pub fn accept(state: &AppState, item: &PushItem) -> Result<Accepted, Reject> {
     let mut parsed = parse_payload(item)?;
     // `sourceRef`（`file:<sha256>` 那种运行键）在**受理时就解析成 `prompt_id`**：
     // 那时才谈得上"逐条 rejected"，晚了手机那行 outbox 早就因为 `applied` 被删了（静默丢失）。
+    //
+    // ⚠ "只说族"那一路（`task` / `modelFamily` / `positivePrompt`）**受理时不做选择**：
+    //   挑工作流要读 capture_runs 的 API 图（分析任务与模型），那是异步 + 稍贵的一步；
+    //   而且挑不到也是**这次的真实结论**（要回一条"需要你确认"，不是拒绝推送）。
     if parsed.prompt_id.is_none() {
-        let source_ref = parsed.source_ref.clone().unwrap_or_default();
-        match resolve_source_ref(state, &source_ref)? {
-            Some(id) => parsed.prompt_id = Some(id),
-            None => {
-                return Err(reject(
-                    "UNKNOWN_SOURCE_REF",
-                    format!(
-                        "桌面上没有 source_ref = {source_ref} 的工作流（prompts 由桌面产生，手机不许创建）"
-                    ),
-                ))
+        if let Some(source_ref) = parsed.source_ref.clone() {
+            match resolve_source_ref(state, &source_ref)? {
+                Some(id) => parsed.prompt_id = Some(id),
+                None => {
+                    return Err(reject(
+                        "UNKNOWN_SOURCE_REF",
+                        format!(
+                            "桌面上没有 source_ref = {source_ref} 的工作流（prompts 由桌面产生，手机不许创建）"
+                        ),
+                    ))
+                }
             }
         }
     }
@@ -264,9 +318,23 @@ pub fn accept(state: &AppState, item: &PushItem) -> Result<Accepted, Reject> {
         return Ok(Accepted::Duplicate);
     }
     eprintln!(
-        "[submit-queue] 受理排队提交：queueId={queue_id} conversation={} promptId={:?}（{}）",
+        "[submit-queue] 受理排队提交：queueId={queue_id} conversation={} promptId={:?}{}（{}）",
         parsed.conversation_id,
         parsed.prompt_id,
+        if parsed.auto.can_pick() {
+            format!(
+                " 自动选工作流：task={:?} 族={:?} 提示词{}",
+                parsed.auto.task,
+                parsed.auto.family,
+                if parsed.auto.positive_prompt.is_some() {
+                    "已给"
+                } else {
+                    "未给"
+                }
+            )
+        } else {
+            String::new()
+        },
         if auto_approve { "自动提交，免桌面批准" } else { "等人批准" }
     );
     start(state, &parsed.queue_id);
@@ -296,6 +364,8 @@ struct ParsedPayload {
     requested_at: Option<String>,
     requested_by: Option<String>,
     payload_text: String,
+    /// "只说族"那一路（`promptId` / `sourceRef` 都没给时才用它）
+    auto: AutoPick,
 }
 
 impl ParsedPayload {
@@ -369,13 +439,36 @@ fn parse_payload(item: &PushItem) -> Result<ParsedPayload, Reject> {
     let run_id = text_of("runId");
     let source_ref = text_of("sourceRef");
     let prompt_id = arg_i64(obj.get("promptId"));
-    if prompt_id.is_none() && source_ref.is_none() {
+    let auto = AutoPick::from_payload(obj);
+    // 任务类型只认那七档：给了个认不出来的，重推一万次也还是错 —— 现场就拒。
+    if let Some(task) = auto.task.as_deref() {
+        if crate::workflow::workflow_recipe::Task::parse(task).is_none() {
+            return Err(bad(
+                "BAD_PAYLOAD",
+                format!(
+                    "submit_job 的 task「{task}」不支持：只能是 t2i / i2i / edit / inpaint / \
+                     upscale / video / audio"
+                ),
+            ));
+        }
+    }
+    // 宽高：0 / 负数 / 荒唐的大值都当形状错（别让它一路传进 ComfyUI 再炸在那边）
+    for (key, value) in [("width", auto.width), ("height", auto.height)] {
+        if let Some(v) = value {
+            if !(64..=8192).contains(&v) {
+                return Err(bad(
+                    "BAD_PAYLOAD",
+                    format!("submit_job 的 {key}={v} 不合理：要在 64~8192 之间（像素）"),
+                ));
+            }
+        }
+    }
+    if prompt_id.is_none() && source_ref.is_none() && !auto.can_pick() {
         return Err(bad(
             "MISSING_WORKFLOW",
-            "submit_job 既没有 promptId 也没有 sourceRef：不知道该提交哪条工作流\
-             （线上形状见契约 §4.1：`promptId` = prompts.id，`sourceRef` = `file:<sha256>` 那种运行键；\
-             手机侧要把 comfy_queue_submit 的意图**摊平到 payload 顶层**，\
-             并自己把 `workflow` / `prompt` 那一类自由参数解析成这两者之一）"
+            "submit_job 不知道该提交哪条工作流：要么给 `promptId` / `sourceRef`（精确指定），\
+             要么给 `task` + `modelFamily`（让桌面按\"同任务同族的最近成功 → 已验证的配方\"自己挑）\
+             —— 只给一个工作流名字是不行的（手机没有那份库，名字解析不出 id）。"
                 .to_string(),
         ));
     }
@@ -407,6 +500,7 @@ fn parse_payload(item: &PushItem) -> Result<ParsedPayload, Reject> {
         requested_at: text_of("requestedAt"),
         requested_by: text_of("requestedBy"),
         payload_text: truncate_chars(&item.payload.to_string(), MAX_PAYLOAD_CHARS),
+        auto,
     })
 }
 
@@ -633,18 +727,92 @@ async fn execute(state: &AppState, job: &Job) -> Terminal {
             )
         }
     };
-    let Some(prompt_id) = job.prompt_id else {
-        return Terminal::failed(
-            code::TOOL_ERROR,
-            "受理时没有解析出 promptId（内存里的行不该出现这种）",
-            0,
-        );
+
+    // ---- 先定"提交哪份工作流" ------------------------------------------------
+    //
+    // 两条路：手机精确给了 `promptId`（或 `sourceRef` 在受理时已解析成 promptId），
+    // 或者只说了"用某族画一张" —— 后者按 §1.2 的① ②档在这里挑（T7）。
+    let mut source_kind: Option<&'static str> = None;
+    let mut picked_note: Option<String> = None;
+    let mut pinned: Vec<(String, String)> = Vec::new();
+    let prompt_id = match job.prompt_id {
+        Some(id) => id,
+        None => {
+            let wanted = crate::workflow::auto_select::Wanted {
+                task: job
+                    .auto
+                    .task
+                    .as_deref()
+                    .and_then(crate::workflow::workflow_recipe::Task::parse),
+                family: job.auto.family.clone(),
+            };
+            let picked = match state.with(|conn| {
+                crate::workflow::auto_select::pick(conn, &wanted)
+            }) {
+                Ok(outcome) => outcome,
+                Err(error) => {
+                    return Terminal::failed(
+                        code::TOOL_ERROR,
+                        &format!("挑工作流时读库失败：{}", error.human()),
+                        0,
+                    )
+                }
+            };
+            let Some(picked) = picked.picked else {
+                // **不猜**：把所有试过的档如实写进回执 —— 这正是"需要你确认 X"那句话。
+                let tried = if picked.tried.is_empty() {
+                    "（没有可用的历史记录）".to_string()
+                } else {
+                    picked.tried.join("\n")
+                };
+                return Terminal::failed(
+                    "NO_WORKFLOW_MATCH",
+                    &format!(
+                        "没找到能直接开跑的工作流（这次没有提交任何东西）。\n{tried}\n\
+                         要么在手机上指定一份工作流，要么先在电脑上把它跑通一次 / 学成配方并跑通一次。"
+                    ),
+                    0,
+                );
+            };
+            source_kind = Some(picked.source_kind);
+            picked_note = Some(picked.note);
+            pinned = picked.overrides;
+            picked.prompt_id
+        }
     };
 
+    // ---- 参数覆盖：已验证的槽位覆盖打底，调用方给的覆盖**最后说了算** ----
+    let mut overrides: Map<String, Value> = Map::new();
+    for (key, value) in pinned {
+        overrides.insert(key, Value::String(value));
+    }
+    for (key, value) in &job.overrides {
+        overrides.insert(key.clone(), value.clone());
+    }
+
+    // ---- 构图 / 分辨率：**默认一个字节都不改**（族与族的分辨率本来就不一样），
+    //      只有手机明确给了宽高才写进这份工作流自己的键 ----
+    let graph = crate::comfy::capture::prompt_api_graph(state, prompt_id)
+        .ok()
+        .flatten();
+    let mut size_note: Option<String> = None;
+    if let Some(graph) = graph.as_ref() {
+        let (size, note) = crate::workflow::auto_select::size_overrides(
+            graph,
+            job.auto.width,
+            job.auto.height,
+        );
+        for (key, value) in size {
+            overrides.entry(key).or_insert(Value::String(value));
+        }
+        size_note = note;
+    }
+
+    // ---- 拼 `comfy_submit` 的参数 ----
     let mut arguments = Map::new();
     arguments.insert("promptId".into(), json!(prompt_id));
-    if !job.overrides.is_empty() {
-        arguments.insert("overrides".into(), Value::Object(job.overrides.clone()));
+    if !overrides.is_empty() {
+        arguments.insert("overrides".into(), Value::Object(overrides.clone()));
     }
     arguments.insert("nsfw".into(), json!(job.nsfw));
     // 等生成的上限与桌面工具同一条（`DEFAULT_WAIT_SECONDS`）；等不到就如实报 timeout。
@@ -653,14 +821,55 @@ async fn execute(state: &AppState, job: &Job) -> Terminal {
         "waitSeconds".into(),
         json!(crate::workflow::workflow_submit::DEFAULT_WAIT_SECONDS),
     );
+    // 这一跑是哪一档挑出来的（T3 的账要能对上；精确指定的不声明 → 保持列默认）
+    if let Some(kind) = source_kind {
+        arguments.insert("sourceKind".into(), json!(kind));
+    }
+    // 手机写好的提示词由桌面写进工作流（`positivePrompt` 会把正面编码器那一路找出来，
+    // 并把 TextGenerate 那一支从这次提交的图里摘掉）
+    let mut prompt_note: Option<String> = None;
+    if let Some(prompt) = job.auto.positive_prompt.as_deref() {
+        arguments.insert("positivePrompt".into(), json!(prompt));
+    }
 
-    let outcome = match crate::workflow::workflow_submit::tool_submit(
+    let mut attempt = crate::workflow::workflow_submit::tool_submit(
         state,
         &policy,
-        &Value::Object(arguments),
+        &Value::Object(arguments.clone()),
     )
-    .await
-    {
+    .await;
+
+    // 正面编码器认不出来时（比如这份工作流把提示词接在某条开关后面），
+    // **退一步写进那个字面量旋钮** —— 但要把"写进了哪个键"说清楚，别假装走了正路。
+    if let (Err(failure), Some(prompt)) = (&attempt, job.auto.positive_prompt.as_deref()) {
+        if failure.code == "INVALID_ARGUMENT" {
+            if let Some(key) = graph
+                .as_ref()
+                .and_then(crate::workflow::auto_select::prompt_override_key)
+            {
+                arguments.remove("positivePrompt");
+                overrides.insert(key.clone(), Value::String(prompt.to_string()));
+                arguments.insert("overrides".into(), Value::Object(overrides.clone()));
+                match crate::workflow::workflow_submit::tool_submit(
+                    state,
+                    &policy,
+                    &Value::Object(arguments),
+                )
+                .await
+                {
+                    Ok(outcome) => {
+                        prompt_note = Some(format!(
+                            "这份工作流没有可识别的正面编码器，提示词写进了 `{key}`。"
+                        ));
+                        attempt = Ok(outcome);
+                    }
+                    Err(retry) => attempt = Err(retry),
+                }
+            }
+        }
+    }
+
+    let outcome = match attempt {
         Ok(outcome) => outcome,
         Err(failure) => {
             return Terminal::failed(
@@ -670,7 +879,19 @@ async fn execute(state: &AppState, job: &Job) -> Terminal {
             )
         }
     };
-    classify(&outcome.payload, elapsed_start.elapsed().as_millis() as i64)
+
+    let mut terminal = classify(&outcome.payload, elapsed_start.elapsed().as_millis() as i64);
+    // 回执里如实写清"这次用了哪份工作流" —— 经验路径选错了要让用户一眼看得出来
+    if let Some(note) = picked_note {
+        terminal.message = format!("{}\n{note}", terminal.message);
+    }
+    if let Some(note) = size_note {
+        terminal.message = format!("{}\n{note}", terminal.message);
+    }
+    if let Some(note) = prompt_note {
+        terminal.message = format!("{}\n{note}", terminal.message);
+    }
+    terminal
 }
 
 /// 把 `comfy_submit` 的结构化结果翻译成回执的一档（**四种**：成功 / 无产物 / 超时 / 报错）。
@@ -941,6 +1162,22 @@ fn submit_arguments_json(job: &Job) -> String {
     if !job.overrides.is_empty() {
         arguments.insert("overrides".into(), Value::Object(job.overrides.clone()));
     }
+    // "只说族"那一路：把手机说的那几项也带上，工具卡上才看得出这次是怎么挑的工作流
+    if let Some(task) = &job.auto.task {
+        arguments.insert("task".into(), json!(task));
+    }
+    if let Some(family) = &job.auto.family {
+        arguments.insert("modelFamily".into(), json!(family));
+    }
+    if let Some(prompt) = &job.auto.positive_prompt {
+        arguments.insert("positivePrompt".into(), json!(truncate_chars(prompt, 400)));
+    }
+    if let Some(width) = job.auto.width {
+        arguments.insert("width".into(), json!(width));
+    }
+    if let Some(height) = job.auto.height {
+        arguments.insert("height".into(), json!(height));
+    }
     arguments.insert("nsfw".into(), json!(job.nsfw));
     Value::Object(arguments).to_string()
 }
@@ -963,12 +1200,20 @@ fn read_job(conn: &Connection, queue_id: &str) -> rusqlite::Result<Option<Job>> 
     conn.query_row(
         "SELECT queue_id, call_id, conversation_id, run_id, prompt_id, source_ref, overrides_json,
                 nsfw, state, approval, ok, outcome_code, outcome_message, media_ids_json,
-                elapsed_ms, reply_state, reply_error
+                elapsed_ms, reply_state, reply_error, payload_json
            FROM submit_jobs WHERE queue_id = ?1",
         rusqlite::params![queue_id],
         |row| {
             let overrides_json: Option<String> = row.get("overrides_json")?;
             let media_ids_json: Option<String> = row.get("media_ids_json")?;
+            // "只说族"那几项**存在 payload_json 里**（不另加列：它本来就是这次指令的原文）
+            let payload_json: Option<String> = row.get("payload_json")?;
+            let auto = payload_json
+                .as_deref()
+                .and_then(|text| serde_json::from_str::<Value>(text).ok())
+                .and_then(|value| value.as_object().cloned())
+                .map(|obj| AutoPick::from_payload(&obj))
+                .unwrap_or_default();
             Ok(Job {
                 queue_id: row.get("queue_id")?,
                 call_id: row.get("call_id")?,
@@ -976,6 +1221,7 @@ fn read_job(conn: &Connection, queue_id: &str) -> rusqlite::Result<Option<Job>> 
                 run_id: row.get("run_id")?,
                 prompt_id: row.get("prompt_id")?,
                 source_ref: row.get("source_ref")?,
+                auto,
                 overrides: overrides_json
                     .as_deref()
                     .and_then(|text| serde_json::from_str::<Value>(text).ok())

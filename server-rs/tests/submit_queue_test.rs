@@ -475,6 +475,110 @@ async fn approval_then_the_existing_submit_chain_ingests_and_reports_media_ids()
 }
 
 // ---------------------------------------------------------------------------
+//  ②b 只说族 → 桌面自己挑工作流、把提示词写进去（T7，2026-11-09）
+// ---------------------------------------------------------------------------
+
+/// 手机只说"用 krea2 画…"时：桌面按①档（同任务同族的最近成功）挑一份、把提示词写进图里、
+/// 跑完把 mediaIds 回执给手机，并把这次走的是哪一档记在 `capture_runs.source_kind` 上。
+#[tokio::test]
+async fn family_only_submission_picks_a_workflow_and_writes_the_prompt() {
+    let (base, submitted, gateway) = fake_comfy(object_info(), history_with_output()).await;
+    let fixture = Fixture::new("family-only", &base, true);
+    write_png(&fixture.dir.join("output").join("unit.png"), [200, 40, 90]);
+    // T1 的"最近成功"靠 `capture_runs.prompt_id` 交回提交入口：把夹具那条记录指到提示词 101
+    fixture
+        .state
+        .write(|conn| {
+            conn.execute(
+                "UPDATE capture_runs SET prompt_id = 101 WHERE run_key = 'unit-run-1'",
+                [],
+            )?;
+            Ok(())
+        })
+        .expect("把捕获记录指到提示词");
+
+    let queue_id = "q-family-only";
+    let result = push_one(
+        &fixture.state,
+        submit_job_item(
+            queue_id,
+            json!({
+                "queueId": queue_id,
+                "conversationId": "c1",
+                "runId": "phone-run-family",
+                // **没有 promptId / sourceRef**：只有"任务 + 族 + 提示词"
+                "task": "t2i",
+                "modelFamily": "krea 2",
+                "positivePrompt": "雨夜便利店，暖光",
+                "nsfw": false,
+                "requestedBy": "phone-test"
+            }),
+        ),
+    );
+    assert!(result.applied.iter().any(|id| id == queue_id), "{result:?}");
+
+    let call_id = submit_queue::call_id_for(queue_id);
+    assert!(approve(&fixture.state, &call_id));
+    let finished = wait_terminal(&fixture.state, queue_id, 30).await;
+    assert_eq!(finished.state, submit_queue::STATE_DONE, "{finished:?}");
+    assert!(
+        !finished.media_ids.is_empty(),
+        "产物要真的入库：{finished:?}"
+    );
+
+    // ① 是**那一份**工作流（夹具里唯一的一条成功记录），提示词被写进了正面编码器
+    let sent = submitted.lock().unwrap().clone();
+    assert_eq!(sent.len(), 1, "只许提交一次");
+    assert_eq!(
+        sent[0]["prompt"]["6"]["inputs"]["text"],
+        json!("雨夜便利店，暖光"),
+        "手机写好的提示词要写进工作流：{}",
+        sent[0]
+    );
+    // ② 没给的参数一个都不许被动过（构图分辨率默认沿用工作流自己的）
+    assert_eq!(
+        sent[0]["prompt"]["3"]["inputs"]["steps"],
+        json!(20),
+        "没给的参数不许被动过"
+    );
+
+    // ③ 来源档如实记成 `recent`（T3 的账），回执里写清这次走了哪一档
+    let source_kind: Option<String> = fixture
+        .state
+        .with(|conn| {
+            Ok(conn
+                .query_row(
+                    "SELECT source_kind FROM capture_runs WHERE run_key = 'comfy-run-1'",
+                    [],
+                    |row| row.get::<_, Option<String>>(0),
+                )
+                .ok()
+                .flatten())
+        })
+        .unwrap();
+    assert_eq!(source_kind.as_deref(), Some("recent"), "来源档要落账");
+
+    let message =
+        &comfyhub_server_rs::ai::conversations::list_messages(&fixture.state, "c1").unwrap()[0];
+    assert!(
+        message.text.contains("最近一次成功"),
+        "回执要说清这次用了哪一档：{}",
+        message.text
+    );
+    let result_part = message
+        .parts
+        .iter()
+        .find(|part| part.r#type == "tool_result")
+        .expect("要有 tool_result 块");
+    let payload = result_part.json_payload.as_ref().unwrap();
+    assert_eq!(payload["ok"], json!(true));
+    assert_eq!(payload["mediaIds"], json!(finished.media_ids));
+
+    gateway.abort();
+    fixture.finish();
+}
+
+// ---------------------------------------------------------------------------
 //  ③ 同一个 queueId 推两次 → 只提交一次
 // ---------------------------------------------------------------------------
 

@@ -645,3 +645,59 @@ fn comfy_recent_successes_只回成功且可按任务与模型族过滤() {
 
     std::fs::remove_dir_all(dir).ok();
 }
+
+/// 真库里的 `capture_runs.raw` 是**整条 `/history` 条目**（`{"prompt":[…], "outputs":…}`），
+/// 不是裸节点图 —— 只认裸图的实现会在真库上"一条都扫不出来"（不报错）。
+///
+/// 2026-11-09 抽查真库抓到的：`raw` 顶层键是 `prompt` / `outputs` / `status` / `meta`。
+#[test]
+fn comfy_recent_successes_认得真库里的_history_形状() {
+    use crate::web::routes::AppState;
+
+    let graph = json!({
+        "1": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "anima-base-v1.0.safetensors"}},
+        "6": {"class_type": "CLIPTextEncode", "inputs": {"text": "a cat", "clip": ["1", 1]}},
+        "3": {"class_type": "KSampler", "inputs": {"seed": 1, "model": ["1", 0], "positive": ["6", 0], "latent_image": ["7", 0]}},
+        "7": {"class_type": "EmptyLatentImage", "inputs": {"width": 512, "height": 512, "batch_size": 1}},
+        "9": {"class_type": "SaveImage", "inputs": {"images": ["3", 0], "filename_prefix": "t"}}
+    });
+    let history_row = json!({
+        "prompt": [7, "real-prompt-id", graph, {"client_id": "x"}, ["9"]],
+        "outputs": { "9": { "images": [{ "filename": "unit.png" }] } },
+        "status": { "status_str": "success", "completed": true }
+    })
+    .to_string();
+
+    let dir = crate::infra::testpaths::scratch("recent-successes-history-shape");
+    std::fs::create_dir_all(dir.join("media")).unwrap();
+    let conn = crate::infra::db::open_memory().unwrap();
+    let schema = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("db")
+            .join("schema.sqlite.sql"),
+    )
+    .unwrap();
+    conn.execute_batch(&schema).unwrap();
+    conn.execute(
+        "INSERT INTO prompts (id, title, positive_prompt, source) VALUES (7, '真库形状', 'x', 'ComfyUI')",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO capture_runs (run_key, status, title, raw, created_at, prompt_id) \
+         VALUES ('history-shape', 'success', '真库形状', ?1, '2026-11-09T00:00:00.000Z', 7)",
+        rusqlite::params![history_row],
+    )
+    .unwrap();
+
+    let state = AppState::new(conn, ":memory:", dir.join("media"));
+    let out = comfy_recent_successes(&state, &json!({"task": "t2i"})).unwrap();
+    let items = out.payload["items"].as_array().unwrap();
+    assert_eq!(items.len(), 1, "history 形状的 raw 要被认出来：{}", out.content);
+    assert_eq!(items[0]["runKey"], "history-shape");
+    assert_eq!(items[0]["promptId"], 7);
+    assert_eq!(items[0]["models"][0], "anima-base-v1.0.safetensors");
+
+    std::fs::remove_dir_all(dir).ok();
+}

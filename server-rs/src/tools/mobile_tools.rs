@@ -70,8 +70,14 @@ pub const MOBILE_TOOLS: &[MobileToolSpec] = &[
 ① 调用成功后只如实说"已排队、等桌面";**不许**说"已提交""已生成"，也不要自己编 mediaIds；
 ② 用户问"出图了吗"要用工具的返回值/后续回执回答，别猜；
 ③ 桌面离线时队列会留在手机上（联网后自动上行），这不代表失败。
-至少要给 `promptId` 或 `sourceRef` 之一；**只给工作流名字是没用的**（手机看不到桌面的库，解析不出 id）。"#,
-        input_schema: r#"{"type":"object","properties":{"promptId":{"type":"integer","description":"库里那条提示词的 id（**手机上通常拿不到**，优先用 sourceRef）"},"sourceRef":{"type":"string","description":"运行键，形如 file:<sha256>（从 comfy_load_workflow / 工作流文件列表里拿）"},"overrides":{"type":"object","description":"参数覆盖：键 = 节点id.输入名（如 6.text），值 = 新值；空对象可省","additionalProperties":true},"nsfw":{"type":"boolean","description":"产物是否要标记为 NSFW（默认 false）"}},"anyOf":[{"required":["promptId"]},{"required":["sourceRef"]}],"additionalProperties":false}"#,
+**两条路给它工作流**：
+· 精确指定：`promptId` 或 `sourceRef`（手机上一般拿不到，别猜）；
+· **只说族**：`task` + `modelFamily` + `positivePrompt` —— 桌面会按"同任务同族的最近成功 →
+  已验证的配方"自己挑一份，把提示词写进去再跑。用户说"用 anima / krea2 / moss 画…"就是这条。
+⚠ 只说族时**不要**自己设 width/height：构图与分辨率是各家族工作流自己的属性，默认沿用。
+用户明确要某个尺寸时才传（桌面会写进那份工作流自己的宽高键）。
+**只给工作流名字是没用的**（手机看不到桌面的库，名字解析不出 id）。"#,
+        input_schema: r#"{"type":"object","properties":{"promptId":{"type":"integer","description":"库里那条提示词的 id（**手机上通常拿不到**，优先用 sourceRef）"},"sourceRef":{"type":"string","description":"运行键，形如 file:<sha256>（从 comfy_load_workflow / 工作流文件列表里拿）"},"task":{"type":"string","enum":["t2i","i2i","edit","inpaint","upscale","video","audio"],"description":"只说族时用：要哪一类任务（用户说\"画一张\"就是 t2i）"},"modelFamily":{"type":"string","description":"只说族时用：模型族（anima / krea2 / moss image …），按工作流里模型文件名匹配；与 task 一起让桌面自己挑工作流"},"positivePrompt":{"type":"string","description":"只说族时用：你写好的最终正向提示词。桌面负责把它写进工作流（不要在这里塞用户原话，也不要指望它被扩写）"},"overrides":{"type":"object","description":"参数覆盖：键 = 节点id.输入名（如 6.text），值 = 新值；空对象可省","additionalProperties":true},"width":{"type":"integer","description":"可选：明确要的构图宽度（像素）。**不给就沿用工作流自己的分辨率** —— 各家族分辨率不同，别随手改"},"height":{"type":"integer","description":"可选：明确要的构图高度（像素）。与 width 同一条纪律"},"nsfw":{"type":"boolean","description":"产物是否要标记为 NSFW（默认 false）"}},"anyOf":[{"required":["promptId"]},{"required":["sourceRef"]},{"required":["modelFamily"]},{"required":["task"]}],"additionalProperties":false}"#,
         // 只有手机有这个名字（R11：桌面离线时它无法履行提交契约，所以**不复用** comfy_submit）
         scope: "MOBILE",
         // 排队要过一道本端审批（它会往本机队列里写东西）；**但真正的提交审批在桌面上**

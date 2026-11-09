@@ -3,6 +3,7 @@
 //! 界面格式 ↔ API 节点图、跑之前体检、摘/拼节点、配方（学/列/绑）、提交（R10 的落点）、
 //! 蓝图（可绘制的节点-连线模型 + 接线体检）、参考图（`LoadImage` 指向的真实文件）。
 
+pub mod auto_select;
 pub mod graph_parse;
 pub mod object_info_cache;
 pub mod reference_images;

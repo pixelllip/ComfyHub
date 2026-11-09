@@ -169,7 +169,12 @@ pub const VERSION: &str = "nsfw-v3";
 ///   `comfy_bind_recipe` / `comfy_list_recipes` 因此多出 `verified` 标注，
 ///   `comfy_recent_successes` 多带一个当前实例地址（跨实例的成功不算数，要人自己看一眼）。
 ///   规则与工具清单都变了 → bump。
-pub const PROMPT_VERSION: &str = "v64";
+/// - **Rust v65**（2026-11-09）：手机**只说族**就能出图（用户口径："在手机提到用哪个模型家族生图，
+///   这样应该可以快速筛选工作流并把提示词写入和运行"）。`comfy_queue_submit` 多了
+///   `task` / `modelFamily` / `positivePrompt`（可选 `width` / `height`）：桌面按
+///   "同任务同族的最近成功 → 已验证的配方"自己挑一份、把提示词写进去再跑；
+///   **默认不改构图分辨率**（各家族工作流自己的宽高）。工具 schema 与描述都变了 → bump。
+pub const PROMPT_VERSION: &str = "v65";
 
 /// 第一问时按轮追加的起标题指令（`SystemPrompt.TITLE_INSTRUCTION`）。
 pub const TITLE_INSTRUCTION: &str = r#"【本次附加任务：为这个对话起标题】

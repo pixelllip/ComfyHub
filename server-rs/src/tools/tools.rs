@@ -1851,12 +1851,13 @@ fn comfy_recent_successes(
             break;
         }
         scanned += 1;
-        let parsed = serde_json::from_str::<Value>(&raw).ok();
-        let Some(graph) = parsed.as_ref().and_then(Value::as_object) else {
+        // ⚠ 真库里的 `raw` 是整条 `/history` 条目（`{"prompt":[…], "outputs":…}`），
+        // 不是裸节点图 —— 两种存法都由 `graph_of_raw` 认（2026-11-09 抽查真库发现）。
+        let Some(graph) = crate::workflow::auto_select::graph_of_raw(&raw) else {
             skipped += 1;
             continue;
         };
-        let recipe = analyze(graph, None);
+        let recipe = analyze(&graph, None);
         if let Some(want) = task_filter {
             if recipe.task != want {
                 continue;
