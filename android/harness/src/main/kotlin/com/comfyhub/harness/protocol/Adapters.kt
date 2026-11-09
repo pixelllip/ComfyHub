@@ -120,9 +120,21 @@ class OpenAiCompletionsAdapter : ProtocolAdapter {
     // 思考强度按方言落到不同字段。**不指定强度（界面上的「默认」）时分两种**：
     // `openai` 方言什么都不发（最安全，很多网关不认 `reasoning_effort:"none"`），
     // 而 `deepseek`/`zai`/`openrouter` 方言会显式发"禁用" —— 它们的网关默认开思考。
-    // ⚠️ 这只是"我们能做的最好"，**网关未必认**，所以界面上这一档叫「默认」不叫「关闭」。
+    // ⚠️ 「默认」不承诺"一定不思考"；真正能关掉的是「关闭」档（2026-11-09 新增，见下）。
     private fun JsonObjectBuilder.applyReasoning(r: ReasoningRequest) {
         if (r.effort != null && r.wireValue != null) {
+            // **「关闭」档**（2026-11-09，与桌面同一口径）：wire 是 none/disabled 时发各家
+            // 自己的关闭开关，而不是 `thinking.type=enabled` + `reasoning_effort=none`。
+            if (r.wireValue == "none" || r.wireValue == "disabled") {
+                when (r.format) {
+                    ThinkingFormat.DEEPSEEK, ThinkingFormat.ZAI ->
+                        put("thinking", buildJsonObject { put("type", "disabled") })
+                    ThinkingFormat.QWEN -> put("enable_thinking", false)
+                    ThinkingFormat.OPENROUTER -> put("reasoning", buildJsonObject { put("effort", "none") })
+                    ThinkingFormat.OPENAI -> put("reasoning_effort", "none")
+                }
+                return
+            }
             when (r.format) {
                 ThinkingFormat.DEEPSEEK -> {
                     put("thinking", buildJsonObject { put("type", "enabled") })

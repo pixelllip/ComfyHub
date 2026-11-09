@@ -70,6 +70,26 @@ fn thinking_effort_branches() {
         ("high".into(), Some("high".into()))
     );
 
+    // **「关闭」档**（2026-11-09 用户报「没有关闭思考的档位」）：目录里声明了关闭取值
+    // （历史与内置规则都存在 `off` 键上）才允许选，发给上游的就是那个取值。
+    let can_off = model_with(true, &[("off", "none"), ("high", "high")]);
+    assert_eq!(
+        thinking_effort(&can_off, Some("disabled")).unwrap(),
+        ("disabled".into(), Some("none".into()))
+    );
+    // 空白值当没填 → 退回 none（DeepSeek / OpenAI 都认）
+    let blank_off = model_with(true, &[("off", "  ")]);
+    assert_eq!(
+        thinking_effort(&blank_off, Some("disabled")).unwrap(),
+        ("disabled".into(), Some("none".into()))
+    );
+    // 没声明关闭取值 → 400（宁可不给选，也不要发出去被上游 400）
+    let err = thinking_effort(&reasoning, Some("disabled")).unwrap_err();
+    assert!(err.detail.unwrap().contains("没声明「关闭」"));
+    // 没声明推理能力 → 同样不许
+    let err = thinking_effort(&plain, Some("disabled")).unwrap_err();
+    assert!(err.detail.unwrap().contains("未声明推理能力"));
+
     // 列了等级 → 只允许表里的，而且**发给上游的是表里的值**（不是等级名）
     // `4096` 那种预算值（Anthropic）与 `max→high` 那种改名都靠它 ——
     // 早先这一版把等级名原样发出去，界面上写着"实际发送：max→4096"、真正发的却是 `max`。

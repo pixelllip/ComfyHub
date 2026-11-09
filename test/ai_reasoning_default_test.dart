@@ -4,6 +4,8 @@
 // 关键约定：
 //   · 「默认」不需要模型在 thinkingEfforts 里声明 off —— 它不发任何思考参数，任何网关都成立；
 //     **但它不承诺"不会思考"**：网关默认开思考时照样会思考，所以名字不能叫「关闭」；
+//   · 2026-11-09 起另有真正的一档「关闭」（[AiReasoningEffort.disabled]）：**只在模型
+//     声明了关闭取值时才出现**，选中后请求体带 `disabled`，后端翻译成各家的关闭开关；
 //   · 真正的思考档位仍然只列模型声明过的（不猜、不降级，AIH-056）；
 //   · 选「默认」后创建 Run 的请求体里**不带** reasoningEffort 字段（后端缺省即 off）。
 
@@ -35,8 +37,9 @@ http.Response _sseResponse(String body) => http.Response.bytes(
   headers: {'content-type': 'text/event-stream; charset=utf-8'},
 );
 
-/// 假后端：模型声明了 reasoning + high/max，但**没有声明 off**。
-MockClient _backend() {
+/// 假后端：模型声明了 reasoning + high/max。默认**没有声明 off**；
+/// 传 `canDisable` 时改成声明了关闭取值（`off→none`）的模型。
+MockClient _backend({bool canDisable = false}) {
   var runCount = 0;
   return MockClient((request) async {
     final path = request.url.path;
@@ -67,7 +70,9 @@ MockClient _backend() {
           'inputModalities': ['text'],
           'tools': true,
           'reasoning': true,
-          'thinkingEfforts': {'high': 'high', 'max': 'max'},
+          'thinkingEfforts': canDisable
+              ? {'off': 'none', 'high': 'high'}
+              : {'high': 'high', 'max': 'max'},
           'thinkingFormat': 'openai',
           'capabilitySource': 'manual',
           'enabled': true,
@@ -116,7 +121,10 @@ MockClient _backend() {
   });
 }
 
-Future<AiWorkspaceStore> _store(WidgetTester tester) async {
+Future<AiWorkspaceStore> _store(
+  WidgetTester tester, {
+  bool canDisable = false,
+}) async {
   tester.view.physicalSize = const Size(1200, 900);
   tester.view.devicePixelRatio = 1.0;
   addTearDown(tester.view.reset);
@@ -124,7 +132,7 @@ Future<AiWorkspaceStore> _store(WidgetTester tester) async {
   final settings = SettingsStore();
   await settings.load();
   final store = AiWorkspaceStore(
-    api: AiApiClient(settings.baseUrl, client: _backend()),
+    api: AiApiClient(settings.baseUrl, client: _backend(canDisable: canDisable)),
   );
   await tester.pumpWidget(
     MultiProvider(
@@ -206,6 +214,59 @@ void main() {
       runBodies.last.containsKey('reasoningEffort'),
       isFalse,
       reason: '「默认」= 一个思考参数都不发（由网关决定），这条是它对用户的全部承诺',
+    );
+  });
+
+  test('只有声明了关闭取值的模型才多出「关闭」一档', () {
+    const offable = AiModel(
+      providerId: 'p',
+      id: 'm',
+      displayName: 'M',
+      reasoning: true,
+      thinkingEfforts: {'off': 'none', 'high': 'high'},
+    );
+    expect(offable.canDisableThinking, isTrue);
+    expect(offable.selectableEfforts, [
+      AiReasoningEffort.off,
+      AiReasoningEffort.disabled,
+      AiReasoningEffort.high,
+    ]);
+    expect(offable.effortWireValue(AiReasoningEffort.disabled), 'none');
+
+    // 没声明 → 不出现这一档（宁可不给选，也不要发出去被上游 400）
+    const plain = AiModel(
+      providerId: 'p',
+      id: 'm',
+      displayName: 'M',
+      reasoning: true,
+      thinkingEfforts: {'high': 'high'},
+    );
+    expect(plain.canDisableThinking, isFalse);
+    expect(plain.selectableEfforts, [
+      AiReasoningEffort.off,
+      AiReasoningEffort.high,
+    ]);
+    expect(plain.effortWireValue(AiReasoningEffort.disabled), isNull);
+  });
+
+  testWidgets('选「关闭」→ Run 请求带上 disabled（以前这一档根本不存在）', (tester) async {
+    final store = await _store(tester, canDisable: true);
+    expect(store.selectedModel?.canDisableThinking, isTrue);
+
+    await tester.tap(find.byType(AppMenuButton<AiReasoningEffort>));
+    await tester.pumpAndSettle();
+    expect(find.text('关闭'), findsOneWidget, reason: '模型声明了关闭取值，这一档要能选');
+    await tester.tap(find.text('关闭'));
+    await tester.pumpAndSettle();
+    expect(store.reasoningEffort, AiReasoningEffort.disabled);
+
+    await tester.enterText(find.byType(TextField), '别想了，直接答');
+    await tester.tap(find.text('发送'));
+    await tester.pumpAndSettle();
+    expect(
+      runBodies.last['reasoningEffort'],
+      'disabled',
+      reason: '「关闭」必须真的把档位发出去 —— 旧代码拿 isThinking 当判据，这一档永远被吞成 null',
     );
   });
 }

@@ -2160,7 +2160,7 @@ class AiWorkspaceStore extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// 换模型后把档位收敛回合法集合：新模型没有这个档位就退回"关闭"。
+  /// 换模型后把档位收敛回合法集合：新模型没有这个档位就退回「默认」（什么都不发）。
   void _clampReasoningEffort() {
     final allowed =
         selectedModel?.selectableEfforts ?? const <AiReasoningEffort>[];
@@ -2602,7 +2602,7 @@ class AiWorkspaceStore extends ChangeNotifier {
       notifyListeners(); // 到这里：发送中 + 这条会话的草稿已作废
       // 模型没声明推理能力时不带这个字段（后端也会再挡一次，AIH-056）
       final effort =
-          (model.supportsReasoningEffort && reasoningEffort.isThinking)
+          (model.supportsReasoningEffort && reasoningEffort.sendsParameter)
           ? reasoningEffort.wire
           : null;
       final start = await _source.startRun(
@@ -3048,7 +3048,8 @@ class AiWorkspaceStore extends ChangeNotifier {
     notifyListeners();
 
     try {
-      final effort = (m.supportsReasoningEffort && reasoningEffort.isThinking)
+      final effort =
+          (m.supportsReasoningEffort && reasoningEffort.sendsParameter)
           ? reasoningEffort.wire
           : null;
       final start = await _source.startRun(

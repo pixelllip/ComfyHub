@@ -626,6 +626,9 @@ class AiModelEdit {
   /// 各档位的默认"过线拼写"（与后端 ThinkingLevels.DEFAULT 对齐）。
   static String defaultEffortWire(AiReasoningEffort e) => switch (e) {
     AiReasoningEffort.off => 'none',
+    // 「关闭」的取值：DeepSeek / OpenAI 都认 none（落到 thinking.type=disabled /
+    // reasoning.effort=none，见后端 apply_openai_reasoning）
+    AiReasoningEffort.disabled => 'none',
     AiReasoningEffort.minimal => 'minimal',
     AiReasoningEffort.low => 'low',
     AiReasoningEffort.medium => 'medium',
@@ -724,8 +727,8 @@ class _AiModelEditorDialogState extends State<AiModelEditorDialog> {
               ),
               Text(
                 _m.reasoning
-                    ? '勾选该模型真正支持的档位。「默认」不在这个列表里，它不发任何思考参数，'
-                          '任何模型都成立，聊天界面永远可选。留空就是不声明。'
+                    ? '勾选该模型真正支持的档位。「默认」不发任何思考参数、聊天界面永远可选；'
+                          '勾上「关闭」才知道这个模型该发什么关闭值（DeepSeek 是 none）。'
                           '真正的思考档位宁可不给选，也不要发出去被上游 400。'
                     : '该模型不支持推理。勾选后可以逐档声明。',
                 style: theme.textTheme.labelSmall?.copyWith(
@@ -738,6 +741,41 @@ class _AiModelEditorDialogState extends State<AiModelEditorDialog> {
                   spacing: 6,
                   runSpacing: 6,
                   children: [
+                    // 「关闭」是模型能力（2026-11-09 用户报「没有关闭思考的档位」）：
+                    // 勾上之后聊天界面才有这一档，发出去的是目录里的关闭取值。
+                    // ⚠ 键沿用历史的 `off`（内置规则与老库都这么存），后端两个键都认。
+                    FilterChip(
+                      label: Text('关闭', style: theme.textTheme.labelSmall),
+                      selected:
+                          _m.thinkingEfforts.containsKey(
+                            AiReasoningEffort.off.wire,
+                          ) ||
+                          _m.thinkingEfforts.containsKey(
+                            AiReasoningEffort.disabled.wire,
+                          ),
+                      onSelected: busy
+                          ? null
+                          : (on) {
+                              final next = Map<String, String>.from(
+                                _m.thinkingEfforts,
+                              );
+                              next.remove(AiReasoningEffort.off.wire);
+                              next.remove(AiReasoningEffort.disabled.wire);
+                              if (on) {
+                                next[AiReasoningEffort.off.wire] =
+                                    AiModelEdit.defaultEffortWire(
+                                      AiReasoningEffort.disabled,
+                                    );
+                              }
+                              _update(
+                                AiModelEdit.copy(
+                                  _m,
+                                  thinkingEfforts: next,
+                                  manual: true,
+                                ),
+                              );
+                            },
+                    ),
                     // 「默认」不列在这里：它是"什么都不声明"的那一档，不是模型能力。
                     for (final e in AiReasoningEffort.values.where(
                       (e) => e.isThinking,

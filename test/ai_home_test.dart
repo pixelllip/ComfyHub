@@ -1178,9 +1178,11 @@ void main() {
     final store = tester
         .element(find.byType(AiHomePage))
         .read<AiWorkspaceStore>();
-    // 目录只声明了三档，所以界面上也只能有这三档（medium / max 不出现）
+    // 目录声明了三档思考 + 一个关闭取值，所以界面上是「默认 → 关闭 → 低 → 高」
+    // （medium / max 不出现；「关闭」2026-11-09 起才独立成档）
     expect(store.selectedModel!.selectableEfforts, [
       AiReasoningEffort.off,
+      AiReasoningEffort.disabled,
       AiReasoningEffort.low,
       AiReasoningEffort.high,
     ]);
@@ -1193,6 +1195,11 @@ void main() {
     await tester.tap(find.byType(AppMenuButton<AiReasoningEffort>));
     await tester.pumpAndSettle();
     expect(find.text('低'), findsWidgets);
+    expect(
+      find.text('关闭'),
+      findsOneWidget,
+      reason: '目录声明了关闭取值 → 这一档必须能选（用户 2026-11-09 报的 bug）',
+    );
     expect(find.text('中'), findsNothing, reason: '未声明的档位不能出现');
 
     await tester.tap(find.text('高').last);

@@ -3,6 +3,7 @@
 //! `use super::*;` 照旧：子模块能看见父模块的私有项，所以用例一行都不用改。
 
 use super::*;
+use crate::provider::protocol::{OpenAiResponsesAdapter, ThinkingFormat, ToolCallRef};
 
 /// 状态码 → 稳定码：这几个档位**一个都不能混**（界面给的下一步完全不一样）。
 #[test]
@@ -98,6 +99,56 @@ fn reasoning_passback_error_is_recognised() {
     assert!(!is_reasoning_passback_error(
         "tool result must be passed back"
     ));
+}
+
+/// **补空条目不能变成"重发同一个请求"**（2026-11-09 现场）。
+///
+/// `deepseek` 方言下 `build_body` 第一次就把缺的 `reasoning` 项补上了，所以被 400 之后
+/// 再"补一次"拿到的是逐字节相同的请求 —— [`build_echo_retry`] 必须返回 `None`，
+/// 让降档直接发生（少烧一次 400 的往返与输入 token）。
+/// 反过来，模型没声明方言时把 `echo_all` 打开**真的**会多一个 reasoning 项 ——
+/// 那种情况必须重发（这条分支是 2026-11-01 加的，别顺手删掉）。
+#[test]
+fn echo_retry_is_skipped_when_the_body_would_not_change() {
+    let silent = ChatTurn {
+        role: "assistant".into(),
+        tool_calls: vec![ToolCallRef {
+            id: "call_1".into(),
+            name: "t".into(),
+            arguments: "{}".into(),
+        }],
+        ..Default::default()
+    };
+    let deepseek = ReasoningRequest {
+        effort: Some("high".into()),
+        wire_value: Some("high".into()),
+        format: Some(ThinkingFormat::DeepSeek),
+        echo_all: false,
+    };
+    assert!(
+        build_echo_retry(
+            &OpenAiResponsesAdapter,
+            "m",
+            std::slice::from_ref(&silent),
+            &[],
+            &deepseek,
+            None
+        )
+        .is_none(),
+        "方言是 deepseek 时第一次就补过了，重发只是同一个请求"
+    );
+
+    let plain = ReasoningRequest {
+        format: Some(ThinkingFormat::OpenAi),
+        ..deepseek
+    };
+    let retry = build_echo_retry(&OpenAiResponsesAdapter, "m", &[silent], &[], &plain, None)
+        .expect("没声明方言时打开 echo_all 会真的多一个 reasoning 项，必须重发");
+    assert_eq!(retry.1["input"][0]["type"], "reasoning");
+    assert_eq!(
+        retry.1["input"][0]["content"],
+        json!([{ "type": "reasoning_text", "text": crate::provider::protocol::NO_REASONING_TEXT }])
+    );
 }
 
 /// usage 累加：多家形状归一，多轮相加（AIH-057）。

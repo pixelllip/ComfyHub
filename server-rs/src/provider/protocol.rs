@@ -28,7 +28,9 @@
 //! 4. **思考有时必须回传**：`openai-responses`（DeepSeek 那家是**无状态**的）在思考模式下
 //!    要求把历史轮次的思维链原文放回 `input`（`reasoning` 项）——
 //!    少一个就是 `400 The reasoning_text in the thinking mode must be passed back to the API.`
-//!    所以 [`ChatTurn::reasoning`] 是**逐协议**用的：responses 发、另两家一个字节都不发。
+//!    所以 [`ChatTurn::reasoning`] 是**逐协议**用的：responses 发 `reasoning` 项；
+//!    completions 在 `deepseek` 方言且请求带 `tools` 时发助手消息上的 `reasoning_content`
+//!    （同一个要求的另一种形状）；anthropic 一个字节都不发（要签名，那是另一件事）。
 
 use serde_json::{json, Map, Value};
 
@@ -184,8 +186,10 @@ pub struct ChatTurn {
     /// 输入 item 里的 `reasoning` 明文 `content` 会被归并进相邻的 assistant 消息）。
     ///
     /// ⚠ **只有需要回传的协议才发它**：`openai-responses` 的适配器把它铺成 `reasoning` 项；
-    /// completions / anthropic 两个适配器**一个字节都不发**（它们的方言要不要回传是另一件事，
-    /// 没实测过就不许顺手加）。所以"历史里的思考进上下文"这件事是**逐协议**的。
+    /// `openai-completions` 在 `deepseek` 方言 + 请求带 `tools` 时铺成助手消息的
+    /// `reasoning_content`（官方 Thinking Mode 指南对 OpenAI 格式是**同一条硬要求**，
+    /// 2026-11 之前我们一个字节都不发 —— 那条路上第一次工具往返之后必 400）；
+    /// anthropic 一个字节都不发。所以"历史里的思考进上下文"这件事是**逐协议**的。
     ///
     /// [DeepSeek Responses API 指南]: https://api-docs.deepseek.com/zh-cn/guides/responses_api
     pub reasoning: Option<String>,
@@ -439,9 +443,20 @@ impl Adapter for OpenAiCompletionsAdapter {
     ) -> Value {
         let mut root = Map::new();
         root.insert("model".into(), json!(model));
+        // **带 `tools` 的请求**要逐轮回传 `reasoning_content`（DeepSeek 的 OpenAI 格式，见
+        // `reasoning_echo_required`）—— 官方原文："for requests carrying the tools parameter,
+        // the reasoning_content must be fully passed back to the API in all subsequent requests,
+        // even for turns where the model did not perform a tool call"。
+        // 不带 tools 时上游会忽略这个字段，所以干脆不发（少给网关一个怪字段）。
+        let echo_reasoning = !tools.is_empty() && reasoning_echo_required(reasoning);
         root.insert(
             "messages".into(),
-            Value::Array(turns.iter().map(openai_message).collect()),
+            Value::Array(
+                turns
+                    .iter()
+                    .map(|turn| openai_message(turn, echo_reasoning))
+                    .collect(),
+            ),
         );
         root.insert("stream".into(), json!(true));
         // 让上游在最后一个 chunk 里带 usage（网关不一定支持，忽略即可）
@@ -534,7 +549,22 @@ impl Adapter for OpenAiCompletionsAdapter {
     }
 }
 
-fn openai_message(turn: &ChatTurn) -> Value {
+/// 这一轮确实没有思考时，回传给上游的**占位文本**。
+///
+/// 上游校验的是"每条助手轮都得带上 reasoning_text"：空数组归并进相邻助手消息之后
+/// 什么都不剩，空串同样过不去（2026-10 与 2026-11-09 两次现场）。零宽空格（U+200B）
+/// 是最小的非空值 —— 渲染上不可见、不参与 `trim()`（它不是 Unicode White_Space），
+/// 只占 1 个 token。
+///
+/// ⚠ 它不是"编一段假思考"：不含任何语义，只标记"这一轮没有思考"。
+/// 用户 2026-11-09 的口径：**开了 reasoning 就一定回传一点内容，哪怕是不可视字符**。
+pub const NO_REASONING_TEXT: &str = "\u{200b}";
+
+/// 一条 OpenAI 格式的 `messages[]`。
+///
+/// `echo_reasoning` = 这份请求要不要把助手轮的 `reasoning_content` 回传（判据见
+/// [`reasoning_echo_required`]，由 `build_body` 连同"有没有 tools"一起算好）。
+fn openai_message(turn: &ChatTurn, echo_reasoning: bool) -> Value {
     let mut message = Map::new();
     message.insert("role".into(), json!(turn.role));
     if turn.role == "tool" {
@@ -544,6 +574,16 @@ fn openai_message(turn: &ChatTurn) -> Value {
         );
         message.insert("content".into(), json!(turn.content));
         return Value::Object(message);
+    }
+    if echo_reasoning && turn.role == "assistant" {
+        // ⚠ **没有思考的轮次也要回传一点内容**（占位符）：`reasoning_content` 的缺失与
+        // "这一轮确实没思考"在上游看来是两件事 —— 少字段就是 400，空串也过不去。
+        let text = turn
+            .reasoning
+            .as_deref()
+            .filter(|r| !r.trim().is_empty())
+            .unwrap_or(NO_REASONING_TEXT);
+        message.insert("reasoning_content".into(), json!(text));
     }
     if !turn.tool_calls.is_empty() {
         // `content` 用空串（比 null 有更广的兼容性）
@@ -613,6 +653,29 @@ fn openai_tools(tools: &[ToolSpec]) -> Value {
 fn apply_openai_reasoning(root: &mut Map<String, Value>, r: &ReasoningRequest) {
     let format = r.format.unwrap_or(ThinkingFormat::OpenAi);
     if let (Some(_), Some(wire)) = (r.effort.as_ref(), r.wire_value.as_ref()) {
+        // **显式关闭**（「关闭」那一档，2026-11-09）：各家的形状不是"把强度填成某个值"，
+        // 而是各自的开关 —— DeepSeek / Z.AI 是 `thinking.type=disabled`，Qwen 是
+        // `enable_thinking=false`，OpenRouter 是 `reasoning.effort=none`。
+        // OpenAI 官方只有 `none` 这个新值（模型敢声明 `off→none` 就照着发）。
+        // ⚠ 这条必须在下面"照着字段发强度"之前 —— 否则会发出
+        // `thinking.type=enabled` + `reasoning_effort=none` 这种自相矛盾的组合。
+        if matches!(wire.trim(), "none" | "disabled") {
+            match format {
+                ThinkingFormat::DeepSeek | ThinkingFormat::Zai => {
+                    root.insert("thinking".into(), json!({ "type": "disabled" }));
+                }
+                ThinkingFormat::Qwen => {
+                    root.insert("enable_thinking".into(), json!(false));
+                }
+                ThinkingFormat::OpenRouter => {
+                    root.insert("reasoning".into(), json!({ "effort": "none" }));
+                }
+                ThinkingFormat::OpenAi => {
+                    root.insert("reasoning_effort".into(), json!("none"));
+                }
+            }
+            return;
+        }
         match format {
             ThinkingFormat::DeepSeek => {
                 root.insert("thinking".into(), json!({ "type": "enabled" }));
@@ -663,10 +726,14 @@ fn apply_openai_reasoning(root: &mut Map<String, Value>, r: &ReasoningRequest) {
 /// `{type:"function", name, parameters}`（没有 `function` 那层）。
 pub struct OpenAiResponsesAdapter;
 
-/// 这一份请求会不会被要求"逐轮回传思维链"（DeepSeek 的 Responses）。
+/// 这一份请求会不会被要求"逐轮回传思维链"（DeepSeek 两家协议共用这条判据）。
 ///
-/// 判据只有两条，都是实测出来的：① 模型目录里声明的思考方言是 `deepseek`；
-/// ② 思考**没被关掉** —— `effort=none` 那一档上游不校验回传（2026-10-25 的对照实验）。
+/// 判据只有两条，都是实测/官方文档给的：① 模型目录里声明的思考方言是 `deepseek`；
+/// ② 思考**没被关掉** —— `effort=none` 那一档不校验回传（2026-10-25 的对照实验）。
+///
+/// 两个适配器用法不同，但"要不要回传"这一问只有这一个答案：
+/// `openai-responses` 铺成 `reasoning` 项（空 `content` 表示这一轮没思考），
+/// `openai-completions` 铺成助手消息的 `reasoning_content` 字段（空串同理）。
 ///
 /// ⚠ 别的方言没有实测过，不许顺手加：空 `content` 的 `reasoning` 项对 OpenAI 官方
 /// 是不合法条目（它要 `id` / 加密内容），多塞一个就把本来能跑的请求变成 400。
@@ -726,18 +793,22 @@ impl Adapter for OpenAiResponsesAdapter {
                     "type": "reasoning",
                     "content": [{ "type": "reasoning_text", "text": reasoning }],
                 }));
-            } else if !turn.tool_calls.is_empty() && reasoning_echo_required(reasoning) {
+            } else if turn.role == "assistant" && reasoning_echo_required(reasoning) {
                 // **这一轮模型根本没思考**（实测 2026-10-25：`krea2 r2i` 那次的 16 轮里，
                 // 有一轮只发了一个工具调用、2.3 秒就回来了，思维链 0 字符）。
                 //
-                // 思考模式下带 `tools` 的请求要求"每个工具轮都能对上思维链"，少一个就是
-                // `400 The reasoning_text in the thinking mode must be passed back to the API.`
-                // —— 而这一轮**没有思维链可回传**，编一段假的等于把别人的思考塞进它的历史。
+                // 思考模式下带 `tools` 的请求要求"每条助手轮都对得上思维链" —— 官方原文
+                // 还特意写了 "even for turns where the model did not perform a tool call"，
+                // 所以这里补的是**每一条**没思考的助手轮（不只是带工具调用的那些）。
                 //
-                // 所以补一个**空 `content` 的 reasoning 项**：这一轮确实没有思考文本（诚实），
-                // 而空 content 正是那家明确接受的形状（被拒的是"空白 reasoning_text"，
-                // 见 `docs/pitfalls.md` 里那行 2026-10-25 的实测）。
-                input.push(json!({ "type": "reasoning", "content": [] }));
+                // 形状：空 `content`（`[]`）在 2026-10 还能过，2026-11-09 第二次就被拒了
+                // （空数组归并进相邻消息之后什么都不剩）。现在改回传一个**零宽空格占位**：
+                // 非空、不可见、不参与 `trim()`，既满足"必须有 reasoning_text"，又不需要
+                // 编一段假思考。见 [`NO_REASONING_TEXT`]。
+                input.push(json!({
+                    "type": "reasoning",
+                    "content": [{ "type": "reasoning_text", "text": NO_REASONING_TEXT }],
+                }));
             }
             if !turn.content.is_empty() || !turn.images.is_empty() {
                 let mut content: Vec<Value> = Vec::new();

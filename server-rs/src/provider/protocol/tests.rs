@@ -248,6 +248,27 @@ fn completions_reasoning_dialects() {
     let or = build(ThinkingFormat::OpenRouter, Some("low"));
     assert_eq!(or["reasoning"]["effort"], "low");
 
+    // **「关闭」档**（2026-11-09 用户报「没有关闭思考的档位」）：wire=none 时发的是各家
+    // 自己的开关，而不是 `thinking.type=enabled` + `reasoning_effort=none` 这种自相矛盾的组合。
+    let off = build(ThinkingFormat::DeepSeek, Some("none"));
+    assert_eq!(off["thinking"]["type"], "disabled");
+    assert!(
+        off.get("reasoning_effort").is_none(),
+        "关闭时不许再带强度（矛盾组合会被上游当成照常思考）：{off}"
+    );
+    assert_eq!(
+        build(ThinkingFormat::Zai, Some("none"))["thinking"]["type"],
+        "disabled"
+    );
+    assert_eq!(
+        build(ThinkingFormat::Qwen, Some("none"))["enable_thinking"],
+        false
+    );
+    assert_eq!(
+        build(ThinkingFormat::OpenRouter, Some("none"))["reasoning"]["effort"],
+        "none"
+    );
+
     // **默认档（不指定）**：只有"默认会思考"的方言才值得试着显式关闭
     assert!(build(ThinkingFormat::OpenAi, None)
         .get("reasoning_effort")
@@ -499,15 +520,17 @@ fn responses_reasoning_round_trip() {
 }
 
 /// **模型有些轮次根本不思考**（2026-10-25 现场）：那一轮只有 `function_call`、思维链 0 字符，
-/// 而 DeepSeek 的 Responses 在思考模式下要求每个工具轮都能对上思维链 —— 少了它，下一次请求
+/// 而 DeepSeek 的 Responses 在思考模式下要求每条助手轮都能对上思维链 —— 少了它，下一次请求
 /// 必然 `400 The reasoning_text in the thinking mode must be passed back to the API.`
 ///
-/// 这里补的是一个**空 `content`** 的 `reasoning` 项（这一轮确实没思考文本，不编假话；
-/// 且空 content 是那家接受的形状）。三条边界一起钉住：
-/// ① deepseek 方言 + 思考开着才补；② 思考已关（`effort=none`）不补（那一档不校验回传）；
-/// ③ 别的方言一个字节都不补（空 reasoning 项对 OpenAI 官方是不合法条目）。
+/// 补的是**零宽空格占位**（[`NO_REASONING_TEXT`]）：2026-10 的空 `content`（`[]`）第一次能过、
+/// 2026-11-09 第二次就被拒了 —— 空数组归并进相邻助手消息之后什么都不剩。占位符非空、
+/// 不可见、不参与 `trim()`，才满足"必须有 reasoning_text"。四条边界一起钉住：
+/// ① deepseek 方言 + 思考开着才补；② 纯文本的助手轮（没有工具调用）也要补
+/// （官方原文 "even for turns where the model did not perform a tool call"）；
+/// ③ 思考已关（`effort=none`）不补；④ 别的方言一个字节都不补。
 #[test]
-fn responses_fills_empty_reasoning_for_tool_turns_that_did_not_think() {
+fn responses_fills_placeholder_reasoning_for_turns_that_did_not_think() {
     let adapter = OpenAiResponsesAdapter;
     let silent_tool_turn = ChatTurn {
         role: "assistant".into(),
@@ -519,6 +542,12 @@ fn responses_fills_empty_reasoning_for_tool_turns_that_did_not_think() {
         }],
         ..Default::default()
     };
+    let silent_text_turn = ChatTurn {
+        role: "assistant".into(),
+        content: "我就答一句".into(),
+        ..Default::default()
+    };
+    let placeholder = json!([{ "type": "reasoning_text", "text": NO_REASONING_TEXT }]);
     let deepseek = ReasoningRequest {
         effort: Some("high".into()),
         wire_value: Some("high".into()),
@@ -534,11 +563,22 @@ fn responses_fills_empty_reasoning_for_tool_turns_that_did_not_think() {
     );
     assert_eq!(body["input"][0]["type"], "reasoning");
     assert_eq!(
-        body["input"][0]["content"],
-        json!([]),
-        "空 content，而不是空白 reasoning_text"
+        body["input"][0]["content"], placeholder,
+        "回传的是零宽空格占位，不是空 content"
     );
     assert_eq!(body["input"][1]["type"], "function_call");
+
+    // ② 没有工具调用的助手轮也要补（官方原文点了 "even for turns where the model did not
+    //    perform a tool call"）：以前漏掉这一条，纯文本轮之后照样 400。
+    let body = adapter.build_body(
+        "m",
+        std::slice::from_ref(&silent_text_turn),
+        &[],
+        &deepseek,
+        None,
+    );
+    assert_eq!(body["input"][0]["type"], "reasoning");
+    assert_eq!(body["input"][0]["content"], placeholder);
 
     let off = ReasoningRequest {
         effort: Some("none".into()),
@@ -614,7 +654,7 @@ fn responses_补回传与方言解耦() {
         "没被拒过就不补，免得给不需要它的上游塞怪东西"
     );
 
-    // 被拒过一次：同一个请求，只把 echo_all 打开 → 补出空 content 的 reasoning 项，
+    // 被拒过一次：同一个请求，只把 echo_all 打开 → 补出占位 reasoning 项，
     // 而**思考强度仍然在**（`reasoning.effort` 还在，没有被降成 none）
     let echoed = ReasoningRequest {
         echo_all: true,
@@ -622,9 +662,117 @@ fn responses_补回传与方言解耦() {
     };
     let body = adapter.build_body("m", &[silent], &[], &echoed, None);
     assert_eq!(body["input"][0]["type"], "reasoning");
-    assert_eq!(body["input"][0]["content"], json!([]));
+    assert_eq!(
+        body["input"][0]["content"],
+        json!([{ "type": "reasoning_text", "text": NO_REASONING_TEXT }])
+    );
     assert_eq!(body["input"][1]["type"], "function_call");
     assert_eq!(body["reasoning"]["effort"], "high", "补回传不许动思考强度");
+}
+
+/// **completions 也要回传 `reasoning_content`**（DeepSeek 的 OpenAI 格式，2026-11 补）。
+///
+/// 官方 Thinking Mode 指南对两种格式是同一条要求："for requests carrying the `tools`
+/// parameter, the `reasoning_content` must be fully passed back to the API in all subsequent
+/// requests — even for turns where the model did not perform a tool call."
+/// Responses 那边早就铺了 `reasoning` 项，而 completions 这边**一个字节都不发** ——
+/// 那条路上第一次工具往返之后必 400（缺 `reasoning_content`）。
+///
+/// 四条边界一起钉住：
+/// ① 带 tools + deepseek 方言 + 思考开着才发；
+/// ② 有思考的轮回传原文，没思考的轮回传**占位符**（缺字段 ≠ 占位符）；
+/// ③ 不带 tools 不发（上游会忽略它，少给网关一个怪字段）；
+/// ④ 思考关掉、别的方言都不发。
+#[test]
+fn completions_回传助手轮的_reasoning_content() {
+    let adapter = OpenAiCompletionsAdapter;
+    let tools = vec![ToolSpec {
+        name: "t".into(),
+        description: "d".into(),
+        parameters: json!({ "type": "object" }),
+    }];
+    let thinking = ReasoningRequest {
+        effort: Some("high".into()),
+        wire_value: Some("high".into()),
+        format: Some(ThinkingFormat::DeepSeek),
+        echo_all: false,
+    };
+    let turns = vec![
+        turn("user", "看看"),
+        ChatTurn {
+            role: "assistant".into(),
+            content: "我查一下".into(),
+            reasoning: Some("先想一下".into()),
+            tool_calls: vec![ToolCallRef {
+                id: "call_1".into(),
+                name: "t".into(),
+                arguments: "{}".into(),
+            }],
+            ..Default::default()
+        },
+        ChatTurn {
+            role: "tool".into(),
+            content: "结果".into(),
+            tool_call_id: Some("call_1".into()),
+            ..Default::default()
+        },
+        ChatTurn {
+            role: "assistant".into(),
+            content: String::new(),
+            reasoning: None,
+            tool_calls: vec![ToolCallRef {
+                id: "call_2".into(),
+                name: "t".into(),
+                arguments: "{}".into(),
+            }],
+            ..Default::default()
+        },
+    ];
+    let body = adapter.build_body("m", &turns, &tools, &thinking, None);
+    assert_eq!(
+        body["messages"][1]["reasoning_content"],
+        json!("先想一下"),
+        "有思考的轮：原文回传"
+    );
+    assert_eq!(
+        body["messages"][3]["reasoning_content"],
+        json!(NO_REASONING_TEXT),
+        "没思考的轮也要带内容（零宽占位），缺字段或空串都是 400"
+    );
+    assert!(
+        body["messages"][0].get("reasoning_content").is_none(),
+        "user 轮不许带"
+    );
+    assert!(
+        body["messages"][2].get("reasoning_content").is_none(),
+        "tool 轮不许带"
+    );
+
+    // ③ 不带 tools：一个字节都不发
+    let body = adapter.build_body("m", &turns, &[], &thinking, None);
+    assert!(body["messages"][1].get("reasoning_content").is_none());
+
+    // ④ 思考关掉 / 别的方言：一个字节都不发
+    let off = ReasoningRequest {
+        effort: Some("none".into()),
+        wire_value: Some("none".into()),
+        format: Some(ThinkingFormat::DeepSeek),
+        echo_all: false,
+    };
+    let body = adapter.build_body("m", &turns, &tools, &off, None);
+    assert!(body["messages"][1].get("reasoning_content").is_none());
+
+    let openai = ReasoningRequest {
+        effort: Some("high".into()),
+        wire_value: Some("high".into()),
+        format: Some(ThinkingFormat::OpenAi),
+        echo_all: false,
+    };
+    let body = adapter.build_body("m", &turns, &tools, &openai, None);
+    assert!(
+        body["messages"][1].get("reasoning_content").is_none(),
+        "别的方言不许凭空多一个 reasoning_content"
+    );
 }
 
 /// responses 的流事件：文本 / 思考 / 函数调用开始与参数分片 / 收尾。

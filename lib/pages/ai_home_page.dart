@@ -4599,10 +4599,13 @@ class _PermissionPicker extends StatelessWidget {
 
 /// 思考强度选择器（AIH-056）。
 ///
-/// 只显示**当前模型声明过**的档位；**「默认」例外** —— 它不发任何思考参数、
-/// 任何网关都成立，所以永远可选（用户要求"能默认不指定思考强度，且不用去改模型声明"）。
-/// **但它不承诺"不会思考"**（2026-09-20 改名的原因，见 [AiReasoningEffort.off]：
-/// 本机在用的聚合网关关不掉思考，叫「关闭」就是撒谎）。
+/// 只显示**当前模型声明过**的档位；两个例外总是可选或按声明出现：
+/// · 「默认」—— 不发任何思考参数、任何网关都成立，所以永远可选
+///   （用户要求"能默认不指定思考强度，且不用去改模型声明"）；
+/// · 「关闭」—— **真的发关闭参数**（2026-11-09 用户报「没有关闭思考的档位」），
+///   只在模型目录里声明了关闭取值（`off` / `disabled`）时出现。
+/// **「默认」不承诺"不会思考"**（2026-09-20 改名的原因，见 [AiReasoningEffort.off]：
+/// 本机在用的聚合网关关不掉思考，叫「关闭」就是撒谎）—— 所以两档必须分开列。
 /// 模型完全没声明推理能力时整块置灰并说明原因，而不是给一堆选了会被后端拒绝的选项。
 class _EffortPicker extends StatelessWidget {
   final AiWorkspaceStore store;
@@ -4633,7 +4636,8 @@ class _EffortPicker extends StatelessWidget {
 
     // 纯图标档用 tooltip 兜住信息（tooltip 里带着档位说明与"为什么置灰"）
     final tooltip = enabled
-        ? '思考强度（当前是 ${store.reasoningEffort.label}）。「默认」始终可选，不发思考参数，由网关决定。'
+        ? '思考强度（当前是 ${store.reasoningEffort.label}）。「默认」不发思考参数，由网关决定。'
+              '「关闭」会真的发关闭参数，模型不思考。'
               '模型声明的档位有 ${options.where((e) => e.isThinking).map((e) => e.label).join(' / ')}'
         : (model == null ? '还没选模型' : '$text。该模型未声明推理能力，请到「设置 → AI 模型」声明。');
 

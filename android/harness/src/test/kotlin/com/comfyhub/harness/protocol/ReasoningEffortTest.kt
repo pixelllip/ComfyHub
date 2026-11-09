@@ -77,6 +77,30 @@ class ReasoningEffortTest {
         assertFalse(body.containsKey("thinking"))
     }
 
+    /**
+     * 「关闭」档（2026-11-09，与桌面同一档）：发的是各家自己的关闭开关，
+     * 而不是 `thinking.type=enabled` + `reasoning_effort=none` 这种自相矛盾的组合。
+     */
+    @Test
+    fun `关闭档发各家自己的关闭开关 而不是 enabled 加 none`() {
+        assertEquals(ReasoningEffort.DISABLED, ReasoningEffort.parse("disabled"))
+
+        val deepseek = req(
+            ReasoningEffort.DISABLED,
+            ThinkingFormat.DEEPSEEK,
+            levelMap = mapOf("off" to LevelSpec.Name("none")),
+        )
+        assertEquals("none", deepseek.wireValue)
+        assertFalse("关闭不是「启用思考」", deepseek.enabled)
+
+        val body = openai.buildBody("m", turns(), true, deepseek)
+        assertEquals("disabled", body["thinking"]!!.jsonObject["type"]!!.jsonPrimitive.content)
+        assertFalse("关闭时不许再带强度", body.containsKey("reasoning_effort"))
+
+        val qwen = openai.buildBody("m", turns(), true, req(ReasoningEffort.DISABLED, ThinkingFormat.QWEN))
+        assertEquals(false, on(qwen, "enable_thinking"))
+    }
+
     @Test
     fun `等级可以在模型目录里改名`() {
         val body = openai.buildBody(

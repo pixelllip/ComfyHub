@@ -107,7 +107,18 @@ enum AiReasoningEffort {
   /// 也就是说"关掉思考"在这类网关上**做不到**，叫「关闭」就是承诺一件做不到的事。
   /// 叫「默认」才是真话 —— 我们不发任何思考参数，思考与否由网关决定
   /// （DSH 同一个档位也叫 `Default`）。要真正不思考，只能换一个不思考的模型/网关。
+  ///
+  /// ⚠ 2026-11-09：真正能关掉的那一类网关现在有单独一档 [disabled]（关闭）。
+  /// 这一档仍然是"不发任何参数"，两档不是一回事：**默认 = 让网关决定，关闭 = 发关闭参数**。
   off('off', '默认', hint: '不发思考参数，由网关决定，有的网关（如聚合站）仍会思考'),
+  /// 关闭思考：**真的发一个关闭取值**，不是"什么都不发"。
+  ///
+  /// 2026-11-09 用户报「没有关闭思考的档位」—— 之前只有 [off]（发空参数），
+  /// 对默认开思考的网关（DeepSeek）等于关不掉。取值来自模型目录里声明的 `off`
+  /// （内置规则与老库都这么存）或 `disabled` 键：DeepSeek 是 `none`，落到
+  /// `thinking.type=disabled`（completions）或 `reasoning.effort=none`（Responses）。
+  /// **模型没声明就不显示**：宁可不给选，也不要发出去被上游 400。
+  disabled('disabled', '关闭', hint: '发关闭参数，模型不思考；网关不认时仍可能思考'),
   minimal('minimal', '极低'),
   low('low', '低'),
   medium('medium', '中'),
@@ -133,7 +144,14 @@ enum AiReasoningEffort {
   }
 
   /// 默认以外的等级（模型可选的"真的在指定思考强度"的档位）
-  bool get isThinking => this != AiReasoningEffort.off;
+  bool get isThinking =>
+      this != AiReasoningEffort.off && this != AiReasoningEffort.disabled;
+
+  /// 这一档要不要**真的往请求里带值**。
+  ///
+  /// 只有「默认」不带（什么都不发，由网关决定）；「关闭」是**要带**的 ——
+  /// 2026-11-09 之前用 `isThinking` 当这个判据，于是"关闭"永远被当成 null，关不掉。
+  bool get sendsParameter => this != AiReasoningEffort.off;
 }
 
 /// 网关的思考方言：同一个"高"在 DeepSeek / Qwen / OpenRouter / Z.AI 上落到的字段不同。
@@ -352,23 +370,41 @@ class AiModel {
 
   bool supports(AiModality m) => inputModalities.contains(m.wire);
 
-  /// 该模型能不能调思考强度：必须声明推理能力，且**至少声明了一个具体档位**。
+  /// 该模型能不能调思考强度：必须声明推理能力，且**至少声明了一个具体档位**
+  /// （只有「关闭」也算 —— 2026-11-09 起关闭是可以单独声明的能力）。
   bool get supportsReasoningEffort =>
       reasoning &&
-      thinkingEfforts.keys.any((k) => k != AiReasoningEffort.off.wire);
+      (canDisableThinking ||
+          thinkingEfforts.keys.any(
+            (k) =>
+                k != AiReasoningEffort.off.wire &&
+                k != AiReasoningEffort.disabled.wire,
+          ));
 
-  /// 可选的思考档位（固定顺序：默认 → 极低 → 低 → 中 → 高 → 极高 → 最大）。
+  /// 目录里声明的「关闭」取值：历史上存在 `off` 键上（内置规则与老库），新写入的用
+  /// `disabled` 键；两个都认。**null = 这个模型关不掉思考**，界面上不显示那一档。
+  String? get disabledEffortWire =>
+      thinkingEfforts[AiReasoningEffort.disabled.wire] ??
+      thinkingEfforts[AiReasoningEffort.off.wire];
+
+  bool get canDisableThinking => disabledEffortWire != null;
+
+  /// 可选的思考档位（固定顺序：默认 → 关闭 → 极低 → 低 → 中 → 高 → 极高 → 最大）。
   ///
   /// **「默认」永远可选**（用户要求："允许我默认不指定思考强度，不影响模型声明"）：
   /// 它不发任何思考参数、任何网关都成立，所以不要求模型在 `thinkingEfforts` 里声明 `off`
   /// —— 否则"只想安静地问一句"的用户得先去改模型声明，这是本末倒置。
   /// **但它不承诺"不会思考"**：网关若默认开思考，它照样会思考（看 [AiReasoningEffort.off]）。
+  ///
+  /// **「关闭」只在模型声明了关闭取值时出现**（[canDisableThinking]，2026-11-09 用户报
+  /// 「没有关闭思考的档位」）：这一档会真的发 `none` / `disabled`，没声明就发等于赌网关认不认。
   /// 真正的思考档位仍然**只列模型声明过的**，不猜、不降级（AIH-056 第 2 条）。
   List<AiReasoningEffort> get selectableEfforts {
     if (!reasoning) return const [];
     final declared = thinkingEfforts.keys.toSet();
     return [
       AiReasoningEffort.off,
+      if (canDisableThinking) AiReasoningEffort.disabled,
       ...AiReasoningEffort.values.where(
         (e) => e.isThinking && declared.contains(e.wire),
       ),
@@ -376,9 +412,11 @@ class AiModel {
   }
 
   /// 该等级的线上表达（网关改名时显示给用户看）。数字表示 Anthropic 的思考预算。
+  /// 「关闭」没有自己的键，读的是 `off` / `disabled` 两个历史键（见 [disabledEffortWire]）。
   String? effortWireValue(AiReasoningEffort effort) =>
-      thinkingEfforts[effort.wire];
-
+      effort == AiReasoningEffort.disabled
+          ? disabledEffortWire
+          : thinkingEfforts[effort.wire];
   AiThinkingFormat? get thinkingFormatEnum =>
       AiThinkingFormat.parse(thinkingFormat);
 

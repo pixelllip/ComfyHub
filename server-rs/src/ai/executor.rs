@@ -611,13 +611,17 @@ async fn run_once(
             eprintln!("[run {run_id}] 思维链回传被拒：改为逐轮补空 reasoning 项，思考强度保持不变");
         }
         // ② 连补了条目都还被拒：只能降档，并且**在正文里说一句**（看不到的现象，
-        //    用户与模型都只能靠猜）。
+        //    用户与模型都只能靠猜）。⚠ 措辞别写成"本轮没思考"：真正缺条目的是**某一轮**
+        //    只调了工具、没产生思考（`reasoning.delta` 一条没有），未必是刚刚这两轮。
         if idle.thinking_forced_off && !thinking_forced_off {
             thinking_forced_off = true;
-            let note = "\n\n（本轮模型没有产生思考，而上游在思考模式下要求逐轮回传思维链；\
-                        补上空条目后仍被拒绝，为避免后续请求被拒，本次回复余下的请求已关闭思考。）";
+            let note = "\n\n（有一轮模型只调用了工具，没有产生思考，而这一家要求把每一轮的\
+                        思考原样带回去。补一条空记录也没被接受，所以本次回复后面的请求改成了\
+                        不思考。）";
             push_note(state, run_id, &assistant_id, &sink, note)?;
-            eprintln!("[run {run_id}] 思维链回传被上游拒绝（补条目无效）：本次 Run 余下请求改用 effort=none");
+            eprintln!(
+                "[run {run_id}] 思维链回传被上游拒绝（补条目无效或请求体没变化）：本次 Run 余下请求改用 effort=none"
+            );
         }
         // 摘到标题就**立刻**写进会话并广播（界面左侧列表马上改名）；
         // 只有第一次算数 —— 后面那些是回声（`TitleStripper` 里已经只认第一次）。

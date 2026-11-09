@@ -32,6 +32,15 @@ package com.comfyhub.harness.protocol
 /** 一个可选的思考等级。`off` 表示"**不指定**思考强度"（界面上叫「默认」）。 */
 enum class ReasoningEffort(val wire: String) {
     OFF("off"),
+
+    /**
+     * 关闭思考（2026-11-09，与桌面同一档）：**真的发一个关闭取值**，不是"不指定"。
+     *
+     * 取值来自模型目录的 `off` / `disabled` 键（DeepSeek 是 `none`）：落到
+     * `thinking.type=disabled`（completions）或 `reasoning.effort=none`（Responses）。
+     * 模型没声明就不该选到这一档（桌面那边同样按声明显示）。
+     */
+    DISABLED("disabled"),
     MINIMAL("minimal"),
     LOW("low"),
     MEDIUM("medium"),
@@ -82,6 +91,7 @@ enum class ThinkingFormat(val wire: String) {
 object ThinkingLevels {
     val DEFAULT: Map<ReasoningEffort, String> = mapOf(
         ReasoningEffort.OFF to "none",
+        ReasoningEffort.DISABLED to "none",
         ReasoningEffort.MINIMAL to "minimal",
         ReasoningEffort.LOW to "low",
         ReasoningEffort.MEDIUM to "medium",
@@ -118,7 +128,8 @@ data class ReasoningRequest(
     val format: ThinkingFormat,
     val budgetTokens: Int? = null,
 ) {
-    val enabled: Boolean get() = effort != null
+    val enabled: Boolean
+        get() = effort != null && effort != ReasoningEffort.DISABLED
 
     companion object {
         /** 完全不发任何思考字段（也**没有**任何方言信息）。 */
@@ -140,6 +151,15 @@ data class ReasoningRequest(
             if (!declaredReasoning) return NONE
             if (requested == null || requested == ReasoningEffort.OFF) {
                 return ReasoningRequest(null, null, format)
+            }
+            if (requested == ReasoningEffort.DISABLED) {
+                // 取值跟桌面同一口径：先找 `disabled`，再找历史的 `off`，都没有就 none。
+                val spec = levelMap[ReasoningEffort.DISABLED.wire] ?: levelMap[ReasoningEffort.OFF.wire]
+                val wire = when (spec) {
+                    is LevelSpec.Name -> spec.value
+                    else -> "none"
+                }
+                return ReasoningRequest(requested, wire, format)
             }
             val spec = levelMap[requested.wire]
             val wireValue = when (spec) {

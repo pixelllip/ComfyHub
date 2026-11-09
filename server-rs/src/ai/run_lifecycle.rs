@@ -276,11 +276,11 @@ pub fn thinking_effort(
     if requested == "off" {
         return Ok(("off".to_string(), None));
     }
-    if !LEVELS.contains(&requested) {
+    if requested != "disabled" && !LEVELS.contains(&requested) {
         return Err(ApiError::ai(
             "CONFIG_ERROR",
             format!(
-                "未知的思考强度：{requested}（可选 off / {}）",
+                "未知的思考强度：{requested}（可选 off / disabled / {}）",
                 LEVELS.join(" / ")
             ),
         ));
@@ -293,6 +293,28 @@ pub fn thinking_effort(
                 m.id
             ),
         ));
+    }
+    // **「关闭」是单独一档**（2026-11-09 用户报「没有关闭思考的档位」）：它不发空参数，
+    // 而是把目录里声明的关闭取值发出去（DeepSeek 是 `none`，落到 `thinking.type=disabled`）。
+    // 目录里的键历史上叫 `off`（内置规则与老库都是这么存的），新写入的叫 `disabled` —— 两个都认。
+    if requested == "disabled" {
+        let declared = m
+            .thinking_efforts
+            .get("disabled")
+            .or_else(|| m.thinking_efforts.get("off"));
+        let Some(wire) = declared else {
+            return Err(ApiError::ai(
+                "CONFIG_ERROR",
+                format!(
+                    "模型 {} 没声明「关闭」这一档的取值（可在「设置 → AI 模型」里勾上关闭）",
+                    m.id
+                ),
+            ));
+        };
+        let wire = wire.trim();
+        // 声明成空白 = 没填：退回 DeepSeek / OpenAI 都认的 `none`
+        let wire = if wire.is_empty() { "none" } else { wire };
+        return Ok(("disabled".to_string(), Some(wire.to_string())));
     }
     let declared: Vec<String> = m
         .thinking_efforts

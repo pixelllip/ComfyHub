@@ -42,7 +42,8 @@ use futures_util::StreamExt;
 use serde_json::{json, Value};
 
 use crate::provider::protocol::{
-    adapter_for, Api, ChatTurn, Frame, ReasoningRequest, SseAccumulator, StreamEvent, ToolSpec,
+    adapter_for, Adapter, Api, ChatTurn, Frame, ReasoningRequest, SseAccumulator, StreamEvent,
+    ToolSpec,
 };
 use crate::web::routes::{ApiError, AppState};
 
@@ -302,25 +303,35 @@ where
         // 补救按两档走，**先修回传、再降档**：
         //   ① 补一个空 `content` 的 reasoning 项重发 —— 思考照旧开着。
         //      这是根因的修法：缺的是"这一轮的思维链条目"，不是"思考这个能力"。
+        //      ⚠ `deepseek` 方言下第一次构建就已经补过了，重发只会得到**同一个请求**
+        //      （2026-11-09 现场：400 之后那次"重发"的请求体逐字节相同，白烧一次）——
+        //      所以先比对请求体，没变化就直接进第 ② 档。
         //   ② 只有补了还被拒，才把强度降成 `effort: none`（那一档上游不校验回传）。
         //      降档是**最后手段**：它会把这个 Run 余下所有轮次的思考一起关掉，
         //      代价是模型变笨，不能拿来当默认反应。
         if !thinking_forced_off && is_reasoning_passback_error(&detail) {
             if !echo_forced {
-                echo_forced = true;
-                reasoning.echo_all = true;
-                body = adapter.build_body(
+                if let Some((echoed, next)) = build_echo_retry(
+                    adapter.as_ref(),
                     request.model,
                     request.turns,
                     request.tools,
                     &reasoning,
                     request.max_output_tokens,
-                );
+                ) {
+                    echo_forced = true;
+                    reasoning = echoed;
+                    body = next;
+                    eprintln!(
+                        "上游要求回传思维链，但这次请求里有轮次没有思维链：\
+                         先补空 reasoning 项重发（**思考保持开启**）"
+                    );
+                    continue;
+                }
                 eprintln!(
-                    "上游要求回传思维链，但这次请求里有轮次没有思维链：\
-                     先补空 reasoning 项重发（**思考保持开启**）"
+                    "上游要求回传思维链，但这个请求体里每一轮已经都带上了（补空条目不会\
+                     改变请求）：不再重发同一个请求，直接降档"
                 );
-                continue;
             }
             thinking_forced_off = true;
             reasoning = ReasoningRequest {
@@ -337,7 +348,8 @@ where
                 request.max_output_tokens,
             );
             eprintln!(
-                "补了空 reasoning 项仍被拒：改用 effort=none 重发一次（本次 Run 余下的请求也沿用）"
+                "补了空 reasoning 项仍被拒：改用 effort=none 重发一次（本次 Run 余下的请求也沿用）\
+                 ｜上游原文：{detail}"
             );
             continue;
         }
@@ -508,6 +520,29 @@ pub fn is_reasoning_passback_error(detail: &str) -> bool {
         || lower.contains("pass back");
     let complains_about_empty = lower.contains("empty") || lower.contains("blank");
     mentions_reasoning && (mentions_echo || complains_about_empty)
+}
+
+/// 再"补一次空 `reasoning` 项"**会不会真的改变请求体**。
+///
+/// `deepseek` 方言下第一次 [`Adapter::build_body`] 就已经把缺的条目补齐了
+/// （[`crate::provider::protocol`] 的 `reasoning_echo_required` 认方言，不认 `echo_all`），
+/// 所以被 400 之后那次"补了再发"拿到的请求体**逐字节相同** —— 重发只是白烧一次往返
+/// 和一次输入 token（2026-11-09 现场：400 之后重发的就是同一条请求）。
+///
+/// 返回 `Some((新的思考参数, 新请求体))` 表示重发有意义；`None` 表示补了也白补，直接降档。
+fn build_echo_retry(
+    adapter: &dyn Adapter,
+    model: &str,
+    turns: &[ChatTurn],
+    tools: &[ToolSpec],
+    reasoning: &ReasoningRequest,
+    max_output_tokens: Option<i64>,
+) -> Option<(ReasoningRequest, Value)> {
+    let mut echoed = reasoning.clone();
+    echoed.echo_all = true;
+    let next = adapter.build_body(model, turns, tools, &echoed, max_output_tokens);
+    let current = adapter.build_body(model, turns, tools, reasoning, max_output_tokens);
+    (next != current).then_some((echoed, next))
 }
 
 /// 归一化后的 token 用量 —— **契约的那四个字段**（`docs/run-event-contract.md` §2）。
