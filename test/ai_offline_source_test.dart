@@ -140,10 +140,14 @@ class _FakeLocalSource implements RunEventSource, LocalSkillSource {
     );
   }
 
+  /// 本地库里"后来又出现"的消息（测下行拉到东西之后界面要自己刷新）。
+  final List<AiMessage> extraMessages = [];
+
   @override
   Future<List<AiMessage>> listMessages(String conversationId) async {
     listedConversations.add(conversationId);
     // 真 harness 的行为：库里有什么就回什么（起过 Run 之后就有一问一答）
+    if (extraMessages.isNotEmpty) return List.of(extraMessages);
     if (_started.isNotEmpty) {
       return [
         for (final (i, m) in _started.indexed) ...[
@@ -1345,6 +1349,65 @@ void main() {
     await store.load();
     expect(store.pullTimerArmed, isFalse);
     store.dispose();
+  });
+
+  test('下行拉到变化 → 打开着的会话立刻重读（不用手点刷新）', () async {
+    // 2026-11-09 真机：桌面的回执（`submit-reply-…`）已经落到本机库，
+    // 会话却一直停在"2 条消息"，用户手点刷新才看见 —— 这一条钉住"库变了界面就变"。
+    final source = _FakeLocalSource();
+    final store = AiWorkspaceStore(
+      api: _okApi(),
+      source: source,
+      credentials: _FakeDeviceCredentials(configured: true),
+      baseUrlProvider: () => 'http://10.0.0.5:8081',
+    );
+    addTearDown(store.dispose);
+
+    await store.load();
+    // 前提：打开的是一条**空**会话，里面还没有任何回执
+    expect(store.conversation, isNotNull);
+    expect(store.messages.any((m) => m.id == 'submit-reply-q1'), isFalse);
+
+    // 下行这一趟真的拉到了东西：本机库里出现了那条回执
+    source.extraMessages.add(
+      AiMessage(
+        id: 'submit-reply-q1',
+        conversationId: store.conversation!.id,
+        seq: 1,
+        role: 'assistant',
+        status: 'complete',
+        text: '手机上排队的那次提交已经跑完了，产物已入库（1 个）',
+      ),
+    );
+    source.pullMode = 'changes';
+    source.pullApplied = 1;
+
+    await store.pullChanges();
+
+    expect(
+      store.messages.any((m) => m.id == 'submit-reply-q1'),
+      isTrue,
+      reason: '拉到变化就等于库变了：打开着的会话必须重读，不能等用户手点刷新',
+    );
+  });
+
+  test('下行没拉到东西 → 不重读会话（每 25 秒空转一次重读太贵）', () async {
+    final source = _FakeLocalSource();
+    final store = AiWorkspaceStore(
+      api: _okApi(),
+      source: source,
+      credentials: _FakeDeviceCredentials(configured: true),
+      baseUrlProvider: () => 'http://10.0.0.5:8081',
+    );
+    addTearDown(store.dispose);
+
+    await store.load();
+    final before = source.listedConversations.length;
+
+    source.pullApplied = 0;
+    await store.pullChanges();
+
+    expect(source.listedConversations.length, before);
   });
 
   test('下行不重叠：上一趟没跑完，这一趟直接跳过', () async {

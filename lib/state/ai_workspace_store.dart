@@ -1111,8 +1111,15 @@ class AiWorkspaceStore extends ChangeNotifier {
   ///
   /// 节奏是固定的 5 秒一次：这里没有"活动与否"可看，而"有人等你点批准"这件事
   /// 慢一秒发现都算慢 —— 但也不能更勤，右侧栏一开着就每秒问后端一次是纯浪费。
+  ///
+  /// ⚠ **多个观察者共用一份轮询**（2026-11-09）：待批卡（右侧栏）与顶部横幅
+  /// （`_PendingApprovalBanner`）都关心同一份清单，各自起一个 5 秒定时器就是
+  /// 每 5 秒问后端两遍。这里按"谁在看"计数，只有第一个观察者真正起定时器与
+  /// 立刻拉一次；最后一个走掉才停。
   void startWatchingPending() {
-    _pendingTimer?.cancel();
+    _pendingWatchers++;
+    // 已经有人开着轮询：**不再补拉一次**（那条路会变成"挂一个观察者就打一次请求"）
+    if (_pendingTimer != null) return;
     _pendingTimer = Timer.periodic(
       const Duration(seconds: 5),
       (_) => unawaited(refreshPending()),
@@ -1120,7 +1127,13 @@ class AiWorkspaceStore extends ChangeNotifier {
     unawaited(refreshPending());
   }
 
+  /// 还有几个观察者在等这份清单（`0` = 定时器已停）。
+  int _pendingWatchers = 0;
+
   void stopWatchingPending() {
+    if (_pendingWatchers > 0) _pendingWatchers--;
+    // 还剩观察者：轮询继续（横幅收起、右侧栏还在看的时候就是这一种）
+    if (_pendingWatchers > 0) return;
     _pendingTimer?.cancel();
     _pendingTimer = null;
   }
@@ -1187,6 +1200,8 @@ class AiWorkspaceStore extends ChangeNotifier {
   @override
   void dispose() {
     stopWatchingComfy();
+    // 直接归零：见 `startWatchingPending` 里那个观察者计数
+    _pendingWatchers = 0;
     stopWatchingPending();
     // 攒着的流式通知定时器要一起收掉，否则页面都销毁了还会被回调
     _streamFlush?.cancel();
@@ -1679,6 +1694,16 @@ class AiWorkspaceStore extends ChangeNotifier {
           pushNotice = r.mode == 'bootstrap'
               ? '已从桌面全量重建本机镜像（${r.applied} 行）。'
               : '已从桌面同步 ${r.applied} 条记录。';
+          // **库变了，界面得跟着变**（2026-11-09 真机）：
+          // 以前这里只记一句"同步了几条"，打开着的会话一个像素都不动 ——
+          // 桌面的回执（`submit-reply-<queueId>`）明明已经落到本机库，用户却要
+          // 手点一次刷新才看得见。会话列表一起重读：标题里的条数与时间也在变。
+          if (!running) {
+            conversations = await _safeListConversations();
+            final open = conversation?.id;
+            if (open != null) await _reloadMessages(open);
+            _notifyNow();
+          }
         }
         debugPrint(
           '[M4] 下行：mode=${r.mode} applied=${r.applied} cursor=${r.cursor}',

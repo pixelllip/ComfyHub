@@ -25,6 +25,13 @@ class SubmitResultCard extends StatelessWidget {
   /// 画廊产物 id → 缩略图地址（与 `_ProducedMediaCard` 同一个来源）。
   final String Function(int mediaId) mediaThumbUrlOf;
 
+  /// 拉缩略图时带的请求头（配对令牌）。
+  ///
+  /// 缩略图地址里**没有**令牌（令牌不进 URL），而手机读的是电脑的后端：闸门开着时
+  /// 不带这个头的请求一律 403，界面上的表现就是"回执卡是破图"（2026-11-09 真机）。
+  /// 桌面上它恒为空 Map，请求与以前逐字节相同。
+  final Map<String, String> mediaHeaders;
+
   /// 点缩略图 / 「查看详情」时打开产物详情；为空时不给入口。
   final void Function(int mediaId)? onOpenMedia;
 
@@ -32,6 +39,7 @@ class SubmitResultCard extends StatelessWidget {
     super.key,
     required this.message,
     required this.mediaThumbUrlOf,
+    this.mediaHeaders = const {},
     this.onOpenMedia,
   });
 
@@ -159,6 +167,7 @@ class SubmitResultCard extends StatelessWidget {
                           height: 72,
                           child: Image.network(
                             mediaThumbUrlOf(id),
+                            headers: mediaHeaders,
                             fit: BoxFit.cover,
                             errorBuilder: (_, _, _) => Container(
                               color: theme.colorScheme.surfaceContainerHighest,

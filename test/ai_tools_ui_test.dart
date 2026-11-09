@@ -470,6 +470,11 @@ Future<Widget> _homePage(
   Map<String, dynamic>? comfyJobs,
   bool hangRuns = false,
   String? assistantText,
+
+  /// 这一页按哪个平台渲染。**回车 = 发送是电脑端的行为**（手机软键盘的回车只换行，
+  /// 见 `ai_home_page.dart` 里按平台分叉的 `Shortcuts`），而 `flutter test` 默认平台
+  /// 是 android —— 要测那条桌面规则就得把它显式设成 windows。
+  TargetPlatform? platform,
 }) async {
   SharedPreferences.setMockInitialValues({});
   final settings = SettingsStore();
@@ -493,7 +498,10 @@ Future<Widget> _homePage(
       ChangeNotifierProvider<SettingsStore>.value(value: settings),
       ChangeNotifierProvider<AiWorkspaceStore>.value(value: store),
     ],
-    child: const MaterialApp(home: AiHomePage()),
+    child: MaterialApp(
+      theme: platform == null ? null : ThemeData(platform: platform),
+      home: const AiHomePage(),
+    ),
   );
 }
 
@@ -1724,7 +1732,9 @@ void main() {
 
     // `hangRuns` = 这一次 Run 永远不返回，正好停在"正在生成中"这个状态
     final rec = _Recorder();
-    await tester.pumpWidget(await _homePage(rec, hangRuns: true));
+    await tester.pumpWidget(
+      await _homePage(rec, hangRuns: true, platform: TargetPlatform.windows),
+    );
     await tester.pumpAndSettle();
 
     await tester.enterText(find.byType(TextField).first, '第一句');
@@ -1763,7 +1773,9 @@ void main() {
     addTearDown(tester.view.reset);
 
     final rec = _Recorder();
-    await tester.pumpWidget(await _homePage(rec, sse: ''));
+    await tester.pumpWidget(
+      await _homePage(rec, sse: '', platform: TargetPlatform.windows),
+    );
     await tester.pumpAndSettle();
 
     // 输入法正在组字：拼音 "nihao" 还没上屏（composing range 非空）

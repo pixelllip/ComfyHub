@@ -233,7 +233,7 @@ void main() {
 
     // 手机排的那一条真的在桌面上露面了（这是本批补的那张卡的全部意义）
     expect(find.text('待审批'), findsOneWidget);
-    expect(find.textContaining('手机排队的提交'), findsOneWidget);
+    expect(find.textContaining('手机排队的提交 ·'), findsOneWidget);
     // 参数按后端给的原文显示（不解析、不猜）
     expect(find.textContaining('promptId'), findsOneWidget);
     // 卡片上写明用户拍板过的那条规矩
@@ -246,7 +246,7 @@ void main() {
     // 真的打到了那条 callId 的审批通道（那条通道同时也是工具审批走的那一条）
     expect(rec.calls, contains('POST /api/ai/tool-calls/submit:q1/approve'));
     // 后端接受了 → 这一条离开待办；没有别的待办 → 整块跟着消失
-    expect(find.textContaining('手机排队的提交'), findsNothing);
+    expect(find.textContaining('手机排队的提交 ·'), findsNothing);
     expect(find.text('待审批'), findsNothing);
   });
 
@@ -265,7 +265,7 @@ void main() {
     expect(rec.calls, contains('POST /api/ai/tool-calls/submit:q1/approve'));
     expect(find.textContaining('桌面没有接受这一条'), findsOneWidget);
     // 关键：行还在（点晚了 / 早被人点过，都不该让这张待办凭空消失）
-    expect(find.textContaining('手机排队的提交'), findsOneWidget);
+    expect(find.textContaining('手机排队的提交 ·'), findsOneWidget);
     expect(find.text('待审批'), findsOneWidget);
   });
 
@@ -307,7 +307,7 @@ void main() {
     expect(find.text('模型能力'), findsOneWidget);
     // 审批归桌面：手机上不给一个点了没用的按钮
     expect(find.text('待审批'), findsNothing);
-    expect(find.textContaining('手机排队的提交'), findsNothing);
+    expect(find.textContaining('手机排队的提交 ·'), findsNothing);
     // 一条请求都不许发（手机往后端问待批清单纯属浪费）
     expect(rec.calls.any((c) => c.contains('/api/ai/pending')), isFalse);
   });
@@ -371,7 +371,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('待审批'), findsOneWidget);
-    expect(find.textContaining('手机排队的提交'), findsOneWidget);
+    expect(find.textContaining('手机排队的提交 ·'), findsOneWidget);
     expect(
       find.byKey(const Key('ai-pending-approve-submit:q1')),
       findsOneWidget,

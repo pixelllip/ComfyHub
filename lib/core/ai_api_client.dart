@@ -708,6 +708,18 @@ class AiApiClient {
   String mediaThumbUrl(int mediaId) => '$baseUrl/api/media/$mediaId/thumb';
   String mediaPosterUrl(int mediaId) => '$baseUrl/api/media/$mediaId/poster';
 
+  /// `Image.network` 拉**媒体缩略图 / 封面**时要带的头。
+  ///
+  /// 上面那两个地址不带令牌（令牌不进 URL：它会进日志、进截图、进浏览记录），
+  /// 所以这两个地址只有在**回环**上能直接打开。手机读的是电脑的后端，闸门开着时
+  /// 从局域网上来的请求没有这个头一律 403 —— 2026-11-09 真机上的表现正是
+  /// 「回执卡 / 产物卡的缩略图全是破图」，而画廊里的同一张图好好的
+  /// （画廊走 `MediaCache` 带令牌下载）。
+  Map<String, String> get imageHeaders {
+    final token = tokenProvider?.call();
+    return {if (token != null && token.isNotEmpty) 'X-ComfyHub-Token': token};
+  }
+
   /// 本次生成真正入库的那份提示词 / 工作流原文（用户建议 ①："生成的产物"包括生成的工作流）。
   ///
   /// 后端没存过工作流时返回 null（HTTP 204），界面据此说"这次没有工作流"。

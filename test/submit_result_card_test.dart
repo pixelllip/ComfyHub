@@ -86,6 +86,38 @@ void main() {
     expect(opened, 7);
   });
 
+  testWidgets('产物缩略图带上配对令牌：手机上（局域网）不带就是破图', (tester) async {
+    final msg = _reply(
+      ok: true,
+      text: '手机上排队的那次提交已经跑完了，产物已入库（1 个）',
+      mediaIds: const [7],
+    );
+
+    await tester.pumpWidget(
+      _host(
+        SubmitResultCard(
+          message: msg,
+          mediaThumbUrlOf: (id) => 'http://10.0.0.5:8081/api/media/$id/thumb',
+          // 真机来源：手机上令牌在进程内缓存里，桌面恒为空
+          mediaHeaders: const {'X-ComfyHub-Token': 'tok-phone'},
+        ),
+      ),
+    );
+
+    final image = tester.widget<Image>(
+      find.descendant(
+        of: find.byKey(const ValueKey('submit-result-media-7')),
+        matching: find.byType(Image),
+      ),
+    );
+    final provider = image.image as NetworkImage;
+    expect(
+      provider.headers?['X-ComfyHub-Token'],
+      'tok-phone',
+      reason: '闸门开着时，局域网里没有这个头的缩略图一律 403（2026-11-09 真机）',
+    );
+  });
+
   testWidgets('没有结果标记的旧回执：不猜成功还是失败', (tester) async {
     final msg = AiMessage(
       id: 'submit-reply-old',

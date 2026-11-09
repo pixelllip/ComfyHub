@@ -1402,6 +1402,8 @@ class _MessageBubble extends StatelessWidget {
         SubmitResultCard(
           message: m,
           mediaThumbUrlOf: mediaThumbUrlOf,
+          // 同 `_ProducedMediaCard`：手机上的缩略图要靠这个头才不是破图
+          mediaHeaders: attachmentPreviewHeaders(),
           onOpenMedia: (mediaId) => Navigator.of(context).push(
             MaterialPageRoute<void>(
               builder: (_) => MediaDetailPage(mediaId: mediaId),
@@ -1871,6 +1873,8 @@ class _MessageBubble extends StatelessWidget {
                       promptIds: producedPromptIds,
                       mediaThumbUrlOf: mediaThumbUrlOf,
                       mediaPosterUrlOf: mediaPosterUrlOf,
+                      // 手机读的是电脑的后端：缩略图地址里没有令牌，得靠这个头
+                      mediaHeaders: attachmentPreviewHeaders(),
                     ),
                   ),
                 if (m.status == 'cancelled')
@@ -2291,12 +2295,19 @@ class _ProducedMediaCard extends StatelessWidget {
   final String Function(int mediaId) mediaThumbUrlOf;
   final String Function(int mediaId) mediaPosterUrlOf;
 
+  /// 拉缩略图 / 封面时带的请求头（配对令牌；桌面上恒为空）。
+  ///
+  /// 媒体地址里不带令牌，而手机读的是电脑的后端 —— 闸门开着时没有这个头一律 403，
+  /// 表现是"产物卡是破图"（2026-11-09 真机）。与 `SubmitResultCard` 同一个来源。
+  final Map<String, String> mediaHeaders;
+
   const _ProducedMediaCard({
     required this.mediaIds,
     this.nsfwMediaIds = const [],
     this.promptIds = const [],
     required this.mediaThumbUrlOf,
     required this.mediaPosterUrlOf,
+    this.mediaHeaders = const {},
   });
 
   /// 标题：图 + 工作流算同一批产物（用户建议 ①），有几个就分别说清楚。
@@ -2360,10 +2371,12 @@ class _ProducedMediaCard extends StatelessWidget {
                           height: 72,
                           child: Image.network(
                             mediaThumbUrlOf(id),
+                            headers: mediaHeaders,
                             fit: BoxFit.cover,
                             // 图片有 thumb；视频的 thumb 会回 204，退到后端抽的第一帧封面
                             errorBuilder: (_, _, _) => Image.network(
                               mediaPosterUrlOf(id),
+                              headers: mediaHeaders,
                               fit: BoxFit.cover,
                               errorBuilder: (_, _, _) => Container(
                                 color:
@@ -4833,6 +4846,9 @@ class _AttachmentTile extends StatelessWidget {
       width: _size,
       height: _size,
       fit: BoxFit.cover,
+      // 附件缩略图同样是后端给的地址（地址里不带令牌）：手机走局域网时必须带头，
+      // 否则自己的参考图也是破图（与下面那条 `attachmentPreviewHeaders()` 一致）。
+      headers: attachmentPreviewHeaders(),
       // 与画廊缩略图同一条规矩：解码宽度跟着绘制尺寸 × DPR，上限 512（见 media_thumb.dart）
       cacheWidth: (_size * dpr).round().clamp(1, 512),
       // 缩略图用不上 mipmap（medium 会为每张纹理生成 mipmap）
@@ -4912,6 +4928,7 @@ class _MessageAttachment extends StatelessWidget {
                 )
               : Image.network(
                   thumbUrl!,
+                  headers: attachmentPreviewHeaders(),
                   fit: BoxFit.cover,
                   cacheWidth: (96 * MediaQuery.devicePixelRatioOf(context))
                       .round()
@@ -5641,21 +5658,30 @@ class _PendingApprovalBanner extends StatefulWidget {
 }
 
 class _PendingApprovalBannerState extends State<_PendingApprovalBanner> {
-  Timer? _timer;
+  /// 这一帧是不是已经把轮询挂上了（`initState` 里要等后端，不是同步完成）。
+  bool _watching = false;
 
   @override
   void initState() {
     super.initState();
-    unawaited(widget.store.refreshPending());
-    _timer = Timer.periodic(
-      const Duration(seconds: 5),
-      (_) => unawaited(widget.store.refreshPending()),
-    );
+    unawaited(_start());
+  }
+
+  /// 与右侧栏**同一条冷启动纪律**（`_ContextPanel.initState`）：先等后端有个结论，
+  /// 再去问待批清单。冷启动那一刻 `baseUrl` 还是 8080 兜底值，这一问必然失败，
+  /// 而失败会**留在界面上**（`pendingError` 只有手点刷新才走）—— 横幅比那张卡还显眼。
+  Future<void> _start() async {
+    await widget.store.waitForBackend();
+    if (!mounted) return;
+    _watching = true;
+    // 轮询交给 store（与右侧栏那张卡**共用一份** 5 秒定时器）：
+    // 两边各起一个就是每 5 秒问后端两遍（2026-11-09 抓到的重复拉取）。
+    widget.store.startWatchingPending();
   }
 
   @override
   void dispose() {
-    _timer?.cancel();
+    if (_watching) widget.store.stopWatchingPending();
     super.dispose();
   }
 
