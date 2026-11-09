@@ -2322,7 +2322,9 @@ class _ProducedMediaCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final shown = mediaIds.take(6).toList();
+    // 全部列出（用户 2026-11-09："不能只看前 x 张"）。以前是 `take(6)`，一批出 10 张时
+    // 后 4 张在卡上根本看不到；这里是横向懒构建，列多少都不会一次全解码。
+    final shown = mediaIds;
     return Container(
       padding: const EdgeInsets.all(8),
       decoration: BoxDecoration(
@@ -2361,6 +2363,7 @@ class _ProducedMediaCard extends StatelessWidget {
                   return Padding(
                     padding: const EdgeInsets.only(right: 6),
                     child: InkWell(
+                      key: ValueKey('produced-media-$id'),
                       onTap: () => _openDetail(context, id),
                       child: NsfwBlur(
                         nsfw: nsfwMediaIds.contains(id),

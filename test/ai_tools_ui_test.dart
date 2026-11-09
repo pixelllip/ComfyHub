@@ -937,6 +937,55 @@ void main() {
     expect(find.text('查看详情'), findsOneWidget);
   });
 
+  testWidgets('(e3b) 产物卡列出全部缩略图，不只前 6 张（2026-11-09）', (tester) async {
+    tester.view.physicalSize = const Size(1400, 1000);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    final rec = _Recorder();
+    const ids = [31, 32, 33, 34, 35, 36, 37];
+    final sse =
+        _sse(1, 'run.started', '{"runId":"r1"}') +
+        _sse(2, 'message.started', '{"messageId":"a1"}') +
+        _sse(3, 'text.delta', '{"messageId":"a1","text":"跑好了。"}') +
+        _sse(
+          4,
+          'tool.requested',
+          '{"callId":"call-s","name":"comfy_submit","arguments":"{\\"promptId\\":7}",'
+              '"approval":"approved"}',
+        ) +
+        _sse(5, 'tool.started', '{"callId":"call-s","name":"comfy_submit"}') +
+        _sse(
+          6,
+          'tool.completed',
+          '{"callId":"call-s","name":"comfy_submit","elapsedMs":9000,"preview":"完成",'
+              '"result":{"promptId":7,"status":"success",'
+              '"mediaIds":[31,32,33,34,35,36,37],"mediaCount":7}}',
+        ) +
+        _sse(
+          7,
+          'message.completed',
+          '{"messageId":"a1","text":"跑好了。","steps":1}',
+        ) +
+        _sse(8, 'run.completed', '{"runId":"r1"}');
+
+    await tester.pumpWidget(await _homePage(rec, sse: sse));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField).first, '帮我跑七张');
+    await tester.tap(find.text('发送'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('生成的产物（7）'), findsOneWidget);
+    // 以前是 `take(6)`：第 7 张在卡上根本不存在（用户："不能只看前 x 张"）
+    for (final id in ids) {
+      expect(
+        find.byKey(ValueKey('produced-media-$id')),
+        findsOneWidget,
+        reason: '产物 #$id 的缩略图要在卡里',
+      );
+    }
+  });
+
   // 用户 bug（2026-09-20）:"更新长期记忆之后，侧边栏没有立即刷新状态"。
   //
   // 后端 `remember` 工具是**直接写 memory.md** 的，前端右侧栏读的是 `store.memory`

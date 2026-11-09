@@ -174,7 +174,11 @@ pub const VERSION: &str = "nsfw-v3";
 ///   `task` / `modelFamily` / `positivePrompt`（可选 `width` / `height`）：桌面按
 ///   "同任务同族的最近成功 → 已验证的配方"自己挑一份、把提示词写进去再跑；
 ///   **默认不改构图分辨率**（各家族工作流自己的宽高）。工具 schema 与描述都变了 → bump。
-pub const PROMPT_VERSION: &str = "v65";
+/// - **Rust v66**（2026-11-09）：`comfy_view_outputs` 不再"只看最近几张"：`limit` 上限
+///   8 → 50（默认 3 → 8），新增 `offset` 翻页与 `promptId` / `collectionId` 过滤，
+///   结果多 `total` / `hasMore`，正文按"第 X–Y 张（共 N 张）"说明怎么继续看。用户口径：
+///   "应该放开 AI 工作台查看产物的权限，不能只看前 x 张。" 工具 schema 与描述都变了 → bump。
+pub const PROMPT_VERSION: &str = "v66";
 
 /// 第一问时按轮追加的起标题指令（`SystemPrompt.TITLE_INSTRUCTION`）。
 pub const TITLE_INSTRUCTION: &str = r#"【本次附加任务：为这个对话起标题】

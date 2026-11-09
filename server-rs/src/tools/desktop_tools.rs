@@ -338,12 +338,12 @@ pub const DESKTOP_TOOLS: &[DesktopToolSpec] = &[
     },
     DesktopToolSpec {
         name: "comfy_view_outputs",
-        description: r#"**看最近产物**：列出画廊里最近的图片产物，并把图附给模型。用户说"看看我刚在 ComfyUI 里跑的图 / 这张哪里不对 / 帮我评估一下效果"时用它 —— **不要让用户再把图发一遍**。
-两种用法：不传 `mediaId` 就取最近的 N 条（`limit` 默认 3、上限 8）；传 `mediaId`（`comfy_submit` 结果里的 mediaIds、画廊里的 id）就只看那一条。
-能看图的模型会自动收到缩图（长边 ≤1024、原图尺寸写在正文里）；看不到图的模型只会拿到元数据，**不许凭文件名编画面内容**。
+        description: r#"**看画廊里的产物**：列出图片产物并把图附给模型。用户说"看看我刚在 ComfyUI 里跑的图 / 这张哪里不对 / 帮我评估一下效果"时用它 —— **不要让用户再把图发一遍**。
+默认按"新的在前"列最近 8 张（`limit` 上限 50）；更早的用 `offset` 往后翻，也可以 `promptId` 只看某一次运行、`collectionId` 只看某个产物集合、`mediaId` 只看一条。结果里有 `total` 与 `hasMore` —— **不要只看第一页就说"就这些"**。
+能看图的模型会自动收到这一页里最多 4 张的缩图（长边 ≤1024、原图尺寸写在正文里）；要逐张细看就传 `mediaId` 单独调用。看不到图的模型只会拿到元数据，**不许凭文件名编画面内容**。
 自动捕获有延迟：刚跑完的那张可能还没入库 —— 结果为空时稍等几秒再调用，或请用户从画廊拖图进对话。
 **只读**：不改库、不复制文件、不碰 ComfyUI。"#,
-        input_schema: r#"{"type":"object","properties":{"limit":{"type":"integer","description":"最多看几张（默认 3，上限 8；媒体 id 用 mediaId）"},"mediaId":{"type":"integer","description":"可选：只看这一条（画廊 id / 工具结果里的 mediaIds）"}},"additionalProperties":false}"#,
+        input_schema: r#"{"type":"object","properties":{"limit":{"type":"integer","description":"这一页最多几张（默认 8，上限 50）"},"offset":{"type":"integer","description":"跳过最新的 N 张再列，用来往后翻页（默认 0）"},"mediaId":{"type":"integer","description":"可选：只看这一条（画廊 id / 工具结果里的 mediaIds）"},"promptId":{"type":"integer","description":"可选：只看某一次运行的产物（comfy_submit 的 promptId / comfy_recent_successes 里的 promptId）"},"collectionId":{"type":"integer","description":"可选：只看某个产物集合里的图"}},"additionalProperties":false}"#,
         scope: "DESKTOP",
         access: "ALLOW",
         mutating: false,

@@ -32,9 +32,9 @@ async fn run_kit_ships_every_rule_the_phone_needs() {
         body["schemaVersion"], 1,
         "与 /api/sync/manifest 的 user_version 同一个数"
     );
-    // v65（2026-11-09）：手机只说族就能出图 —— comfy_queue_submit 多了 task / modelFamily /
-    //   positivePrompt（可选 width / height）。
-    assert_eq!(body["promptVersion"], "v65");
+    // v66（2026-11-09）：comfy_view_outputs 放开浏览 —— limit 上限 8 → 50（默认 3 → 8），
+    //   新增 offset 翻页 / promptId / collectionId 过滤，结果带 total / hasMore。
+    assert_eq!(body["promptVersion"], "v66");
     assert_eq!(body["nsfwEnabled"], false, "夹具里没开 NSFW");
     assert_eq!(body["inlineBudget"]["perImageBytes"], 8388608, "单图 8MB");
     assert_eq!(body["inlineBudget"]["totalBytes"], 20971520, "合计 20MB");

@@ -611,6 +611,114 @@ async fn view_outputs_returns_recent_media_as_reference_images() {
     .unwrap();
     assert_eq!(none.payload["count"], 0);
     assert!(none.content.contains("没有"), "{}", none.content);
+
+    // 翻页（2026-11-09 用户："不能只看前 x 张"）：列表必须能沿 `offset` 看到更早的，
+    // 并且结果里带 `total` / `hasMore` —— 否则模型只能"看完第一页就说就这些"。
+    state
+        .with(|conn| {
+            // 夹具里 100 那条是默认时间（= 现在），压到很早，让顺序可断言
+            conn.execute(
+                "UPDATE media_assets SET created_at = '2026-09-01T00:00:00.000Z' WHERE id = 100",
+                [],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+    for (id, name, at) in [
+        (201, "p1.png", "2026-11-09T10:00:01.000Z"),
+        (202, "p2.png", "2026-11-09T10:00:02.000Z"),
+        (203, "p3.png", "2026-11-09T10:00:03.000Z"),
+    ] {
+        write_test_png(&state.media_dir().join(name), 4, 4);
+        state
+            .with(|conn| {
+                conn.execute(
+                    "INSERT INTO media_assets
+                       (id, prompt_id, kind, original_name, stored_name, width, height, created_at)
+                     VALUES (?1, 11, 'IMAGE', ?2, ?2, 4, 4, ?3)",
+                    rusqlite::params![id, name, at],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+    }
+
+    let page1 = call_tool(
+        &state,
+        "comfy_view_outputs",
+        serde_json::json!({ "limit": 2 }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(page1.payload["count"], 2, "{}", page1.content);
+    assert_eq!(page1.payload["total"], 5, "{}", page1.content);
+    assert_eq!(page1.payload["hasMore"], true, "{}", page1.content);
+    assert_eq!(page1.payload["items"][0]["id"], 203);
+    assert_eq!(page1.payload["items"][1]["id"], 202);
+    assert!(
+        page1.content.contains("第 1-2 张") && page1.content.contains("共 5 张"),
+        "正文要说清这是第几页、总共有几张：{}",
+        page1.content
+    );
+
+    let page2 = call_tool(
+        &state,
+        "comfy_view_outputs",
+        serde_json::json!({ "limit": 2, "offset": 2 }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(page2.payload["offset"], 2);
+    assert_eq!(page2.payload["items"][0]["id"], 201);
+    assert_eq!(page2.payload["items"][1]["id"], 101);
+    assert_eq!(page2.payload["hasMore"], true, "{}", page2.content);
+    assert!(
+        page2.content.contains("offset=4"),
+        "正文要告诉模型下一页从哪翻：{}",
+        page2.content
+    );
+
+    let page3 = call_tool(
+        &state,
+        "comfy_view_outputs",
+        serde_json::json!({ "limit": 2, "offset": 4 }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(page3.payload["count"], 1);
+    assert_eq!(page3.payload["items"][0]["id"], 100);
+    assert_eq!(page3.payload["hasMore"], false, "{}", page3.content);
+
+    // 按一次运行的 promptId 过滤：只回这次生成的 3 张（夹具里 100 属于 prompt 10）
+    let by_prompt = call_tool(
+        &state,
+        "comfy_view_outputs",
+        serde_json::json!({ "promptId": 11, "limit": 50 }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(by_prompt.payload["total"], 3, "{}", by_prompt.content);
+    assert!(
+        by_prompt.payload["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|item| item["id"] != 100),
+        "{}",
+        by_prompt.content
+    );
+
+    // 翻过头：空结果 + 如实说总数，不报工具错误
+    let too_far = call_tool(
+        &state,
+        "comfy_view_outputs",
+        serde_json::json!({ "offset": 99 }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(too_far.payload["count"], 0);
+    assert_eq!(too_far.payload["total"], 5);
+    assert!(too_far.content.contains("超出范围"), "{}", too_far.content);
 }
 
 /// 2026-11-03：`layout_propose` 的**执行接线**（不只是纯函数）。
