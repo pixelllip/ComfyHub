@@ -19,7 +19,7 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "fs"
 rusqlite = { version = "0.40", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 # 上传去重键：按文件内容的 SHA-256（与 Kotlin `MediaFiles.sha256` 同一个口径）
-sha2 = "0.10"
+sha2 = "0.11"
 # ★ `preserve_order` 是**为了与 Kotlin 对齐**而开的（P4 第 43 步）：Kotlin 的 `JsonObject`
 #   是插入序（= JSON 文本里的键顺序），而 serde_json 默认的 `Map` 是 **BTreeMap（按键排序）**。
 #   `GraphParse` 的启发式全是"文档顺序里第一个命中的节点"（找采样器 / 找 steps / 找 seed…），
