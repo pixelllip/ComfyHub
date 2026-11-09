@@ -35,7 +35,7 @@ pwsh -File scripts\dev-app.ps1           # 日常开发：debug 版起起来，�
 | **画廊** | 生成产物：列表 / 详情 / 大图（滚轮缩放）/ 视频播放；NSFW 标记与模糊；右键菜单。**手机上默认缓存看过的缩略图 / 原件**，详情菜单可「保存到手机相册」 |
 | **提示词** | 本机提示词库：搜索、收藏、标签、工作流原文（界面格式 ↔ API 图的转换在服务端）。AppBar 的「布局 → 提示词」进画布次级页（主入口在 AI 工作台的模板卡，见下） |
 | **标签** | 标签库与分类、使用次数 |
-| **设置** | Provider / 模型目录 / API Key、「远程访问与配对」、NSFW 开关、ComfyUI 自动捕获、桌面端还有本地服务与后端地址、**产物导出**、**备份与恢复**、**存储占用与清理** |
+| **设置** | Provider / 模型目录 / API Key、「远程访问与配对」、NSFW 开关、ComfyUI 自动捕获、桌面端还有本地服务与后端地址、**联网代理**、**产物导出**、**备份与恢复**、**存储占用与清理** |
 
 后端能力（都是 AI 的工具，不是界面按钮）：
 
@@ -175,7 +175,10 @@ Get-Content .run\api.json          # 后端实际监听的端口（唯一真源�
 | `COMFYHUB_SERVER_EXE` | 指定后端 exe（**把映像挪出受限区**的唯一开关，AGENTS §12） |
 | `COMFYHUB_PROJECT_ROOT` | 覆盖运行根目录（工具白名单 / 库 / 产物都按它算） |
 | `COMFYHUB_COMFY_URL` / `COMFYHUB_COMFY_OUTPUT` | ComfyUI 地址 / 产物目录的环境默认值 |
-| `COMFYHUB_HTTPS_PROXY` | 出网代理（本机与内网强制直连） |
+| `COMFYHUB_HTTPS_PROXY` | 出网代理（本机与内网强制直连；写 `direct` = 强制直连）。不设就按系统代理 |
+
+要看"这次出网到底走不走代理"：`GET /api/system/outbound`（设置 → 本地服务 → 联网代理；
+加 `?probe=1` 会真的向 Civitai / Danbooru 各发一次请求，5xx 也算"网络通了"）。
 
 **两种运行布局**（改路径解析前必读 AGENTS §7）：源码树（根 = 有 `server-rs/Cargo.toml` 的那层，
 后端用 `server-rs\target\{release,debug}\`）与发布包（根 = `viewer.exe` 所在目录，后端在同级 `backend\`）。

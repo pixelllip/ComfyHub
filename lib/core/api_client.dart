@@ -206,6 +206,18 @@ class ApiClient {
     Map<String, dynamic>.from(await _get('/api/stats') as Map),
   );
 
+  /// **这次出网走不走代理** —— 连"这份设置从哪来"一起给，见 [OutboundInfo]。
+  ///
+  /// [probe] 为真时后端会真的向 Civitai / Danbooru 各发一次请求
+  /// （目标是后端写死的，界面不能传 URL）—— 只有它能把"配置写对了"
+  /// 和"配置写对了但这条链路其实不通"分开。所以只在用户点「测试出网」时用。
+  Future<OutboundInfo> outbound({bool probe = false}) async =>
+      OutboundInfo.fromJson(
+        Map<String, dynamic>.from(
+          await _get('/api/system/outbound${probe ? '?probe=1' : ''}') as Map,
+        ),
+      );
+
   // -------------------------------------------------------------------------
   //  备份 / 恢复（`server-rs/src/web/backup.rs`）
   // -------------------------------------------------------------------------

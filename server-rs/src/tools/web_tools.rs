@@ -404,14 +404,19 @@ impl KeenableClient {
             } else {
                 format!("{hint}｜返回：{detail}")
             };
-            return Err(ToolFailure::new(code, message));
+            // 与 danbooru / Civitai 同一条：5xx 或 4xx 都是"对方回了"，
+            // 出网路径要跟着说，否则用户分不清"没走代理"和"服务端挂了"。
+            return Err(ToolFailure::new(
+                code,
+                format!("{message}（本次出网路径：{route}）"),
+            ));
         }
 
         match serde_json::from_str::<Value>(&text) {
             Ok(Value::Object(obj)) => Ok(obj),
             _ => Err(ToolFailure::new(
                 "SEARCH_FAILED",
-                "搜索服务返回了无法解析的内容",
+                format!("搜索服务返回了无法解析的内容（本次出网路径：{route}）"),
             )),
         }
     }

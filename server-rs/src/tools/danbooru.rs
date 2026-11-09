@@ -379,7 +379,7 @@ impl DanbooruClient {
         if !(200..300).contains(&status) {
             return Err(ToolFailure::new(
                 "DANBOORU_FAILED",
-                format!("参考图下载失败（HTTP {status}）"),
+                format!("参考图下载失败（HTTP {status}；本次出网路径：{route}）"),
             ));
         }
         let content_type = response
@@ -685,6 +685,10 @@ impl DanbooruClient {
         if status == 404 && not_found_ok {
             return Ok(None);
         }
+        // ⚠ **每一次失败都要写出网路径**：`5xx` 是"对方回了"，超时是"我们一次握手都没成"，
+        // 用户看到的那句话必须能区分这两件事。2026-11-09 danbooru 挂维护回 503，
+        // 报错只写"暂时不可用"，被当成了"本项目没吃代理"—— 排查方向直接偏了。
+        let with_route = |hint: String| format!("{hint}（本次出网路径：{route}）");
         if !(200..300).contains(&status) {
             // Cloudflare 的 managed challenge 长这样：403 + 一整页 HTML（标题 "Just a moment..."）。
             // 必须**单独认出来**：把它报成"UA 被拒"或"没有这个 tag"都会把用户带偏
@@ -692,13 +696,13 @@ impl DanbooruClient {
             if status == 403 && looks_like_cloudflare_challenge(&text) {
                 return Err(ToolFailure::new(
                     "DANBOORU_CLOUDFLARE",
-                    format!(
+                    with_route(format!(
                         "danbooru 前面的 Cloudflare 拦住了这次请求（403 + 挑战页，不是 danbooru 自己回的）。\
                          本机实测**短 UA 才过得去**（当前用的是 `{}`）。\
                          换一个 User-Agent（环境变量 {ENV_UA}）再试，或者让用户自己在浏览器里查这个 tag —— \
                          **不要**把这个结果说成「danbooru 上没有这个角色」。",
                         self.user_agent
-                    ),
+                    )),
                 ));
             }
             let (code, hint) = match status {
@@ -724,6 +728,12 @@ impl DanbooruClient {
                 ),
                 _ => ("DANBOORU_FAILED", format!("danbooru 返回 {status}")),
             };
+            // 404 是"对方明确说没有"，出网路径对那句结论没有帮助，就不往里塞噪音。
+            let hint = if status == 404 {
+                hint
+            } else {
+                with_route(hint)
+            };
             return Err(ToolFailure::new(code, hint));
         }
         match serde_json::from_str::<Value>(&text) {
@@ -733,15 +743,15 @@ impl DanbooruClient {
                 if looks_like_cloudflare_challenge(&text) {
                     return Err(ToolFailure::new(
                         "DANBOORU_CLOUDFLARE",
-                        format!(
+                        with_route(format!(
                             "danbooru 前面的 Cloudflare 送回了挑战页（HTTP {status} 但不是 JSON）。\
                              可用环境变量 {ENV_UA} 换一个 User-Agent 再试；**不要**说成「没有这个角色」。"
-                        ),
+                        )),
                     ));
                 }
                 Err(ToolFailure::new(
                     "DANBOORU_FAILED",
-                    format!("danbooru 返回了无法解析的内容（status={status}）"),
+                    with_route(format!("danbooru 返回了无法解析的内容（status={status}）")),
                 ))
             }
         }

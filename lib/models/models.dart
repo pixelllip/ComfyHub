@@ -86,6 +86,144 @@ class ConfinementInfo {
 }
 
 // ===========================================================================
+//  出网代理（`GET /api/system/outbound`）
+// ===========================================================================
+
+/// **这次出网走不走代理**，连"这份设置是从哪来的"一起给。
+///
+/// 存在的理由（2026-11-09）：danbooru 挂维护、Cloudflare 回 503，而工具报错只写
+/// "暂时不可用"，看着就像"本项目没吃代理"。真相是**路由是通的、503 是对方回的** ——
+/// 这件事得在界面上看得见，用户才能自己核对，而不是靠猜。
+class OutboundInfo {
+  /// `proxy` = 公网走代理；`direct` = 公网直连
+  final String route;
+
+  /// 代理地址（`host:port`）；直连时为空
+  final String? proxy;
+
+  /// 这份设置来自哪里：`env:COMFYHUB_HTTPS_PROXY` / `env:HTTPS_PROXY` / `system` / `none`
+  final String source;
+
+  /// 系统代理开没开
+  final bool systemEnabled;
+
+  /// 系统代理填的地址（原样）
+  final String? systemServer;
+
+  /// `ProxyOverride` 拆开的例外表（这些地址直连）
+  final List<String> overrides;
+
+  /// 系统用的是 PAC 自动配置脚本（**本项目读不了它**，后端会写进 [warning]）
+  final String? autoConfigUrl;
+
+  /// 读得到但用不上的情况（目前只有 PAC）
+  final String? warning;
+
+  /// `?probe=1` 时后端真的发过请求的结果
+  final List<OutboundProbe> probes;
+
+  const OutboundInfo({
+    required this.route,
+    this.proxy,
+    this.source = 'none',
+    this.systemEnabled = false,
+    this.systemServer,
+    this.overrides = const [],
+    this.autoConfigUrl,
+    this.warning,
+    this.probes = const [],
+  });
+
+  factory OutboundInfo.fromJson(Map<String, dynamic> j) {
+    final system = (j['system'] is Map)
+        ? Map<String, dynamic>.from(j['system'] as Map)
+        : const <String, dynamic>{};
+    return OutboundInfo(
+      route: (j['route'] ?? 'direct') as String,
+      proxy: j['proxy'] as String?,
+      source: (j['source'] ?? 'none') as String,
+      systemEnabled: system['enabled'] == true,
+      systemServer: system['server'] as String?,
+      overrides: ((system['overrides'] as List?) ?? const [])
+          .map((e) => '$e')
+          .toList(),
+      autoConfigUrl: system['autoConfigUrl'] as String?,
+      warning: j['warning'] as String?,
+      probes: ((j['probes'] as List?) ?? const [])
+          .whereType<Map>()
+          .map((e) => OutboundProbe.fromJson(Map<String, dynamic>.from(e)))
+          .toList(),
+    );
+  }
+
+  bool get viaProxy => (proxy ?? '').isNotEmpty;
+
+  /// 这份设置从哪来 —— 一句人话（别把 `env:HTTPS_PROXY` 这种内部代号甩到界面上）。
+  String get sourceLabel {
+    if (source.startsWith('env:')) {
+      return '环境变量 ${source.substring(4)}';
+    }
+    return switch (source) {
+      'system' => '系统的代理设置',
+      'none' => '没有找到代理设置',
+      _ => source,
+    };
+  }
+
+  /// 一句话结论：公网到底走不走代理。
+  String get headline =>
+      viaProxy ? '公网请求走 HTTP 代理 $proxy' : '公网请求直连，没有走代理';
+}
+
+/// 一次探针的结果（后端写死了目标，前端只显示）。
+class OutboundProbe {
+  final String host;
+
+  /// `proxy` / `direct`（这一次实际走的路）
+  final String via;
+
+  /// 人话版路径（`HTTP 代理 127.0.0.1:7890`）
+  final String route;
+
+  /// 对方回的 HTTP 状态；连不上 / 超时是 null
+  final int? status;
+
+  /// 连不上时的原因
+  final String? error;
+
+  final int elapsedMs;
+
+  const OutboundProbe({
+    required this.host,
+    required this.via,
+    required this.route,
+    this.status,
+    this.error,
+    this.elapsedMs = 0,
+  });
+
+  factory OutboundProbe.fromJson(Map<String, dynamic> j) => OutboundProbe(
+    host: (j['host'] ?? '') as String,
+    via: (j['via'] ?? 'direct') as String,
+    route: (j['route'] ?? '') as String,
+    status: (j['status'] as num?)?.toInt(),
+    error: j['error'] as String?,
+    elapsedMs: (j['elapsedMs'] as num?)?.toInt() ?? 0,
+  );
+
+  bool get reached => status != null;
+
+  /// 一句人话：**"对方回了"和"根本没连上"是两件事**，别混成一句。
+  String get sentence {
+    final seconds = (elapsedMs / 1000).toStringAsFixed(1);
+    if (status != null) {
+      return '$host 返回了 HTTP $status，用了 $seconds 秒（$route）';
+    }
+    return '$host 没连上，用了 $seconds 秒（$route）。原因是 $error';
+  }
+}
+
+// ===========================================================================
 //  标签
 // ===========================================================================
 

@@ -1224,6 +1224,12 @@ impl HttpModelFinder {
                 500..=599 => (Reachability::Error, format!("对方暂时不可用（{status}）")),
                 _ => (Reachability::Error, format!("返回 {status}")),
             };
+            // 5xx 是"对方回了"：出网路径跟着说，别让用户以为没走代理。
+            let hint = if status >= 500 {
+                format!("{hint}（本次出网路径「{route}」）")
+            } else {
+                hint
+            };
             return Err(SourceOutcomeError::new(state, hint));
         }
         Ok(text)

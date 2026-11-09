@@ -418,14 +418,18 @@ impl CivitaiClient {
                 500..=599 => ("CIVITAI_FAILED", format!("Civitai 暂时不可用（{status}）")),
                 _ => ("CIVITAI_FAILED", format!("Civitai 返回 {status}")),
             };
-            return Err(ToolFailure::new(code, hint));
+            // 5xx 是"对方回了"而不是"我们没出去"——路径必须跟着一起说（同 danbooru）。
+            return Err(ToolFailure::new(
+                code,
+                format!("{hint}（本次出网路径：{route}）"),
+            ));
         }
 
         match serde_json::from_str::<Value>(&text) {
             Ok(Value::Object(obj)) => Ok(obj),
             _ => Err(ToolFailure::new(
                 "CIVITAI_FAILED",
-                "Civitai 返回了无法解析的内容",
+                format!("Civitai 返回了无法解析的内容（本次出网路径：{route}）"),
             )),
         }
     }

@@ -232,6 +232,9 @@ pub fn router(state: AppState) -> Router {
         .route("/api/health", get(health))
         // 「我现在是不是被关在工作区里了」—— 界面/doctor/工具文案共用的那一份事实（见 confinement.rs）
         .route("/api/system/confinement", get(system_confinement))
+        // 「这次出网走不走代理」—— 同一个问题在 danbooru 维护时害人猜了半天（见 outbound.rs）。
+        // `?probe=1` 才真的发请求；目标写死在项目真正会访问的两个公网服务上。
+        .route("/api/system/outbound", get(system_outbound))
         // 本地 LoRA 训练引擎（可选能力）：探测 / 起停 / 状态。
         // 数据面在 anima_daemon 的 /studio/*（经 MCP 工具暴露给模型），这里只给
         // 界面一个“装没装 / 起没起 / WebUI 在哪个端口”的入口。
@@ -2297,6 +2300,93 @@ async fn system_confinement(
     State(state): State<AppState>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     Ok(Json(crate::infra::confinement::describe(&state)))
+}
+
+/// `GET /api/system/outbound` 的查询参数。
+#[derive(Debug, Deserialize, Default)]
+struct OutboundQuery {
+    /// `?probe=1` 才真的发请求 —— 打开设置页不该往外送流量。
+    probe: Option<String>,
+}
+
+/// `GET /api/system/outbound` —— **这次出网走不走代理**，连"这份设置从哪来"一起给。
+///
+/// 存在的理由（2026-11-09 用户 bug）：danbooru 挂维护、Cloudflare 回 503，
+/// 而工具报错只写"暂时不可用（503）"，看着就像"本项目没吃代理"。
+/// 实际上路由是通的 —— **是对方回的 503**。这件事界面上得看得见、能自己复核。
+///
+/// `?probe=1` 时额外真发两个请求（Civitai / Danbooru）：只有它能区分
+/// "配置写对了"和"配置写对了但这条链路其实不通"。
+/// 探针目标**写死**在这里，绝不接受调用方给的 URL（那是 SSRF 的口子）。
+async fn system_outbound(Query(query): Query<OutboundQuery>) -> Json<serde_json::Value> {
+    let mut body =
+        serde_json::to_value(crate::infra::outbound::status()).unwrap_or_else(|_| json!({}));
+    if probe_requested(query.probe.as_deref().unwrap_or_default()) {
+        let (civitai, danbooru) = tokio::join!(
+            probe_outbound(PROBE_CIVITAI, "https://civitai.com/api/v1/models?limit=1"),
+            probe_outbound(
+                PROBE_DANBOORU,
+                "https://danbooru.donmai.us/tags.json?search=shinku_%28nte%29&limit=1"
+            )
+        );
+        body["probes"] = json!([civitai, danbooru]);
+    }
+    Json(body)
+}
+
+/// 探针目标之一：Civitai（本机直连不通、只有代理通 —— 最能说明"吃不吃代理"）。
+const PROBE_CIVITAI: &str = "civitai.com";
+/// 探针目标之二：Danbooru（它维护时回 5xx，正好演示"网络通了、是对方的问题"）。
+const PROBE_DANBOORU: &str = "danbooru.donmai.us";
+
+fn probe_requested(raw: &str) -> bool {
+    matches!(
+        raw.trim().to_ascii_lowercase().as_str(),
+        "1" | "true" | "yes" | "on"
+    )
+}
+
+/// 发一次探针请求，把"走哪条路 + 对方回什么 + 花了多久"如实交出去。
+///
+/// ⚠ **连上了但回 4xx/5xx 也是"通了"**：那证明代理这条路是好的，
+/// 与"连不上 / 超时"是两件事 —— 这个区别正是界面上要显出来的。
+async fn probe_outbound(host: &str, url: &str) -> serde_json::Value {
+    use crate::infra::outbound::Route;
+
+    let route = crate::infra::outbound::route(host);
+    let via = match &route {
+        Route::Proxy(_) => "proxy",
+        Route::Direct => "direct",
+    };
+    let started = std::time::Instant::now();
+    let outcome = async {
+        let client = crate::infra::outbound::http_client(
+            host,
+            std::time::Duration::from_secs(5),
+            std::time::Duration::from_secs(10),
+        )
+        .map_err(|e| format!("HTTP 客户端创建失败：{e}"))?;
+        let response = client
+            .get(url)
+            .header("User-Agent", "ComfyHub/1.0 (+local)")
+            .header("Accept", "application/json")
+            .send()
+            .await
+            .map_err(|e| format!("{e}"))?;
+        Ok::<u16, String>(response.status().as_u16())
+    }
+    .await;
+    let mut row = json!({
+        "host": host,
+        "via": via,
+        "route": route.describe(),
+        "elapsedMs": started.elapsed().as_millis() as u64,
+    });
+    match outcome {
+        Ok(status) => row["status"] = json!(status),
+        Err(error) => row["error"] = json!(error),
+    }
+    row
 }
 
 /// 训练引擎状态：装没装、守护进程 / WebUI 在不在线、项目数、问题清单。

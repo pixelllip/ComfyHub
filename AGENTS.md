@@ -41,7 +41,7 @@
 | pub 源 | 必须 `https://pub.dev`（国内镜像对个别包返回 424） |
 | 脚本 | 一律 `pwsh`。**App 与后端的起停不走任何脚本**，脚本只剩构建 / 测试 / 可选能力 |
 | 端口 | 后端 `--port 0` 让系统挑，真实端口只从 `.run\api.json` 读；ComfyUI `8188` |
-| 出网代理 | 本机 `civitai.com` 这类直连不通、只有 `127.0.0.1:7890` 通；**公网走代理、本机 / 内网强制直连**（否则 `127.0.0.1:8188` 会被交给代理打死 ComfyUI）。Rust 侧统一走 `infra::outbound`（`COMFYHUB_HTTPS_PROXY` → 系统代理 → 直连；写 `direct` 可强制直连），别自己发明第三份选择器 |
+| 出网代理 | 本机 `civitai.com` 这类直连不通、只有 `127.0.0.1:7890` 通；**公网走代理、本机 / 内网强制直连**（否则 `127.0.0.1:8188` 会被交给代理打死 ComfyUI）。Rust 侧统一走 `infra::outbound`（`COMFYHUB_HTTPS_PROXY` → 系统代理 → 直连；写 `direct` 可强制直连），别自己发明第三份选择器。系统代理那一档会读 `ProxyEnable` / `ProxyServer` / `ProxyOverride`（**例外表照办**；PAC 读不了会如实报）。要当场看结论或跑探针：`GET /api/system/outbound`（设置 → 本地服务 → 联网代理）—— "503 是不是没走代理"这件事别再靠猜 |
 | Android 构建 | `android/` 走 AGP **9.4.0** + Gradle **9.6.0** + **AGP 内建 Kotlin**（`android.builtInKotlin=true`，任何模块都不 apply KGP）；`~/.gradle/gradle.properties` 里 `dl.google.com` / `repo.maven.apache.org` **必须绕过代理**、`github.com` **必须走代理**；pub 缓存在 C:、工程在 D: 会跨盘炸，所以关了 `kotlin.incremental`。动 `android/` 前先读 `docs/android-agp9-builtin-kotlin-migration.md` |
 
 ## 5. 改脚本时的约定

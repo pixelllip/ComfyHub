@@ -36,6 +36,44 @@ async fn confinement_endpoint_reports_the_judge_not_just_the_verdict() {
 }
 
 #[tokio::test]
+async fn outbound_endpoint_reports_the_route_and_its_source() {
+    let (status, body) = get_json(app(), "/api/system/outbound").await;
+    assert_eq!(status, StatusCode::OK);
+    // 界面要的四个键（`lib/models/models.dart` 的 OutboundInfo 直接读它们）
+    for key in ["route", "proxy", "source", "system"] {
+        assert!(body.get(key).is_some(), "缺了 `{key}`：{body}");
+    }
+    assert!(
+        matches!(body["route"].as_str(), Some("proxy" | "direct")),
+        "route 只能是 proxy / direct：{body}"
+    );
+    assert!(
+        body["proxy"].is_null() || body["proxy"].is_string(),
+        "proxy 要么是 host:port，要么是 null：{body}"
+    );
+    // ⚠ **只断言来源非空，不断言具体值**：这台机器的系统代理（或环境变量）是环境属性；
+    //   要钉的是"来源必须一起给" —— 只回一个地址，用户没法判断它是不是自己填的那个。
+    assert!(
+        !body["source"].as_str().unwrap_or("").is_empty(),
+        "来源必须给：{body}"
+    );
+    // 系统代理那几项也照原样给（用户要能对着 Windows 的"代理设置"核对）
+    for key in ["enabled", "server", "overrides", "autoConfigUrl"] {
+        assert!(
+            body["system"].get(key).is_some(),
+            "system 缺了 `{key}`：{body}"
+        );
+    }
+    assert!(body["system"]["enabled"].is_boolean());
+    assert!(body["system"]["overrides"].is_array());
+    // 默认**不发探针**：打开设置页不能往公网送流量（只有 `?probe=1` 才发）
+    assert!(
+        body.get("probes").is_none(),
+        "没要求探针就不该有 probes：{body}"
+    );
+}
+
+#[tokio::test]
 async fn health_reports_engine_and_schema_version() {
     let (status, body) = get_json(app(), "/api/health").await;
     assert_eq!(status, StatusCode::OK);

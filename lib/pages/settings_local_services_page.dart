@@ -5,8 +5,10 @@ import 'package:url_launcher/url_launcher.dart';
 import '../core/backend_launcher.dart';
 import '../core/settings_store.dart';
 import '../core/theme.dart';
+import '../models/models.dart';
 import '../state/library_store.dart';
 import '../widgets/backup_card.dart';
+import '../widgets/outbound_card.dart';
 import '../widgets/settings_scaffold.dart';
 import '../widgets/storage_card.dart';
 import '../widgets/settings_switch_row.dart';
@@ -39,6 +41,12 @@ class _LocalServicesSettingsPageState extends State<LocalServicesSettingsPage> {
   bool _testOk = false;
   Map<String, dynamic>? _health;
 
+  /// 出网代理（`GET /api/system/outbound`）—— 打开这一页就读一次，不往外发流量。
+  OutboundInfo? _outbound;
+  bool _outboundLoading = false;
+  bool _outboundProbing = false;
+  String? _outboundError;
+
   @override
   void initState() {
     super.initState();
@@ -51,6 +59,8 @@ class _LocalServicesSettingsPageState extends State<LocalServicesSettingsPage> {
     _projectRootController = TextEditingController(
       text: settings.projectRoot ?? BackendLauncher.detectProjectRoot() ?? '',
     );
+    // 进页就读一次：`probe` 为假，后端只读配置、不发请求。
+    WidgetsBinding.instance.addPostFrameCallback((_) => _loadOutbound());
   }
 
   @override
@@ -105,6 +115,35 @@ class _LocalServicesSettingsPageState extends State<LocalServicesSettingsPage> {
       });
     } finally {
       if (mounted) setState(() => _testing = false);
+    }
+  }
+
+  /// 读一次出网代理设置。[probe] 为真时让后端真的向 Civitai / Danbooru 各发一次请求
+  /// （只有用户点「测试出网」才这样：打开页面不该往外送流量）。
+  Future<void> _loadOutbound({bool probe = false}) async {
+    final api = context.read<LibraryStore>().api;
+    setState(() {
+      if (probe) {
+        _outboundProbing = true;
+      } else {
+        _outboundLoading = true;
+      }
+      _outboundError = null;
+    });
+    try {
+      final info = await api.outbound(probe: probe);
+      if (!mounted) return;
+      setState(() => _outbound = info);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _outboundError = '$e');
+    } finally {
+      if (mounted) {
+        setState(() {
+          _outboundLoading = false;
+          _outboundProbing = false;
+        });
+      }
     }
   }
 
@@ -378,6 +417,20 @@ class _LocalServicesSettingsPageState extends State<LocalServicesSettingsPage> {
                 ],
               ),
             ),
+          ),
+        ),
+        // 出网走不走代理（2026-11-09）：跟「后端地址」一样属于"这一台机器怎么联网"，
+        // 但比地址更容易被误会 —— danbooru 回 503 那次，谁都以为是没吃代理。
+        SettingsSection(
+          title: '联网代理',
+          estimatedHeight: 320,
+          child: OutboundCard(
+            info: _outbound,
+            loading: _outboundLoading,
+            probing: _outboundProbing,
+            error: _outboundError,
+            onRefresh: () => _loadOutbound(),
+            onProbe: () => _loadOutbound(probe: true),
           ),
         ),
         // 备份与恢复（2026-11-06）：放在「服务状态」后面 —— 恢复之后要重启服务，
