@@ -21,10 +21,10 @@
 //!    `!is_mutating` 一刀切：那会把 `comfy_load_workflow`（会写库）和
 //!    `ask_user_question`（闸门）一起卷进来。名单是可审计的，一刀切不是。
 //! 2. **命中一律如实说**：正文开头那句 `[缓存命中] …（没有重新执行）` 是
-//!    [`Cached::into_wire`] 拼的，**由模型与用户一起看见**（工具卡上的摘要也是它）。
+//!    [`Cached::into_wire`] 拼接，**模型与界面均可看到**（工具卡摘要也是它）。
 //!    悄悄返回旧数据 = 模型把几分钟前的队列状态当成现在的事实。
 //! 3. **审批语义一个字都不改**：查缓存发生在**审批之后**（见
-//!    [`crate::ai::executor::handle_call`] 的步骤 ⑥）。所以"用户没批准"永远优先 ——
+//!    [`crate::ai::executor::handle_call`] 的步骤 ⑥）。因此"未批准"始终优先 ——
 //!    缓存只免掉"再跑一遍"，不免掉"再问一次"。
 //! 4. **写操作一律清空缓存**（[`invalidates`]）：内存里的重建成本是几次重复调用，
 //!    比"读到旧文件"便宜得多。**别为省这一次清空去搞精细失效** —— 那正是
@@ -35,11 +35,11 @@
 //!
 //! # 磁盘类工具为什么按 `stat` 校验而不是只认 TTL
 //!
-//! `read_file` / `list_dir` 的答案随时可能被**我们之外的人**改掉：用户在自己的编辑器里
+//! `read_file` / `list_dir` 的结果随时可能被**外部进程**修改：在其他编辑器中
 //! 存一次、AI 上一轮用 `write_file` 写一次、别的工具投一张图进 `input\`。TTL 只能把窗口
 //! 缩小，而 `mtime + 长度` 能把它关掉 —— 文件被动过一个字节，下一次调用立刻重新读。
 //! 顺带还买到一个更重要的性质：**路径要过 [`ToolPolicy::resolve_read`]**，
-//! 所以"用户把某个目录从读白名单里删掉之后，缓存还在供那份内容"这件事不会发生。
+//! 因此"目录已从读白名单移除、缓存仍返回该内容"的情况不会发生。
 //!
 //! # 与 Kotlin 的关系
 //!
@@ -107,7 +107,7 @@ pub fn freshness(name: &str) -> Option<Freshness> {
         // 真正的判据是 mtime + 长度。
         "read_file" | "list_dir" => File(secs(30)),
 
-        // ---- 本机库 / 本机目录：读起来便宜，但用户（或另一台端）随时会改 ----
+        // ---- 本机库 / 本机目录：读取开销低，但可能被其他进程或设备随时修改 ----
         "list_skills" | "search_prompts" | "search_character_cards" | "search_style_cards" => {
             Ttl(secs(20))
         }
@@ -142,7 +142,7 @@ pub fn freshness(name: &str) -> Option<Freshness> {
         //   进了缓存就会变成"第二次又把整篇正文灌一遍"—— 去重失效、上下文白烧。
         //   跨 Run 重读一份 skill 是常态，但它本来就只有一次磁盘读，省不出什么。
         //
-        // ⚠ `ask_user_question` 同理：它是**闸门**，不是查询（缓存一个提问 = 吞掉用户的选择）。
+        // ⚠ `ask_user_question` 同理：它是**闸门**，不是查询（缓存提问会丢弃作答）。
         //
         // 其余的（`write_file` / `register_skill` / `delete_skill` / `remember` /
         // `comfy_submit` / `comfy_use_*` / `comfy_make_mask` / `comfy_start` / `comfy_stop` /
@@ -156,7 +156,7 @@ pub fn freshness(name: &str) -> Option<Freshness> {
 /// 这次调用会不会改动"缓存所描述的世界"（→ 成功之后一律清空缓存）。
 ///
 /// 判据是工具的静态 `mutating` 位**加上**一条显式的例外：
-/// `comfy_load_workflow` 的 `mutating` 是 `false`（它不改用户机器上的任何文件），
+/// `comfy_load_workflow` 的 `mutating` 为 `false`（它不改动本机任何文件），
 /// 但它**会往库里写一条提示词** —— 不清缓存的话，"导入 → 立刻搜库"会搜不到刚导进来的那条。
 pub fn invalidates(name: &str) -> bool {
     crate::tools::tools::is_mutating(name) || name == "comfy_load_workflow"
@@ -194,7 +194,7 @@ impl Cached {
     /// 纪律 2 就在这几行里：正文开头**必须**写明这是哪一次的结果、以及它还能用多久 ——
     /// 少了这句话，模型会把几分钟前的队列状态当成现在的事实，而且**它没有任何线索**。
     ///
-    /// 摘要（工具卡上那一行小字）从**加了标注的正文**重新算，所以用户也看得见"缓存命中"；
+    /// 摘要（工具卡上那行小字）由**带标注的正文**重新计算，因此界面同样显示"缓存命中"；
     /// `payload` 里补 `cached` / `cachedAgeSeconds` 两个键给界面（它们是**追加**的，
     /// 老的读取方一个都不受影响）。
     pub fn into_wire(self) -> (String, String, Value) {
@@ -427,7 +427,7 @@ fn canonical_into(value: &Value, out: &mut String) {
     }
 }
 
-/// "N 秒" / "M 分 SS 秒"（给用户与模型看的人话，不用 `Debug` 输出 `12.34s`）。
+/// "N 秒" / "M 分 SS 秒"（供界面与模型阅读的说明，不使用 `Debug` 的 `12.34s`）。
 fn human_age(age: Duration) -> String {
     let seconds = age.as_secs();
     if seconds < 60 {
