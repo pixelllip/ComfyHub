@@ -446,7 +446,7 @@ class _HomeShellState extends State<HomeShell> {
   ///
   /// 为什么不是"一上来五页全建"：`IndexedStack` 会把**所有** children 都挂载，
   /// 于是设置页在启动时就要 `BackendLauncher`、画廊在启动时就要拉列表 ——
-  /// 一个页面缺依赖会让整个壳子炸掉（`home_nav_test` 里就是这么红的）。
+  /// 一个页面缺依赖会使整个外壳报错（`home_nav_test` 即如此失败）。
   /// 而且"没点过的页面也去拉数据"纯属浪费。
   ///
   /// 所以：**点过就留下，没点过就是空位**。既拿到了"换页不重建"，
@@ -458,7 +458,7 @@ class _HomeShellState extends State<HomeShell> {
 
   /// 切页：**唯一的入口**（导航栏 / 横幅 / 预设"运行"都走它）。
   ///
-  /// 顺手把目标页标成"已访问"—— 这样它才真的被建出来（见 [`_visited`]）。
+  /// 同时把目标页标记为"已访问"—— 这样它才会被实际创建（见 [`_visited`]）。
   /// 散着写 `setState(() => _index = i)` 的后果是：页面切过去了，但那一格还是占位。
   void _goToPage(int index) {
     setState(() {

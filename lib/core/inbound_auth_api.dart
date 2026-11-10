@@ -114,7 +114,7 @@ class InboundAuthApi {
 
   /// `PUT /api/auth` `{enabled}` —— 打开/关闭「允许移动端连接」。
   ///
-  /// 打开时后端会**顺手生成一个长期令牌**（若还没有），这是它现在唯一的用途。
+  /// 打开时后端会**一并生成一个长期令牌**（若尚未存在），这是它当前唯一的用途。
   Future<InboundAuthStatus> setEnabled(bool enabled, {String? token}) async =>
       InboundAuthStatus.fromJson(
         _asMap(
@@ -533,7 +533,7 @@ class InboundAuthStatus {
   /// 闸门总开关。**关着 = 今天的行为**（局域网内任何设备都能连）。
   final bool enabled;
 
-  /// 是否已经有长期令牌（打开开关时后端会顺手生成一个）。
+  /// 是否已有长期令牌（打开开关时后端会一并生成一个）。
   final bool hasToken;
   final String? schema;
   final List<PairedDevice> devices;

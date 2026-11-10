@@ -124,7 +124,7 @@ class BackendLauncher extends ChangeNotifier {
 
   /// 这个 App 有没有"认领"本地服务：自己起的，或者接管了已经在跑的那个。
   /// 只有认领过，退出时才会去停它们 —— 不然「别人起的后端、只是开个 App 看看」
-  /// 会被顺手带走。
+  /// 会被一并终止。
   bool servicesClaimed = false;
 
   /// 这次后端**没能用回**想要的端口时，记录原目标（null = 正常）。
@@ -187,7 +187,7 @@ class BackendLauncher extends ChangeNotifier {
   }) async {
     final uri = Uri.parse('${_settings.baseUrl}/api/health');
     // 本机连"没人监听"的端口要等 SYN 重传（这台机器上实测 ~2 秒），冷启动时服务
-    // 还没起来恰是常态；先花 ≤250ms 判一下端口，省掉这段白等。
+    // 尚未启动属于常态；先花 ≤250ms 探测端口，避免这段空等。
     // 只对回环地址这么做，远端地址不预检（免得把慢网络误判成"没起来"）。
     if (_isLoopback(uri.host) && !await _portOpen(uri.host, uri.port)) {
       return null;
@@ -296,7 +296,7 @@ class BackendLauncher extends ChangeNotifier {
 
   /// 把"这次真的用上了哪份库"记进偏好。
   ///
-  /// 只认**真有库**的目录：`snapshotLibrary` 顺手给那份库补上身份文件
+  /// 只认**确实含库**的目录：`snapshotLibrary` 同时为该库补上身份文件
   /// （2026-11-10：从此"这次打开的是不是你的库"是可以问出来的，不是猜的）。
   Future<void> _rememberLibrary(DataDirResolution info) async {
     final ref = snapshotLibrary(info.dataDir);
@@ -408,7 +408,7 @@ class BackendLauncher extends ChangeNotifier {
       // 探到已经在跑 = 这次没起过进程，但要**认领**它：
       // 「关 App 时一并停止本地服务」这句承诺包含"启动 App 之前就已经在跑的"那个。
       _claimRunningBackend();
-      // 顺手把它的端口记下来：下次我们启动时就能要回同一个（这是"手机不用重新配"的
+      // 同时记录其端口：下次启动时可复用同一个（这是"手机无需重新配置"的
       // 前提），而且它要是当初回落过，这里也要如实说出来。
       await _recordActualPort(null, spawned: false);
       _set(StartupPhase.ready, '后端已就绪');
@@ -537,7 +537,7 @@ class BackendLauncher extends ChangeNotifier {
           onError: (Object e) => _log('[stderr 错误] $e'),
         );
 
-    // 进程提前退出要能当场看见（不再像脚本时代那样白等满 90 秒）
+    // 进程提前退出要能立即发现（不再像脚本方式那样空等满 90 秒）
     var exited = false;
     int? exitCode;
     unawaited(

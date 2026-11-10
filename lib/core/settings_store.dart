@@ -154,7 +154,7 @@ class SettingsStore extends ChangeNotifier {
   /// 历史地址（最近用的在前）。界面拿它渲染"最近用过"那一组候选。
   List<String> get baseUrlHistory => List.unmodifiable(_baseUrlHistory);
 
-  /// 历史最多留几条（再多就成了"翻半天找不到"，而不是"顺手点一下"）。
+  /// 历史最多保留几条（再多会难以查找，而不是可快速点击）。
   static const int maxBaseUrlHistory = 6;
 
   /// 当前地址是否来自手动填写（false 表示按本机 `.run\api.json` 自动确定）。
@@ -496,7 +496,7 @@ class SettingsStore extends ChangeNotifier {
     v = _normalizeUrl(v);
     _baseUrlFromUser = true;
     _baseUrl = v;
-    // 顺手记住它：跨端来回切时，"上一条用过的"就是最好的候选（见 _baseUrlHistory）
+    // 同时记录该值：跨端切换时"上一条使用过的"是最佳候选（见 _baseUrlHistory）
     _baseUrlHistory = [
       v,
       ..._baseUrlHistory.where((e) => e != v),
@@ -638,7 +638,7 @@ class SettingsStore extends ChangeNotifier {
     }
   }
 
-  /// 选产物缓存的原件预算（MB）。**当场生效**：缓存那边顺手淘汰一次，
+  /// 选产物缓存的原件预算（MB）。**立即生效**：缓存随即淘汰一次，
   /// 把 2GB 调整为 512MB 后，占用必须立即下降（见 `MediaCache.setOriginalBudget`）。
   Future<void> setMediaCacheOrigBudgetMb(int mb) async {
     if (!kOriginalCacheBudgetChoicesMb.contains(mb)) return;

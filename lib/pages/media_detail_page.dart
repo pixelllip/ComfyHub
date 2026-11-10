@@ -89,7 +89,7 @@ class _MediaDetailPageState extends State<MediaDetailPage> {
   /// "只有一份产物时禁用箭头"）。
   List<int> _siblings = const [];
 
-  /// 同批产物的完整元数据（后端列成员时顺手带回来的）。
+  /// 同批产物的完整元数据（后端列成员时一并返回）。
   ///
   /// 翻页动画要**同时画出前后两张**，不可能等切过去再请求；这份缓存让相邻页
   /// 在拖动开始的那一帧就能建出来。
@@ -138,7 +138,7 @@ class _MediaDetailPageState extends State<MediaDetailPage> {
     // 若这次请求返回时已翻到别的图，其结果直接丢弃。
     final id = _currentId;
     // 打开详情 = 主动查看该条（「打开详情之后就没必要模糊了」）：
-    // 详情页自己不打码，顺手把"这一条看过了"记下来 —— 回到列表时它的缩略图也不再糊。
+    // 详情页本身不打码，同时记录"这一条已查看" —— 回到列表时它的缩略图也不再模糊。
     // 只记在内存里（`NsfwStore`），关掉 App 再打开照旧打码。
     //
     // ⚠ 每次**切换**也要对新的那一条 reveal（`_goTo` 会再调一次 `_load`）——

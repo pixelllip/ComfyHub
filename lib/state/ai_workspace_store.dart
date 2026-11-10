@@ -149,7 +149,7 @@ class AiWorkspaceStore extends ChangeNotifier {
   ///
   /// 触发点是**打开模型选择器那一刻**（`_ModelPickerDialog.initState`）：要挑模型的时候
   /// 清单必须是最新的，而这一次重读只是本机库的一次查询（手机上一条网络请求都不打）。
-  /// 清单真的变了才顺手重读模型目录 —— 没变时也调 `_loadModels` 就是白白抖一下选择器。
+  /// 仅在清单确实变化时重读模型目录 —— 未变化时调用 `_loadModels` 会使选择器无谓刷新。
   Future<void> refreshProviders() async {
     try {
       final fresh = await _overlayDeviceCredentials(
@@ -742,7 +742,7 @@ class AiWorkspaceStore extends ChangeNotifier {
     try {
       return await (local as LocalSkillSource).localSkills();
     } catch (e) {
-      // 桥这边也炸了：把回落失败的这件事留在日志里，界面上仍然显示"拉取失败"的原话，
+      // 桥接同样失败：把回落失败记入日志，界面上仍显示"拉取失败"的原文，
       // 而不是假装"本机一个 skill 都没有"。
       debugPrint('[M5] 本机 skill 列表也读不出来：$e');
       return const [];
@@ -1511,7 +1511,7 @@ class AiWorkspaceStore extends ChangeNotifier {
     // （`ai_providers` / `ai_models` 本来就是本机表，离线可用，而且能写）。
     // 两份都读就会出现同一个 provider 两套 baseURL / 能力声明 —— 谁赢看不出来，
     // 而它决定"这条消息发得出去吗"。**一个端只留一份清单**（§14.4：两端各一份、
-    // 不做自动合并）；缓存代码与那两个键一并删掉，免得日后有人顺手读回来。
+    // 不做自动合并）；缓存代码与那两个键一并删除，避免日后被重新读回。
     try {
       providers = await _providerStore.listProviders();
       // 空清单要**如实说明**：否则只会显示空选择器，无法判断"模型是否被删除"。
@@ -1556,7 +1556,7 @@ class AiWorkspaceStore extends ChangeNotifier {
   /// ⚠ **只在内存里、且只有一份**：真源是 Android Keystore（[PairingTokenStore]），
   /// 这份读的是进程内缓存 [`PairingTokenCache`]（**HTTP 客户端也默认读它**，见
   /// `ApiClient` 的构造函数）。
-  /// 2026-09-24 真机验收踩过一次"两份令牌"的坑：AI 工作台这一路带着令牌跑得好好的，
+  /// 真机验收时出现过"两份令牌"的问题：AI 工作台这一路带令牌运行正常，
   /// 而「AI 模型与凭据」页自己造的客户端没带 → 那边一条红横幅 `需要配对令牌`。
   /// 所以这里**只留一个来源**，别再加第二个字段。
   String? get pairingToken => PairingTokenCache.value;
@@ -1613,7 +1613,7 @@ class AiWorkspaceStore extends ChangeNotifier {
       kitVersion = r.kitVersion;
       kitIssue = r.ok ? null : (r.reason ?? '本机还没有规则工件（run-kit）');
     } catch (e) {
-      // 连通道都炸了也要如实说，不能让"没有规则"变成一条静默的失败
+      // 即使通道异常也要如实说明，不能让"没有规则"变成静默失败
       kitIssue = '取规则工件失败，$e';
     }
     // 拿不到规则 = **发不出去**（按钮会一直是灰的）。这条日志是给排查用的：
@@ -1647,7 +1647,7 @@ class AiWorkspaceStore extends ChangeNotifier {
       }
       // M4 补全：队列里还有东西就**挂着定时重试**，推空了立刻停 ——
       // 既不能"只在冷启动与 Run 收尾各推一次"（停留在聊天页时不会再推），
-      // 也不能空转（空队列还每 45 秒打一次网络 = 白烧电）。
+      // 也不能空转（队列为空仍每 45 秒发一次请求会浪费资源）。
       if (r.pending > 0) {
         _armOutboxRetry();
       } else {
