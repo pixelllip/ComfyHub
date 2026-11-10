@@ -74,7 +74,7 @@ function Say([string]$msg, [string]$color = 'Gray') { Write-Host $msg -Foregroun
 function Check([string]$name, $ok, [string]$detail = '') {
     # `$ok` 故意不强类型（`[bool]`）：`-match` / `-contains` 这类表达式可能返回**数组**，
     # 强类型参数会当场抛绑定错误 —— 而那个错误会让后面所有断言**静默跳过**、脚本还报"全部通过"
-    # （这个坑真踩过）。这里统一按"非空即真"处理。
+    # （该问题实际出现过）。此处统一按"非空即真"处理。
     $passed = $false
     if ($ok -is [array]) { $passed = $ok.Count -gt 0 } else { $passed = [bool]$ok }
     $script:Checks++

@@ -316,7 +316,7 @@ struct BroadcastRoute {
 ///   `krea2 t2i workflow.json` 上实测）：`properties` 里**没有**类型，节点自己长着
 ///   `anything[CLIP]` / `anything15[MODEL]` / `anything16[VAE]` 这样**每个接了线的输入插口各一路**，
 ///   类型就写在那条插口的 `type` 上。只认老版本的表现是"这份工作流一处广播都填不上"，
-///   而它看上去一切正常（缺口留到提交时才炸）。
+///   而它看起来一切正常（缺口留到提交时才暴露）。
 fn broadcast_routes(
     node: &Map<String, Value>,
     links: &LinkTable,

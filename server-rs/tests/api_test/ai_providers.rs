@@ -235,7 +235,7 @@ async fn ai_models_distinguish_missing_provider_from_an_empty_catalog() {
     assert_eq!(list[2]["thinkingEfforts"], serde_json::json!({}));
     assert_eq!(list[2]["enabled"], false);
 
-    // ③ 坏 JSON 那行：不炸，按空处理；空白 thinking_format 也算"没声明"
+    // ③ 损坏 JSON 那行：不报错，按空处理；空白 `thinking_format` 也算"未声明"
     assert_eq!(list[1]["inputModalities"], serde_json::json!([]));
     assert_eq!(list[1]["attachmentTransports"], serde_json::json!({}));
     assert_eq!(list[1]["mimeAllowlist"], serde_json::json!([]));

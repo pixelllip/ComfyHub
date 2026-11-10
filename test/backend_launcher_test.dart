@@ -112,7 +112,7 @@ void main() {
     BackendLauncher.waitDeadlineOverride = const Duration(seconds: 1);
     // 把"去哪找 .run\api.json"钉在临时根上：否则 load/refresh 会读到**真项目**
     // 的端口文件，用例结果随"这台机器的后端正跑在哪个端口"漂移
-    // （settings_store.dart 里那条注释就是这个坑的现场记录）。
+    // （`settings_store.dart` 中那条注释即该问题的记录）。
     SettingsStore.portFileRootsOverride = [root.path];
   });
 

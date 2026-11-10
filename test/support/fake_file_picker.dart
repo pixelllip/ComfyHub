@@ -17,7 +17,7 @@ import 'package:file_picker/file_picker.dart';
 ///
 /// `path` 由基类从 [uri] 推出来（`file://` 才算本地文件），
 /// `lengthSync()` 直接给构造时写好的大小。`xFile` / 读字节在测试里用不到，
-/// 真被调到说明代码换了读取方式 —— 当场炸，比静默返回空数据好。
+/// 若被调用说明代码更换了读取方式 —— 立即报错，优于静默返回空数据。
 final class FakePlatformFile extends PlatformFile {
   FakePlatformFile(this.name, this.uri, {this.size});
 

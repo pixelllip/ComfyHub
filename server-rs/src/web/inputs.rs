@@ -4,7 +4,7 @@
 //! 三个"缺失即默认"的约定是从 Kotlin 侧抄来的，别改：
 //!  - `PromptInput` 的**每个字段都有默认值**（`#[serde(default)]`）：Flutter 的
 //!    `toInputJson()` 只会带上它认为有值的键，少一个键就整条 400 是不能接受的；
-//!  - 未知字段**忽略**（`camelCase` 映射之外的键不报错）—— 旧客户端多带个字段不该炸；
+//!  - 未知字段**忽略**（`camelCase` 映射之外的键不报错）—— 旧客户端多带一个字段不应报错；
 //!  - `extraParams` 是 `Map<String,String>`（**值也是字符串**）：Dart 那边 `.map((k,v) => ...toString())`
 //!    已经把它拍平了，这里跟着就行。
 
@@ -120,7 +120,7 @@ pub struct Deleted {
 
 /// 收藏回执。
 ///
-/// ⚠ Kotlin 侧这里踩过坑并留了注释：写成 `mapOf("id" to id, "favorite" to favorite)` 会因为
+/// ⚠ Kotlin 侧此处出现过问题并留有注释：写成 `mapOf("id" to id, "favorite" to favorite)` 会因为
 /// **混了 Long + Boolean** 让 kotlinx 序列化直接抛 → 库改好了、响应却是 500。
 /// Rust 的 `json!` 没有这个毛病，但**字段名要一致**（`id` / `favorite`）。
 #[derive(Debug, Clone, Serialize)]

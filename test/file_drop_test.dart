@@ -139,7 +139,7 @@ void main() {
     for (final arguments in malformed) {
       _expectSuccessReply(await _push(arguments));
     }
-    // 方法名不认识（通道只认 droppedFiles）——同样不炸、不推
+    // 方法名无法识别（通道只接受 `droppedFiles`）——同样不报错、不推送
     _expectSuccessReply(
       await _push(<String, Object?>{
         'paths': [r'D:\a.png'],

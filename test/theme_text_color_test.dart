@@ -20,11 +20,11 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:viewer/core/theme.dart';
 
-/// 逐个样式查"有没有颜色"。**两种主题都查** —— 这个坑只在浅色下看得见，
+/// 逐个样式检查"是否有颜色"。**两种主题都检查** —— 该问题只在浅色下可见，
 /// 只查深色等于没查。
 ///
 /// ⚠ 这里刻意**手写清单**而不是反射/遍历：`TextTheme` 没有"列出所有样式"的接口，
-/// 而漏掉一个样式就等于给这个坑留了一条缝（清单本身也是"主题提供了哪些档位"的说明）。
+/// 而漏掉一个样式就等于留下该问题（清单本身也是"主题提供了哪些档位"的说明）。
 void _expectAllStylesColored(TextTheme theme, Brightness brightness) {
   final label = brightness.name;
   final styles = <String, TextStyle?>{

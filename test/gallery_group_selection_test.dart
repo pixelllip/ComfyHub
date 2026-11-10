@@ -687,7 +687,7 @@ void main() {
 
   testWidgets('窗口最窄（360）+ 选停靠：不抛异常；网格被挤成细条 = 这个选择的既定代价', (tester) async {
     // 选择停靠即停靠，**不添加**"空间不够就回退弹窗"逻辑。
-    // 这条把这个选择的边界钉成"已知"而不是"以后才炸"：
+    // 这条把该选择的边界固定为"已知"，而不是等日后失败才发现：
     // 窗口最小宽度是 360（`windows\runner\win32_window.cpp` 的 `kMinWindowWidthLogical`），
     // 面板宽度被算式夹在下限 300（`kCollectionPanelMinWidth`）→ 网格只剩几十像素。
     // 不得崩溃、不得 RenderFlex overflow；空间拥挤是该选择的预期结果。

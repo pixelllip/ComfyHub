@@ -746,7 +746,7 @@ async fn pair_start_hands_out_a_ticket_and_the_scan_flow_claims() {
     // ② 扫码会话**不进** pair/pending（那张列表是给"手机举手"那条路用的）
     //
     // ⚠ 判据是"**条数没变**"而不是"条数为 0"：`sessions()` 是**进程级全局态**，
-    // 同进程里并行跑的别的配对用例随时会往里放"手机举手"的会话（本仓踩过这个坑，
+    // 同进程并行执行的其他配对用例随时会写入"手机举手"的会话（本仓库出现过该问题，
     // 所以 auth 用例还有一把 `auth_test_lock`）。断言 0 会变成"看谁先跑"的偶发红。
     let (status, before) = send_as(
         app.clone(),

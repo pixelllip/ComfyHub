@@ -5,7 +5,7 @@
 use super::*;
 
 /// ⚠ 每个用例**自己一个目录**：共用 `comfyhub-cap-<pid>` 会让并行用例互相覆盖
-/// `custom.json`（这个坑在本仓库踩过不止一次，见 docs/pitfalls.md 那条"偶发红"）。
+/// `custom.json`（该问题在本仓库出现过多次，见 docs/pitfalls.md 中"偶发失败"那条）。
 fn dir(tag: &str) -> PathBuf {
     crate::infra::testpaths::scratch(&format!("cap-{tag}"))
 }

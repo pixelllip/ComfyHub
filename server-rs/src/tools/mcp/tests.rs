@@ -156,7 +156,7 @@ fn 权限被拒_不再误导为_comfy_没在运行() {
 fn dir_writable_探测结果可信() {
     // ⚠ 判据真源已经搬到 `crate::infra::confinement::dir_writable`（后端自检与 doctor 都用它），
     // 这里只保留一条"探针语义没被改坏"的回归 —— 用例的临时目录放**项目内**
-    // （`%TEMP%` 在受限会话里写不了，那正是 `confinement.rs` 文件头记的同一个坑）。
+    // （受限会话中无法写入 `%TEMP%`，正是 `confinement.rs` 文件头记录的同一问题）。
     let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("target")
         .join(".scratch")

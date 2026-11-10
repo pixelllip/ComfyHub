@@ -845,7 +845,7 @@ fn apply_comfy_cli_write_redirection(command: &mut tokio::process::Command, proj
         }
         command.env("COMFY_CACHE_DIR", home.join("cache"));
     }
-    // tempfile：**直接指**项目内，不再探 `%TEMP%`（SQLite `temp_store=MEMORY` 那条坑的同源）
+    // tempfile：**直接指向**项目内，不再探测 `%TEMP%`（与 SQLite `temp_store=MEMORY` 同一原因）
     let tmp = project_root.join(".run").join("tmp");
     if std::fs::create_dir_all(&tmp).is_ok() {
         command.env("TMP", &tmp);

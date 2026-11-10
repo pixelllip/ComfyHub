@@ -158,7 +158,7 @@ Get-ChildItem $OutDir -File -ErrorAction SilentlyContinue | Remove-Item -Force -
 # 而 `CaptureRepo.beginRun` 对 `success` 的记录**永远不再抢占**（那是幂等的正确行为）。
 # 于是只要上一轮被 Ctrl+C 打断过（清理在 finally 里，没跑到），这一轮的第 1 幕就会
 # 「/history 明明有一条、轮询却 checked=0」—— 表现为"捕获全挂"，但根因只是一个残留行。
-# 这个坑在 `docs/pitfalls.md` 里记着，脚本自己先兜住它。
+# 该问题记录在 `docs/pitfalls.md` 中，脚本先自行覆盖。
 $script:SqliteReady = Test-SqliteAccess
 if ($script:SqliteReady) {
     $ownKeys = "'e2e-capture-0001'", "'e2e-push-0001'"

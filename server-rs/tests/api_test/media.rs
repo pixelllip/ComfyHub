@@ -722,7 +722,7 @@ async fn media_tags_can_be_added_and_removed_individually() {
     assert_eq!(removed.1["ownTags"], serde_json::json!([]));
     assert_eq!(removed.1["promptTags"], serde_json::json!(["赛博朋克"]));
 
-    // 产物不存在 → 404（不能让外键炸成 500）
+    // 产物不存在 → 404（不要让外键返回 500）
     let missing = send_json(
         router_for(state.clone()),
         "POST",

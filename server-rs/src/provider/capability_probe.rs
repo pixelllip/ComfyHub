@@ -520,7 +520,7 @@ pub fn write_entry(
 /// 临时文件 + rename（**原子**：写一半断电也不会留下半份目录）。
 ///
 /// ⚠ 临时名带上进程号：Windows 上 `fs::rename` 能覆盖，但**不保证**在另一个进程正读它时
-/// 立刻成功；固定名字的 `.tmp` 还会让两个进程互相踩（本仓库踩过"偶发红"这一类坑）。
+/// 立即成功；固定名称的 `.tmp` 还会使两个进程相互覆盖（本仓库出现过"偶发失败"一类问题）。
 fn write_atomic(target: &std::path::Path, text: &str) -> Result<(), String> {
     let tmp = target.with_file_name(format!(
         "{}.{}.tmp",

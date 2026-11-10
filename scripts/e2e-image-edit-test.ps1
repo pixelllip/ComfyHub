@@ -570,7 +570,7 @@ try {
                 (@($applied | Where-Object { $_ -match ('^\d+\.image ← ' + [regex]::Escape($mask.placedSubjectFilename) + '$') }).Count -ge 1) `
                 ($applied -join ' | ')
         }
-        # ⚠ 与下面 cfg 那条同一个坑：工具回的是 **Rust 的 f64 格式化**，
+        # ⚠ 与下面 cfg 那条同一问题：工具返回的是 **Rust 的 f64 格式化**，
         #   `-PersonDenoise 0` 报出来是 `0.0`、而 PowerShell 的 `"$PersonDenoise"` 是 `0`。
         #   不留这个尾巴，`denoise 0`（纯合成那一档）会被判成"没覆盖上"（实测假红）。
         Check "denoise 被覆盖成 $PersonDenoise（贴人物图的融合档）" `

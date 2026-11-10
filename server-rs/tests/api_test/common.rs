@@ -491,7 +491,7 @@ pub(crate) fn auth_test_lock() -> &'static tokio::sync::Mutex<()> {
 ///
 /// ⚠ 必须真的插进 `ai_providers` / `ai_models`：`ai_runs.provider_id` 没有外键，
 /// 但 `run_kit` 与模型目录要它们；而"夹具里没有 provider"正是那种
-/// "测试全绿、真库才炸"的缝（`/api/sync/changes` 那次 500 的教训）。
+/// "测试全部通过、真实库才失败"的缺口（`/api/sync/changes` 那次 500 的教训）。
 pub(crate) fn seed_provider_and_model(state: &comfyhub_server_rs::web::routes::AppState) {
     state
         .write(|tx| {
@@ -1175,7 +1175,7 @@ pub(crate) async fn call_tool(
 //  内容与来源**逐字节相同**；遮罩要在对的像素上是白的、尺寸与底图一致。
 //  为什么盯着这两条：ComfyUI 的 `LoadImage` / `LoadImageMask` 只认 input 目录里的
 //  裸文件名，写错目录（安装形态 vs 共享目录）的表现是 `Invalid image file` ——
-//  看着像"文件不存在"，其实是写进了另一个目录；而遮罩尺寸与底图不一致时采样直接炸。
+//  看似"文件不存在"，实际写入了另一个目录；而遮罩尺寸与底图不一致时采样直接失败。
 // ===========================================================================
 
 /// 造一张**真能解码**的 PNG（投放与遮罩两条链路都必须吃得下真图）。

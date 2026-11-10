@@ -170,7 +170,7 @@ async fn delete_media(
     Ok(Json(Deleted { deleted: id }))
 }
 
-/// 产物是否存在（标签子路由用它把"不存在"翻成 404，而不是让外键炸成 500）。
+/// 产物是否存在（标签子路由用它把"不存在"转换为 404，而不是让外键返回 500）。
 fn media_exists(state: &AppState, id: i64) -> Result<bool, ApiError> {
     state.with(|conn| {
         Ok(conn

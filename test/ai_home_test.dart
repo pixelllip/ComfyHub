@@ -44,7 +44,7 @@ String _sse(int seq, String type, String dataJson) =>
     'id: $seq\nevent: $type\ndata: $dataJson\n\n';
 
 /// SSE 响应必须给出 **UTF-8 字节**：正文里有中文，直接当字符串塞进 `http.Response`
-/// 会被按 Latin-1 编码，客户端解码时炸成 "Contains invalid characters"。
+/// 会被按 Latin-1 编码，客户端解码时报错 "Contains invalid characters"。
 http.Response _sseResponse(String body) => http.Response.bytes(
   utf8.encode(body),
   200,
