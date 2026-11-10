@@ -16,11 +16,11 @@ import 'prompts_page.dart' show confirmDialog;
 
 /// 提示词 / 预设详情：完整提示词 + 标签 + 关联产物（+ 生成参数，**只在"从画廊进来"时**）。
 ///
-/// 用户 2026-10-11 定的分工：
-///  * **预设详情**（从预设库进）只有正向 / 负向提示词、标签、关联产物 ——
-///    "生成参数应该是让用户点击关联产物详情自己看"；
-///  * **从画廊进来**（看某张图当初用了什么）**保留**生成参数 ——
-///    那时用户要的就是"这次生成到底怎么配的"，藏掉反而多一跳。
+/// 分工：
+///  * **预设详情**（从预设库进入）只包含正向 / 负向提示词、标签、关联产物 ——
+///    生成参数在关联产物详情中查看；
+///  * **从画廊进入**（查看某张图的提示词）**保留**生成参数 ——
+///    该场景需要确认"这次生成的实际配置"。
 class PromptDetailPage extends StatefulWidget {
   final int promptId;
 
@@ -62,7 +62,7 @@ class _PromptDetailPageState extends State<PromptDetailPage> {
       final prompt = await store.api.getPrompt(widget.promptId);
       // **关联产物按"归一化后的提示词同款"取**（`/api/presets/{id}/media`，2026-10-11）：
       // 自动捕获的产物指向的是**另一条**提示词行，所以按 `prompt_id` 直连会漏掉它们 ——
-      // 而用户要的正是"用这套预设同款提示词的产物自动关联上来"。
+      // 需要的是"使用同一提示词的产物自动关联"。
       final media = await store.api.presetMedia(widget.promptId);
       if (!mounted) return;
       setState(() {
@@ -206,7 +206,7 @@ class _PromptDetailPageState extends State<PromptDetailPage> {
               const SizedBox(height: 16),
             ],
 
-            // 生成参数**只在"从画廊进来"时显示**（用户 2026-10-11）：
+            // 生成参数**只在"从画廊进入"时显示**：
             // 底模 / 采样器 / 步数 / 尺寸属于"当初那次生成"，不属于这段提示词本身。
             // 预设视角下要看参数就点下面的关联产物进详情页 —— 那里才是那次生成的事实。
             if (widget.showParams && PromptParams.hasAny(p)) ...[

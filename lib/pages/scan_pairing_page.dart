@@ -45,7 +45,7 @@ class _ScanPairingPageState extends State<ScanPairingPage> {
 
     final parsed = PairingPayload.parse(raw);
     if (!parsed.ok) {
-      // 继续扫：用户可能只是把码对歪了、或者桌上还有别的码
+      // 继续扫描：二维码可能未对准，或画面上存在其他码
       if (mounted && parsed.error != _problem) {
         setState(() => _problem = parsed.error);
       }
@@ -100,7 +100,7 @@ class _ScanPairingPageState extends State<ScanPairingPage> {
                     ),
                   ),
                 ),
-                // 取景框：给用户一个"把它对准这里"的明确目标
+                // 取景框：提供明确的对准目标
                 IgnorePointer(
                   child: Center(
                     child: Container(

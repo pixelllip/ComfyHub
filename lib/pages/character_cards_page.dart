@@ -8,8 +8,8 @@ import 'cards_page.dart';
 /// 真正的实现是 [CardsPage]（与画风卡共用同一套编辑器 / 示例管理）；
 /// 这个类保留原来的名字，给既有用例 / 深链接一个稳定落点。「预设库 → 卡片库」
 /// 入口现在直接开可切换的 [CardsPage]，不经过这里。
-/// `switchable: false`：从这个入口进来只做角色卡，不让顶部切换器把用户
-/// 悄悄带去另一类卡（卡片库入口才用可切换的 [CardsPage]）。
+/// `switchable: false`：从该入口进入只显示角色卡，顶部切换器不切换到另一类卡
+/// （卡片库入口使用可切换的 [CardsPage]）。
 class CharacterCardsPage extends StatelessWidget {
   /// [api] 仅供测试注入假后端；正式运行时按设置里的后端地址创建。
   final AiApiClient? api;

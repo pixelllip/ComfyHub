@@ -53,8 +53,8 @@ class _LocalServicesSettingsPageState extends State<LocalServicesSettingsPage> {
     final settings = context.read<SettingsStore>();
     _settings = settings;
     _urlController = TextEditingController(text: settings.baseUrl);
-    // 后端重启会换端口（自动挑的），地址一变这框就得跟着走 —— 否则界面上摆的
-    // 是一个上一轮的**死地址**，用户看着它去排查，只会越查越糊涂。
+    // 后端重启会更换端口（自动分配），地址变化时输入框需同步 —— 否则界面显示
+    // 的是上一轮的**失效地址**，据此排查会得到错误结论。
     settings.addListener(_syncUrlField);
     _projectRootController = TextEditingController(
       text: settings.projectRoot ?? BackendLauncher.detectProjectRoot() ?? '',
@@ -72,7 +72,7 @@ class _LocalServicesSettingsPageState extends State<LocalServicesSettingsPage> {
     super.dispose();
   }
 
-  /// 地址框跟着**当前真实地址**走；只在用户没在编辑它的时候同步。
+  /// 地址框跟随**当前真实地址**；仅在没有编辑该输入框时同步。
   void _syncUrlField() {
     if (!mounted || _urlFocus.hasFocus) return;
     final v = _settings.baseUrl;
@@ -86,8 +86,8 @@ class _LocalServicesSettingsPageState extends State<LocalServicesSettingsPage> {
       _testing = true;
       _testResult = null;
     });
-    // 判据是"**本机地址永远自动**"：用户把回环地址填回来不会变成"手填的覆盖"，
-    // 真源只有 `.run\api.json`。存完把框里的值拉回真实地址，并当面说一句。
+    // 判据是"**本机地址始终自动**"：填写回环地址不会成为"手动覆盖"，
+    // 真源只有 `.run\api.json`。保存后将输入框同步为真实地址并提示。
     final wasLocalTyped = SettingsStore.isLocalBackendUrl(_urlController.text);
     await settings.setBaseUrl(_urlController.text);
     if (!mounted) return;
@@ -118,8 +118,8 @@ class _LocalServicesSettingsPageState extends State<LocalServicesSettingsPage> {
     }
   }
 
-  /// 读一次出网代理设置。[probe] 为真时让后端真的向 Civitai / Danbooru 各发一次请求
-  /// （只有用户点「测试出网」才这样：打开页面不该往外送流量）。
+  /// 读一次出网代理设置。[probe] 为真时后端向 Civitai / Danbooru 各发送一次请求
+  /// （仅在点「测试出网」时执行：打开页面不应产生外网流量）。
   Future<void> _loadOutbound({bool probe = false}) async {
     final api = context.read<LibraryStore>().api;
     setState(() {
@@ -328,8 +328,8 @@ class _LocalServicesSettingsPageState extends State<LocalServicesSettingsPage> {
                       ),
                     ],
                   ),
-                  // 「端口没能要回上次那个」必须**看得见**：手机保存的地址当场失效，
-                  // 不写出来用户只会遇到"手机突然连不上"，猜不到该重扫二维码。
+                  // 「端口未能恢复为上次使用的值」必须**可见**：手机保存的地址随即失效，
+                  // 不显示时只会遇到"手机突然连不上"，无法判断需要重新扫码。
                   if (launcher.portFallbackFrom != null) ...[
                     const SizedBox(height: 8),
                     Row(
@@ -433,14 +433,14 @@ class _LocalServicesSettingsPageState extends State<LocalServicesSettingsPage> {
             onProbe: () => _loadOutbound(probe: true),
           ),
         ),
-        // 备份与恢复（2026-11-06）：放在「服务状态」后面 —— 恢复之后要重启服务，
-        // 两件事在同一屏，用户不用来回翻。
+        // 备份与恢复：位于「服务状态」之后 —— 恢复后需要重启服务，
+        // 两件事在同一屏。
         const SettingsSection(
           title: '备份与恢复',
           estimatedHeight: 460,
           child: BackupCard(),
         ),
-        // 存储占用 / 孤儿 / 事件归档：与备份同屏，用户排查"盘怎么满了"时不用来回翻。
+        // 存储占用 / 孤儿 / 事件归档：与备份同屏，便于排查磁盘占用。
         const SettingsSection(
           title: '存储',
           estimatedHeight: 420,

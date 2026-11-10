@@ -324,8 +324,8 @@ class CardsViewState extends State<CardsView> {
     if (store.api.baseUrl.isEmpty) return;
     Navigator.of(context).push(
       MaterialPageRoute(
-        // 详情页的左右切换只在这张卡挂的示例里走 —— 不传的话它会按
-        // `collectionId` 把用户带回画廊里原本那一批（用户 2026-11-07 报的 bug）。
+        // 详情页的左右切换只在这张卡挂载的示例中进行 —— 不传入时它会按
+        // `collectionId` 跳转到画廊中原本那一批。
         builder: (_) =>
             MediaDetailPage(mediaId: media.id, siblings: card.examples),
       ),
@@ -336,7 +336,7 @@ class CardsViewState extends State<CardsView> {
 /// 卡片库的独立页面（老入口 / 用例用）。
 ///
 /// 内部就是 [CardsView]；**预设页不再走这里** —— 它把两个 [CardsView] 直接当作
-/// 「角色卡」「画风卡」两个同级页签（用户 2026-10-24 的要求），顶部只有一条导航。
+/// 「角色卡」「画风卡」两个同级页签，顶部只有一条导航。
 class CardsPage extends StatefulWidget {
   final CardKind initialKind;
 
@@ -452,9 +452,8 @@ class _CardTile extends StatelessWidget {
     return Card(
       child: InkWell(
         borderRadius: BorderRadius.circular(14),
-        // 点卡片本体 = **编辑**（用户 2026-10-24："点击画风卡 卡片的行为是编辑，
-        // 不是修改示例图片"）。示例缩略图与「管理示例」按钮有自己的点击区域，
-        // 点它们仍然是看示例 / 管理示例。
+        // 点击卡片本体 = **编辑**，不是修改示例图片。示例缩略图与「管理示例」按钮
+        // 有独立的点击区域，点击后分别为查看示例 / 管理示例。
         onTap: onEdit,
         child: Padding(
           padding: const EdgeInsets.fromLTRB(14, 12, 8, 10),
@@ -790,7 +789,7 @@ class _CardEditorDialogState extends State<_CardEditorDialog> {
       _saving = true;
       _error = null;
     });
-    // 全量替换：空字段发 null（后端落 NULL），用户在弹窗里清空就真的清掉
+    // 全量替换：空字段发 null（后端写入 NULL），弹窗中清空即真正清除
     final payload = <String, dynamic>{
       'name': name,
       'prompt': _text('prompt'),
@@ -954,8 +953,8 @@ class _ExamplePickerDialogState extends State<_ExamplePickerDialog> {
         query: _search.text,
       );
       if (!mounted) return;
-      // 默认视图把卡片当前的示例也放进来（它们可能早于最近 60 条，否则用户
-      // 打开"管理示例"会看不到、也就没法取消勾选）。
+      // 默认视图同时包含卡片当前的示例（它们可能早于最近 60 条，否则
+      // "管理示例"中不可见，无法取消勾选）。
       final seen = <int>{};
       final merged = <MediaAsset>[
         if (_search.text.trim().isEmpty) ...widget.initial,

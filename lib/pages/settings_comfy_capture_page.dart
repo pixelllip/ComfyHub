@@ -11,7 +11,7 @@ import '../widgets/settings_switch_row.dart';
 
 /// 「ComfyUI 自动捕获」子页。
 ///
-/// 2026-11-05 从设置首页搬出来（用户：一张卡里超过两项的配置收进子界面）。
+/// 从设置首页移出（一张卡中超过两项的配置收进子界面）。
 /// 页面内容与原来那张卡**一模一样**（状态 / 开关 / 地址 / 输出目录 / 轮询 /
 /// 自动标签 / 保存 / 立即同步 / 导入），只是现在有独立的顶栏与滚动区。
 class ComfyCaptureSettingsPage extends StatefulWidget {
@@ -119,7 +119,7 @@ class _ComfyCaptureSettingsPageState extends State<ComfyCaptureSettingsPage> {
     }
   }
 
-  /// 把探测到的输出目录写进配置（用户显式点的那一下）。
+  /// 将探测到的输出目录写进配置（手动触发）。
   Future<void> _applyComfyLocation(String outputDir) async {
     final store = context.read<LibraryStore>();
     setState(() {
@@ -313,8 +313,7 @@ class _ComfyCaptureSettingsPageState extends State<ComfyCaptureSettingsPage> {
       sections: [
         SettingsSection(
           title: '捕获配置',
-          // 估算值要贴近实际，否则两列的"连续切分"会选错切点
-          // （2026-11-05 用户指着这一页说视觉重心不对）。
+          // 估算值需接近实际，否则两列的"连续切分"会选错切点。
           estimatedHeight: 400,
           child: Card(
             child: Padding(
@@ -423,8 +422,8 @@ class _ComfyCaptureSettingsPageState extends State<ComfyCaptureSettingsPage> {
                           icon: const Icon(Icons.folder_open, size: 18),
                           label: const Text('选择目录…'),
                         ),
-                        // 发布包是便携式的，ComfyUI 装在哪不能靠猜；探测只读，
-                        // 点「使用这个目录」才写进配置（绝不偷偷改用户设置）。
+                        // 发布包是便携式的，ComfyUI 安装位置不固定；探测为只读，
+                        // 点「使用这个目录」后才写入配置。
                         TextButton.icon(
                           onPressed: _captureBusy ? null : _locateComfy,
                           icon: const Icon(Icons.travel_explore, size: 18),

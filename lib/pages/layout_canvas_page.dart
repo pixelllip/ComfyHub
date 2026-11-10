@@ -25,8 +25,8 @@ const List<({String label, int w, int h})> kLayoutPresets = [
 
 /// 八个缩放手柄（四角 + 四边中点），坐标是相对框的 0 / 0.5 / 1。
 ///
-/// 只给右下角一个的话，想改左边就得"先移动再改大小"，用户 2026-11-01 直接说
-/// "太难用"。角和边分开是有用的：拖边只动一个轴，拖角两个轴一起动。
+/// 只提供右下角一个手柄时，修改左侧需"先移动再改大小"。
+/// 角与边分开：拖边只改变一个轴，拖角同时改变两个轴。
 const List<({double ax, double ay})> kLayoutHandles = [
   (ax: 0, ay: 0),
   (ax: 0.5, ay: 0),
@@ -41,13 +41,13 @@ const List<({double ax, double ay})> kLayoutHandles = [
 /// 布局 → 提示词。
 ///
 /// 两条入口，**画布本身只有一份**：
-///   · 从 AI 工作台来（[fromWorkspace]）：AI 已经给了一份草图（[initialSpec]），
-///     用户在这里改，点「提交回工作台」把规格交回去 —— 模型按新框重写提示词
-///     （2026-11-03 用户口径："AI 生成提示词的同时给出可用的 2D 布局模板，
-///     我可打开预览并修改，修改后重新提交给工作台"）；
+///   · 从 AI 工作台进入（[fromWorkspace]）：AI 已提供草图（[initialSpec]），
+///     在此修改后点「提交回工作台」将规格交回 —— 模型按新框重写提示词
+///     （AI 生成提示词时同时给出可用的 2D 布局模板，可打开预览并修改，
+///     修改后重新提交给工作台）；
 ///   · 从「预设库」来（默认）：空白画布，自己框，然后把提示词复制走。
 ///
-/// 三条设计纪律（对着这个文件看）：
+/// 三条设计约束：
 ///   ① **坐标只有一套单位**（0~1000，见 `LayoutRect`），画布只做乘除；
 ///   ② **散文是有损投影**，所以先量化成词再拼句，不把百分比写进正文；
 ///   ③ **翻译是纯函数**（`LayoutSpec.translate`），同一份布局翻两次必须逐字节相同 ——
@@ -60,7 +60,7 @@ class LayoutCanvasPage extends StatefulWidget {
     this.fromWorkspace = false,
   });
 
-  /// AI 给的那份草图（或用户上次提交的那一版）；null = 空白画布。
+  /// AI 提供的草图（或上次提交的版本）；null = 空白画布。
   final LayoutSpec? initialSpec;
 
   /// 草图的名字（卡片标题），只用来在面板里标明"正在改哪一版"。
@@ -234,10 +234,9 @@ class _LayoutCanvasPageState extends State<LayoutCanvasPage> {
   }
 
   void _onPanStart(Offset local, Size size) {
-    // ⚠ 起点用 `onPanDown` 记下的位置，**不用 `onPanStart` 的 localPosition**：
-    // 后者是"手势被识别出来时"的位置，已经吃掉了约 20px 的判定阈值（slop）。
-    // 拿它当起点，拖出来的框会比按下的地方偏右下约 20px —— 用户 2026-11-01 的
-    // "不准"有一半是这个（另一半是散文的方位词太粗）。
+    // ⚠ 起点使用 `onPanDown` 记录的位置，**不使用 `onPanStart` 的 localPosition**：
+    // 后者是手势被识别时的位置，已消耗约 20px 判定阈值（slop）。
+    // 以它为起点时，拖出的框相对按下位置偏右下约 20px。
     final start =
         _downUnit ??
         (_unit(local.dx, size.width), _unit(local.dy, size.height));
@@ -541,8 +540,8 @@ class _LayoutCanvasPageState extends State<LayoutCanvasPage> {
 
   /// 把当前画布交回 AI 工作台（2026-11-03 的主流程）。
   ///
-  /// 返回值是 [LayoutResubmit]：工作台拿它拼一条用户消息，模型按新框重写提示词。
-  /// 空画布不许提交 —— 交回一份"什么都没有"只会让模型问一句"你要画什么"。
+  /// 返回值是 [LayoutResubmit]：工作台用它拼一条消息，模型按新框重写提示词。
+  /// 空画布不允许提交 —— 交回空内容后模型会再次询问需求。
   Future<void> _submitToWorkspace() async {
     if (_regions.isEmpty) {
       _snack('先框出至少一个区域，再提交');
@@ -749,7 +748,7 @@ class _LayoutCanvasPageState extends State<LayoutCanvasPage> {
     _dragId = null;
   }
 
-  /// 用户从布局库打开一份 → 原地替换。
+  /// 从布局库打开一份 → 原地替换。
   void _applySpec(LayoutSpec spec) => setState(() => _loadSpec(spec));
 
   /// 载入后重新起编号，否则新建框会和旧 id 撞（撞了以后 `_replace` 会改错框）。

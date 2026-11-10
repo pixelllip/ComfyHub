@@ -9,14 +9,14 @@ import '../widgets/settings_scaffold.dart';
 
 /// 「外观与布局」子页：主题 / 取色 / 每页数量 / 集合详情。
 ///
-/// 2026-11-05 从设置首页搬出来（用户：一张卡里超过两项的配置收进子界面）。
-/// 后来又按用户"能拆开的卡片要拆开"的意见，把原来一张"外观"大卡拆成
+/// 从设置首页移出（一张卡中超过两项的配置收进子界面）。
+/// 原"外观"大卡拆分为
 /// **主题 / 系统主题色 / 列表** 三块 —— 宽窗口下 [SettingsScaffold] 才能把它们
 /// 分到不同列里，而不是一整张长卡占住一列。
 class InterfaceSettingsPage extends StatelessWidget {
   const InterfaceSettingsPage({super.key});
 
-  /// 重新读一次平台强调色：用户在系统里换了颜色，不用重启 App 就能看到。
+  /// 重新读取平台强调色：系统颜色变更后无需重启 App 即可生效。
   Future<void> _redetectAccent(BuildContext context) async {
     final messenger = ScaffoldMessenger.of(context);
     await context.read<SettingsStore>().refreshSystemAccent();

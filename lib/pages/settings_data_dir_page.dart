@@ -12,8 +12,7 @@ import '../widgets/settings_scaffold.dart';
 
 /// 「数据目录」子页：查看数据的存放位置，一键搬运，一键搬回默认位置。
 ///
-/// 用户 2026-11-06："我能在设置内修改数据目录吗？还要考虑数据迁移。"
-/// 用户 2026-11-10："要做到傻瓜化，只需点一个按钮就能搬，一个按钮搬回默认目录。"
+/// 设计约束：只需一个按钮即可搬运，一个按钮搬回默认目录。
 ///
 /// 因此这一页只保留两个动作：「搬到别处…」与「搬回默认位置」。
 /// 选择目标文件夹后立即开始搬运，不再追加确认步骤；搬运过程本身是安全的：
@@ -213,7 +212,7 @@ class _DataDirSettingsPageState extends State<DataDirSettingsPage> {
   Future<void> _changeLocation(BackendLauncher launcher) async {
     final picked = await FilePicker.getDirectoryPath(dialogTitle: '选择新的存放位置');
     if (picked == null || !mounted) return;
-    // 用户常直接选 `…\storage`：按它的上一级算，否则又会套成 `storage\storage`。
+    // 直接选择 `…\storage` 时按上一级计算，否则会形成 `storage\storage`。
     final target = normalizeDataDirTarget(picked);
     await _migrateTo(launcher, target);
   }
@@ -428,7 +427,7 @@ class _DataDirSettingsPageState extends State<DataDirSettingsPage> {
       _status = '';
     });
 
-    // 用户 2026-11-06 选的"迁移完弹窗问我"：旧数据删不删当场问，默认保留。
+    // 迁移完成后弹窗询问是否删除旧数据，默认保留。
     final remove = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => AlertDialog(
