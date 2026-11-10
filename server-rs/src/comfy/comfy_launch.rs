@@ -46,7 +46,7 @@
 //!
 //! 只停**我们自己起的那一个**（`.run\comfyui-<端口>.pid` 记着 pid）：没有 pid 记录时
 //! **如实说明"这不是我启动的、不做改动"** —— 桌面实例（ComfyUI Desktop）有其自身的
-//! 生命周期，被 AI 顺手杀掉是不可接受的。杀之前还要用 `tasklist` 核一眼那个 pid 现在
+//! 生命周期，被 AI 一并终止是不可接受的。终止前还要用 `tasklist` 核对该 pid 当前
 //! 是不是 python（pid 会被系统回收，不复核就可能误杀无辜进程）。
 //!
 //! # ⚠ 写不进工作区外：**限制按「映像位置」判，不按路径、也不按会话**（2026-09-29 逐条量过）
@@ -472,9 +472,9 @@ pub async fn start(state: &AppState, arguments: &Value) -> Result<ToolOutcome, T
     )?;
     // 先确认"子进程写得进它自己的目录"（写不进就别白起一个卡死的实例，见 ensure_writable）
     let output_dir = desktop.as_ref().and_then(|d| d.output_dir.clone());
-    // 顺手留证：探一次就把"本进程受不受限"落到 `.run\confinement.json`，doctor 靠它报出来 ——
+    // 同时留证：探测一次就把"本进程是否受限"写入 `.run\confinement.json`，doctor 据此报告 ——
     // 沿用 pitfalls 151/154 的约束（doctor 无法判断该项，只能推测）。
-    // 探到正常时 `refresh` 会把旧标记清掉，所以每次调 comfy_start 都顺手校正一次。
+    // 探测正常时 `refresh` 会清除旧标记，因此每次调用 `comfy_start` 都校正一次。
     crate::infra::confinement::refresh(state);
     ensure_writable(&plan, output_dir.as_deref(), &dir_writable)?;
     let wait = arguments
@@ -659,7 +659,7 @@ fn spawn_detached(plan: &LaunchPlan) -> Result<std::process::Child, ToolFailure>
         .args(&plan.args)
         // 工作目录 = 工作区（comfy-cli 也是这么起的；等价于 `--base-directory`，但少一个参数）
         .current_dir(&plan.workspace)
-        // ① 这两条是"日志有头没有尾"那个坑的解药（AGENTS/pitfalls：ComfyUI 会打 ✓）
+        // ① 这两条是"日志有头无尾"问题的解法（AGENTS/pitfalls：ComfyUI 会打 ✓）
         .env("PYTHONUTF8", "1")
         .env("PYTHONIOENCODING", "utf-8")
         .stdin(Stdio::null())

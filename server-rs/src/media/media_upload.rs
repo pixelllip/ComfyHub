@@ -404,7 +404,7 @@ pub async fn upload(
     ))
 }
 
-/// `rusqlite::OptionalExtension` 的小包装（省得每个文件都 import 一次）。
+/// `rusqlite::OptionalExtension` 的小包装（避免每个文件都 import 一次）。
 trait OptionalPresent<T> {
     fn optional_present(self) -> rusqlite::Result<Option<T>>;
 }

@@ -1,6 +1,6 @@
 //! 写仓储（Rust 版）—— 逐条对照 Kotlin 的 `TagRepo.kt` / `PromptRepo.kt`。
 //!
-//! # 三条从 Kotlin 侧抄过来的语义（别"顺手优化"）
+//! # 从 Kotlin 侧照抄的三条语义（不要额外"优化"）
 //!
 //! 1. **标签按 `normalized`（trim + 小写）去重**，但**保留首次写入时的展示名大小写**；
 //!    改名时如果撞上别的标签 → 400（`WriteError::Conflict`），不是静默合并。

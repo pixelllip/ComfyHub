@@ -73,7 +73,7 @@ pub fn update(state: &AppState, id: i64, input: &MediaUpdate) -> Result<MediaDto
             tags_touched = true;
         }
 
-        // 归属（2026-10-18）：这两个是**带副作用**的（要顺手收拾空集合、
+        // 归属：这两个是**带副作用**的（要同时清理空集合、
         // 要在移出时打上 `collection_opt_out`），所以不拼进下面那条通用 UPDATE。
         let mut collection_touched = false;
         if input.clear_collection {

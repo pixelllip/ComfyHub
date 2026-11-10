@@ -281,7 +281,7 @@ fn route_description_is_human_readable() {
 
 /// 本机的真实配置：`COMFYHUB_HTTPS_PROXY` 没有时按系统代理走（本机系统代理是 7890）。
 ///
-/// ⚠ 这条**不断言具体值**：CI / 别的机器上代理可能是另一个地址或压根没有。
+/// ⚠ 这条**不断言具体值**：CI / 其他机器上代理可能是另一个地址或不存在。
 /// 它只钉"公网主机拿到的是一个 Route（不是 panic）"与"状态能拼出人话"这两个不变量。
 #[test]
 fn real_environment_never_panics() {

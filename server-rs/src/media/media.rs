@@ -592,7 +592,7 @@ pub fn json_error(error: ApiError) -> Response {
     error.into_response()
 }
 
-/// 详情端点的返回类型别名（省得路由层写一长串）。
+/// 详情端点的返回类型别名（避免路由层重复书写长类型）。
 pub type MediaJson = Json<MediaDto>;
 
 /// 列表端点的返回类型别名。

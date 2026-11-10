@@ -35,7 +35,7 @@
 //! * [`group_key`] 是**纯函数**：同一份输入永远同一个 key。入库时算得出、回填时算得出，
 //!   两者必须一致 —— 这也是"回填与入库共用同一份实现"那条纪律的落点。
 //!
-//! # 拼 key 的坑（踩过就别再踩）
+//! # 拼接 key 的问题（避免重复出现）
 //!
 //! 归一化后的片段**可能含 ASCII 控制字符**（提示词中可能粘贴 `\u{1}`、`\r`），
 //! 所以**不能**拿控制字符当分隔符 —— 那样 `["a", "b\u{1}c"]` 与 `["a\u{1}b", "c"]`
@@ -297,7 +297,7 @@ fn unescape(s: &str) -> String {
     out
 }
 
-/// 把归一化后的片段拼成一个**无歧义**的串（长度前缀，见文件头"拼 key 的坑"）。
+/// 把归一化后的片段拼成一个**无歧义**的串（长度前缀，见文件头"拼接 key 的问题"）。
 fn join_fragments(frags: &[String]) -> String {
     if frags.is_empty() {
         return EMPTY.to_string();
@@ -577,8 +577,8 @@ pub fn pending_grouped(conn: &Connection) -> Result<(usize, usize), WriteError> 
 ///    `collection_id` 也是 NULL（那正是"移出"的写法），只判第 1 条等于**把刚拖出去的那张
 ///    又吸回来**，而且一个错都不报。这两条判据必须成对出现，少了任何一条都是静默失败。
 /// 3. **只给"同款 >= 2 张"的桶建组**（2026-10-18 加）—— 一个组只有一张图没有意义
-///    （见 [`prune_singleton_auto`]），所以独苗**压根不建组**，而不是"先建一个再解散"：
-///    后者每次启动都要白跑一趟（建了又拆），日志还会跟着响。桶由 [`pending_buckets`] 算，
+///    （见 [`prune_singleton_auto`]），因此独苗**不创建分组**，而不是"先创建再解散"：
+///    后者每次启动都会做一次无效操作（创建后立即拆除），日志也会随之产生输出。桶由 [`pending_buckets`] 计算，
 ///    判据与入库 / 探针**共用同一份**（这里不重写一遍）。
 /// 4. **按 `created_at` 升序** —— 同一组的成员顺序就是"调参的先后"，集合的
 ///    `id` 也据此稳定（详情页左右切换靠它）。
@@ -677,7 +677,7 @@ fn collection_of(conn: &Connection, media_id: i64) -> Result<Option<i64>, WriteE
 /// 搬空了 → 删掉（不留点不开的空格子）；是 `auto` 且只剩 1 个成员 → 一并解散；
 /// 是 `manual` → **不改动**（手动创建的组，仅剩一张也保留）。
 pub fn detach(conn: &Connection, media_id: i64) -> Result<(), WriteError> {
-    // 顺手当 NotFound 的判据（产物不在就别去动集合）
+    // 同时作为 NotFound 的判据（产物不存在时不去改动集合）
     let from = collection_of(conn, media_id)?;
     let affected = conn.execute(
         "UPDATE media_assets SET collection_id = NULL, collection_opt_out = 1 WHERE id = ?1",
@@ -720,7 +720,7 @@ fn default_title(conn: &Connection) -> Result<String, WriteError> {
 /// 而 `attach` 还在按这个 key 往它里面吸新图（把不相关的图越吸越多）。
 /// 已修改即归为手动；恢复算法分组只能通过"重新自动分组"。
 ///
-/// 翻成手动时**顺手给一个默认名字**：否则界面上会显示成"未命名集合"，
+/// 转为手动时**一并给出默认名称**：否则界面会显示为"未命名集合"，
 /// 否则需要再手动修改一次（"新建集合要有默认编组名"）。
 fn mark_manual(conn: &Connection, collection_id: i64) -> Result<(), WriteError> {
     let row: Option<(String, Option<String>)> = conn
@@ -1012,7 +1012,7 @@ pub fn prune_all_empty(conn: &Connection) -> Result<usize, WriteError> {
 /// 旧集合没有自动解散。" 一个 `auto` 集合的语义是"同一句提示词的一批微调"（见文件头），
 /// 只剩一张时它不再是一批，而界面上仍然是一个叠放封面 + 数量角标、点进去只有一张的格子。
 /// 判据是**集合的语义**，不是"空 / 非空" —— 所以只清 0 成员的 [`prune_all_empty`]
-/// 罩不住它，要单独收拾（"只剩一张"这一档也因此是**收尾**的责任，而不是"压根不建"
+/// 无法覆盖它，需单独处理（"只剩一张"这一档因此属于**收尾**的职责，而不是"不创建"
 /// 一句话能覆盖的：`assign` 那条入库路会先建出单成员组，要等这里的收尾或 [`backfill`]）。
 ///
 /// # 只碰 `origin = 'auto'`（**硬纪律**，别放宽）
