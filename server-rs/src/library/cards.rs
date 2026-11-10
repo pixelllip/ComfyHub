@@ -6,8 +6,8 @@
 //!
 //! 每张卡只有**一版正面提示词** `prompt`：整段自然语言，给自然语言模型 / 人读。
 //!
-//! 2026-10-24 用户口径：**不再保留 Danbooru tag 版**。卡片里的一句话描述比 tag 栈
-//! 更耐改（换底模、换 tag 体系都不用重写），真要 tag 版时按用户要求**当场再翻一版**
+//! 约束：**不再保留 Danbooru tag 版**。卡片中的一句描述比 tag 栈
+//! 更耐修改（更换底模、tag 体系都无需重写），确需 tag 版时**当场再转换一版**
 //! 就行。老库里 `tag_prompt` 那一列的内容由 `infra::db` 的迁移**转成自然语言后灌进
 //! `prompt`**（已有自然语言版的卡一个字都不动），随后那一列再没人读。
 //!
@@ -102,7 +102,7 @@ impl CardKind {
         }
     }
 
-    /// 用户看到的名字（标题 / 按钮 / 错误文案都从这里来）。
+    /// 界面显示的名称（标题 / 按钮 / 错误文案均取自此处）。
     pub fn label(self) -> &'static str {
         match self {
             CardKind::Character => "角色卡",
@@ -308,7 +308,7 @@ fn with_examples(
     Ok(card)
 }
 
-/// 清洗 + 去重示例 id（保持用户给的顺序）。
+/// 清洗并去重示例 id（保持传入顺序）。
 fn clean_example_ids(ids: &[i64]) -> Result<Vec<i64>, WriteError> {
     let mut out: Vec<i64> = Vec::new();
     for raw in ids {
@@ -771,7 +771,7 @@ fn arg_i64(arguments: &Value, key: &str) -> Option<i64> {
 
 /// `exampleMediaIds` 允许数组或逗号分隔字符串（模型两种写法都见过）。
 ///
-/// 非法项**报错**而不是静默丢掉：AI 以为挂上了、界面却没有，属于"静默丢用户数据"。
+/// 非法项**报错**而不是静默丢弃：否则 AI 认为已挂载、界面却没有，属于"静默丢弃数据"。
 fn arg_media_ids(
     arguments: &Value,
     key: &str,

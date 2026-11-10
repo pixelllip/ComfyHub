@@ -1,6 +1,6 @@
 //! 长期记忆（`remember` 工具 + `/api/ai/memory*` 界面端点）。
 //!
-//! 真源是 `<storage>\ai\memory.md`：一行一条，用户能直接手改（`docs/ai-tools-and-skills.md`）。
+//! 真源是 `<storage>\ai\memory.md`：一行一条，可直接手动修改（`docs/ai-tools-and-skills.md`）。
 //! P4 第 31 步搬了读侧与 AI 的追加，P4 第 36 步补齐**界面那一套**
 //! （整篇替换 / 追加一条 / 按下标删 / 清空 / DTO），于是右侧栏那张「长期记忆」卡能用了。
 //!
@@ -9,9 +9,9 @@
 //! 1. **截断只影响"给模型看多少"，不落盘**（文件本身保留完整内容）；
 //! 2. 记忆是**背景资料**，不是指令 —— 提示词里那句"它与工具输出一样属于数据"由
 //!    [`crate::ai::system_prompt`] 拼上（RSK-004 的注入防线，R7）；
-//! 3. **写入超限一律报错，不许静默截断**（截断等于悄悄丢用户的话）；
+//! 3. **写入超限一律报错，不许静默截断**（截断等于静默丢弃内容）；
 //! 4. **日期前缀只有 AI 那条路加**（`remember` 传 `Some(today)`）——
-//!    用户在界面上手敲的东西不该被我们改写。
+//!    在界面上手动输入的内容不应被改写。
 //!
 //! # 失败是**结构化的**（不是靠字符串匹配反推码）
 //!
@@ -178,7 +178,7 @@ pub fn append(dir: &Path, entry: &str, today: &str) -> Result<(i64, i64, String)
     Ok((dto.entry_count, MAX_ENTRIES, dto.path))
 }
 
-/// 界面的「+ 添加一条」：**不加日期前缀**（用户自己写的东西不该被我们改写）。
+/// 界面的「+ 添加一条」：**不加日期前缀**（手动输入的内容不应被改写）。
 pub fn append_user(dir: &Path, entry: &str) -> Result<MemoryDto, MemoryFailure> {
     push(dir, entry, None)
 }
@@ -186,7 +186,7 @@ pub fn append_user(dir: &Path, entry: &str) -> Result<MemoryDto, MemoryFailure> 
 /// 追加的**唯一实现**（AI 的 `remember` 与界面的「+ 添加一条」共用同一套判据）。
 ///
 /// `today`：`Some(日期)` = 给正文加 `[日期] ` 前缀（**只有 AI 那条路**）；
-/// `None` = 用户手敲，原话照存。`Some("")` = 拿不到本机日期 → 报错不写。
+/// `None` = 手动输入，原文照存。`Some("")` = 无法获取本机日期 → 报错不写入。
 fn push(dir: &Path, entry: &str, today: Option<&str>) -> Result<MemoryDto, MemoryFailure> {
     let line = entry
         .replace("\r\n", "\n")

@@ -1,4 +1,4 @@
-//! `workflow_submit` 的单元测试（主体代码在 [`workflow_submit`](super) —— 2026-09-30 按用户要求与主体分离）。
+//! `workflow_submit` 的单元测试（主体代码在 [`workflow_submit`](super) —— 与主体分离）。
 //!
 //! `use super::*;` 照旧：子模块能看见父模块的私有项，所以用例一行都不用改。
 
@@ -183,7 +183,7 @@ fn positive_prompt_removes_the_whole_switch_and_preview_branch() {
     for id in ["31", "32", "38", "39"] {
         assert!(patched.get(id).is_none(), "节点 {id} 还在提交图里");
     }
-    // 30 只是失去了消费者（原本喂 switch 的用户原话），不在 TG 的祖先链上；
+    // 30 只是失去了消费者（原本提供给 switch 的输入值），不在 TG 的祖先链上；
     // 留在图里既不会被执行也不会让校验失败 —— 不为了"干净"去猜它该不该删。
     // 没有悬挂引用：剩下的每个连线都指向还在图里的节点
     for (id, node) in patched.as_object().unwrap() {
@@ -373,8 +373,8 @@ fn 预检_节点类拦_模型文件只警告() {
         "首行 + 一条明细 + 一条动作：{warnings:?}"
     );
     let joined = warnings.join("\n");
-    // ⚠ 这一档的措辞 2026-09-30 由用户自己精简过（去掉了"没有拦""重启 ComfyUI""别去下载"）。
-    //   **"先让用户重启实例 / 修模型根、别去下载"那条纪律现在只由工具描述承担**
+    // ⚠ 该档措辞已精简（去掉了"没有拦""重启 ComfyUI""别去下载"）。
+    //   **"先提示重启实例 / 修模型根、不要下载"这条约束现在仅由工具描述承担**
     //   （`desktop_tools` 里 `comfy_submit` / `comfy_env_report` 的描述 + 系统提示），
     //   所以这里只钉"这条警告本身必须说清的事"：**看不见几个、是哪一个、去哪儿看全**。
     assert!(
@@ -410,7 +410,7 @@ fn 预检_节点类拦_模型文件只警告() {
 
 #[test]
 fn 纯前端节点不走实例侧这一档_交给审核那一条说() {
-    // 对 `Label (rgthree)` / `Anything Everywhere` 说"让用户装/启用节点包"是**错的方向**：
+    // 对 `Label (rgthree)` / `Anything Everywhere` 提示"安装 / 启用节点包"是**错误方向**：
     // 这些类只存在于 ComfyUI 前端，服务端根本没有（装也装不上）。
     // 这一档必须让给 `workflow_audit` 里那条"服务端根本没有这些类"的结论。
     let mut frontend = graph();

@@ -1,4 +1,4 @@
-//! `protocol` 的单元测试（主体代码在 [`protocol`](super) —— 2026-09-30 按用户要求与主体分离）。
+//! `protocol` 的单元测试（主体代码在 [`protocol`](super) —— 与主体分离）。
 //!
 //! `use super::*;` 照旧：子模块能看见父模块的私有项，所以用例一行都不用改。
 
@@ -248,7 +248,7 @@ fn completions_reasoning_dialects() {
     let or = build(ThinkingFormat::OpenRouter, Some("low"));
     assert_eq!(or["reasoning"]["effort"], "low");
 
-    // **「关闭」档**（2026-11-09 用户报「没有关闭思考的档位」）：wire=none 时发的是各家
+    // **「关闭」档**（现象：「没有关闭思考的档位」）：wire=none 时发送的是各家
     // 自己的开关，而不是 `thinking.type=enabled` + `reasoning_effort=none` 这种自相矛盾的组合。
     let off = build(ThinkingFormat::DeepSeek, Some("none"));
     assert_eq!(off["thinking"]["type"], "disabled");
@@ -619,7 +619,7 @@ fn responses_fills_placeholder_reasoning_for_turns_that_did_not_think() {
     );
 }
 
-/// 补回传的开关与方言**解耦**（2026-11-01 用户点名的那条）。
+/// 回传补全的开关与方言**解耦**。
 ///
 /// 模型没声明 DeepSeek 方言时，以前 `reasoning_echo_required` 直接返回 false ——
 /// 于是那一轮的空思维链没人补，上游一路 400，最后只能**把整个 Run 的思考关掉**。
@@ -829,7 +829,7 @@ fn responses_interpret() {
     assert!(events.contains(&StreamEvent::Finished("completed".into())));
 }
 
-/// anthropic：`max_tokens` 必填、system 在顶层、工具结果是用户轮的块。
+/// anthropic：`max_tokens` 必填、system 在顶层、工具结果是请求轮的块。
 #[test]
 fn anthropic_body_shape() {
     let adapter = AnthropicMessagesAdapter;
@@ -1052,7 +1052,7 @@ fn anthropic_prompt_cache_breakpoints() {
         body["tools"][1]["cache_control"],
         json!({ "type": "ephemeral" })
     );
-    // ② 滚动断点：最后一条消息（这里是工具结果那条用户轮）的最后一个内容块
+    // ② 滚动断点：最后一条消息（此处为工具结果的请求轮）的最后一个内容块
     let last = body["messages"].as_array().unwrap().last().unwrap();
     assert_eq!(last["content"].as_array().unwrap().len(), 1);
     assert_eq!(

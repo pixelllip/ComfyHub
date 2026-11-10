@@ -1,10 +1,10 @@
 //! **端点信任闸门**（SSRF 防护，AIH-017）—— `AddressScope` + `EndpointGuard` 的逐条对照。
 //!
-//! 它是"用户填了一个 Base URL"与"我们真的往那儿发请求"之间唯一的一道判定：
+//! 它是"填写了一个 Base URL"与"实际向该地址发请求"之间唯一的判定：
 //! 保存时就拦（不等请求发出），这样"填了一个内网地址"当场看到人话，
 //! 而不是几分钟后一条来历不明的 `PROVIDER_UNREACHABLE`。
 //!
-//! # 四个信任档（AIH-017：默认最严，放宽必须由用户显式选择）
+//! # 四个信任档（AIH-017：默认最严，放宽必须显式选择）
 //!
 //! | 档 | 允许的地址 |
 //! | --- | --- |
@@ -16,7 +16,7 @@
 //! ⚠ **红线一条都不能松**（`BLOCKED`）：云元数据地址（`169.254.169.254`、
 //! `metadata.google.internal`）与 `0.0.0.0` 这种"任意地址"**在任何档位下都拒绝**——
 //! `unsafe-any` 也只放行"能解析出来的普通地址"。这是这个模块存在的全部理由：
-//! 一个用户可控的 URL 直通出网客户端，等于把云元数据端点交给调用方。
+//! 一个外部可控的 URL 直通出网客户端，等于把云元数据端点交给调用方。
 //!
 //! # 与 Java 判定的一致性（为什么不用 crate）
 //!
@@ -27,7 +27,7 @@
 
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
-/// 地址归属（`enum Scope`，名字逐字对齐 —— 它会出现在给用户看的那句话里）。
+/// 地址归属（`enum Scope`，名称逐字对齐 —— 它会出现在界面显示的说明中）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Scope {
     Loopback,
@@ -38,7 +38,7 @@ pub enum Scope {
 }
 
 impl Scope {
-    /// 给用户看的名字（Kotlin 是把枚举名直接插进文案的，所以是**大写**）。
+    /// 界面显示的名称（Kotlin 将枚举名直接插入文案，因此为**大写**）。
     pub fn wire(self) -> &'static str {
         match self {
             Scope::Loopback => "LOOPBACK",
