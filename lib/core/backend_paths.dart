@@ -70,7 +70,7 @@ bool looksLikeRoot(String dir) {
 
 /// **源码树判据：`server-rs\Cargo.toml`，或者"有 `db\schema.sqlite.sql` 但没有 `backend\exe`"。**
 ///
-/// ⚠ 为什么不能只看 `db\schema.sqlite.sql`（2026-10-11 踩到的坑）：那份 DDL 是
+/// ⚠ 只检查 `db\schema.sqlite.sql` 不足的依据：那份 DDL 是
 /// **构建时拷进产物目录**的，所以 `build\windows\x64\runner\Debug\` 里也有一份 ——
 /// 单看它会把产物目录误认成源码树，于是"往上找源码树"那一步被它截住，
 /// Debug 版 App 又回到"用自己的空库 + 旧后端 exe"（界面报 HTTP 400）。

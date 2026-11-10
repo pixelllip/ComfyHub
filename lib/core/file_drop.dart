@@ -107,7 +107,7 @@ class FileDrop {
   }
 
   /// 从 `{"paths": [...]}` 里取出路径。形状不对一律回空表（**不猜、不修**）：
-  /// 路径是别的进程给的，只按约定的形状取用，顺手"修一修"只会把错的东西
+  /// 路径是别的进程给的，只按约定的形状取用，额外"修正"只会把错误的内容
   /// 当成附件导进来。
   static List<String> _pathsFrom(Object? arguments) {
     if (arguments is! Map) return const [];

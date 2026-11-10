@@ -86,7 +86,7 @@ class SystemAccent {
 
   /// Windows：`AccentColorMenu` 是 **ABGR**，`ColorizationColor` 是 **ARGB**。
   ///
-  /// ⚠ 两个值的字节序不同（这是 Win32 的历史坑）：本机实测同一份强调色
+  /// ⚠ 两个值的字节序不同（Win32 的历史问题）：本机实测同一份强调色
   /// `#720903` 在 `AccentColorMenu` 里存成 `0xFF030972`，在 `ColorizationColor`
   /// 里存成 `0xC4720903`。**别拿一个解码函数套两个键**。
   static Color? _windowsAccent() {

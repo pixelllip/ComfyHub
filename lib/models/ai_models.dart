@@ -1618,7 +1618,7 @@ class AiMemory {
   );
 
   /// 一行一条的正文（去掉空行）。**下标与后端 `MemoryStore.entries()` 同源** ——
-  /// 界面按这份列表做单条 / 批量删除，顺手把 `- ` 与 `[日期] ` 前缀剥掉只用于展示。
+  /// 界面按这份列表做单条 / 批量删除，同时剥掉 `- ` 与 `[日期] ` 前缀，仅用于展示。
   List<String> get entries => content
       .split('\n')
       .map((l) => l.trim())

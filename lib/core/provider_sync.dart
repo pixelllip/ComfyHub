@@ -127,7 +127,7 @@ class ProviderSync {
           updated.add(id);
         }
       } catch (e) {
-        // 单条失败只记这一条，其余照常 —— 一条坏数据不该让整趟白跑
+        // 单条失败只记录该条，其余照常 —— 一条无效数据不应使整次同步空转
         problems.add(ProviderSyncProblem(id, '写本机库失败，$e'));
         continue;
       }

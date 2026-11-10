@@ -645,7 +645,7 @@ class ApiClient {
 
   /// **给集合改名**（集合详情里的「重命名」）。
   ///
-  /// 后端会顺手把这一组转成手动（`origin = manual`）：命名后即归为手动，
+  /// 后端会同时把这一组转为手动（`origin = manual`）：命名后即归为手动，
   /// 下次「重新自动整理」不会把组连同名字一起解散。
   Future<MediaCollection> renameCollection(int id, String title) async {
     final json = await _send('PATCH', '/api/media/collections/$id', {

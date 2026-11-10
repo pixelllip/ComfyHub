@@ -257,7 +257,7 @@ class MediaCache {
       if (await file.exists()) await file.delete();
       await part.rename(file.path);
       _record(name, size, thumb: thumb);
-      // 写进来就可能超了：顺手淘汰（当前这条还在 `_inflight` 里，不会被删）。
+      // 写入后可能超出上限：随即淘汰（当前这条仍在 `_inflight` 中，不会被删除）。
       await trim();
       return file;
     } catch (e) {
