@@ -274,8 +274,8 @@ async fn ai_models_distinguish_missing_provider_from_an_empty_catalog() {
 
 /// provider 的新建 / 更新 / 删除完整一轮，以及**每一条校验的稳定码与人话**。
 ///
-/// 这里盯的是"用户能不能把设置填对"：校验顺序写反（比如先判 URL 再判重名）会让
-/// 用户在一个根本没写错的字段上看到报错；`revision` 少判一次，两个窗口就会互相覆盖设置
+/// 这里检查"设置能否被正确保存"：校验顺序颠倒（例如先判 URL 再判重名）会让
+/// 在一个本无错误的字段上显示报错；`revision` 少判一次，两个窗口会互相覆盖设置
 /// （而"被覆盖了"这件事现场完全看不出来）。
 #[tokio::test]
 async fn provider_crud_round_trip_with_revision_and_validation() {
@@ -508,7 +508,7 @@ async fn provider_crud_round_trip_with_revision_and_validation() {
 
 /// `PUT /providers/{id}/models`：全量替换 + 逐条校验（AIH-011）。
 ///
-/// 模型目录是**附件准入与思考强度的唯一真源** —— 少校验一条，用户就能存进去一个
+/// 模型目录是**附件准入与思考强度的唯一真源** —— 少校验一条，就会保存一个
 /// "看着配好了、一用就 400"的模型。
 #[tokio::test]
 async fn provider_models_put_replaces_the_catalog_and_validates_every_field() {
@@ -654,9 +654,9 @@ async fn provider_models_put_replaces_the_catalog_and_validates_every_field() {
 //  内置模型目录的状态与同步（P4 第 38 步）
 // ---------------------------------------------------------------------------
 
-/// 预览 → 同步 → 再预览：**幂等**，而且**用户改过的行一个字节都不许动**。
+/// 预览 → 同步 → 再预览：**幂等**，且**已修改的行不得改动**。
 ///
-/// 这条链的失败模式全是静默的：把用户改过的能力冲掉、把用户自己加的模型删掉、
+/// 这条链的失败模式均为静默：覆盖已修改的能力声明、删除自定义添加的模型、
 /// 或者"第二次同步又新增了 69 个"。判据只有"库里那几行还是不是原样"。
 #[tokio::test]
 async fn builtin_status_previews_and_sync_is_idempotent_and_never_touches_user_edits() {
@@ -758,7 +758,7 @@ async fn builtin_status_previews_and_sync_is_idempotent_and_never_touches_user_e
     assert_eq!(again["added"], 0, "第二次同步不该再新增");
     assert_eq!(again["modelCount"], total);
 
-    // ⑥ 用户改过的行：显示名 / 启用 / 附件上限 —— 同步**一个字节都不许动**
+    // ⑥ 已修改的行：显示名 / 启用 / 附件上限 —— 同步**不得改动**
     let (provider_id, model_id) = state
         .with(|conn| {
             let p: String =
@@ -778,7 +778,7 @@ async fn builtin_status_previews_and_sync_is_idempotent_and_never_touches_user_e
                   WHERE provider_id=?1 AND model_id=?2",
                 rusqlite::params![provider_id, model_id],
             )?;
-            // 用户自己加的模型（不在目录里）——同步**永远不删**
+            // 自定义添加的模型（不在目录中）——同步**永不删除**
             conn.execute(
                 "INSERT INTO ai_models (provider_id, model_id, display_name, capability_source)
                  VALUES (?1, 'user-added-model', '用户自己加的', 'manual')",
@@ -810,7 +810,7 @@ async fn builtin_status_previews_and_sync_is_idempotent_and_never_touches_user_e
     assert_eq!(enabled, 0, "用户关掉的模型不许被打开");
     assert_eq!(max_bytes, Some(123));
 
-    // ⑦ 对齐模式（用户点按钮）：会把**目录里已有的那些**能力对齐回来，
+    // ⑦ 对齐模式（点击按钮触发）：把**目录中已有的那些**能力对齐回来，
     //    但显示名 / enabled / 附件上限仍然不碰
     let (_, refreshed) = send_json(
         router_for(state.clone()),
@@ -835,7 +835,7 @@ async fn builtin_status_previews_and_sync_is_idempotent_and_never_touches_user_e
     assert_eq!(enabled, 0);
     assert_eq!(max_bytes, Some(123));
 
-    // ⑧ 未知 mode → 400（**不静默按默认走**：用户点了「对齐能力」却只补了缺的模型，
+    // ⑧ 未知 mode → 400（**不静默使用默认值**：否则「对齐能力」只补齐了缺失模型，
     //    而界面会显示"成功"）
     let (status, body) = send_json(
         router_for(state.clone()),
@@ -1265,7 +1265,7 @@ async fn provider_credentials_round_trip_without_ever_returning_the_value() {
     );
 }
 
-/// 删 provider 时**托管密钥跟着走**（2026-09-28 用户 bug「删除 provider 时，密钥被设置成
+/// 删除 provider 时**托管密钥随之处理**（现象：「删除 provider 时，密钥被设置为
 /// 不自动删除」）：以前 provider 删了，`credentials.dpapi.json` 里那把 key 成了孤儿 ——
 /// 界面上再也摸不到，却还留在盘上。两条会静默做错的边界各有一条断言：
 /// ① 无人引用 → key 一并清掉；② ref 被别的 provider 共用 → 留着（删的是引用不是 key）。

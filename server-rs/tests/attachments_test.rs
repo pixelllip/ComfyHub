@@ -6,13 +6,13 @@
 //! 用库里的事实再验一次**。前两层在界面上，抓不住；**第三层是唯一能用用例钉住的**，也是
 //! `e2e-ai-tools-test.ps1` 第 9 幕要证的那件事：
 //!
-//! * 不通过 → **`400 UNSUPPORTED_CONTENT`**，而且**上游请求数为 0**（在 append 用户消息之前返回）；
+//! * 不通过 → **`400 UNSUPPORTED_CONTENT`**，且**上游请求数为 0**（在 append 请求消息之前返回）；
 //! * 通过之后**不许静默丢掉**：这一版适配器还不能把附件内联进请求体，所以必须在那一轮正文后面
 //!   附一句"以下附件未随本次请求发送：…"（AIH-030 的"看起来发出去了、其实没有"）。
 //!
 //! 另外两条形状上的事实也在这里钉住：
 //! ① 上传**只认签名**（声称 image/png 而内容是二进制 → 400 + 人话）；
-//! ② 附件块要真的落进用户消息的有序块里（少了它界面画不出缩略图、执行器也不知道带了图）。
+//! ② 附件块必须写入请求消息的有序块中（缺少时界面无法绘制缩略图，执行器也无法判断带了图片）。
 
 use std::sync::{Arc, Mutex};
 
@@ -378,7 +378,7 @@ async fn 创建_run_之前拦住不支持的附件_上游零请求() {
         seen.lock().unwrap().is_empty(),
         "预检拦下时不许有任何上游请求"
     );
-    // 用户消息也不该落库（在 append 之前就返回了）
+    // 请求消息也不应落库（在 append 之前已返回）
     let count: i64 = state
         .with(|conn| conn.query_row("SELECT COUNT(*) FROM ai_messages", [], |r| r.get(0)))
         .unwrap();
@@ -416,7 +416,7 @@ async fn 支持的图片会被真的内联_发不出去的必须如实告知() {
     assert_eq!(status, StatusCode::ACCEPTED, "{body}");
     let user_message_id = body["userMessageId"].as_str().unwrap().to_string();
 
-    // ① 两个附件块都真的落进了用户消息（界面靠它画缩略图）
+    // ① 两个附件块都已写入请求消息（界面据此绘制缩略图）
     let parts: Vec<(String, Option<String>)> = state
         .with(|conn| {
             let mut stmt = conn.prepare(
@@ -472,8 +472,8 @@ async fn 支持的图片会被真的内联_发不出去的必须如实告知() {
     );
     // ③ 系统提示里那句"附带图片附件"要与事实一致（内联了才说有）
     assert!(request.contains("本次请求附带图片附件: 有"), "{request}");
-    // ④ 附件 id 对照（用户 bug 2026-09-28「系统给不出可投放的附件 ID」）：
-    //    内联图片的 id 必须写进用户消息正文，模型才知道 comfy_use_attachment 投哪个 id。
+    // ④ 附件 id 对照（现象：「系统给不出可投放的附件 ID」）：
+    //    内联图片的 id 必须写入请求消息正文，模型才能确定 comfy_use_attachment 使用哪个 id。
     assert!(
         request.contains("随本条消息内联的附件"),
         "内联了图片就要给附件 id 对照：{request}"
@@ -487,7 +487,7 @@ async fn 支持的图片会被真的内联_发不出去的必须如实告知() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
-/// 回归（2026-09-27 用户现场："**上传不了图片附件**"）：
+/// 回归用例（现象："**上传不了图片附件**"）：
 /// 一张 4MB 的照片在 axum 默认的 2MB `DefaultBodyLimit` 下**根本进不到 handler** ——
 /// curl 拿到 `附件上传解析失败：Error parsing multipart/form-data request`，
 /// 而 App 是 chunked 发送，被中途掐断后界面显示

@@ -10,7 +10,7 @@ async fn confinement_endpoint_reports_the_judge_not_just_the_verdict() {
     assert_eq!(status, StatusCode::OK);
     // ⚠ **只断言"形状"，不断言 restricted 的取值**：真机上那份 ComfyUI 目录到底写不写得进
     //   是环境属性（AGENTS §12 纪律）。要断言的是"判据必须一起给" ——
-    //   只回一个布尔，界面与模型就只能猜（2026-09-29 用户 bug 就是这么变成"改 ACL"的）。
+    //   只返回一个布尔值，界面与模型只能推测（该问题由此变成"改 ACL"）。
     for key in [
         "restricted",
         "serverImage",
@@ -52,12 +52,12 @@ async fn outbound_endpoint_reports_the_route_and_its_source() {
         "proxy 要么是 host:port，要么是 null：{body}"
     );
     // ⚠ **只断言来源非空，不断言具体值**：这台机器的系统代理（或环境变量）是环境属性；
-    //   要钉的是"来源必须一起给" —— 只回一个地址，用户没法判断它是不是自己填的那个。
+    //   需固定的是"来源必须一并返回" —— 只返回一个地址，无法判断是否为自行填写的那一个。
     assert!(
         !body["source"].as_str().unwrap_or("").is_empty(),
         "来源必须给：{body}"
     );
-    // 系统代理那几项也照原样给（用户要能对着 Windows 的"代理设置"核对）
+    // 系统代理相关项也原样返回（便于与 Windows 的"代理设置"核对）
     for key in ["enabled", "server", "overrides", "autoConfigUrl"] {
         assert!(
             body["system"].get(key).is_some(),
@@ -181,14 +181,14 @@ async fn prompts_paged_envelope_matches_dart_paged() {
     assert_eq!(body["items"][0]["title"], "国风山水");
 }
 
-/// ★ **预设库只放人自己存的**（2026-10-11 用户拍板）。
+/// ★ **预设库只放手动保存的**。
 ///
 /// 原话："从 comfy 输出目录获取的产物，其关联的提示词不需要送进预设库 —— 毕竟都叫这个名字了"。
 /// 自动捕获那些仍然是提示词行（画廊详情要按 `promptId` 反查它），只是不进这个列表。
 ///
 /// ⚠ **AI 侧必须传 `includeCaptured=true`**：`search_prompts` / `comfy_find_workflow` 找的是
 /// "库里能跑的工作流"，自动捕获那些正是最好用的来源 —— 默认过滤会把它们藏起来，
-/// 表现是"AI 说库里没有，而用户明明在画廊里看得到"（而且不会有用例变红）。
+/// 表现为"AI 报告库中不存在，而画廊中可见"（且不会有用例失败）。
 #[tokio::test]
 async fn preset_list_hides_captured_prompts_but_ai_can_still_search_them() {
     let state = state();
@@ -229,7 +229,7 @@ async fn preset_list_hides_captured_prompts_but_ai_can_still_search_them() {
 
 /// ★ 预设的**关联产物**按归一化后的提示词匹配（2026-10-11）。
 ///
-/// 用户要的是"用这套预设同款提示词的产物自动关联上来" —— 所以判据**不能**是
+/// 目标是"使用这套预设同款提示词的产物自动关联" —— 因此判据**不能**是
 /// `media_assets.prompt_id == 预设 id`（那只有"这条预设自己生成过"才算，
 /// 而自动捕获的产物指向的是**另一条**提示词行）。
 #[tokio::test]
@@ -339,7 +339,7 @@ async fn prompt_object_has_every_key_dart_reads() {
         "少一个键 = 界面上少一块内容；多一个键 = 与 Kotlin 不一致"
     );
     // `negativeMode` 是**必给**的（不是 Option）：界面拿它决定"只发正面"那个开关的位置。
-    // 老库补上这一列之后默认是 keep —— 绝不能默认成 positive_only（那会悄悄丢掉用户的负面提示词）。
+    // 老库补上该列后默认为 keep —— 绝不能默认为 positive_only（否则会静默丢弃负面提示词）。
     assert_eq!(body["negativeMode"], "keep", "没设过就是 keep");
     for absent in [
         "sampler",
