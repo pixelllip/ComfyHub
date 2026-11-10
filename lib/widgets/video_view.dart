@@ -7,7 +7,7 @@ import 'win_video_view.dart';
 
 /// 内嵌视频播放的**平台分派**：Windows 一份实现、安卓/iOS 另一份。
 ///
-/// 两份实现各自有各自的坑（Windows 那份还要靠打过补丁的插件，见 AGENTS §9），
+/// 两份实现各有各的问题（Windows 那份依赖打过补丁的插件，见 AGENTS §9），
 /// 所以这个类只做一件事：**在哪个平台就用哪个实现**，并且给调用方**一个**
 /// 判据 `supported`（而不是让它自己 `Platform.isWindows || Platform.isAndroid`
 /// 地拼 —— 拼漏一个平台的表现是"明明能播却显示不支持"）。

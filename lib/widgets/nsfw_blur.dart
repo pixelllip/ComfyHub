@@ -28,7 +28,7 @@ import '../state/nsfw_store.dart';
 ///     该选项的语义是默认打码，不是永久解锁某几条。
 ///
 /// 没挂 `NsfwStore`（例如某些单测直接 pump 一个 widget）时**不打码**：
-/// 宁可显示原图，也不要让用例因为少一个 provider 就崩。
+/// 宁可显示原图，也不让用例因为缺少一个 provider 而失败。
 class NsfwBlur extends StatelessWidget {
   /// 要打码的内容（图片 / 视频封面…）。
   final Widget child;

@@ -8,7 +8,7 @@ import 'package:video_player/video_player.dart';
 /// 为什么不复用 `WinVideoView`：那个走 Media Foundation，**只有 Windows 有实现**
 /// （而且我们给它的插件打过补丁，见 AGENTS §9）。所以按平台分成两个实现，
 /// 由 [PlatformVideoView] 分派 —— 两条路各自的解码器/纹理细节完全不同，
-/// 硬塞进一个类只会让两边的坑互相纠缠。
+/// 合并进一个类只会让两边的问题互相牵连。
 ///
 /// 三条纪律与 Windows 那侧一致：
 ///  · **失败要如实**：解不开就显示原因 + "用系统播放器打开"那条退路，不显示黑屏；

@@ -42,7 +42,7 @@ class ContextMenuScope extends StatefulWidget {
 
   /// 从 [context] 往上找**最近**的 host（找不到返回 null）。
   ///
-  /// 两个坑，缺一不可：
+  /// 两个问题，缺一不可：
   ///  1. 右键的调用点常常拿的是**页面自己的** `context`（`State.context`，例如
   ///     `_GalleryPageState.context`），而页面 `build` 里 `return ContextMenuScope(...)`
   ///     意味着这个 context 在 Scope **外面** —— 但它同时又是 Scope 所在元素的**祖先**，

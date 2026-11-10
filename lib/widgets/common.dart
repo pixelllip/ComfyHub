@@ -154,7 +154,7 @@ class FilterChipRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     // `runAlignment` 故意不暴露、也不动：它只在**多行**时决定"行块整体靠哪边"，
-    // 默认 start 就是"从容器顶部开始往下排"。曾经想顺手设成 end 让多行贴底，
+    // 默认 start 即"从容器顶部开始排列"。曾考虑改为 end 让多行贴底，
     // 那会让窄屏输入区里那一排贴在输入框下沿，看着像被压住。
     // 调用方要的"每行贴右"是 `alignment` 的事，跟 `runAlignment` 无关。
     return Wrap(

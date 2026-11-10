@@ -57,7 +57,7 @@ class AiWorkspaceStore extends ChangeNotifier {
   /// "一显示就去拉"的地方（右侧栏的 ComfyUI 状态 / 实时进度 / 待审批）拿到的
   /// `baseUrl` 在冷启动那一秒还是 8080 兜底值，请求注定失败 —— 而其中
   /// `/api/capture/status` 那个失败是**会显示出来且不会自己消失**的（只能手动刷新）。
-  /// 走 store 这一道的好处：测试里没注入闸门时它是个空操作，不会因为缺 provider 就炸。
+  /// 经 store 处理的好处：测试中未注入闸门时它是空操作，不会因缺少 provider 而失败。
   Future<void> waitForBackend() => backendReady?.call() ?? Future<void>.value();
 
   final AiApiClient? _injected;

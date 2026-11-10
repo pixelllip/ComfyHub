@@ -716,7 +716,7 @@ class _GalleryPageState extends State<GalleryPage> {
         // 选择弹窗模式时才使用居中弹窗（虚化背景；拖出时完全让开，见 `_folderLayer`）
         if (open && !docked) _folderLayer(theme),
         // 拖动中给一条"移出集合"的落点提示（两种形态都有；
-        // 现在**随手松手**也算移出，它只是顺手接得住）
+        // 现在**松手**也算移出，该处仅作兜底）
         if (open && _folderDragging) _detachStrip(theme),
       ],
     );

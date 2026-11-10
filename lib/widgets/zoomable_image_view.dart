@@ -337,7 +337,7 @@ class _ZoomableImageViewState extends State<ZoomableImageView> {
         child: LayoutBuilder(
           builder: (context, constraints) {
             final width = constraints.maxWidth;
-            // 高度无界时（例如塞进 ListView 且没给高度）退一个 3:2 的默认高度，别让布局崩掉
+            // 高度无界时（例如放入 ListView 且未指定高度）回退为 3:2 的默认高度，避免布局异常
             final height = constraints.hasBoundedHeight
                 ? constraints.maxHeight
                 : width * 2 / 3;

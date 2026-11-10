@@ -415,7 +415,7 @@ List<MdBlock> _parseMarkdownUncached(String source) {
       flushParagraph();
       final body = <String>[];
       // 注意：`RegExp.escape('```')` 里含有 `$`，走 `String.replaceAll` 会被当成
-      // 替换引用而炸掉（返回空串）——这里只对单个字符做转义。
+      // 替换引用导致异常（返回空串）——此处只对单个字符做转义。
       final closePattern = RegExp(
         r'^\s{0,3}' + RegExp.escape(fence.marker[0]) + r'{3,}[ \t]*$',
       );

@@ -312,7 +312,7 @@ class CardsViewState extends State<CardsView> {
   }
 
   void _openExample(CharacterCard card, MediaAsset media) {
-    // 测试里可能没有 LibraryStore；那时缩略图只做展示，点开无动作（不崩）。
+    // 测试中可能没有 LibraryStore；此时缩略图仅作展示，点击无动作（不抛错）。
     // ⚠ 别用 `read<LibraryStore?>()` —— provider 注册的是非空类型，问可空类型
     // 找不到同一个 InheritedWidget（会永远返回 null，真机上点缩略图就"没反应"）。
     final LibraryStore store;

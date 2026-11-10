@@ -2855,7 +2855,7 @@ class _StreamingReasoningState extends State<_StreamingReasoning> {
   /// 视口是不是贴着底部：**只有贴底才跟随**（和聊天列表同一条纪律）。
   bool _atBottom = true;
 
-  /// 贴底容差：只吸收亚像素误差，不是"接近底部"（聊天列表那边踩过同样的坑，
+  /// 贴底容差：只吸收亚像素误差，不是"接近底部"（聊天列表中也出现过同类问题，
   /// 见 `_AiHomePageState._bottomEpsilon` 的注释）。
   static const double _bottomEpsilon = 1.5;
 
@@ -3017,7 +3017,7 @@ class _ComposerState extends State<_Composer> {
   /// 中文输入法正在组字（拼音还没上屏）。
   ///
   /// 以前这里是个**永远是 false** 的布尔字段（只在 `onChanged` 里被赋 false），
-  /// 等于没有这道闸：组字期间按回车会把半截拼音当消息发出去，并且顺手清空输入框 ——
+  /// 等于没有这道闸：组字期间按回车会把半截拼音当消息发出，并同时清空输入框 ——
   /// 在 Windows 上"清空时输入法还在组字"正是引擎把旧文本回灌/复制的触发条件
   /// （flutter/flutter#191196）。现在直接读控制器里的 composing range，是真的。
   bool get _composing => widget.controller.value.composing.isValid;
@@ -4311,7 +4311,7 @@ class _ComposerState extends State<_Composer> {
     if (!mounted) return;
     if (image != null && await _attachClipboardImage(image)) return;
     if (!mounted) return;
-    // 没有文件 → 先看是不是**原生那一半压根没接上**："通道没编进产物"与"剪贴板里
+    // 没有文件 → 先看是不是**原生那一半未接通**："通道没编进产物"与"剪贴板里
     // 确实没有文件"表现完全一样，静默降级的话这一档永远查不出来（只说一次）。
     if (FileClipboard.channelAlive == false && !_clipboardNoticeShown) {
       _clipboardNoticeShown = true;
@@ -4390,7 +4390,7 @@ class _SendIntent extends Intent {
 /// 的**唯一**防线，而这种"换掉一个内置菜单项"的改动一旦被谁改回去，
 /// 界面上不会报任何错、只会安安静静粘出一串 `D:\...`（见 `_composerContextMenu`）。
 ///
-/// 为什么要补末尾那一手：光标落在只读位置之类的场景下，内置项里**压根没有**「粘贴」，
+/// 补充末尾项的用途：光标落在只读位置等场景下，内置项里**没有**「粘贴」，
 /// 不补充时该档位没有任何粘贴入口。
 @visibleForTesting
 List<ContextMenuButtonItem> withReplacedPaste(

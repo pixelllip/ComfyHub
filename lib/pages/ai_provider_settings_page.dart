@@ -571,7 +571,7 @@ class _AiProviderSettingsPageState extends State<AiProviderSettingsPage> {
 
   /// 统一的界面反馈：**任何失败都要提示**。
   ///
-  /// 之前的坑：错误只渲染在右侧详情面板里，而详情面板要先选中一个 Provider 才显示 ——
+  /// 此前的问题：错误只渲染在右侧详情面板中，而详情面板需先选中一个 Provider 才显示 ——
   /// 否则"新建 Provider 失败"在界面上无任何反馈，表现为"点击后未添加"。
   void _notify(String message, {bool error = false}) {
     if (!mounted) return;
@@ -609,9 +609,9 @@ class _AiProviderSettingsPageState extends State<AiProviderSettingsPage> {
         'credentialRef': defaultCredentialRef(draft.id),
         // ⚠ **不发端点信任级别**：它由软件按地址自己判（桌面后端 `EndpointTrust.infer`；
         //    手机侧存默认值，且手机侧根本不读这个字段 —— 见 `ProviderJson` 的注释）。
-        //    实测过的坑：硬塞一个"仅本机"会让公网地址当场被后端拒绝，而错误看不见。
+        //    实测问题：强加"仅本机"会使公网地址立即被后端拒绝，而错误不可见。
       });
-      // 对话框里填了密钥就顺手存上（"填完就能用"）；留空不算错，详情页还能补。
+      // 对话框中填写密钥后即保存（"填完即可用"）；留空不算错误，详情页仍可补充。
       final saved = await _saveDialogKey(created, draft.apiKey);
       await _reload();
       await _select(created);
@@ -742,7 +742,7 @@ class _AiProviderSettingsPageState extends State<AiProviderSettingsPage> {
   /// 模型能力声明（敲错一个字符的表现是"附件发不出去 / 思考参数不发"，两端都不报错）。
   ///
   /// 三条纪律（真活在 [ProviderSync] 里，这里只管界面与反馈）：
-  ///  ① **覆盖要先问一次**（同 id 会被桌面那份改掉，不打招呼就改配置是最糟的一种"顺手"）；
+  ///  ① **覆盖需先确认一次**（同 id 会被桌面那份覆盖，未经确认修改配置属于最差的一类"顺带改动"）；
   ///  ② 结束时**如实报账**（建了几个 / 覆盖了几个 / 本机独有几个保留 / 哪几条没成）；
   ///  ③ 完成后**让聊天页那份清单也跟上**（[AiWorkspaceStore.refreshProviders]）——
   ///     否则切回后显示"同步完成但无选项"，需要再次切换页面。

@@ -711,7 +711,7 @@ class _PromptsPageState extends State<PromptsPage>
           .showSnackBar(const SnackBar(content: Text('没有未关联产物的提示词')));
       return;
     }
-    // 顺手拿前几条标题当例子
+    // 取前几条标题作为示例
     final sample = await store.api.listPrompts(
       hasMedia: false,
       page: 1,
