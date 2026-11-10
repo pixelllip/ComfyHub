@@ -13,7 +13,7 @@
 //!
 //! 1. **必须带 User-Agent**，而且**必须短**：本机实测同一个 URL、同一个代理只换 UA ——
 //!    `ComfyHub/1.0 (+local)` → **200**，而描述型 / Mozilla 形状的 UA → **403 + Cloudflare 挑战页**。
-//!    所以 UA 写死成常量并留 `COMFYHUB_DANBOORU_UA` 口子（被拦时用户自己能换，不必等发版）。
+//!    因此 UA 固定为常量并提供 `COMFYHUB_DANBOORU_UA` 覆盖项（被拦截时可自行更换，无需等待新版本）。
 //! 2. **本机必须走代理**：`danbooru.donmai.us` 直连不稳（大量 connect timeout），
 //!    经 `127.0.0.1:7890` 稳定 200 —— 走 [`crate::infra::outbound::route`]（公网走代理、本机/内网直连）。
 //! 3. **`wiki_pages/<tag>.json` 的 404 是正常情况**（这个 tag 没有 wiki 页，不是错误）：
@@ -48,10 +48,10 @@ pub const DEFAULT_BASE_URL: &str = "https://danbooru.donmai.us";
 /// User-Agent：**必须带、必须短**（长得像脚本的反而被 Cloudflare 拦，见模块头）。
 pub const USER_AGENT: &str = "ComfyHub/1.0 (+local)";
 
-/// 覆盖 User-Agent 的环境变量（被 Cloudflare 拦时用户自己能换一个）。
+/// 覆盖 User-Agent 的环境变量（被 Cloudflare 拦截时可自行更换）。
 pub const ENV_UA: &str = "COMFYHUB_DANBOORU_UA";
 
-/// 覆盖站点地址的环境变量（本机假服务用；真用户不会设它）。
+/// 覆盖站点地址的环境变量（供本机测试服务使用；正常使用不会设置）。
 pub const ENV_BASE_URL: &str = "DANBOORU_BASE_URL";
 
 pub const CONNECT_TIMEOUT_SECONDS: u64 = 5;
@@ -105,7 +105,7 @@ pub struct Post {
     pub tag_string: String,
 }
 
-/// 参考图一次最多回几张（再多对"让用户挑一个"没有帮助，只会白下几百 MB）。
+/// 参考图一次最多返回几张（再多无助于"选择一张"，只会额外下载数百 MB）。
 pub const MAX_REFERENCE_IMAGES: i64 = 6;
 
 /// 单张参考图的下载上限：超过就退回更小的采样图 / 预览图，宁可糊一点也别把盘吃满。
@@ -126,7 +126,7 @@ pub fn category_name(code: Option<i64>) -> &'static str {
     }
 }
 
-/// 把用户 / 模型的写法归一成 danbooru 的 tag 写法。
+/// 把各种写法归一为 danbooru 的 tag 写法。
 ///
 /// 空白 → 下划线（danbooru 的 tag 不允许空格；`shinku (nte)` 与 `shinku_(nte)` 是同一个 tag）、
 /// 全角括号 → 半角且前面**保证有一个下划线**（danbooru 的消歧写法是 `name_(work)`）、小写。
@@ -686,12 +686,12 @@ impl DanbooruClient {
             return Ok(None);
         }
         // ⚠ **每一次失败都要写出网路径**：`5xx` 是"对方回了"，超时是"我们一次握手都没成"，
-        // 用户看到的那句话必须能区分这两件事。2026-11-09 danbooru 挂维护回 503，
+        // 界面提示必须区分这两种情况。danbooru 维护期间返回 503 时，
         // 报错只写"暂时不可用"，被当成了"本项目没吃代理"—— 排查方向直接偏了。
         let with_route = |hint: String| format!("{hint}（本次出网路径：{route}）");
         if !(200..300).contains(&status) {
             // Cloudflare 的 managed challenge 长这样：403 + 一整页 HTML（标题 "Just a moment..."）。
-            // 必须**单独认出来**：把它报成"UA 被拒"或"没有这个 tag"都会把用户带偏
+            // 必须**单独识别**：报成"UA 被拒"或"没有这个 tag"都会导致误判
             // （前者让人以为换个 UA 就好，后者直接让人以为角色不存在）。
             if status == 403 && looks_like_cloudflare_challenge(&text) {
                 return Err(ToolFailure::new(

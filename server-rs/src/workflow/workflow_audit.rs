@@ -1,9 +1,9 @@
 //! `comfy_audit_workflow`：跑之前先审一份本机工作流（`WorkflowAudit.kt` +
 //! `ToolRegistry.kt` 里那条工具处理体的逐条对照，P4 第 63 步）。
 //!
-//! # 它要解决什么（用户 2026-09-22：「让 AI 具有审核本地工作流的能力」）
+//! # 目标（「让 AI 具有审核本地工作流的能力」）
 //!
-//! 起因是一句追问：会话 `0bedb3f5` 里用户问"你有没有发现你用的 krea2 工作流本身有问题呢？"，
+//! 起源于会话 `0bedb3f5` 中的提问"你有没有发现你用的 krea2 工作流本身有问题呢？"，
 //! AI 承认"我上一轮确实没审这条骨架就用了"。那次踩到的东西**全是可以在跑之前查出来的**：
 //!
 //! | 那次的现象 | 代价 | 对应检查项 |
@@ -48,7 +48,7 @@
 //! Kotlin 的模型清单是**注入的**（`comfyModels ?: …`），为 null 时 [`Report`] 的第 ⑦ 项直接跳过。
 //! Rust 侧（与 `comfy_fit_workflow` / `comfy_env_report` 一样）直接调
 //! [`crate::comfy::comfy_models::inventory`]，没有"清单能力没启用"这一档 —— 于是这里恒传 `Some(&inv)`。
-//! 不影响任何用户可见行为：两种实现里清单都拿得到，而清单为空时第 ⑦ 项本来就返回空。
+//! 不影响界面行为：两种实现都能获取清单，清单为空时第 ⑦ 项本就返回空。
 
 use serde_json::{json, Map, Value};
 
@@ -143,7 +143,7 @@ impl Report {
     /// 提交闸门要的那句话：有"必跑不了"的项就返回一段说明，否则 `None`。
     ///
     /// 只收 [`Level::Block`] —— 参数档位 / 显存 / 提示词风格那些**不许**拦
-    /// （它们是"不推荐"，不是"跑不了"；拦了就是替用户做决定）。
+    /// （它们属于"不推荐"，不是"无法运行"；拦截即为代替决定）。
     pub fn blocking_refusal(&self) -> Option<String> {
         let blocking = self.blocking();
         if blocking.is_empty() {
@@ -256,7 +256,7 @@ fn finding_block(f: &Finding) -> String {
 /// `Anything Everywhere` 与显示节点由 [`is_broadcast`] / [`is_display`] 自己认得
 /// （模式匹配），这里不重复列。
 ///
-/// ⚠ `Fast Bypasser (rgthree)` 是 2026-10-17 补的：用户的 `krea2 i2i workflow.json` 里
+/// ⚠ `Fast Bypasser (rgthree)` 为后来补充：`krea2 i2i workflow.json` 中
 /// 用的就是**单数**那个名字（rgthree 新旧版本的类名不同），而 `/object_info` 里查不到它 ——
 /// 漏了这一条的表现是"这份工作流学不下来"，而屏幕上看不出为什么。
 pub(crate) const KNOWN_FRONTEND_ONLY: [&str; 14] = [
@@ -382,7 +382,7 @@ const DISPLAY_VIRTUAL: [&str; 12] = [
 /// 它同时是两处的唯一真源：
 ///  * 这里挑"图里还有纯前端节点"（[`check_frontend_nodes`]）；
 ///  * 提交闸门那边（[`crate::workflow::workflow_submit::preflight_refusal`]）**跳过**这一档：
-///    对它们说"让用户装/启用节点包"是错的方向（前端类装也装不上），
+///    提示"安装 / 启用节点包"是错误方向（前端类无法安装），
 ///    那句话必须由这里那条结论来说。
 pub fn is_frontend_only(class_type: &str) -> bool {
     KNOWN_FRONTEND_ONLY.contains(&class_type) || is_broadcast(class_type) || is_display(class_type)
@@ -564,7 +564,7 @@ fn check_frontend_nodes(
     // `PreviewImage` / `PreviewAny` 都是**真节点**（`output_node: true`），只是"看一眼、没下游"。
     // 2026-10-25 的现场就是它：`krea2 r2i` 里的 `55 PreviewAny` 被这张模式表判成纯前端节点，
     // 提交闸门当场按 `MODEL_NOT_LOADABLE` 拒 —— 而 ComfyUI 明明能跑它；模型只能一遍遍重读
-    // 工作流、换着法子重写，永远过不去（用户看到的就是"AI 走了大量弯路还是没跑通"）。
+    // 工作流反复重写仍无法通过（表现为"AI 反复尝试仍未成功"）。
     //
     // 广播型（`Anything Everywhere` 那一族）**不适用**这条：它们在本机被注册成**零输出桩**，
     // 在 `/object_info` 里查得到也照样跑不出东西（见 `workflow_frontend` 的文件头）。

@@ -3,7 +3,7 @@
 //! # 为什么由后端出这份列表
 //!
 //! 手机没法自己扫网段猜桌面的地址（那是攻击行为，而且多数网络里扫不出来）。
-//! 而**这台机器自己知道**它有哪些网卡 —— 用户实际会在三条路之间来回切：
+//! 而**本机已知**自身有哪些网卡 —— 实际使用中会在三条路径之间切换：
 //! 回环（同机 / 模拟器）、局域网（同一 Wi-Fi）、Tailscale（异地组网）。
 //! 把这三类如实列出来，手机只需要"点一下"。
 //!
@@ -36,7 +36,7 @@ pub struct Endpoint {
 pub fn classify(ip: &IpAddr) -> &'static str {
     match ip {
         IpAddr::V4(v4) => classify_v4(v4),
-        // IPv6 只认回环：别的（link-local / 临时地址）对用户没有意义，归 other
+        // IPv6 只认回环：其他（link-local / 临时地址）无实际用途，归入 other
         IpAddr::V6(v6) => {
             if v6.is_loopback() {
                 "loopback"
@@ -53,7 +53,7 @@ fn classify_v4(ip: &Ipv4Addr) -> &'static str {
         return "loopback";
     }
     // Tailscale 走 CGNAT 100.64.0.0/10 —— 它看着像公网，其实是私网组网。
-    // 排在私网之前判：不能让它掉进 other（用户就认不出"这条是异地那条路"）。
+    // 在私网之前判断：不能归入 other（否则无法识别"该条为异地线路"）。
     if o[0] == 100 && (64..=127).contains(&o[1]) {
         return "tailscale";
     }
@@ -63,10 +63,10 @@ fn classify_v4(ip: &Ipv4Addr) -> &'static str {
     "other"
 }
 
-/// 这个地址值不值得报给用户。
+/// 该地址是否值得返回。
 ///
 /// 跳过三类：**未指定**（`0.0.0.0` / `::`，客户端连不上）、**链路本地**（169.254/16、fe80::，
-/// 那是"没拿到 DHCP"的残渣）、**多播**。别的照实收（含公网地址 —— 用户自己拿 Tailscale
+/// 那是"未获取 DHCP"的残留）、**多播**。其他如实收集（含公网地址 —— 自行使用 Tailscale
 /// Funnel 或反代暴露出来时，那就是他想要的候选）。
 fn usable(ip: &IpAddr) -> bool {
     match ip {
@@ -90,7 +90,7 @@ fn weight(kind: &str) -> u8 {
 /// 把"我们监听的端口 + 一批地址"组装成候选列表（**纯函数**，用例喂假地址）。
 ///
 /// 去重按 URL；顺序稳定（见 [`weight`]，同类内保持传入顺序）—— 界面上的候选顺序
-/// 每次都一样，用户点的那一条不会跳来跳去。
+/// 每次结果一致，选择的那一条不会变化。
 pub fn assemble(port: u16, ips: &[IpAddr]) -> Vec<Endpoint> {
     if port == 0 {
         return Vec::new();
@@ -143,7 +143,7 @@ pub fn collect(port: u16) -> Vec<Endpoint> {
 /// 必然 `Connection refused`，而且报错完全看不出是地址问题（2026-10-31 真机现场）。
 /// 所以这条不是"排序偏好"，是**正确性**：回环绝不能出现在二维码的候选里。
 ///
-/// 局域网排在 Tailscale 前面：同一 Wi-Fi 是最常见的配对现场；Tailscale 用户
+/// 局域网排在 Tailscale 之前：同一 Wi-Fi 是最常见的配对场景；Tailscale 使用者
 /// 仍能拿到自己的地址，只是不在第一顺位。
 pub fn pairing_candidates(mut endpoints: Vec<Endpoint>) -> Vec<Endpoint> {
     endpoints.retain(|e| e.kind != "loopback");
