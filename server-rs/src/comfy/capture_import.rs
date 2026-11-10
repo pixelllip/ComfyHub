@@ -9,8 +9,8 @@
 //!
 //! 它们是**"库里怎么才会有东西"**的另一半：轮询与 `comfy_submit` 收的是"跑过的运行"，
 //! 而这两条收的是**外部推过来的运行**（ComfyUI 自定义节点 / e2e 脚本）与
-//! **用户早就存在盘上的工作流文件**（用户 bug ⑤：首次使用时库必然是空的，而
-//! `user\<用户>\workflows\*.json` 早就存在）。
+//! **盘上已有的工作流文件**（首次使用时库必然为空，而
+//! `user\<账号>\workflows\*.json` 早已存在）。
 //!
 //! # 三条纪律
 //!
@@ -18,7 +18,7 @@
 //!     `alreadyCaptured` + 已有的 `promptId`（绝不重复入库）；幂等靠 `run_key` + 文件 sha256。
 //!  2. **批量导入按 `run_key = file:<sha256>` 判重**（与 `comfy_load_workflow` 同一把钥匙），
 //!     所以"导两次"只有一行；`tolerateUnsupported = true` —— 批量时"转换不了"绝不能让整份工作流
-//!     消失（它照样是用户库里的一份资产，能不能跑由 `runnable` 如实标出来）。
+//!     消失（它仍是库中的一份资产，能否运行由 `runnable` 如实标注）。
 //!  3. **逐条结果如实分开**：`imported` / `duplicates` / `failed` 三个计数 +
 //!     每条一个 `{name, path, status, promptId?, runnable?, reason?}` —— 失败**不许静默跳过**。
 
@@ -577,7 +577,7 @@ pub async fn import_workflows(state: &AppState, body: &Value) -> Result<Value, A
         .filter(|q| !q.is_empty());
 
     // ⚠ 只扫**能用的**（坏 JSON / 空 / 非 .json / 格式认不出来的都不列）：
-    // 它们 `comfy_load_workflow` 一定失败，收进来只会让用户看见一堆"失败"
+    // 它们 `comfy_load_workflow` 必然失败，收进来只会显示大量"失败"
     let files = crate::comfy::comfy_dirs::scan(&dirs, query, limit);
 
     let mut imported = 0i64;

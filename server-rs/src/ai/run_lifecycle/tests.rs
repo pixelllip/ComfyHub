@@ -1,4 +1,4 @@
-//! `run_lifecycle` 的单元测试（主体代码在 [`run_lifecycle`](super) —— 2026-09-30 按用户要求与主体分离）。
+//! `run_lifecycle` 的单元测试（主体代码在 [`run_lifecycle`](super) —— 与主体分离）。
 //!
 //! `use super::*;` 照旧：子模块能看见父模块的私有项，所以用例一行都不用改。
 
@@ -70,7 +70,7 @@ fn thinking_effort_branches() {
         ("high".into(), Some("high".into()))
     );
 
-    // **「关闭」档**（2026-11-09 用户报「没有关闭思考的档位」）：目录里声明了关闭取值
+    // **「关闭」档**（现象：「没有关闭思考的档位」）：目录中声明了关闭取值
     // （历史与内置规则都存在 `off` 键上）才允许选，发给上游的就是那个取值。
     let can_off = model_with(true, &[("off", "none"), ("high", "high")]);
     assert_eq!(
@@ -140,14 +140,14 @@ fn heartbeat_frames_have_no_id_line() {
     assert!(ev.starts_with("id: 7\nevent: text.delta\n"));
 }
 
-/// **首段思考不必等第一个工具调用**（用户 bug 2026-09-28：
+/// **首段思考不必等待第一个工具调用**（现象：
 /// 「回复的首次思考过程没有显示 —— 等输出第一个工具调用的时候才显示最早的思考结果」）。
 ///
 /// 现场：事件总线是批写的（200 条一次事务），而这条流**只从库里读**。
 /// 一次 Run 开头的 `run.started` / `message.started` / 几条 `reasoning.delta`
 /// 加起来远不到一批，全压在批里看不见；直到第一条 `tool.requested`
 /// （闸门类事件，那边会 flush）才把憋着的思考一起放出来 ——
-/// 用户看到的就是"思考跟第一个工具卡同时冒出来"。
+/// 表现为"思考与第一个工具卡同时出现"。
 ///
 /// 这条用例就是那个现场的最小复现：**只 emit、故意不 flush**，
 /// 然后要求 SSE 的第一次 poll 就能读到它。去掉 `poll_next` 里那次 flush 必红。

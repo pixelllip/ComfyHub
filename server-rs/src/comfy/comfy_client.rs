@@ -16,7 +16,7 @@
 //! 2. **本机/内网强制直连**：[`crate::provider::upstream::client_for`] 按目标主机选代理
 //!    （公网走代理、`127.0.0.1` 直连）。ComfyUI 永远在本机或内网，这条不遵守的后果是
 //!    "打开系统代理之后连不上 ComfyUI"（AGENTS §4 那条实测）。
-//! 3. **错误要翻成人话**（Kotlin `friendlyError`）：把 `ConnectException` 的类名丢给用户，
+//! 3. **错误要转换为可读说明**（Kotlin `friendlyError`）：把 `ConnectException` 的类名直接展示，
 //!    他只会看到一串 Java 内部名字，而不是"ComfyUI 没在运行？"。
 
 use std::path::PathBuf;
@@ -53,7 +53,7 @@ pub async fn queue(comfy_url: &str) -> Result<QueueSnapshot, String> {
 /// `POST {comfy_url}/upload/image`：把一段字节交给 **ComfyUI 自己**写进它的 `input` 目录，
 /// 返回它在那边真实可用的**裸文件名**。
 ///
-/// # 为什么必须有这条路（2026-09-28 用户 bug「comfy_use_attachment 总是失败」）
+/// # 必须提供这条路径的依据（「comfy_use_attachment 总是失败」）
 ///
 /// 直写 `input` 目录在真机上会拿到 `拒绝访问 (os error 5)`：后端进程没有那个目录的写权限，
 /// 而 **ComfyUI 自己是有的** —— 同一次会话里 MCP 的 `upload_file`（走的就是这条 HTTP）成功。
@@ -378,7 +378,7 @@ fn host_of(url: &str) -> String {
     authority.split(':').next().unwrap_or(authority).to_string()
 }
 
-/// 网络异常 → 用户能看懂的一句话（Kotlin `friendlyError` 的对应物）。
+/// 网络异常 → 可直接阅读的一句说明（Kotlin `friendlyError` 的对应物）。
 ///
 /// ⚠ reqwest 把"连接被拒 / DNS 失败 / 超时"都折进一个 `reqwest::Error`，还**不保证**
 /// 底层 `io::Error` 一定挂着（超时就没有）—— 所以这里先问 `is_timeout`/`is_connect`，
@@ -437,7 +437,7 @@ impl SourceIo for reqwest::Error {
 }
 
 /// 队列项是 `[number, prompt_id, graph, extra_data, outputs]`：
-/// 标题藏在 `extra_data.extra_pnginfo.workflow.extra.title`（用户在 ComfyUI 里给工作流起的名字）。
+/// 标题位于 `extra_data.extra_pnginfo.workflow.extra.title`（在 ComfyUI 中为工作流设置的名称）。
 /// 取不到就 `None` —— 界面宁可只说"正在生成…"，也不要编一个名字出来。
 fn label_of_queue_item(item: &serde_json::Value) -> Option<String> {
     let row = item.as_array()?;
