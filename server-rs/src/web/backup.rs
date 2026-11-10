@@ -46,7 +46,7 @@ fn db_path_of(state: &AppState) -> PathBuf {
 /// `GET /api/system/backups` —— 目录、清单、有没有待完成的恢复、上一次恢复的结果。
 ///
 /// 四个键一起给：界面要同时回答"备份在哪 / 有哪些 / 我刚才点的那次成了没成"。
-/// 少给 `lastRestore` 的话，用户重启完只能看到一个没有任何变化的列表 —— 不知道恢复
+/// 缺少 `lastRestore` 时，重启后只能看到一个没有变化的列表 —— 无法判断恢复
 /// 到底做没做（这正是"界面看不见的现象只能靠猜"那一类）。
 async fn list_backups(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
     let root = state.project_root();

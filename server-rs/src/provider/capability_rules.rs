@@ -174,7 +174,7 @@ pub const RAW_RULES: &[RawRule] = &[
     },
     // `deepseek-flash` 是 DeepSeek 官方现行模型 id（与 `deepseek-v4.1` 那批旧名并存）。
     // 少了这一条时，它落到"没规则命中"→ 只能手工声明，而手工表极易填成
-    // `{"max": "high"}` 这种**错的映射**（2026-10-25 用户 bug：思考强度档位错误）。
+    // `{"max": "high"}` 这种**错误映射**（思考强度档位错误）。
     // 档位按官方文档：`none / low / high / max`。
     RawRule {
         pattern: "deepseek-flash",

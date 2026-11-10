@@ -23,7 +23,7 @@ use crate::provider::capability_catalog::{OverlayEntry, OverlayFile, REMOTE_FILE
 
 /// 数据集出处（写进 `remote.json` 的 `source`，只作展示）。
 pub const SOURCE: &str = "models.dev";
-/// 数据集地址（**固定常量**，不是模型/用户给的 → 不跟随重定向也没有 SSRF 面）。
+/// 数据集地址（**固定常量**，不是外部传入的 → 不跟随重定向，也无 SSRF 面）。
 pub const URL: &str = "https://models.dev/api.json";
 /// 出网超时（Kotlin 同值 30 秒）。
 pub const HTTP_TIMEOUT_SECONDS: u64 = 30;
