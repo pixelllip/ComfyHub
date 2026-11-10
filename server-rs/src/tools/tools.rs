@@ -197,7 +197,7 @@ pub struct ToolSession {
     ///
     /// 与 [`crate::tools::policy::MAX_COMFY_QUERIES_PER_RUN`] 一起构成 **AIH-036「不许把 ComfyUI
     /// 当轮询器」** 这条线：`comfy_get_status` / `comfy_list_workflows` / `comfy_get_run`
-    /// 这类查询便宜又顺手，模型很容易"再确认一下"刷十几次。
+    /// 这类查询开销低且便捷，模型容易"再次确认"十几次。
     /// 判据是**类别**（[`crate::ai::ai_settings::category_of`] 回 `"comfy"`），不是名字前缀 ——
     /// 与界面分组、与联网那份预算都是同一份清单。
     pub comfy_queries_in_window: i64,

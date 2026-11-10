@@ -23,7 +23,7 @@
 //! * **搜索服务自己的地址**：按地址**推断**信任档（回环是给本机假服务 / 自建代理留的），
 //!   与 Kotlin 的 `guardBaseHost` 同一个入口。
 //!
-//! # 两处 JVM 口径的忠实移植（不是"顺手现代化"）
+//! # 两处 JVM 口径的忠实移植（并非"一并现代化"）
 //!
 //! * **编码**：Kotlin 用的是 `URLEncoder.encode(_, UTF_8)` —— 它把**空格编成 `+`**
 //!   （`application/x-www-form-urlencoded` 口径），保留 `-_.*`。见 [`crate::tools::tools::url_encode`]。

@@ -248,7 +248,7 @@ fn stays_inside(dir: &Path, candidate: &Path) -> bool {
 ///
 /// 与 input 不同，output **没有**"实例自己报"的入口（`/object_info` 里没有它），
 /// 所以顺序是：配置里的输出目录 → input 候选的兄弟 `output`。两个都没有就空着 ——
-/// 反正 input 已经覆盖绝大多数工作流。
+/// 因为 `input` 已覆盖绝大多数工作流。
 fn output_dirs_of(state: &AppState, inputs: &[PathBuf]) -> Vec<PathBuf> {
     let configured = crate::comfy::capture::capture_config(state)
         .ok()

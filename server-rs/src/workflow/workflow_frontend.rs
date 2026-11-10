@@ -195,7 +195,7 @@ pub fn emulate(
 
     // --- ③ 一个输出节点都没有：前端会自动挂 SaveImage，这里照做 ---
     // 仅在"原本无法保存任何图片"时补，不覆盖既有工作流（否则会写入额外文件）。
-    // 接哪一路？**按类型找产出 IMAGE 的节点**（不能看输入名：VAEDecode 的输出压根不在
+    // 接哪一路？**按类型查找产出 IMAGE 的节点**（不能看输入名：`VAEDecode` 的输出并不在
     // 它的 `inputs` 里，它是把 `samples` 解成图的那个节点）。
     if !out.is_empty() && out.values().all(|value| !is_save_like_node(value)) {
         let image_source: Option<Value> = out.iter().find_map(|(node_id, value)| {

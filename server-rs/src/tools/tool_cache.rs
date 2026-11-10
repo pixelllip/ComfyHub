@@ -139,7 +139,7 @@ pub fn freshness(name: &str) -> Option<Freshness> {
 
         // ⚠ `load_skill` **刻意不在名单里**：它自己有一条更严的去重
         //   （`ToolSession.loaded_skills`，同一轮第二次直接回 `SKILL_ALREADY_LOADED`）。
-        //   进了缓存就会变成"第二次又把整篇正文灌一遍"—— 去重失效、上下文白烧。
+        //   进入缓存会变成"第二次又重发整篇正文"—— 去重失效、上下文浪费。
         //   跨 Run 重读一份 skill 是常态，但它本来就只有一次磁盘读，省不出什么。
         //
         // ⚠ `ask_user_question` 同理：它是**闸门**，不是查询（缓存提问会丢弃作答）。

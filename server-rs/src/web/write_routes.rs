@@ -351,7 +351,7 @@ async fn delete_prompt(
 
 /// 收藏 / 取消收藏。
 ///
-/// ⚠ 响应是 `{"id", "favorite"}` 两个键（Kotlin 侧这里踩过"混类型 map 让序列化抛 500"的坑）。
+/// ⚠ 响应是 `{"id", "favorite"}` 两个键（Kotlin 侧出现过"混类型 map 使序列化抛 500"的问题）。
 async fn favorite(
     State(state): State<AppState>,
     Id(id): Id,

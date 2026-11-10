@@ -47,7 +47,7 @@ fn 官方档位的骨架不报必跑不了的问题() {
     );
     assert!(report.blocking_refusal().is_none());
     // 唯一会报的是"固定 seed + 固定前缀"那条提醒 —— 重复跑同一份图会落同一个文件名，
-    // 被去重吞掉（那次白跑 78 秒）。它是提醒，不是拦。
+    // 被去重吞掉（该次无效运行 78 秒）。它是提醒，不是拦截。
     assert_eq!(
         report.findings.iter().map(|f| f.check).collect::<Vec<_>>(),
         vec![CHECK_OUTPUT_NAME],

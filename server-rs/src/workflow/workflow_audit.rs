@@ -8,7 +8,7 @@
 //!
 //! | 那次的现象 | 代价 | 对应检查项 |
 //! | --- | --- | --- |
-//! | `Krea2_spine` 固定 seed + 固定前缀 → `mediaCount: 0` | 白跑 78 秒 | [`CHECK_OUTPUT_NAME`] |
+//! | `Krea2_spine` 固定 seed + 固定前缀 → `mediaCount: 0` | 无效运行 78 秒 | [`CHECK_OUTPUT_NAME`] |
 //! | 20 个 rgthree 前端节点（Label / Bookmark / Fast Groups Bypasser） | 转换失败 | [`CHECK_FRONTEND`] |
 //! | `WidgetToString.IS_CHANGED()` / `SystemNotification` 版本不兼容 | 0.01 秒空跑 | [`CHECK_NODE_VERSION`] |
 //! | 用 `CheckpointLoaderSimple` 从 int8 一体包"只取 MODEL" | 与官方模板不符 | [`CHECK_LOADER_FOLDER`] |
@@ -78,7 +78,7 @@ pub const CHECK_LOADER_FOLDER: &str = "loaderFolder";
 pub enum Level {
     /// 必跑不了（ComfyUI 验证阶段就会整片丢节点 / 报文件不存在）。
     Block,
-    /// 跑得起来，但大概率不是你要的结果（白跑一次显卡时间）。
+    /// 可以运行，但结果大概率不是预期（浪费一次显卡时间）。
     Warn,
     /// 只是背景信息。
     Info,
@@ -695,7 +695,7 @@ fn check_node_versions(nodes: &[(String, String, &Map<String, Value>)]) -> Vec<F
 }
 
 // ---------------------------------------------------------------------------
-//  ③ 输出文件名 + 固定 seed（那次白跑 78 秒的根因）
+//  ③ 输出文件名 + 固定 seed（该次无效运行 78 秒的原因）
 // ---------------------------------------------------------------------------
 
 fn check_output_name(graph: &Map<String, Value>) -> Vec<Finding> {

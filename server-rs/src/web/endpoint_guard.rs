@@ -110,7 +110,7 @@ fn scope_of_v6(addr: Ipv6Addr) -> Scope {
         return Scope::Blocked;
     }
     // 站点本地 fec0::/10（Java `Inet6Address.isSiteLocalAddress` 认的就是这一段，
-    // **不是** fc00::/7 的 ULA —— 照它写，别"顺手现代化"）
+    // **不是** fc00::/7 的 ULA —— 照其实现书写，不要"一并现代化"）
     if segments[0] & 0xffc0 == 0xfec0 {
         return Scope::Private;
     }

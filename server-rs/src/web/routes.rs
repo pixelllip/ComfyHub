@@ -393,7 +393,7 @@ pub fn router(state: AppState) -> Router {
             axum::routing::post(add_memory_entry),
         )
         // 单条 / 批量删除用 POST 而不是带 body 的 DELETE：Ktor 对 DELETE 带请求体的处理
-        // 在各客户端上并不一致（Kotlin 侧就是这么注释的）—— 形状照抄，别"顺手改成 DELETE"。
+        // 在各客户端上并不一致（Kotlin 侧即如此注释）—— 形状照抄，不要"一并改成 `DELETE`"。
         .route(
             "/api/ai/memory/delete",
             axum::routing::post(delete_memory_entries),

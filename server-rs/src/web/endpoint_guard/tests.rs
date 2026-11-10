@@ -80,7 +80,7 @@ fn inferred_trust_matches_the_scope() {
     assert_eq!(infer_trust("api.openai.com"), "public");
     // ⚠ 链路本地地址**推不出 private-network**：它在上一步就被判成 BLOCKED（红线），
     // 于是落到 `else -> public`。Kotlin 的 infer 里那一支 `Scope.LINK_LOCAL` 是**死代码**
-    // （`AddressScope.of` 永远不会产出它）—— 这里照抄，不"顺手让它有意义"。
+    // （`AddressScope.of` 永远不会产出它）—— 此处照抄，不额外"赋予含义"。
     // 结果一样是拒绝：`assert_allowed(fe80::1, "public")` 撞红线。
     assert_eq!(infer_trust("fe80::1"), "public");
     assert!(assert_allowed("fe80::1", infer_trust("fe80::1")).is_err());

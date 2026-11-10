@@ -18,7 +18,7 @@ fn 判据来自_workflow_audit_那一份() {
     assert!(is_broadcast("Anything Everywhere3?"));
     assert!(is_broadcast("anything everywhere (3)"));
     assert!(is_display("PreviewImage"));
-    // 中文类名不命中任何一条模式（不存在"顺手认一下中文"这种事）
+    // 中文类名不命中任何一条模式（不存在"顺带识别中文"的情况）
     assert!(!is_display("显示节点"));
     assert!(!is_broadcast("我的显示节点"));
 }

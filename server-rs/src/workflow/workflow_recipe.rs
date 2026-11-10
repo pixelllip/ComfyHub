@@ -2489,7 +2489,7 @@ pub enum Status {
     /// —— 那是给同名 `.safetensors` 写的元数据。绑定时必须挡住：把一个 `.metadata.json`
     /// 写进 `ckpt_name`，ComfyUI 只会报"文件不存在"，而模型**明明就在盘上**。
     NotAModel,
-    /// 这条配方里压根没有这个角色 / 这个键：报出它的槽位清单。
+    /// 该配方中没有这个角色 / 这个键：返回其槽位清单。
     NotInRecipe,
     /// 同一个角色有多个槽位（两条 LoRA），说不清绑哪个：让调用方点明 `override_key`。
     Ambiguous,

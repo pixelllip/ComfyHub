@@ -584,7 +584,7 @@ fn huge_seed_saturates_like_kotlin() {
 
 /// `extra` 的上限与 Kotlin **一模一样**：`>= 60` 就停，但那条 `__node_id` 不经过检查，
 /// 所以实际长度**最多 61**（60 来自 `__node_id`、下一条 push 才触发 break）。
-/// 别"顺手修正"成严格 60 —— 那会与 Kotlin 差一条，而这一条会进 `extra_params`。
+/// 不要"一并修正"为严格的 60 —— 那会与 Kotlin 相差一条，而这一条会进入 `extra_params`。
 #[test]
 fn extra_cap_matches_kotlin_exactly() {
     let mut nodes = String::from("{");
