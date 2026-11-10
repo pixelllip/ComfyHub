@@ -1,4 +1,4 @@
-//! `db` 的单元测试（主体代码在 [`db`](super) —— 2026-09-30 按用户要求与主体分离）。
+//! `db` 的单元测试（主体代码在 [`db`](super) —— 与主体分离）。
 //!
 //! `use super::*;` 照旧：子模块能看见父模块的私有项，所以用例一行都不用改。
 
@@ -218,7 +218,7 @@ fn open_or_create_converges_an_unversioned_database() {
     std::fs::remove_dir_all(path.parent().unwrap().parent().unwrap()).ok();
 }
 
-/// 库比后端新：**只警告不拦**（拦了用户就没法回退版本）。
+/// 库比后端新：**只警告不拦截**（拦截会阻止版本回退）。
 #[test]
 fn open_or_create_warns_but_opens_a_newer_database() {
     let path = temp_path("newer");
@@ -475,10 +475,10 @@ fn healing_a_missing_table_never_downgrades_a_newer_version() {
 /// ★★ **老库的数据迁移**：老卡的 `tags`（JSON 数组）必须被拼成 `prompt`（整段文本）。
 ///
 /// 这条盯的是 2026-10 角色卡收敛（只剩名称 / 正面提示词 / 负面提示词）：老库里 `prompt` 这一列
-/// 根本不存在，而新代码读的就是它 —— 不搬过去，用户打开角色卡页看到的是**一页空卡**
+/// 根本不存在，而新代码读取的是它 —— 不迁移时，打开角色卡页显示为**空白页**
 /// （数据明明还在 `tags` 里）。列由 `ensure_columns` 补，内容由 `backfill_character_card_prompt` 搬。
 ///
-/// ⚠ 两条边界是同一条用例的两面：**只搬一次**（幂等）+ **不许复活**用户清空过的提示词
+/// ⚠ 两条边界是同一条用例的两面：**只迁移一次**（幂等）+ **不得恢复**已清空的提示词
 /// （老库的 `tags` 列留着不走，判据"prompt 空 + tags 非空"永远成立，每次开库都搬就会删了又回来）。
 ///
 /// ⚠ 顺带守着 [`open_or_create`] 那条顺序纪律（先补列、再跑 DDL）：DDL 里若出现
@@ -535,7 +535,7 @@ fn open_or_create_migrates_the_old_card_tags_into_the_prompt() {
     );
     drop(conn);
 
-    // 幂等：再开一次不许拼第二遍（也不许把用户后来手填的 prompt 盖掉）
+    // 幂等：再次打开时不得重复拼接（也不得覆盖后续手动填写的 prompt）
     let again = open_or_create(&path).expect("再开一次");
     let kept: String = again
         .query_row("SELECT prompt FROM character_cards", [], |r| r.get(0))
@@ -545,7 +545,7 @@ fn open_or_create_migrates_the_old_card_tags_into_the_prompt() {
         "迁移必须幂等：不许重复拼接"
     );
 
-    // ★ 用户在界面上清空提示词（`prompt = NULL`）之后，**下次开库不许把它从 tags 复活**：
+    // ★ 在界面上清空提示词（`prompt = NULL`）后，**下次打开库不得从 tags 恢复**：
     //   老库那个 `tags` 列还在，判据"prompt 为空 + tags 非空"永远成立 —— 所以迁移只能跑
     //   "刚补上这一列"的那一次（`open_or_create` 拿 `added` 判）。
     again
@@ -720,7 +720,7 @@ fn tags_are_turned_into_a_natural_sentence() {
 }
 
 /// 升级到 11 的那一次：只有 tag 版的卡转成自然语言；**已有正文的卡一个字都不动**；
-/// 而且只跑一次 —— 用户之后清空正文，不会被 tag 列复活。
+/// 并且只执行一次 —— 之后清空正文，不会被 tag 列恢复。
 #[test]
 fn upgrading_to_11_converts_tag_cards_once() {
     let path = temp_path("card-tag-migrate");

@@ -1,4 +1,4 @@
-//! `system_prompt` 的单元测试（主体代码在 [`system_prompt`](super) —— 2026-09-30 按用户要求与主体分离）。
+//! `system_prompt` 的单元测试（主体代码在 [`system_prompt`](super) —— 与主体分离）。
 //!
 //! `use super::*;` 照旧：子模块能看见父模块的私有项，所以用例一行都不用改。
 
@@ -132,7 +132,7 @@ fn 全权限档多一段而白名单一个字都不放宽() {
     let full = render_with(&policy(r#"{"permissionMode":"full"}"#), false, "");
     assert!(!ask.contains("本次是**自动允许（无需批准）**档"));
     assert!(full.contains("本次是**自动允许（无需批准）**档"));
-    // 全权限档下 ask 的工具不再标「需要用户批准」，但 deny 的照旧
+    // 全权限档下 ask 的工具不再标「需要批准」，但 deny 的保持不变
     assert!(ask.contains("web_search（需要用户批准）："));
     assert!(full.contains("web_search（只读）："));
     // ⚠ `render` 自己**不过滤**清单（过滤在 `run_kit::kit_parts` —— 与 Kotlin 的

@@ -1,4 +1,4 @@
-//! `find_model` 的单元测试（主体代码在 [`find_model`](super) —— 2026-09-30 按用户要求与主体分离）。
+//! `find_model` 的单元测试（主体代码在 [`find_model`](super) —— 与主体分离）。
 //!
 //! `use super::*;` 照旧：子模块能看见父模块的私有项，所以用例一行都不用改。
 
@@ -188,7 +188,7 @@ fn 权重文件判据与扩展名表同源() {
     assert!(looks_like_weight("a/b/c.safetensors"));
     assert!(looks_like_weight("x.CKPT"), "扩展名大小写不敏感");
     assert!(looks_like_weight("m.gguf"));
-    // `.yaml` / `.json` 是 ComfyUI 能加载的配置，但**不是**"用户要手下的文件"
+    // `.yaml` / `.json` 是 ComfyUI 可加载的配置，但**不是**"需要手动下载的文件"
     assert!(!looks_like_weight("config.json"));
     assert!(!looks_like_weight("model.yaml"));
     assert!(!looks_like_weight("noext"));
@@ -497,7 +497,7 @@ fn 渲染把没查到与没查成分开说() {
         "{text}"
     );
 
-    // 没有 note 时按"说不准 + 用户要的类型"给，并把文件名线索带上
+    // 没有 note 时按"无法确定 + 所需类型"返回，并附带文件名线索
     unknown.note = None;
     let text = render_candidate(2, &unknown, Some(ModelKind::Lora));
     assert!(
@@ -513,7 +513,7 @@ fn 渲染把没查到与没查成分开说() {
         "{text}"
     );
 
-    // 连用户要什么都没说 → 让他自己看工作流的加载器
+    // 未说明所需类型 → 由工作流的加载器判断
     let text = render_candidate(3, &unknown, None);
     assert!(
         text.contains("让用户看工作流里那个加载器要的是哪一类"),
@@ -852,7 +852,7 @@ async fn 三源按顺序查到且_sha256_与_install_into_各自取对() {
         .unwrap();
     assert!(result.online);
 
-    // 顺序固定（用户拍板）：Civitai → HuggingFace → ModelScope
+    // 顺序固定：Civitai → HuggingFace → ModelScope
     assert_eq!(
         result
             .sources
@@ -991,7 +991,7 @@ async fn 三源按顺序查到且_sha256_与_install_into_各自取对() {
     );
 }
 
-/// 顺序纪律（用户拍板）：**先查本机，再查外网** —— 命中时一个请求都不发。
+/// 顺序约束：**先查本机，再查外网** —— 命中时不发送任何请求。
 ///
 /// 命中的判据是"同名"，而且**不能用纯子串**：`anima` 不该命中 `anima-turbo`。
 #[tokio::test]
@@ -1097,7 +1097,7 @@ async fn 本机清单来源如实带进结果() {
     assert_eq!(result.local_source.wire(), "object_info");
 }
 
-/// HF 的 401 / 403 **分得开**：要登录 vs gated（"AI 说能下、用户下不动"的回归防线）。
+/// HF 的 401 / 403 **可区分**：需要登录 vs gated（"AI 报告可下载、实际无法下载"的回归防线）。
 #[tokio::test]
 async fn hf_的_401_与_403_分别落到_needs_login_与_gated() {
     let (base, _) = fake_models(vec![("/api/models", 401, r#"{"error":"unauthorized"}"#)]).await;
