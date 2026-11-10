@@ -1,4 +1,4 @@
-//! ComfyHub **自己起 / 停**本机 ComfyUI 实例（2026-09-28 用户 bug「通过 CLI 启动 comfyui 总是失败」）。
+//! ComfyHub **自己起 / 停**本机 ComfyUI 实例（「通过 CLI 启动 ComfyUI 总是失败」）。
 //!
 //! # 为什么不走 comfy-mcp 的 `launch_comfyui`
 //!
@@ -30,7 +30,7 @@
 //! ```
 //!
 //! 三个路径参数**复用 [`crate::tools::mcp::prepare_launch_with`]**（`launch_comfyui` 那条路也是它）——
-//! 分头写必然漂移，而漂移的表现是"ComfyHub 起的实例看不到用户的模型"。
+//! 分头实现必然不一致，表现为"ComfyHub 启动的实例看不到本机模型"。
 //!
 //! 三条纪律（都踩过）：
 //!
@@ -45,7 +45,7 @@
 //! # 停
 //!
 //! 只停**我们自己起的那一个**（`.run\comfyui-<端口>.pid` 记着 pid）：没有 pid 记录时
-//! **如实说"这不是我起的、我不动它"** —— 用户的桌面实例（ComfyUI Desktop）有它自己的
+//! **如实说明"这不是我启动的、不做改动"** —— 桌面实例（ComfyUI Desktop）有其自身的
 //! 生命周期，被 AI 顺手杀掉是不可接受的。杀之前还要用 `tasklist` 核一眼那个 pid 现在
 //! 是不是 python（pid 会被系统回收，不复核就可能误杀无辜进程）。
 //!
@@ -62,7 +62,7 @@
 //! | 怀疑对象 | 实测 | 结论 |
 //! | --- | --- | --- |
 //! | 目录 ACL | 诊断脚本对两个目录报 `NOT_THIS_CLASS`（无 deny ACE、无 package ACE，`WRITE_DAC`/`WRITE_OWNER` 都在） | 无关 |
-//! | 路径配错 / 用户身份 / Defender | 同用户同目录，`powershell` 写得进；Defender 无受控文件夹规则 | 无关 |
+//! | 路径配置 / 账户身份 / Defender | 同一账户同一目录，`powershell` 可写入；Defender 无受控文件夹规则 | 无关 |
 //! | **映像在工作区内** | **同一个二进制逐字节相同：放工作区内 → 写 `%TEMP%`、`D:\Comfy-Desktop\…` 全 `os error 5`；`copy` 到 `%TEMP%` → 哪儿都能写** | ✅ 就是它 |
 //! | 从哪个会话 / 终端起 | 双击也一样被限 | 无关（限制在令牌里，跟会话走没用） |
 //!
@@ -109,7 +109,7 @@ pub struct LaunchPlan {
     pub log: PathBuf,
     /// pid 记在哪（停实例时按它认"这是我起的"）。
     pub pid_file: PathBuf,
-    /// 三个参数的来路说明（如实回给模型/用户）。
+    /// 三个参数的来源说明（如实返回模型与界面）。
     pub note: Option<String>,
 }
 
@@ -154,7 +154,7 @@ pub fn looks_runnable(dir: &Path) -> bool {
 ///
 /// 1. 显式参数 `workspace`（给了就必须能跑，否则当场如实报错，不悄悄换一个）；
 /// 2. 环境变量（`COMFYHUB_COMFY_WORKSPACE` → `COMFYHUB_COMFY_HOME` / `COMFYUI_HOME` / `COMFYUI_PATH`；
-///    与 [`crate::comfy::comfy_dirs`] 同一批键，脚本 / 高级用户用）；
+///    与 [`crate::comfy::comfy_dirs`] 同一批键，供脚本 / 高级用法使用）；
 /// 3. 项目内自带的 `<根>\comfyui`；
 /// 4. 常见位置与 ComfyUI Desktop 的几套布局（[`crate::comfy::comfy_dirs`] 里那三个有界探测）；
 /// 5. [`crate::comfy::comfy_dirs::find_home`]（任何形态，能跑就用）。
@@ -346,11 +346,11 @@ pub fn plan_with(
 /// * **按映像位置**：后端 exe 在工作区内 → 写工作区外全 `os error 5`；同一二进制复制出去 → 全通。
 ///   所以换 ComfyUI 自带的 python **没用**（后端自己就写不了），换 spawn 档位也没用。
 /// * **按继承**：受限父进程拉起的、工作区外的 python 照样被拒（`tests/tmp-inherit-probe.rs`）。
-///   所以"让用户双击 Desktop"那条路之所以有效，是因为它的 python **映像在 ComfyUI 那边**
+///   因此"手动双击 Desktop"之所以有效，是因为其 python **映像位于 ComfyUI 一侧**
 ///   **且**父进程（Desktop）不受限 —— 两个前提缺一个就不成立。
 ///
 /// 所以在这种后端里**任何由我们拉起的实例都是残废的**（写不了自己的 temp/output/模型目录）。
-/// 与其白起一个卡死的实例（用户等两分钟、看到 100% CPU、以为 ComfyUI 坏了），
+/// 与其启动一个卡死的实例（等待两分钟、观察到 100% CPU、被误认为 ComfyUI 故障），
 /// 不如**当场如实拒绝**并说清修法（把后端映像挪出工作区 —— 见下面 `ensure_writable` 的文案）。
 fn dir_writable(dir: &Path) -> bool {
     crate::infra::confinement::dir_writable(dir)
@@ -438,7 +438,7 @@ pub async fn start(state: &AppState, arguments: &Value) -> Result<ToolOutcome, T
     })?;
     let base = config.comfy_url.trim().trim_end_matches('/').to_string();
 
-    // 已经在跑就**不重复起**（同一端口硬起第二个必失败，而用户其实只想用它）。
+    // 已在运行则**不重复启动**（同一端口启动第二个必然失败，而实际只需使用现有实例）。
     // ⚠ 这里也要如实说"它读哪个 input"：那不是我们起的，只有**上次留档**或**问实例**知道
     //   —— 投放工具会自己去问（`image_edit::target_input_dir`），这里的 payload 是给人看的。
     if let Some(stats) = probe(&base).await {
@@ -473,7 +473,7 @@ pub async fn start(state: &AppState, arguments: &Value) -> Result<ToolOutcome, T
     // 先确认"子进程写得进它自己的目录"（写不进就别白起一个卡死的实例，见 ensure_writable）
     let output_dir = desktop.as_ref().and_then(|d| d.output_dir.clone());
     // 顺手留证：探一次就把"本进程受不受限"落到 `.run\confinement.json`，doctor 靠它报出来 ——
-    // 沿用 pitfalls 151/154 的纪律（doctor 看不出这一条，用户就只能一直靠猜）。
+    // 沿用 pitfalls 151/154 的约束（doctor 无法判断该项，只能推测）。
     // 探到正常时 `refresh` 会把旧标记清掉，所以每次调 comfy_start 都顺手校正一次。
     crate::infra::confinement::refresh(state);
     ensure_writable(&plan, output_dir.as_deref(), &dir_writable)?;
@@ -486,7 +486,7 @@ pub async fn start(state: &AppState, arguments: &Value) -> Result<ToolOutcome, T
     let started = Instant::now();
     let mut child = spawn_detached(&plan)?;
     let pid = child.id();
-    // 先记 pid 再等：等的过程里用户点「停止」也要停得掉
+    // 先记录 pid 再等待：等待期间点「停止」也必须能终止
     let _ = write_pid_file(&plan, pid);
     // 把"这个实例读哪个 input"一起记下来（投放侧要照它对上，见 write_launch_record）
     let _ = write_launch_record(&plan, pid);
@@ -671,7 +671,7 @@ fn spawn_detached(plan: &LaunchPlan) -> Result<std::process::Child, ToolFailure>
         // CREATE_NO_WINDOW：控制台程序默认会拿到自己的窗口（AGENTS §2 那条纪律）
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         // CREATE_NEW_PROCESS_GROUP：与后端自己的 Ctrl 事件脱钩（后端被 Ctrl+C 收走时
-        // 实例不该跟着一起死 —— 它是用户要用的长跑进程）
+        // 实例不应随之终止 —— 它是需要持续运行的长跑进程）
         const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
         command.creation_flags(CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP);
     }
@@ -763,7 +763,7 @@ fn clear_launch_files(pid_file: &Path) {
 
 /// 把"这个实例读哪个 input / 写哪个 output"记下来。
 ///
-/// # 为什么非记不可（2026-09-30 用户 bug）
+/// # 必须记录的依据
 ///
 /// 起实例时挂的 input 有两处可能给它赋值：调用方自己写的 `--input`、以及 ComfyHub 照
 /// ComfyUI Desktop 的 `settings.json` 补的 `--input-directory`。**实例最终读哪一个**，
@@ -804,7 +804,7 @@ pub fn read_launch_record(project_root: &Path, port: u16) -> Option<Value> {
 ///
 /// 只认**自己起的、而且现在还活着**的那一个：pid 记录还在、而且那个 pid 现在真的是 python
 /// （pid 会被系统回收，不复核就可能把别人的进程当成自己的实例）。
-/// 用户自己用 ComfyUI Desktop 起的实例我们没起过 → `None`；那条路靠**直接问实例**
+/// 由 ComfyUI Desktop 自行启动的实例我们未启动过 → `None`；该路径靠**直接查询实例**
 /// （`image_edit::target_input_dir` 的探测），而不是靠猜。
 pub fn launched_input_dir(project_root: &Path, port: u16) -> Option<PathBuf> {
     let pid_file = project_root
@@ -839,11 +839,11 @@ fn log_tail(path: &Path) -> String {
     chars[start..].iter().collect()
 }
 
-/// "已经在跑 / 刚起来"的统一回报（**同一份措辞**：模型与用户看到的是同一件事）。
+/// "已在运行 / 刚启动"的统一回报（**同一份措辞**：模型与界面看到的是同一结果）。
 ///
 /// `known_input` 是**这个实例读哪个 input 目录** —— 起实例时挂的那份（我们起的）或留档里那份。
 /// 它是投放工具的目标目录，所以必须回给模型：两边不一致的表现是提交时 400
-/// `Invalid image file`，而模型光看配置是推不出来的（2026-09-30 用户 bug）。
+/// `Invalid image file`，仅凭配置无法推断。
 fn running_outcome(
     base: &str,
     stats: &Value,

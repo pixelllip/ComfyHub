@@ -3,7 +3,7 @@
 //!
 //! # 为什么需要它
 //!
-//! 用户的原话是"可以使用 civitai 等网站查找符合要求的工作流，**优先根据本机已有的模型修改该工作流**"。
+//! 需求为"可以使用 civitai 等网站查找符合要求的工作流，**优先根据本机已有的模型修改该工作流**"。
 //! 三件工具当时都齐了（`civitai_search` 能搜模型、`comfy_load_workflow` 能读工作流、
 //! `comfy_submit(overrides=…)` 能改参数），**缺的正是中间那一步**：判断"这份图里点名的
 //! `xxx.safetensors`，本机上哪个文件能顶"。
@@ -24,7 +24,7 @@
 //!
 //! ⚠ **必须取并集**（2026-09-22 的事故就是"问到实例就 `return`"造成的）：`launch_comfyui` 起的
 //! 实例没挂共享模型根时，`/object_info` 是一份**权威但看不到共享目录**的清单，于是"盘上明明有的
-//! anima-base / qwen_3_06b_base"被报成"本机没有"，模型据此让用户去下载一个**本来就在硬盘上**的
+//! anima-base / qwen_3_06b_base"被报成"本机没有"，模型据此要求下载一个**已在硬盘上**的
 //! 文件。现在：能加载的标 `visibleToInstance = true`（权威），盘上多出来的也列进来但标 `false`
 //! 并单列进 [`Inventory::disk_only`] —— 报告据此说"**这个实例看不到它们**"，而不是"本机没有"。
 
@@ -51,7 +51,7 @@ pub const MODEL_EXTS: &[&str] = &[
     "json",
 ];
 
-/// 一次最多列多少条（用户的 models 目录上千个文件是常态，不能整个塞进工具结果）。
+/// 一次最多列出多少条（models 目录常有上千个文件，不能全部放入工具结果）。
 pub const MAX_ENTRIES: usize = 500;
 
 /// 一条候选最多给几个（3 个足够做决定，多了只会淹掉结论）。
@@ -60,12 +60,12 @@ pub const MAX_CANDIDATES: usize = 3;
 /// 多低的相似度就不给候选了。
 ///
 /// 0.35 ≈ "至少有一半 token 对上了"。定这条线是为了**不编**：ComfyUI 只认磁盘上真实存在的
-/// 文件名，给一个看着像的名字等于让用户白等一次提交（还会得到一句看不懂的报错）。
+/// 文件名，给出相近的名称会导致一次无效提交（并得到难以理解的报错）。
 pub const MIN_SCORE: f64 = 0.35;
 
 /// "沾边"的下限（只作为缺模型时的背景，**不出现在候选里**）。
 ///
-/// 0.15 ≈ 只共用一个词。定这条是因为**报错的名字比不报更糟**：用户看到
+/// 0.15 ≈ 仅共用一个词。取该值是因为**报错名称比不报更差**：否则会看到
 /// "本机有个 sd15.safetensors" 会以为"那不就是我的模型吗"，而它跟 `krea2TurboInt8` 其实毫无关系。
 pub const NEAR_MISS_MIN: f64 = 0.15;
 
@@ -275,7 +275,7 @@ pub struct LocalModel {
 }
 
 impl LocalModel {
-    /// 给用户看的体积（GB）；不知道就 `None` —— **不编一个数出来**。
+    /// 界面显示用的体积（GB）；未知时为 `None` —— **不编造数值**。
     pub fn size_gb(&self) -> Option<f64> {
         self.bytes.map(|b| b as f64 / 1024.0 / 1024.0 / 1024.0)
     }
@@ -295,7 +295,7 @@ pub struct Inventory {
     pub merged: bool,
 }
 
-/// 一个候选（`same_folder` 为假 = 它不在该输入本来的那一类目录里，用之前要跟用户说一声）。
+/// 一个候选（`same_folder` 为假 = 不在该输入对应的目录类别中，使用前需说明）。
 #[derive(Debug, Clone)]
 pub struct Scored {
     pub model: LocalModel,
@@ -312,7 +312,7 @@ impl Inventory {
     }
 
     /// 全清单里找候选：**先在本类目录里找，不够再跨目录找**
-    /// （用户把 LoRA 放进 checkpoints 是常见事故，报出来比一句"本机没有"有用得多）。
+    /// （LoRA 被放入 checkpoints 属于常见情况，报出比返回"本机没有"更有用）。
     pub fn candidates_for(&self, folder: &str, wanted: &str) -> Vec<Scored> {
         let scored_of = |local: &LocalModel, same_folder: bool| -> Option<Scored> {
             let s = ModelName::similarity(wanted, &local.name);
@@ -349,7 +349,7 @@ impl Inventory {
         all
     }
 
-    /// **接近但不够像**的几条（分数低于 [`MIN_SCORE`]）—— 缺模型时给用户看的一句话背景。
+    /// **接近但不够匹配**的几条（分数低于 [`MIN_SCORE`]）—— 缺模型时的背景说明。
     ///
     /// 两道闸门，缺一个这句提示就会变成噪声：
     ///  ① 分数要过 [`NEAR_MISS_MIN`]；② 至少要有一个**长度 ≥ 3 的公共词**。
@@ -397,7 +397,7 @@ fn scan_cache() -> &'static Mutex<HashMap<String, Cached>> {
 ///
 /// * `object_info`：ComfyUI 的 `/object_info`（拿得到就是"能加载什么"的唯一权威）；
 ///   为 `None` 时退回扫盘。
-/// * `model_dirs`：用户**真实的模型根**（`models` 目录本身），例如 ComfyUI Desktop 的
+/// * `model_dirs`：**实际的模型根**（`models` 目录本身），例如 ComfyUI Desktop 的
 ///   `…\ComfyUI-Shared\models`。由调用方传进来、**不在这里读环境** ——
 ///   这样单测才不会被开发机的真实目录影响。
 pub fn inventory(
@@ -550,7 +550,7 @@ pub fn from_object_info(object_info: Option<&Map<String, Value>>) -> Option<Inve
     })
 }
 
-/// 扫盘时看的 ComfyUI 根：环境变量 / 用户配置的输出目录父目录 / 项目内 `comfyui`。
+/// 扫盘时使用的 ComfyUI 根：环境变量 / 配置的输出目录父目录 / 项目内 `comfyui`。
 fn scan_roots(project_root: Option<&Path>) -> Vec<PathBuf> {
     let Some(root) = project_root else {
         return Vec::new();
@@ -750,7 +750,7 @@ fn is_model_file(path: &Path) -> bool {
     // ⚠ **有意与 Kotlin 不同**（2026-09-27 真机抽查实测）：ComfyUI / Civitai 会给每个模型
     // 配一份同名 sidecar `xxx.metadata.json`（762 字节的 JSON，写着 sha256 / base_model /
     // 预览图 URL）。Kotlin 的 `MODEL_EXTS` 含 `json`，于是这 3 个 sidecar 被当成"盘上有、
-    // 实例枚举不到"的模型 —— 报告据此喊"这个实例没挂共享模型根 → 让用户重启 ComfyUI"，
+    // 实例枚举不到"的模型 —— 报告据此提示"该实例未挂载共享模型根 → 需重启 ComfyUI"，
     // **是一个纯粹的假警报**（真的 `.safetensors` 就在旁边、实例看得到）。
     // 判据取最窄的那一条：只排除 `.metadata.json` 这个明确的后缀，别的 `json`/`yaml`
     // 照样收（GGUF / 工作流配置那些确实可能被 loader 读）。
@@ -937,7 +937,7 @@ pub fn enumerate_model_inputs(
 //  模型文件名的配对打分（`ModelName`）
 // ---------------------------------------------------------------------------
 
-/// 模型文件名的**配对打分**（用户建议 ① 的核心判据）。
+/// 模型文件名的**配对打分**（核心判据）。
 ///
 /// 现场长这样：工作流点名 `krea2TurboOfficialComfy_krea2TurboInt8.safetensors`，
 /// 而本机盘上那份叫 `krea2_turbo_int8_v2.safetensors` —— 字面上几乎不像，但**词根全对**。
@@ -969,18 +969,18 @@ impl ModelName {
         (dice + containment).min(1.0)
     }
 
-    /// 严格相等（同名同后缀）：只有这一种情况才允许"不用问用户就替换"。
+    /// 严格相等（同名同后缀）：仅此情况允许"无需确认直接替换"。
     pub fn same(wanted: &str, local: &str) -> bool {
         Self::tokens(wanted).into_iter().collect::<HashSet<_>>()
             == Self::tokens(local).into_iter().collect::<HashSet<_>>()
     }
 
-    /// 把文件名变成一个**能拿去搜的查询词**（用户建议 ②，2026-09-22）。
+    /// 把文件名转换为**可用于搜索的查询词**。
     ///
     /// `krea2TurboOfficialComfy_krea2TurboInt8.safetensors` → `krea2 Turbo Int8`
     /// —— 拿整个文件名去 `civitai_search` 是搜不到的（那是一串打包名），但词根级别的词是能的。
     ///
-    /// **这不是"猜模型名"**：它只是把用户图里那个文件名转成一句更好的搜索词。
+    /// **这不是"推测模型名"**：它只是把图中的文件名转换为更合适的搜索词。
     pub fn lookup_query(file_name: &str) -> String {
         let stop: HashSet<&str> = [
             "official", "comfy", "comfyui", "final", "fixed", "copy", "new", "old", "v", "ver",
