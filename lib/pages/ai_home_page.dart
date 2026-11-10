@@ -73,7 +73,7 @@ String attachmentDisplayName(String raw, {required bool hasPreview}) {
   return name;
 }
 
-/// 「从设定图生成角色卡」那条固定起手（用户 2026-11-04 的流程）。
+/// 「从设定图生成角色卡」的固定起手流程。
 ///
 /// 这句话只负责**把意图与顺序说清**：先逐部位问、带裁图、问完再写卡。
 /// 具体规则（怎么裁、选项要不要配图、哪些不许问）在系统提示第 26 条里。
@@ -117,15 +117,15 @@ class _AiHomePageState extends State<AiHomePage> {
   /// 那一帧 24.7ms Build 的来源。实例不变时整棵子树被跳过。
   late final Widget _conversationList;
 
-  /// 正在把草稿写回输入框。这时**必须屏蔽** `_onInputChanged` ——
-  /// 否则"清空输入框"这个动作会被当成"用户把字删光了"，把刚取回来的草稿覆盖成空串
-  /// （切走再切回来字就没了，用户报的 bug ②）。
+  /// 正在把草稿写回输入框。此时**必须屏蔽** `_onInputChanged` ——
+  /// 否则"清空输入框"会被当作"删光文字"，把刚取回的草稿覆盖为空串
+  /// （切走再切回后文字丢失）。
   bool _applyingDraft = false;
 
   /// 第几次切换会话：异步取草稿回来时用它判断"还是不是同一次切换"。
   int _draftEpoch = 0;
 
-  /// 视口是不是贴着底部（用户建议 ③）：**贴底才自动跟随**，翻旧消息时不打扰。
+  /// 视口是否贴底：**贴底才自动跟随**，翻旧消息时不跟随。
   bool _atBottom = true;
 
   /// 上一次通知时**消息区里装的是哪条会话**。
@@ -158,7 +158,7 @@ class _AiHomePageState extends State<AiHomePage> {
       // 那时监听器还没挂上 —— 所以这里补一次取用。
       if (mounted) _applyHandoffIfAny();
       // 回到聊天页 = 可能刚从「AI 模型与凭据」改完模型的能力声明回来：
-      // 目录重读一次，改动当场生效（用户 bug 2026-09-28「模型声明要重启客户端才生效」）。
+      // 目录重读一次，改动立即生效（此前模型声明需重启客户端才生效）。
       // 冷启动那一次不用：load() 自己会读目录（loaded 还没翻真，正好跳过）。
       if (mounted && _store.loaded) _store.refreshModels();
     });
@@ -190,12 +190,12 @@ class _AiHomePageState extends State<AiHomePage> {
       // 附件托盘由 Store 随会话存走（`AiWorkspaceStore._stashAttachments`），
       // 这里只保住输入框里的文字
       _store.saveDraft(previous, _input.text);
-      // **真的换了会话**才清空输入框（下面再把新会话的草稿取回来）。
-      // 页面刚挂上来的那一次（previous == null）不算切换：用户可能已经打了字，
-      // 清空就等于把他的字吃掉。
+      // **确实更换会话**时才清空输入框（随后取回新会话草稿）。
+      // 页面首次挂载（previous == null）不算切换：此时可能已有输入文字，
+      // 清空会丢失输入。
       _setInputText('');
     } else if (id != null && _input.text.isNotEmpty) {
-      // 用户抢在第一次通知之前就打了字：这段字属于当前会话，存下来、别被草稿覆盖
+      // 首次通知之前已有输入：该文本属于当前会话，需保存，不能被草稿覆盖
       _store.saveDraft(id, _input.text);
     }
     if (id == null) return;
@@ -203,12 +203,12 @@ class _AiHomePageState extends State<AiHomePage> {
     final epoch = ++_draftEpoch;
     _store.loadDraft(id).then((draft) {
       if (!mounted || _draftEpoch != epoch) return;
-      // 取草稿期间用户已经开始打字了：以用户现在打的为准，不要回退成旧草稿
+      // 取草稿期间已开始输入：以当前输入为准，不回退为旧草稿
       if (_input.text.isEmpty) _setInputText(draft.text);
     });
   }
 
-  /// 程序性地改输入框内容：**不**触发草稿保存（草稿是"用户打出来的"才算数）。
+  /// 程序性地修改输入框内容：**不**触发草稿保存（仅手动输入才保存草稿）。
   void _setInputText(String text) {
     _applyingDraft = true;
     _input.value = TextEditingValue(
@@ -221,12 +221,12 @@ class _AiHomePageState extends State<AiHomePage> {
   /// 取走预设页交过来的文本（`▶️运行`），填进输入框并聚焦。
   ///
   /// 三条别踩：
-  ///  1. **取走即清空**（`takeHandoff`）—— 否则每次切回工作台都会再填一遍，
-  ///     用户刚清空的输入框会"复活"上一段字；
-  ///  2. **只在输入框为空时填**：用户可能已经打了一半，直接覆盖等于把他的字吃掉；
-  ///     有内容时改走"追加到末尾"，不丢他的输入；
-  ///  3. **不触发草稿保存**（走 [_setInputText]）—— 这段字是程序填的，
-  ///     不该被当成"用户打出来的草稿"落盘。
+  ///  1. **取走即清空**（`takeHandoff`）—— 否则每次切回工作台都会再次填入，
+  ///     使已清空的输入框重新出现上一段文本；
+  ///  2. **仅在输入框为空时填入**：已有输入时直接覆盖会丢失内容；
+  ///     有内容时改为"追加到末尾"，保留原输入；
+  ///  3. **不触发草稿保存**（走 [_setInputText]）—— 该文本由程序填入，
+  ///     不作为手动草稿落盘。
   void _applyHandoffIfAny() {
     if (!_store.hasHandoff) return;
     final text = _store.takeHandoff();
@@ -252,30 +252,30 @@ class _AiHomePageState extends State<AiHomePage> {
     super.dispose();
   }
 
-  /// 用户手动滚到底 / 翻上去时更新"贴底"状态（用户建议 ③ / ④）。
+  /// 手动滚到底 / 翻上去时更新"贴底"状态。
   ///
   /// 判据只有一条：**是不是真的贴底**（容差 [_bottomEpsilon]，只吸收亚像素误差）。
   ///
-  /// 老写法是 `distance < 80 ? true : ...` —— 那等于给"贴底"画了一个 80px 宽的笼子。
-  /// 这就是用户 bug 2026-09-20 那个"两个症状、一个根因"：
-  ///  ① 流式输出时往上滚一小段：内容同时在往下长，`max` 涨、`pixels` 没动多少，
-  ///     算出来的距离一直落在 80 以内 → 下一帧又被判成"贴底" →
-  ///     `_followIfAtBottom()` 的 `animateTo(max)` 把人拽回底部（"只滚一小段的话
-  ///     界面会立即重置到底部，再继续滚才不会滚下去"）。
-  ///  ② 快速拉滚动条时位置变化异常：用户一边拖，那个 180ms 的跟随动画一边在执行、
-  ///     每来一段流式内容又排一次新的 —— 手指和动画各拉一个方向，位置就跳。
+  /// 旧写法为 `distance < 80 ? true : ...`，相当于把"贴底"的判定范围设为 80px。
+  /// 该阈值导致两个现象：
+  ///  ① 流式输出时向上滚动一小段：内容同时增长，`max` 增大而 `pixels` 变化很小，
+  ///     计算出的距离始终在 80 以内 → 下一帧再次判定为"贴底" →
+  ///     `_followIfAtBottom()` 的 `animateTo(max)` 将视口拉回底部（"只滚一小段时
+  ///     界面立即重置到底部"）。
+  ///  ② 快速拖动滚动条时位置异常：180ms 的跟随动画在拖动期间执行，
+  ///     每段流式内容又触发一次 —— 拖动与动画方向不同，位置发生跳动。
   ///
-  /// 容差收到 1.5 之后，**用户滚一像素就脱离"贴底"**：`_followIfAtBottom()` 当场不再
-  /// 排新的跟随动画，上面两条同时消失（用户滚回底部时距离归零，自然重新贴上）。
+  /// 容差改为 1.5 后，**滚动一像素即脱离"贴底"**：`_followIfAtBottom()` 不再
+  /// 触发新的跟随动画，上述两个现象同时消失（滚回底部时距离归零，重新判定为贴底）。
   ///
   /// 这里**不需要**再判"位置有没有变小"：内容变长时 `max` 在涨而 `pixels` 没动，
-  /// 距离确实会变大，但那只是"新内容在下面"，跟随照旧；而用户真的滚上去了，
+  /// 距离确实会变大，但那只是"新内容在下方"，仍保持跟随；若主动向上滚动，
   /// 距离一定会超过这个容差。
   ///
   /// 另外**不要**在这里去动 `position`（比如"把在飞的动画按停"）：`UserScrollNotification`
   /// 是在 `ScrollDragController.update` 的中间派发的，此刻 `applyUserOffset` 正等着
   /// `setPixels`，任何 `jumpTo` / `hold` 都会把 `activity` 换成 Idle ——
-  /// 结果是**用户的手指当场失效**，而且 Flutter 会直接抛
+  /// 结果是**拖动立即失效**，且 Flutter 会直接抛出
   /// `'activity!.isScrolling': is not true`（本机实测过）。
   void _onScroll() {
     if (!_scroll.hasClients) return;
@@ -284,7 +284,7 @@ class _AiHomePageState extends State<AiHomePage> {
     if (next != _atBottom && mounted) setState(() => _atBottom = next);
   }
 
-  /// 只有"用户本来就在底部"才跟着新内容滚（用户建议 ③）。
+  /// 只有"原本就在底部"时才跟随新内容滚动。
   void _followIfAtBottom() {
     if (!_atBottom) return;
     _scrollToBottom();
@@ -292,15 +292,15 @@ class _AiHomePageState extends State<AiHomePage> {
 
   /// 换了会话（消息内容**整批被换掉**）时，把滚动位置重置到最新一条。
   ///
-  /// 用户 2026-09-20 报的第四个坑是"总长变小、`pixels` 还停在按旧总长算的位置上 ——
-  /// 内容被顶到视口外，第一条消息在界面上直接消失"。触发它的时机正是这里：
+  /// 已知现象："总长变小、`pixels` 仍停留在按旧总长计算的位置 ——
+  /// 内容被顶到视口外，第一条消息在界面上消失"。触发时机正是这里：
   /// `openConversation` 会把 `messages` 整批换掉，而本页只是重新 `build`，
   /// **滚动位置不会自己重置** —— `pixels` 被原样带到新会话上：
   ///   · 新会话内容更短 → 被夹回/顶出视口；
   ///   · 新会话内容一样长 → 直接落在半路（连夹取都不会发生，用例里实测差 256px）。
   ///
   /// 所以"换会话落在最新一条"这条产品纪律由界面**显式**负责，不靠框架的夹取去猜。
-  /// 换会话 = 用户想看最新的进展，落在半路没有任何理由。
+  /// 换会话的目的是查看最新进展，停留在中间位置没有意义。
   ///
   /// 必须放在**帧后**：这一刻新会话的内容还没布局，`maxScrollExtent` 还是旧的，
   /// 当场 `jumpTo` 会跳到一个马上就不成立的偏移上。这里用 `jumpTo`（不是动画）：
@@ -316,7 +316,7 @@ class _AiHomePageState extends State<AiHomePage> {
     });
   }
 
-  /// 回到最新消息（右下角按钮，用户建议 ④）。
+  /// 回到最新消息（右下角按钮）。
   void _jumpToBottom() {
     if (mounted) setState(() => _atBottom = true);
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -349,18 +349,18 @@ class _AiHomePageState extends State<AiHomePage> {
     final wide = width >= 900;
     // 第三栏（ComfyUI 状态）只在够宽时才铺开。
     //
-    // **900~1199px 曾经是个死角**（用户建议 ② / 需求审计 AIH-002）：那个区间
-    // `wide` 成立 → 没有窄屏那个 FAB，但 `showPanel` 不成立 → 也没有第三栏，
-    // 于是「ComfyUI 状态」整块内容在界面上**一个入口都没有**。
-    // 当时补的是"只在 900~1199px 把入口放进 AppBar"，结果**窄屏那一支还是靠 FAB** ——
-    // 而 FAB 钉在 `Scaffold` 的右下角，正好落在输入区「发送」按钮上面：
-    // 窗口一窄就盖住发送按钮（用户 2026-09-20 报的 bug）。现在入口只在**一个地方**：
+    // **900~1199px 区间缺少入口**：该区间内 `wide` 成立 → 无窄屏 FAB，
+    // 但 `showPanel` 不成立 → 也无第三栏，
+    // 因此「ComfyUI 状态」在界面上**没有入口**。
+    // 仅在 900~1199px 将入口放入 AppBar 时，**窄屏仍依赖 FAB** ——
+    // 而 FAB 位于 `Scaffold` 右下角，与输入区「发送」按钮重叠：
+    // 窗口变窄时会覆盖发送按钮。现在入口只在**一个地方**：
     // 第三栏铺不开时，一律进 AppBar（`onShowStatus`），窄屏不再有 FAB。
     final showPanel = wide && width >= 1200;
 
     final conversationList = _conversationList;
-    // AppBar 显示**当前对话标题**（用户建议 ④）：标题是自动总结出来的，
-    // 所以它得一直在视野里，用户才知道自己在哪条对话里、也可以随手改名。
+    // AppBar 显示**当前对话标题**：标题自动生成，
+    // 需要常驻可见，以便确认当前会话并可随时改名。
     //
     // **对话主体单独抽成一个会 `watch` 的 widget**（[_Thread]）：流式回包 /
     // ComfyUI 进度轮询每秒会通知好几次，以前是整页（含左侧 240px 会话列表）
@@ -376,14 +376,14 @@ class _AiHomePageState extends State<AiHomePage> {
       //
       // 准入判断是同步的、和 `send()` 共用同一份（`store.sendBlockReason()`）：
       // 被拒时（最常见的是"还在生成中又按了一次回车"）一个字节都不动 ——
-      // 以前是"先清空、再由 send() 拒绝"，用户打的字被静默吃掉，只能自己
-      // 把上一条复制一遍再发一次（用户报的 bug）。
+      // 旧实现为"先清空、再由 send() 拒绝"，输入文字被静默丢弃，
+      // 只能手动复制上一条后重发。
       //
       // 清空仍然发生在等待之前：`store.send()` 要一直 await 到整轮结束，
       // 放到后面就会出现"点了发送输入框里的话还在"，看起来像没反应。
       if (store.sendBlockReason() == null) {
         _input.clear();
-        // 用户刚发了消息：无论刚才翻到哪儿，都跳回底部看回复
+        // 刚发送消息：无论此前滚动到哪里，都回到底部查看回复
         if (mounted) setState(() => _atBottom = true);
         _scrollToBottom();
       }
@@ -426,9 +426,8 @@ class _AiHomePageState extends State<AiHomePage> {
 
   /// 手机上「上下文与状态」面板（模型能力 / ComfyUI / Skills / 长期记忆）。
   ///
-  /// ⚠ 入口名字必须与内容一致（用户 2026-11-05："手机的 comfyui 详情菜单中，
-  /// 包含的内容与其名字不符"）：它早先叫「ComfyUI 状态」，但面板里 ComfyUI 只是
-  /// 其中一张卡 —— 用户点进来会以为走错地方。现在顶栏菜单叫「ComfyUI 与上下文」、
+  /// ⚠ 入口名称必须与内容一致：此前名为「ComfyUI 状态」，但面板中 ComfyUI 只占
+  /// 其中一张卡，进入后与名称不符。现在顶栏菜单为「ComfyUI 与上下文」、
   /// 面板自己再标一行"上下文与状态"。
   void _showContextSheet(BuildContext context) {
     final store = context.read<AiWorkspaceStore>();
@@ -534,20 +533,20 @@ class _Thread extends StatelessWidget {
   final Future<void> Function(AiWorkspaceStore store, OutgoingMessage message)
   onSubmitted;
 
-  /// 用户在画布上改完布局、点「提交回工作台」时走这条路。
+  /// 在画布修改布局后点「提交回工作台」时调用。
   ///
   /// 与普通提交共用同一份发送逻辑（清空输入框 / 贴底 / 准入判断），只是正文是
-  /// `LayoutResubmit.toMessage()` 拼出来的 —— 所以它也是一条**用户消息**。
+  /// `LayoutResubmit.toMessage()` 生成 —— 因此它也是一条**消息**。
   final Future<void> Function(String text) onLayoutResubmit;
 
   /// 输入框 `+` 菜单里的「选择现有工作流」：把路径写进输入框，让 AI 照着这一份出图。
   ///
-  /// 不直接发送：用户还要补一句"想生成什么"。路径写进去之后，AI 的第一动作必然是
+  /// 不直接发送：还需要补充"想生成什么"。路径写入后，AI 的第一动作必然是
   /// `comfy_load_workflow(path=…)`（系统提示第 23 条 + `comfy-workflow-guide`），
   /// 不会自己编一份新的。
   Future<void> _pickWorkflow(BuildContext context) async {
     final store = context.read<AiWorkspaceStore>();
-    // 选择器**只做选择**：蓝图入口已按用户要求移除（2026-11-05）。
+    // 选择器**只做选择**：不提供蓝图入口。
     final file = await showWorkflowPicker(
       context,
       loadList: store.listWorkflowFiles,
@@ -578,7 +577,7 @@ class _Thread extends StatelessWidget {
             .clamp(180.0, constraints.maxHeight)
             .toDouble();
         return Column(
-          // `stretch` 不能省（用户 bug 2026-09-20："聊天主体距离两侧边栏空出一大片空白"）。
+          // `stretch` 不能省略（否则聊天主体与两侧边栏之间出现大片空白）。
           //
           // Column 的默认 `crossAxisAlignment` 是 **center**：子项拿到的是**松约束**，
           // 于是消息区（`SingleChildScrollView`）会缩到"最宽那条气泡 + 内边距"的宽度
@@ -608,11 +607,11 @@ class _Thread extends StatelessWidget {
                     controller: controller,
                     onLayoutResubmit: onLayoutResubmit,
                   ),
-                  // 「AI 正在生成」的加载提示**不再做成底部浮层**（用户建议 2026-09-20：
-                  // "不要出现在底部（很影响观感），而是当前正在生成回复的气泡底部，
-                  // 并且只保留转圈圈动画"）—— 它现在是那个气泡自己的内容，
+                  // 「AI 正在生成」的加载提示**不做成底部浮层**：
+                  // 显示在正在生成回复的气泡底部，且只保留转圈动画。
+                  // 它现在是该气泡自身的内容，
                   // 见 `_MessageBubble` 里 `isStreaming` 那一段。
-                  // 回到聊天底部（用户建议 ④）：**只在用户翻上去之后**才出现，
+                  // 回到聊天底部：**仅在向上滚动之后**才出现，
                   // 贴在对话主体右下角，不挡输入区。
                   if (!atBottom)
                     Positioned(
@@ -630,13 +629,13 @@ class _Thread extends StatelessWidget {
                 ],
               ),
             ),
-            // 输入区**被提问接管**（用户 bug 2026-09-21）：AI 正在等用户回答时，
-            // 底下这块整个换成提问卡（选项 + 自己输入 + 跳过），而不是在普通输入框
-            // 上面再摞一张卡 —— 那样用户会不知道"该往哪儿打字"。
+            // 输入区**由提问接管**：AI 等待回答时，
+            // 该区域整体替换为提问卡（选项 + 自由输入 + 跳过），不在普通输入框
+            // 上叠加卡片，以避免输入位置不明确。
             // 答完（或跳过）`pendingQuestion` 变 null，普通输入框自动回来。
             ConstrainedBox(
               constraints: BoxConstraints(maxHeight: composerMax),
-              // 不再套外层滚动：用户要在**输入框内部**滑动（2026-11-08），
+              // 不套外层滚动：需要在**输入框内部**滑动（2026-11-08），
               // 外层滚动会把那次拖动抢走。高度由输入框自己的 `maxLines`
               // 跟着"屏幕 - 键盘 - 卡片 - 底行"算出来（见 `_composerInputMaxLines`）。
               child: questions.isNotEmpty
@@ -680,7 +679,7 @@ class _ConversationList extends StatefulWidget {
   State<_ConversationList> createState() => _ConversationListState();
 }
 
-/// 这一栏**只在"会话列表真的变了"时重建**（用户 bug 2026-09-20 的性能现场）。
+/// 这一栏**仅在"会话列表实际变化"时重建**。
 ///
 /// 为什么不直接 `context.watch`：Provider 的 watch 是"通知一次就重建一次"，
 /// 而流式回包（攒到一帧也有十几次/秒）与 ComfyUI 进度轮询（1.5 秒一次）都会
@@ -749,8 +748,8 @@ class _ConversationListState extends State<_ConversationList> {
                     ),
                   ),
                 )
-              // 「选中」和「鼠标按下 / 悬停」必须一眼分得开（用户 bug：次新那条会话
-              // 顶着一块亮灰底，看起来比当前会话还像被选中）。
+              // 「选中」与「鼠标按下 / 悬停」必须可区分（次新会话曾显示亮灰底，
+              // 比当前会话更接近选中态）。
               // Material 默认的**按下高亮**是 ~38% 白，比选中态的存在感强得多；而且窗口在
               // 收到 mouse-up 之前失去焦点 / 被最小化时，这个按下高亮会**卡在屏幕上不动**。
               // 所以：按下 / 水波纹 / 悬停一律压到很淡，选中态改用明确底色（见下面的 selectedTileColor）。
@@ -767,8 +766,8 @@ class _ConversationListState extends State<_ConversationList> {
                     ),
                   ),
                   child: ListView.builder(
-                    // 列表整体留出内边距（用户建议 ⑥）：以前 ListTile 是**贴着**左右边缘画的，
-                    // 选中底色从窗口边缘一直铺到底，看着像"一整条横幅"而不是一行一个会话。
+                    // 列表整体保留内边距：此前 ListTile **紧贴**左右边缘，
+                    // 选中底色从窗口边缘铺到底，呈现为整条横幅而非单行会话。
                     padding: const EdgeInsets.symmetric(
                       horizontal: 8,
                       vertical: 4,
@@ -794,7 +793,7 @@ class _ConversationListState extends State<_ConversationList> {
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                         ),
-                        // 条数 + **最近一次对话时间**（用户建议 ⑥）：
+                        // 条数 + **最近一次对话时间**：
                         // 光有"N 条消息"看不出哪条是刚聊过的，得切进去才知道。
                         subtitle: Text(
                           '${c.messageCount} 条消息 · ${relativeTime(c.updatedAt)}',
@@ -854,8 +853,8 @@ class _ConversationListState extends State<_ConversationList> {
 
 /// 顶部条：显示**当前对话标题**，可以直接改名，也能看到当前模型与消息数。
 ///
-/// 对话标题现在是 AI 在第一次提问时自动总结出来的（用户建议 ③），
-/// 用户不接受这个总结时可以在这里（或会话列表的「重命名」里）改掉。
+/// 对话标题在首次提问时由 AI 自动生成，
+/// 如需修改可在此处（或会话列表的「重命名」）编辑。
 class _ConversationAppBar extends StatelessWidget
     implements PreferredSizeWidget {
   final AiWorkspaceStore store;
@@ -863,12 +862,12 @@ class _ConversationAppBar extends StatelessWidget
   /// 给「上下文与状态」面板用的入口（可空）。
   ///
   /// **只在第三栏铺不开时给**（< 1200px）：那个宽度下右侧栏不存在，不补这个按钮
-  /// 的话 Comfy 状态整块内容在界面上不可达（用户建议 ② / AIH-002）。
-  /// 窄屏以前用的是右下角 FAB，而 FAB 会盖住输入区的发送按钮（用户 bug），
+  /// 时 Comfy 状态整块内容在界面上无法访问。
+  /// 窄屏此前使用右下角 FAB，而 FAB 会覆盖输入区的发送按钮，
   /// 所以现在无论宽窄都走这一个入口。
   final VoidCallback? onShowStatus;
 
-  /// 「选择现有工作流」入口（用户 2026-10-21）。
+  /// 「选择现有工作流」入口。
   ///
   /// 放在顶栏而不是输入区底行：320 宽下底行已经排满 4 枚图标 + 发送，
   /// 再塞一枚会溢出；顶栏这里空间稳定，且"选素材"本来就不是发送动作。
@@ -916,15 +915,15 @@ class _ConversationAppBar extends StatelessWidget
           ),
         ],
       ),
-      // **一个主操作 + 一个 overflow**（2026-11-05 用户："AppBar 按钮太多"）。
+      // **一个主操作 + 一个 overflow**（AppBar 按钮数量过多）。
       //
       // 以前这里平铺 5 枚图标（工作流 / ComfyUI 状态 / 训练台 / 重命名 / 新建），
       // 窄屏挤、宽屏也在抢标题宽度。M3 的做法是主操作留在外面、其余收进菜单：
       //   · 「新建对话」是这一页唯一的主动作 → `IconButton.filledTonal`；
       //   · 工作流 / 状态 / 重命名 / 训练台 → 「更多」菜单。
       //
-      // ⚠ 原来那枚「选择现有工作流（可看蓝图）」**从顶栏移除**（用户点名要删的
-      //   "查看蓝图入口"）；工作流选择改从输入框的 `+` 菜单进（功能不丢）。
+      // ⚠ 「选择现有工作流（可看蓝图）」**从顶栏移除**；
+      //   工作流选择改从输入框的 `+` 菜单进入。
       actions: [
         AppMenuButton<String>(
           tooltip: '更多操作',
@@ -1015,10 +1014,10 @@ class _ConversationAppBar extends StatelessWidget
 
 /// 消息区。
 ///
-/// **精确总长**（用户 bug 2026-09-20，第二版）：滚动条滑块的长度与位置都是
-/// `pixels / maxScrollExtent` 算出来的，而懒构建的 `ListView` 对**还没布局到的**
-/// 子项只能估算总长 —— 估算每滚一段就换一个值，滑块就来回跳（用户报的
-/// "在最新一条聊天记录里，滚动条会跳变 1/3 的进度"）。
+/// **精确总长**：滚动条滑块的长度与位置由
+/// `pixels / maxScrollExtent` 计算，而懒构建的 `ListView` 对**尚未布局的**
+/// 子项只能估算总长 —— 每次滚动都会改变估算值，滑块位置随之跳动
+/// （在最新一条聊天记录中，滚动条进度会跳变约 1/3）。
 ///
 /// 前一版把缓存窗口放到前后各 2 个视口，只是让"已建那几项的平均高度"更稳一点：
 /// 实测变化 17 次 → 11 次、回缩 9 次 → 4 次，**压掉一半、压不到 0** ——
@@ -1029,9 +1028,9 @@ class _ConversationAppBar extends StatelessWidget
 /// `maxScrollExtent = scrollExtent − viewportDimension` 从第一帧起就精确，
 /// 滑块的长度与位置**全程不变**。
 ///
-/// 为什么不用 `ListView` 的 `itemExtentBuilder`（用户探过的那条路）：
+/// 不使用 `ListView` 的 `itemExtentBuilder`：
 /// 它要求**每一条**都给一个精确高度，而且那个返回值是**硬约束**，差一点就直接
-/// 裁内容（用户实测 `RenderFlex overflowed by 168~512px`）。要在懒构建的前提下
+/// 裁内容（`RenderFlex overflowed by 168~512px`）。要在懒构建的前提下
 /// 拿到"每一条的真值"，就得再搭一层离屏测量（量宽度还得和真实布局宽度
 /// 逐像素一致）—— 拿一个必然会算错的地方，去换一个本来就有精确答案的地方，不值得。
 ///
@@ -1056,7 +1055,7 @@ class _ConversationAppBar extends StatelessWidget
 ///
 /// 真要再往下优化，方向是"给还没量过的行一个精确高度的懒构建"
 /// （`ListView.itemExtentBuilder`）。但那要额外搭一层离屏测量，而且它的返回值是
-/// **硬约束**：差一点就直接裁内容（用户实测 `RenderFlex overflowed by 168~512px`），
+/// **硬约束**：差一点就会裁内容（`RenderFlex overflowed by 168~512px`），
 /// 量宽度还必须与真实布局宽度逐像素一致 —— 不该塞进这次修复里。
 class _MessageList extends StatelessWidget {
   final AiWorkspaceStore store;
@@ -1071,10 +1070,10 @@ class _MessageList extends StatelessWidget {
     required this.onLayoutResubmit,
   });
 
-  /// 每一条气泡的外边距（用户建议 2026-09-20："聊天气泡距离边缘 20 到 30 像素"）。
+  /// 每一条气泡的外边距。
   ///
   /// 取 24：气泡铺满整栏宽度（不再有 `maxWidth` 上限），左右各留 24 ——
-  /// 用户气泡贴右边栏、助手气泡贴左边栏，中间是一条读得下去的行宽。
+  /// 请求气泡靠右栏、助手气泡靠左栏，中间为可读行宽。
   static const EdgeInsets _itemPadding = EdgeInsets.symmetric(
     horizontal: 24,
     vertical: 6,
@@ -1092,12 +1091,12 @@ class _MessageList extends StatelessWidget {
       padding: const EdgeInsets.symmetric(vertical: 6),
       child: Column(
         // `stretch`：**每条消息占满整行**，靠左还是靠右由 `_MessageBubble`
-        // 自己的 `crossAxisAlignment` 决定（用户消息靠右）。
+        // 自身的 `crossAxisAlignment` 决定（请求消息靠右）。
         //
         // 这里以前是 `start`，子项因此拿到松约束、缩到"气泡自己那么宽"，
         // 而 `_MessageBubble` 那层 Column 也就跟着缩成一样宽 —— 它里面写的
-        // `CrossAxisAlignment.end` 于是**完全没有效果**：用户消息实际是左对齐的，
-        // 右侧再空出一大片（用户 2026-09-20 的截图）。
+        // `CrossAxisAlignment.end` 因此**没有效果**：请求消息实际为左对齐，
+        // 右侧出现大片空白。
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           for (final message in store.messages)
@@ -1130,7 +1129,7 @@ int aiChatBubbleBuilds = 0;
 @visibleForTesting
 int sidebarBuilds = 0;
 
-/// 一条气泡的「重建闸门」（用户 bug：聊天快速上下滑动卡顿 / 展开流式思考后卡顿）。
+/// 一条气泡的「重建闸门」（避免快速滑动 / 展开流式思考时卡顿）。
 ///
 /// 为什么需要它：列表的 `itemBuilder` 每次刷新都会重跑，如果直接建 `_MessageBubble`，
 /// 一屏里的**每一条历史气泡**都会跟着重新解析 Markdown、重新排版 —— 逐字回包时
@@ -1180,7 +1179,7 @@ class _MessageBubbleSlotState extends State<_MessageBubbleSlot> {
         !widget.message.isUser &&
         streamingId != null &&
         streamingId == widget.message.id;
-    // 权限档同样要进闸门（用户建议 ①）：**生成过程中切档**要当场反映到气泡里，
+    // 权限档同样纳入闸门：**生成过程中切换档位**需立即反映到气泡中，
     // 它不在 `message` 实例里、也不是 `liveRevision`，漏掉就会"切了但字没变"。
     final permission = generating ? store.permissionMode : '';
     final unchanged =
@@ -1203,27 +1202,27 @@ class _MessageBubbleSlotState extends State<_MessageBubbleSlot> {
       child: _MessageBubble(
         message: message,
         sending: store.sending,
-        // 「AI 正在生成」的转圈动画只画在**正在流的那一条**上（用户建议 2026-09-20）
+        // 「AI 正在生成」的转圈动画只绘制在**正在流式生成的那一条**上
         generating: generating,
-        // 本轮权限档（用户建议 ①，2026-09-20）：**实时**读 store，就在正在生成的气泡里显示。
+        // 本轮权限档：**实时**读取 store，显示在正在生成的气泡中。
         // 只在流式期间给值 —— 历史气泡上挂"现在的档位"是错的（后端没按轮存过权限档）。
         permissionLabel: generating ? store.permissionLabel : '',
-        // 这条回复当时用的是哪个模型（用户建议 2026-09-20）
+        // 该回复使用的模型
         modelLabel: message.isUser ? '' : store.modelLabelOf(message.modelId),
         onRetry: store.retry,
         // 工具卡 / 思考都只属于助手消息
         toolCalls: message.isUser ? const [] : store.toolCallsFor(message),
-        // 思考 / 正文按**流顺序**还原成段（用户要求"如实按流顺序显示"）
+        // 思考 / 正文按**流顺序**还原为段（按到达顺序显示）
         segments: message.isUser ? const [] : store.segmentsFor(message),
         // 这条回复真正产出的产物（回复末尾的「画廊入口卡」）
         producedMediaIds: message.isUser
             ? const []
             : store.producedMediaIds(message),
-        // 其中被 AI 声明为成人内容的那些：产物卡只糊这几张（用户 bug 2026-09-20）
+        // 其中被 AI 声明为成人内容的：产物卡仅对这些打码
         producedNsfwMediaIds: message.isUser
             ? const []
             : store.producedNsfwMediaIds(message),
-        // 产出这些图的那份工作流也属于"生成的产物"（用户建议 ①）
+        // 产出这些图的工作流也属于"生成的产物"
         producedPromptIds: message.isUser
             ? const []
             : store.producedPromptIds(message),
@@ -1235,7 +1234,7 @@ class _MessageBubbleSlotState extends State<_MessageBubbleSlot> {
         toolCategoryOf: store.toolCategoryOf,
         onApprove: store.approveToolCall,
         onDeny: store.denyToolCall,
-        // 提问（用户建议 ⑥）：答完同一个 Run 接着做，不新建消息
+        // 提问：回答后同一 Run 继续执行，不新建消息
         onAnswerQuestion:
             (questionId, {int? optionIndex, String? text}) async =>
                 (await store.answerQuestion(
@@ -1245,11 +1244,11 @@ class _MessageBubbleSlotState extends State<_MessageBubbleSlot> {
                 )).ok,
         onSkipQuestion: (questionId) async =>
             (await store.skipQuestion(questionId)).ok,
-        // 卡片里"自己输入答案"→ 焦点交给底部被接管的那个答案框（用户 bug 2026-09-21）
+        // 卡片中"自己输入答案"→ 焦点交给底部被接管的答案框
         onFocusAskAnswer: () => store.pendingQuestionFocus.requestFocus(),
         // 提问卡里的裁图是后端给的相对路径（`/api/ai/attachments/{id}/file`）
         apiBase: store.baseUrl,
-        // 用户消息里的附件块：按 id 现取缩略图 / 视频预览帧（M3）
+        // 消息中的附件块：按 id 获取缩略图 / 视频预览帧（M3）
         thumbUrlOf: store.thumbUrlFor,
         fileUrlOf: store.fileUrlFor,
         // 画廊产物（媒体 id）走画廊接口，别再喂给附件接口
@@ -1270,22 +1269,22 @@ class _MessageBubble extends StatelessWidget {
   final AiMessage message;
   final bool sending;
 
-  /// 这条就是**正在流式生成**的那一条（用户建议 2026-09-20）：
+  /// 表示**正在流式生成**的那一条：
   /// 「AI 正在生成」只在它的底部画一个转圈动画。
   final bool generating;
 
-  /// 正在生成期间显示的本轮权限档（用户建议 ①，2026-09-20）。
+  /// 生成期间显示的本轮权限档。
   ///
-  /// 这里给的是**这一刻**的档位（`store.permissionMode` 实时读），所以用户在
-  /// 生成过程中切档，气泡里的字会立刻跟着变 —— 这正是"实时权限切换并展示"要的效果。
-  /// 非流式期间一律空：后端没有按轮存过权限档，历史气泡上挂"现在的档位"是假的。
+  /// 该值取**当前时刻**的档位（实时读取 `store.permissionMode`），因此生成过程中
+  /// 切换档位时，气泡中的文字会立即更新。
+  /// 非流式期间为空：后端未按轮保存权限档，在历史气泡上显示"当前档位"不准确。
   final String permissionLabel;
 
-  /// 这条回复**当时**用的模型名（用户建议 2026-09-20）。
+  /// 该回复**当时**使用的模型名。
   ///
   /// 取的是消息自己记的 `modelId`（后端逐条落库），不是"当前选中的模型"——
   /// 所以往上翻历史时看到的是每轮各自的模型，切换模型那轮一眼就能看出来。
-  /// 用户消息不需要这个（显示的是"谁问的"，不是"谁答的"）。
+  /// 请求消息不需要该字段（显示的是"谁问的"，不是"谁答的"）。
   final String modelLabel;
 
   final Future<void> Function(String assistantMessageId) onRetry;
@@ -1304,21 +1303,21 @@ class _MessageBubble extends StatelessWidget {
 
   /// 这次回复入库的提示词 id（`comfy_submit` 的 capturedPromptId）。
   ///
-  /// 用户建议 ①："「生成的产物」包括生成的工作流" —— 有了它，回复末尾那张卡
-  /// 就能直接打开这次真正跑过的工作流（也能拖回 ComfyUI 复现）。
+  /// "生成的产物"包括生成的工作流 —— 借助该字段，回复末尾的卡片
+  /// 可以直接打开本次实际运行的工作流（也可拖回 ComfyUI 复现）。
   final List<int> producedPromptIds;
 
   /// AI 与提示词同轮给出的候选布局（`layout_propose`，2026-11-03）。
   final List<LayoutCandidate> layoutCandidates;
 
-  /// 画布改完提交回工作台（正文是一条用户消息）。
+  /// 画布修改后提交回工作台（正文为一条消息）。
   final Future<void> Function(String text) onLayoutResubmit;
 
   final String Function(String toolName) toolCategoryOf;
   final Future<void> Function(String callId) onApprove;
   final Future<void> Function(String callId) onDeny;
 
-  /// 回答 / 跳过 AI 的提问（用户建议 ⑥）。
+  /// 回答 / 跳过 AI 的提问。
   final Future<bool> Function(
     String questionId, {
     int? optionIndex,
@@ -1327,7 +1326,7 @@ class _MessageBubble extends StatelessWidget {
   onAnswerQuestion;
   final Future<bool> Function(String questionId) onSkipQuestion;
 
-  /// "自己输入答案"：把焦点交给**底部被提问接管的那块输入区**（用户 bug 2026-09-21）。
+  /// "自己输入答案"：将焦点交给**底部被提问接管的输入区**。
   ///
   /// 气泡里的提问卡刻意**不带输入框**（否则一屏两个框，不知道往哪儿写），
   /// 所以这一行只做一件事：把光标送到下面那个唯一的答案框里。
@@ -1375,7 +1374,7 @@ class _MessageBubble extends StatelessWidget {
 
   /// 气泡正文的有序块：思考 / 正文 / 工具卡 / **环节组**，顺序 = `parts` 的顺序（= 消息获取顺序）。
   ///
-  /// 用户明确要求"完全按照消息获取顺序来，不要将最终回复置于最终思考的前面"：
+  /// **严格按照消息到达顺序**排列，不将最终回复放在最终思考之前：
   /// 早先这里是"所有思考与正文段先铺完、工具卡统统一坨挂在最下面"，
   /// 一轮回复里工具卡就跑到最终正文后面去了 —— 那也是重排。
   ///
@@ -1383,20 +1382,20 @@ class _MessageBubble extends StatelessWidget {
   /// **工具卡到达时的位置**（`type == 'tool_call'`，`text` 是 callId，见
   /// `AiWorkspaceStore._appendLiveToolCall`）。少了后者，流式期间工具卡就只能补在末尾，
   /// "思考 → 工具 → 正文"被画成"思考 → 正文 → 工具"，直到最终答复落库才跳回正确位置
-  /// （用户 2026-09-19 报的错位）。
+  /// （曾出现顺序错位）。
   ///
-  /// **关键步骤（环节）折叠**（用户建议 2026-09-28）：`step` 块开一组，把**紧接着**的
+  /// **关键步骤（环节）折叠**：`step` 块开一组，把**紧接着**的
   /// 工具卡收进那一组（默认折叠，见 [`_StepGroup`]）。两条纪律：
   ///  ① **只收连续的工具卡** —— 中间夹了正文 / 思考（或下一个环节）就先把这一组交出去
   ///     （宁可同一个环节名多一个组头，也不把正文挪到工具卡后面去：正文与工具卡的先后
-  ///     是用户 bug⑥ 专门定下来的，不能再动）；
+  ///     为固定行为，不能修改）；
   ///  ② 同一环节名再次开组时标「续」，让人一眼看出这是同一个环节的第二段操作。
   List<Widget> _orderedBody(BuildContext context, ThemeData theme) {
     final m = message;
     // 手机排队提交的回执（后端 id 形如 `submit-reply-<queueId>`）：
     // 画成**独立的提交结果卡**（成功带产物缩略图、失败带原因原文），
     // 不再按普通 Markdown 正文混在聊天里 —— 否则失败和一句解释长得一样，
-    // 用户点了批准却以为"没反应"（2026-11-08 真机）。
+    // 已批准但界面显示为"没有反应"（2026-11-08 真机）。
     if (m.id.startsWith('submit-reply-')) {
       return [
         SubmitResultCard(
@@ -1431,7 +1430,7 @@ class _MessageBubble extends StatelessWidget {
         // 桌面这边后端已经摘过，这里是幂等的 no-op）
         final visible = stripStepMarkers(text);
         if (visible.trim().isEmpty) return;
-        // 用户消息是**纯文本**，不走 Markdown（用户打什么就显示什么）。
+        // 请求消息是**纯文本**，不走 Markdown（按输入原样显示）。
         // 例外：布局画布提交回来的那条 —— 正文是一整套规格 JSON，原样铺开会占满一屏，
         // 所以画成一张卡（点「再次修改」还能接着改**这一版**）。
         if (m.isUser) {
@@ -1530,7 +1529,7 @@ class _MessageBubble extends StatelessWidget {
     return blocks;
   }
 
-  /// 用户消息里的 `@` 卡片 / `/技能`：一个小卡片，点开看**发送那一刻**的快照。
+  /// 消息中的 `@` 卡片 / `/技能`：一个小卡片，点开查看**发送那一刻**的快照。
   Widget? _mentionChip(BuildContext context, AiMessagePart part) {
     final payload = part.payload;
     if (payload == null) return null;
@@ -1638,7 +1637,7 @@ class _MessageBubble extends StatelessWidget {
     );
   }
 
-  /// 打开画布改这一份布局；用户点「提交回工作台」时把规格发回对话。
+  /// 打开画布编辑该布局；点「提交回工作台」时将规格发回对话。
   ///
   /// 走的是与输入框回车**同一条发送路**（`onLayoutResubmit`）：所以清空输入框、
   /// 贴底、准入判断的行为完全一致，不会出现"画布能发、输入框不能发"的两套规矩。
@@ -1662,8 +1661,8 @@ class _MessageBubble extends StatelessWidget {
 
   Widget _toolCard(AiToolCallState call) => Padding(
     padding: const EdgeInsets.only(top: 8),
-    // 提问（用户建议 ⑥）画的**不是工具卡而是提问卡**：一个是"等你批准"，
-    // 一个是"等你回答"，混在一起用户会以为点了就等于批准。
+    // 提问渲染为**提问卡而非工具卡**：一个是"等待批准"，
+    // 一个是"等待回答"，混在一起会被理解为点击即批准。
     child: call.allQuestions.isNotEmpty
         ? _AskCard(
             key: ValueKey('${message.id}-${call.callId}'),
@@ -1672,7 +1671,7 @@ class _MessageBubble extends StatelessWidget {
             apiBase: apiBase,
             onAnswer: onAnswerQuestion,
             onSkip: onSkipQuestion,
-            // "自己输入答案"那一行把焦点交给底部被接管的输入框（用户 bug 2026-09-21）
+            // "自己输入答案"一行将焦点交给底部被接管的输入框
             onFocusAnswer: onFocusAskAnswer,
           )
         : _ToolCallCard(
@@ -1689,12 +1688,12 @@ class _MessageBubble extends StatelessWidget {
     final theme = Theme.of(context);
     final m = message;
     final align = m.isUser ? CrossAxisAlignment.end : CrossAxisAlignment.start;
-    // 用户气泡 = primaryContainer（M3 的"我"侧），助手气泡 = surfaceContainerHigh
+    // 请求气泡 = primaryContainer（M3 的"我"侧），助手气泡 = surfaceContainerHigh
     // （实色，不再叠 alpha：叠色在深色下会发灰、在动态取色下还会串色）。
     final bg = m.isUser
         ? theme.colorScheme.primaryContainer
         : theme.colorScheme.surfaceContainerHigh;
-    // M3 表达性气泡：大圆角 + 靠近说话人的那一角收小（用户消息贴右、助手贴左）。
+    // M3 表达性气泡：大圆角 + 靠近说话人的一角收小（请求消息靠右、助手靠左）。
     final bubbleShape = BorderRadius.only(
       topLeft: const Radius.circular(16),
       topRight: const Radius.circular(16),
@@ -1708,7 +1707,7 @@ class _MessageBubble extends StatelessWidget {
         !sending;
     // 待批准的工具调用（M4）：气泡里要能点「批准 / 拒绝」。
     // ⚠ 提问卡也用 `pendingApproval` 这个状态（"等你回答"），但它**不是审批**：
-    // 混进来会让顶上多一条"有 1 个工具调用在等你的批准"，而用户根本找不到批准按钮。
+    // 混入后顶部会多出"有 1 个工具调用等待批准"，而找不到批准按钮。
     final pending = toolCalls
         .where((c) => c.needsApproval && c.allQuestions.isEmpty)
         .toList();
@@ -1722,15 +1721,15 @@ class _MessageBubble extends StatelessWidget {
           // 气泡本体（内含底色那一块）在用例里要能精确取到矩形 ——
           // "转圈动画贴在正在生成的那条气泡底部"这条断言就靠它。
           key: ValueKey('ai-bubble-${m.id}'),
-          // **助手气泡铺满整行，用户气泡按内容收缩**（用户 bug 2026-10-25）。
+          // **助手气泡铺满整行，请求气泡按内容收缩**。
           //
           // 助手这一侧是"内容面板"（正文 / 工具卡 / 产物卡 / 思考过程…），宽度
           // 只能由版面决定：一旦让 `Container` 收缩到内容宽度，流式期间气泡宽度
           // 就会跟着"当前最后一行有多长"一抽一抽地跳 —— 思考过程最明显，它折叠时
-          // 显示的正是**最后一行**，每换一行气泡右边缘就变一次（用户截图）。
-          // 用户这一侧是"消息气泡"：按内容收缩、贴右边，才像一条消息。
+          // 显示的是**最后一行**，换行时气泡右边缘随之变化。
+          // 请求侧为"消息气泡"：按内容收缩并靠右。
           //
-          // 早先这里指望外层 `stretch` 撑满（用户建议 2026-09-20："空间利用率低"），
+          // 此前依赖外层 `stretch` 撑满（空间利用率低），
           // 但 `stretch` 只作用到"每条消息占满整行"那一层：这一层 Column 的
           // `crossAxisAlignment` 是 start/end，气泡拿到的是**松约束**、又缩回内容
           // 宽度了（这也是 057c47b 那句"气泡由 stretch 撑满整行"没兑现的原因）。
@@ -1739,7 +1738,7 @@ class _MessageBubble extends StatelessWidget {
           margin: const EdgeInsets.symmetric(vertical: 6),
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
           decoration: BoxDecoration(color: bg, borderRadius: bubbleShape),
-          // 整条气泡一个选择域（用户 bug ②："仅能选择 3 行文本"）：
+          // 整条气泡为一个选择域：
           // 一段回复被解析成很多个块（段落 / 标题 / 列表 / 表格 / 代码块），
           // 每块一个 SelectableText 的话，鼠标拖到当前块末尾就拉不动了。
           // 包一层 SelectionArea、内部一律用 Text，选择就能跨段连续拉下去。
@@ -1748,11 +1747,11 @@ class _MessageBubble extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 // 思考 / 正文 / 工具卡**按 parts 的真实顺序**交错渲染
-                // （用户要求：完全按照消息获取顺序来，不重排）。
+                // （严格按消息到达顺序排列，不重排）。
                 // 后端给的 parts 就是权威的有序块；`segments` 是它的降级版本（只有思考与正文段），
                 // 流式过程中 parts 还没到，就用它 + 末尾追加还没归位的工具卡。
                 ...body,
-                // 附件块（只出现在用户轮）
+                // 附件块（只出现在请求轮）
                 for (final part in m.parts)
                   if (part.type == 'attachment')
                     Padding(
@@ -1764,11 +1763,11 @@ class _MessageBubble extends StatelessWidget {
                       ),
                     ),
                 // 上面两条路**都没产出内容**时才退回整段正文（老数据 / 只有纯文本），
-                // 用户消息本来就是纯文本，不走 Markdown。
+                // 请求消息为纯文本，不走 Markdown。
                 //
                 // ⚠️ 判据必须是"正文块为空"，**不能**写成 `segments.isEmpty`：
-                // 用户消息的 `segments` 是刻意传空的（它走 parts 那条路），那个条件对它**永远成立**，
-                // 于是正文被渲染两遍 —— 用户 2026-09-19 的截图就是它：带附件的消息里
+                // 请求消息的 `segments` 刻意传空（走 parts 路径），该条件对它**始终成立**，
+                // 导致正文被渲染两遍 —— 带附件的消息中
                 // 同一句话上下各一份、图片正好夹在中间（`_orderedBody` 一份 + 这里一份）。
                 if (body.isEmpty && m.text.isNotEmpty)
                   m.isUser
@@ -1778,9 +1777,8 @@ class _MessageBubble extends StatelessWidget {
                           style: theme.textTheme.bodyMedium,
                           selectable: false,
                         ),
-                // 「AI 正在生成」：**画在这条气泡自己的底部**，而且只有一个转圈动画
-                // （用户建议 2026-09-20："不要出现在底部（很影响观感），而是当前正在
-                // 生成回复的气泡底部，并且只保留转圈圈动画"）。
+                // 「AI 正在生成」：**显示在该气泡自身的底部**，且只有一个转圈动画
+                // （不放在页面底部，只显示在正在生成的气泡底部）。
                 //
                 // 判据是"这条就是正在流的那一条"（`generating`），不是 `status == 'streaming'`：
                 // 后者在流中断 / 被打断的历史消息上也可能留着，那会让旧气泡一直转圈。
@@ -1806,8 +1804,8 @@ class _MessageBubble extends StatelessWidget {
                             color: theme.colorScheme.primary,
                           ),
                         ),
-                        // 本轮权限档（用户建议 ①）：就贴在这个转圈旁边。
-                        // 用户在生成过程中切档，这行字**立刻**跟着变 ——
+                        // 本轮权限档：显示在转圈动画旁。
+                        // 生成过程中切换档位时，该行文字**立即**更新 ——
                         // 不用等这一轮结束，也不用去输入区低头找那个按钮。
                         if (permissionLabel.isNotEmpty) ...[
                           const SizedBox(width: 8),
@@ -1860,9 +1858,9 @@ class _MessageBubble extends StatelessWidget {
                       ),
                     ),
                   ),
-                // 画廊入口卡（用户建议 ⑤）：这次回复**真的生成了产物**时，
-                // 在末尾贴一个能点开看详情的入口，而不是让用户自己去画廊里翻。
-                // 用户建议 ①：这张卡里也包含"生成它的工作流"（一次运行出来的图 + 那份工作流
+                // 画廊入口卡：本次回复**实际生成产物**时，
+                // 在末尾提供可打开详情的入口，不需要到画廊中查找。
+                // 该卡也包含"生成它的工作流"（一次运行产生的图 + 该工作流
                 // 本来就是同一批产物），所以多一个「查看工作流」按钮。
                 if (producedMediaIds.isNotEmpty || producedPromptIds.isNotEmpty)
                   Padding(
@@ -1912,11 +1910,11 @@ class _MessageBubble extends StatelessWidget {
             ),
           ),
         ),
-        // 这一轮是怎么答出来的：模型（用户建议 2026-09-20）+ 思考强度 + token 用量。
+        // 本轮的生成信息：模型 + 思考强度 + token 用量。
         //
-        // 放在气泡**外面**（不是里面）：它是元信息、不属于回复内容 ——
-        // 放进气泡会被 `SelectionArea` 一起复制走（用户 bug ② 就是"选中的文本里
-        // 混进了不该有的东西"），挂在外面既选不中、也一眼看得出属于哪一条。
+        // 放在气泡**外面**：它属于元信息，不属于回复内容 ——
+        // 放入气泡会被 `SelectionArea` 一并复制（选中的文本中会混入非正文内容），
+        // 放在外面不可选中，也能看出属于哪一条。
         ?_metaRow(theme),
       ],
     );
@@ -1937,7 +1935,7 @@ class _MessageBubble extends StatelessWidget {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          // 本轮用的模型（用户建议 2026-09-20）：切换模型那一轮一眼就能看出来。
+          // 本轮使用的模型：切换模型的那一轮可直接辨认。
           // 取的是**这条消息自己记的** modelId，所以翻历史时看到的是各轮真实的模型。
           if (modelLabel.isNotEmpty) ...[
             Icon(
@@ -2084,7 +2082,7 @@ class _ToolCallCardState extends State<_ToolCallCard> {
                 ),
               if (call.hasDetail)
                 Tooltip(
-                  // 带工具名的 tooltip：用例与用户都能精确定位"展开哪一个工具的结果"
+                  // 带工具名的 tooltip：便于定位"展开哪一个工具的结果"
                   message:
                       '${_expanded ? '收起' : '展开'} ${call.displayTitle} 的结果',
                   child: InkWell(
@@ -2101,7 +2099,7 @@ class _ToolCallCardState extends State<_ToolCallCard> {
                 ),
             ],
           ),
-          // 副标题：`用途 · 机器名`。机器名留在界面上，但不再是用户第一眼看到的东西。
+          // 副标题：`用途 · 机器名`。机器名保留在界面上，但不是首要信息。
           if (call.displaySubtitle.isNotEmpty)
             Padding(
               padding: const EdgeInsets.only(left: 20, top: 1),
@@ -2148,8 +2146,8 @@ class _ToolCallCardState extends State<_ToolCallCard> {
               child: ConstrainedBox(
                 constraints: const BoxConstraints(maxHeight: 320),
                 child: SingleChildScrollView(
-                  // 三块**各自一个容器**（用户 2026-10-25：参数 / 结果分开显示，
-                  // 有说明再放第三块）。一块展开 = 三块一起展开，不各管各的。
+                  // 三块**各自一个容器**（参数 / 结果分开显示，
+                  // 有说明时放第三块）。一块展开即三块一起展开。
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
@@ -2271,7 +2269,7 @@ class _StatusChip extends StatelessWidget {
   }
 }
 
-/// 回复末尾的**画廊入口卡**（用户建议 ⑤）：
+/// 回复末尾的**画廊入口卡**：
 /// "如果让 AI 调用 comfy 生成了产物，可以在回复末尾贴上一个类似画廊项目的入口，点开即查看对应详情"。
 ///
 /// 只显示**后端确认入库**的产物（媒体 id 来自工具的结构化结果），
@@ -2279,17 +2277,17 @@ class _StatusChip extends StatelessWidget {
 ///
 /// 缩略图走**画廊**的 `/api/media/{id}/thumb`（视频退到 `/poster`）：
 /// 早先这里复用了附件那两条接口（`thumbUrlOf(id)`），id 空间不同，必然 404 ——
-/// 用户看到的就是"生成产物后预览图不可用"。
+/// 表现为"生成产物后预览图不可用"。
 class _ProducedMediaCard extends StatelessWidget {
   final List<int> mediaIds;
 
   /// 这一批里**被标记为成人内容**的那些（`comfy_submit` 声明了 `nsfw=true`）。
   ///
-  /// 用户 bug 2026-09-20：模糊开关一开，回复里的产物卡也把所有图糊了 ——
+  /// 模糊开关开启时，回复中的产物卡曾把所有图打码 ——
   /// 只有 AI 明说过"这次是成人内容"的那几张才该糊。
   final List<int> nsfwMediaIds;
 
-  /// 产出这些图的那份提示词 / 工作流（用户建议 ①）。
+  /// 产出这些图的提示词 / 工作流。
   final List<int> promptIds;
 
   final String Function(int mediaId) mediaThumbUrlOf;
@@ -2310,7 +2308,7 @@ class _ProducedMediaCard extends StatelessWidget {
     this.mediaHeaders = const {},
   });
 
-  /// 标题：图 + 工作流算同一批产物（用户建议 ①），有几个就分别说清楚。
+  /// 标题：图 + 工作流属于同一批产物，按数量分别说明。
   ///
   /// 只有图时保持原来的写法，别为了多一个维度把常见情况的标题变啰嗦。
   String get _title {
@@ -2322,7 +2320,7 @@ class _ProducedMediaCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    // 全部列出（用户 2026-11-09："不能只看前 x 张"）。以前是 `take(6)`，一批出 10 张时
+    // 全部列出。此前使用 `take(6)`，一批 10 张时
     // 后 4 张在卡上根本看不到；这里是横向懒构建，列多少都不会一次全解码。
     final shown = mediaIds;
     return Container(
@@ -2413,8 +2411,8 @@ class _ProducedMediaCard extends StatelessWidget {
                   style: _buttonStyle,
                 ),
               if (promptIds.isNotEmpty)
-                // 「生成的产物」包括生成的工作流（用户建议 ①）：
-                // 直接打开这次真正跑过的那份工作流，而不是让用户去画廊里找
+                // "生成的产物"包括生成的工作流：
+                // 直接打开本次实际运行的工作流，不需要到画廊中查找
                 TextButton.icon(
                   onPressed: () => _openWorkflow(context),
                   icon: const Icon(Icons.account_tree_outlined, size: 15),
@@ -2471,7 +2469,7 @@ class _ProducedMediaCard extends StatelessWidget {
 /// 所以攒的是"**连续**到达的工具卡"这一串：
 ///  * 中间夹了正文 / 思考 → 先把已经攒下的交出去，**环节仍然开着**，后面再来的工具卡
 ///    另起一组并标「续」—— 这样"正文与工具卡的先后"永远等于它们到达的先后
-///    （用户 bug⑥ 的纪律），同时这一环节的操作**一个都不会漏在外面**；
+///    （固定行为），同时该环节的操作**不会遗漏在外**；
 ///  * 遇到下一个环节 → 关掉上一组，开新的一组。
 class _StepCollector {
   _StepCollector({required this.out, required this.buildCard});
@@ -2534,15 +2532,15 @@ class _StepCollector {
 
 /// 一个**关键步骤（环节）组**：环节头 + 这一环节里的操作（工具卡），默认折叠。
 ///
-/// 用户建议 2026-09-28：「关键步骤之间 AI 的操作可以再折叠（关键步骤名显示这是哪个粗略环节，
-/// 比如正在分析请求这种，做个约束）」。环节名由**后端**从 `[步骤]…[/步骤]` 里摘出来，
+/// 关键步骤之间的操作可折叠，环节名用于说明当前步骤。
+/// 环节名由**后端**从 `[步骤]…[/步骤]` 中提取，
 /// 只可能是那六个固定名字（见 `server-rs/src/step_mark.rs`）—— 前端这里不再做任何猜名。
 ///
-/// 三条纪律：
+/// 三条约束：
 ///  ① **默认折叠**（与"思考过程"同一条：过程让位给正文），但收起时**不是藏起来** ——
 ///     标题上带"N 个操作"，一眼能看出这里做过几件事；
-///  ② **有东西等用户处理时不许折叠**（等批准的 / 失败的 / 被拒的）：批准按钮躲进折叠区，
-///     用户就永远不知道该点哪里（那是"AI 卡住了"的观感）；
+///  ② **有待处理项时不得折叠**（待批准 / 失败 / 被拒）：批准按钮位于折叠区时，
+///     无法确定点击位置（呈现为"AI 卡住"）；
 ///  ③ 同一环节名的第二次开组标「续」，让人看出这是同一个环节的第二段操作（见 [`_StepCollector`]）。
 class _StepGroup extends StatefulWidget {
   final String phase;
@@ -2562,10 +2560,10 @@ class _StepGroup extends StatefulWidget {
 }
 
 class _StepGroupState extends State<_StepGroup> {
-  /// 用户自己点开的（默认 false = 折叠）。
+  /// 是否由手动展开（默认 false = 折叠）。
   bool _userExpanded = false;
 
-  /// 这一组里有没有"等用户处理"的东西（处置见类注释第 ② 条）。
+  /// 该组是否包含"待处理"项（处置见类注释第 ② 条）。
   bool get _hasPendingWork => widget.calls.any(
     (c) =>
         c.needsApproval ||
@@ -2638,7 +2636,7 @@ class _StepGroupState extends State<_StepGroup> {
   }
 }
 
-/// 思考过程：**默认折叠**（用户要求："思考过程默认自动折叠"）。
+/// 思考过程：**默认折叠**。
 ///
 /// 收起时**不是简单藏起来** —— 显示模型思考的摘要（压成两行）：
 /// **生成中取末尾一行**（看"现在想到哪了"），**结束后取开头**（看"这段在讲什么"）。
@@ -2667,8 +2665,8 @@ class _ReasoningPanelState extends State<_ReasoningPanel> {
   /// **只扫一小段**：思考正文可能是几万字，而收起时最多显示两行 ——
   /// 全文过一遍正则（还每帧一次）纯属白花钱，流式期间这就是"卡顿"的一部分。
   ///
-  /// [fromEnd] = true 时取**末尾一行**（流式生成中用户要看"现在想到哪了"）；
-  /// 生成结束后再回到开头（用户要看"这段思考在讲什么"）。取末尾同样只看最后
+  /// [fromEnd] = true 时取**末尾一行**（流式生成中显示当前进度）；
+  /// 生成结束后回到开头（显示思考内容）。取末尾同样只看最后
   /// `limit * 4` 个字符，不扫全文。
   static String summaryOf(
     String text, {
@@ -2795,9 +2793,9 @@ class _ReasoningPanelState extends State<_ReasoningPanel> {
 /// 单独包一层是为了让"折叠时完全不构建它"这个行为一眼可见（见 `_ReasoningPanel`）。
 ///
 /// 用普通 `Text` 而不是 `SelectableText`：思考与正文同在一个 `SelectionArea` 里，
-/// 内层再开一个选择域的话，拖选到思考段末尾就拉不到下面的正文了（用户 bug ②）。
+/// 内层再开一个选择域时，拖选到思考段末尾无法继续选中下方正文。
 ///
-/// 这里解决用户 2026-09-19 报的两个问题：
+/// 这里解决两个问题：
 ///
 ///  ① **展开正在持续流式输出的思考过程后卡顿**：以前整段思考是一个 `Text`，
 ///     每来一个字都要把**几万字**重新排版一遍（一帧几十毫秒，直接掉帧）。
@@ -2806,7 +2804,7 @@ class _ReasoningPanelState extends State<_ReasoningPanel> {
 ///     于是每帧只重排"最后那一块"。
 ///  ② **展开后无法及时刷新**：内层滚动条停在自己原来的位置，新思考长在可视区下面，
 ///     看起来像"不刷新"。现在流式期间和聊天列表同一套纪律 —— **贴底才跟随**，
-///     用户自己往上翻了就不打扰。
+///     主动向上滚动时不打扰。
 class _StreamingReasoning extends StatefulWidget {
   final String text;
 
@@ -3027,7 +3025,7 @@ class _ComposerState extends State<_Composer> {
   void initState() {
     super.initState();
     widget.controller.addListener(_onControllerChanged);
-    // 拖进来的文件**挂成附件**（用户 2026-10-18："实现拖拽进窗口（AI工作台）"）。
+    // 拖入的文件**作为附件**挂载。
     //
     // ⚠ 听的是**全局广播流**，不是"输入框上的拖放区域"：Flutter 框架没有
     // "外部文件拖进窗口"的 API（`Draggable`/`DragTarget` 只传应用内的数据），
@@ -3067,9 +3065,9 @@ class _ComposerState extends State<_Composer> {
     final next = match?.group(1);
     // 键盘路径：行末输入 `@` 直接开卡片面板（按钮收在 "+" 菜单里；直接打字也该有入口）。
     //
-    // ⚠ 只认**文本真的变了**的那一次（用户 2026-11-08）：关掉弹层后焦点回到
-    // 输入框，controller 的 selection 变化也会触发监听；只看"行末是 @"的话
-    // 会**又弹一遍**，得取消两次才能接着打字。用 `_atHandled` 记住这次 @ 已经处理过。
+    // ⚠ 只处理**文本确实变化**的那一次：关闭弹层后焦点回到输入框，
+    // controller 的 selection 变化同样会触发监听；仅判断"行末为 @"时会
+    // **再次弹出**，需要取消两次才能继续输入。用 `_atHandled` 记录该次 @ 已处理。
     final atEnd = RegExp(r'(?:^|\s)@$').hasMatch(text);
     if (!_cardsOpen && atEnd && text != _atHandled) {
       _atHandled = text;
@@ -3077,8 +3075,8 @@ class _ComposerState extends State<_Composer> {
     } else if (!atEnd) {
       _atHandled = null;
     }
-    // ★ 两个弹层**互斥**（用户 2026-11-08：两个都开着会叠加溢出）。
-    //   开始打 `/` 说明用户要的是 skill 菜单，卡片面板当场收起。
+    // ★ 两个弹层**互斥**（同时开启会叠加并溢出）。
+    //   输入 `/` 表示需要 skill 菜单，卡片面板立即收起。
     if (next != null && _cardsOpen) {
       _cardsOpen = false;
     }
@@ -3103,13 +3101,13 @@ class _ComposerState extends State<_Composer> {
   ///
   /// 发送时每张卡各拼一段固定标记的文本（`[STYLE SPEC]` / `[CHARACTER CARD]`），
   /// 正文**逐字**带上 —— skill `r2i-prompt` 认的就是这些槽位。
-  /// 角色卡按**选中的先后**排（用户从 @ 面板一张一张点进来）。
+  /// 角色卡按**选择顺序**排列（从 @ 面板逐个点选）。
   final List<CharacterCard> _characterCards = [];
   StyleCard? _styleCard;
 
   /// 卡片面板是否展开。
   ///
-  /// 选一张就收起（用户 2026-11-08）；要连着选多张就再打一次 `@`。
+  /// 选择一张后收起；选择多张时再次输入 `@`。
   /// 面板高度也按可用高度收（键盘弹起时不顶出屏幕）。
   bool _cardsOpen = false;
 
@@ -3135,7 +3133,7 @@ class _ComposerState extends State<_Composer> {
         Theme.of(context).platform == TargetPlatform.iOS;
     if (phone) {
       // 手机：**底部弹层**。面板不参与输入区排版，键盘弹起也不会把
-      // 元素挤成一条（用户 2026-11-08："窗口高度太低，元素太小，很难操作"）。
+      // 元素挤压成一条（窗口高度不足时难以操作）。
       FocusManager.instance.primaryFocus?.unfocus();
       await _ensureCards();
       if (!mounted) return;
@@ -3180,8 +3178,8 @@ class _ComposerState extends State<_Composer> {
       if (!mounted) return;
       if (!picked) {
         // 取消选择：把行末那个 `@` 摘掉，再把焦点还给输入框。
-        // 不摘的话用户接着打字会变成"@ 后面跟正文"，而且下次点击又像要弹层
-        //（用户 2026-11-08：取消之后还得再取消一次才能打字）。
+        // 不摘除时继续输入会变成"@ 后接正文"，且下次点击会再次弹出面板
+        //（取消后需再次取消才能输入）。
         final text = widget.controller.text;
         final match = RegExp(r'(?:^|\s)@$').firstMatch(text);
         if (match != null) {
@@ -3238,9 +3236,8 @@ class _ComposerState extends State<_Composer> {
 
   /// 点一张卡 = **切换选中**；面板不收起，方便接着选第二、第三张。
   ///
-  /// 用户 2026-10-28："只能 @ 一张角色卡，我想引入两个或以上的角色怎么办" ——
-  /// 所以角色卡改成多选（同框 / 对话都靠它），再点同一张 = 取消。
-  /// 画风卡仍然只有一张（一张图只有一套渲染规格），选新的替换旧的、再点取消。
+  /// 角色卡为多选（同框 / 对话均依赖它），再次点击同一张即取消。
+  /// 画风卡只有一张（一张图只有一套渲染规格），选择新的替换旧的，再次点击取消。
   void _chooseCard(CharacterCard card) {
     if ((card.prompt ?? '').trim().isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -3262,13 +3259,13 @@ class _ComposerState extends State<_Composer> {
       // 选完清掉搜索词：下一张常常是另一个名字，不用先手动删一遍。
       _cardQuery = '';
       _cardSearch.clear();
-      // ★ 选完就收起（用户 2026-11-08："@卡片不会自动收回"）。
+      // ★ 选择后收起。
       //   要再选一张就再打 `@` 或点 `+`；面板常驻会把输入区顶出屏幕。
       _cardsOpen = false;
     });
-    // 面板收了、键盘也收过（打开时），把焦点还给输入框，用户可以接着写正文。
+    // 面板收起、键盘已收起（打开时），将焦点还给输入框，以便继续输入正文。
     widget.focusNode.requestFocus();
-    // 从键盘 `@` 进来的那条路：把行末那个查询词摘掉，只留用户自己写的正文。
+    // 从键盘 `@` 进入的路径：移除行末查询词，只保留已输入的正文。
     final text = widget.controller.text;
     final trigger = RegExp(r'(?:^|\s)@[^\s@]*$').firstMatch(text);
     if (trigger != null) {
@@ -3372,7 +3369,7 @@ class _ComposerState extends State<_Composer> {
     'updatedAt': card.updatedAt,
   };
 
-  /// 菜单里列出的 skills：只列**用户可调用**且启用的（`/` 就是用户显式调用）。
+  /// 菜单中列出的 skills：只列**可调用**且已启用的（`/` 表示显式调用）。
   List<AiSkill> get _slashMatches {
     final query = _slashQuery;
     if (query == null) return const [];
@@ -3424,7 +3421,7 @@ class _ComposerState extends State<_Composer> {
 
   /// 输入框最多能长几行：**屏幕 - 键盘 - 已选卡片 - 底行**剩下多少算多少。
   ///
-  /// 超过这个行数时文本在输入框**内部**滚动（用户 2026-11-08："允许我在输入框内滑动"），
+  /// 超过该行数时文本在输入框**内部**滚动，
   /// 整个输入区不会顶到 AppBar 上 —— 键盘高度可变，所以每次 build 都现算。
   int get _inputMaxLines {
     final cards = _characterCards.length + (_styleCard != null ? 1 : 0);
@@ -3447,7 +3444,7 @@ class _ComposerState extends State<_Composer> {
     final slashMatches = _slashMatches;
     // 输入框最多能长几行：**屏幕 - 键盘 - 已选卡片 - 底行** 里剩下的高度。
     // 这样键盘高度怎么变，输入区都不会顶到 AppBar 上；超出这个行数时
-    // 文本在**输入框内部**滚动（用户 2026-11-08 明确要的交互）。
+    // 文本在**输入框内部**滚动。
     final inputMax = _inputMaxLines;
 
     return Container(
@@ -3570,10 +3567,9 @@ class _ComposerState extends State<_Composer> {
           if (_cardsOpen) _cardsPanel(theme),
           // 排版：上一行整宽输入框，下一行 [附件] [模型选择] …… [发送]
           Shortcuts(
-            // 回车 = 发送只在**电脑端**（2026-11-08 用户："手机的回车逻辑被你
-            // 改成了发送"）。手机软键盘的回车是 `TextInputAction.newline`，
-            // 但个别输入法会把它当原始 Enter 键事件发上来 —— 在这里绑了就会
-            // 直接发送。手机上不绑，回车一律走输入框自己的换行。
+            // 回车 = 发送只在**电脑端**。手机软键盘的回车为 `TextInputAction.newline`，
+            // 但个别输入法会将其作为原始 Enter 键事件上报 —— 在此绑定会直接发送。
+            // 手机端不绑定，回车一律走输入框自身的换行行为。
             shortcuts:
                 (theme.platform == TargetPlatform.android ||
                     theme.platform == TargetPlatform.iOS)
@@ -3594,7 +3590,7 @@ class _ComposerState extends State<_Composer> {
                 ),
               },
               child: Focus(
-                // Ctrl+V 粘附件（用户 2026-10-18："ctrl+v不能粘贴附件"）。
+                // Ctrl+V 粘贴附件。
                 //
                 // ⚠ 为什么把 handler 放在**这里**（紧贴 TextField 外面）：
                 // 按键是从焦点节点**往上冒泡**的，而"粘文本"是 `DefaultTextEditingShortcuts`
@@ -3625,16 +3621,15 @@ class _ComposerState extends State<_Composer> {
               ),
             ),
           ),
-          // 已选卡片放在**输入框下面**（用户 2026-11-08："一旦文本行数较多，
-          // 卡片信息不见了"）：输入区是"底部锚定 + 内部滚动"（reverse），
-          // 放在输入框上面的 chip 会被长文本顶出可视区；放在下面则永远贴着
-          // 底行，长文本只在输入框内部滚。
+          // 已选卡片放在**输入框下面**：输入区为"底部锚定 + 内部滚动"（reverse），
+          // 放在输入框上方的 chip 会被长文本顶出可视区；放在下方则始终贴着
+          // 底行，长文本只在输入框内部滚动。
           if (_characterCards.isNotEmpty || _styleCard != null)
             _cardChips(theme),
           const SizedBox(height: 8),
-          // 底行排版。四条用户反馈累积到这里，规矩已经收敛成两句：
-          //   · **一条放不下就折行**，绝不横向滚动；
-          //   · **操作控件靠左；只有发送（宽屏再加 token 汇总）贴右**。
+          // 底行排版约束：
+          //   · **一行放不下时折行**，不使用横向滚动；
+          //   · **操作控件靠左；发送（宽屏另含 token 汇总）靠右**。
           //
           //   ① token 汇总被挤没 + 发送按钮不贴右（2026-09-20）：汇总当时是 loose 的
           //      `Flexible`，用不满的那截空白落在**按钮右边**，按钮就不贴右；它和
@@ -3643,24 +3638,22 @@ class _ComposerState extends State<_Composer> {
           //   ② 控件显示不全（2026-09-20）：操作组曾经是"唯一的 `Expanded` + 横向
           //      滚动"，窄窗口下视口只剩 21px（内容 847px），权限档 / 模型选择被从
           //      **左边缘**裁掉。→ 换成折行。
-          //   ③ 折行本身也得好看（用户 2026-09-21："你不觉得这个排版很奇怪吗"）：
-          //      把"附件(40) / 权限档(187) / 模型(296 撑满) / 思考(70)"直接折，
-          //      结果是**三行**、每行右边一大片空白、权限档孤零零挂在第一行。
-          //      根因是每个控件的固有宽度差一个数量级。→ 窄的时候这四枚一律退成
-          //      **同宽的图标按钮**（各 ~48px）：一行放得下就一行，放不下再折行，
-          //      每一行都是整齐的等宽图标。
+          //   ③ 折行后的排版：将"附件(40) / 权限档(187) / 模型(296 撑满) / 思考(70)"直接折行，
+          //      结果为**三行**、每行右侧大片空白、权限档单独位于第一行。
+          //      原因是各控件的固有宽度相差一个数量级。→ 窄屏时这四项统一退为
+          //      **等宽图标按钮**（各约 48px）：一行放得下则一行，放不下再折行，
+          //      每行均为整齐的等宽图标。
           //
-          //   ④ 整排贴右（用户 2026-09-24，手机）：窄屏那一排曾经是**一个
-          //      `Wrap(alignment: end)`**（四枚控件 + 发送挤在一起），于是整排一起贴右，
-          //      "附件"左边空出一大片。→ 窄屏也拆成 `Row`：左 `Expanded`（start 对齐）、
-          //      右发送，见下面那个分支的注释。
+          //   ④ 整排靠右：窄屏该排此前为**一个 `Wrap(alignment: end)`**（四项控件 + 发送），
+          //      整排一起靠右，"附件"左侧留出大片空白。→ 窄屏同样拆为 `Row`：
+          //      左侧 `Expanded`（start 对齐）、右侧发送，见下方分支注释。
           //
           // 宽屏右侧那两件（token 汇总 + 发送）走同一个 `Wrap`（end 对齐 = 整体贴右，
           // 换行后最后一行也贴右）。
           LayoutBuilder(
             builder: (context, constraints) {
-              // 三档（2026-10-11 用户："按钮太小了比较难点，也没显示出有用的关键信息；
-              // 在其他特定宽度下，控件变成两行排列也很难看"）：
+              // 三档（按钮过小时难以点击，且不显示关键信息；
+              // 特定宽度下控件变为两行排列）：
               //
               //   ① ≥ [_fullLabelWidth]：控件带**全称**（"自动允许（无需批准）"、模型名 + 能力徽标）
               //   ② [_shortLabelWidth] ~ [_fullLabelWidth]：控件带**短标签**
@@ -3679,9 +3672,8 @@ class _ComposerState extends State<_Composer> {
                   : constraints.maxWidth >= _shortLabelWidth
                   ? _ComposerLabel.short
                   : _ComposerLabel.icon;
-              // token 汇总是**纯展示项**，窄了先让它走（用户 2026-09-21：
-              // "宽度太窄的时候可以不显示对话 token 用量"）—— 但它不该在中等宽度就消失，
-              // 所以门限单独一档。
+              // token 汇总属于**纯展示项**，宽度不足时优先隐藏，
+              // 但不应在中等宽度就消失，因此单独设置门限。
               final showSummary = constraints.maxWidth >= _summaryWidth;
               return Row(
                 crossAxisAlignment: CrossAxisAlignment.end,
@@ -3729,18 +3721,17 @@ class _ComposerState extends State<_Composer> {
 
   /// 输入区底行的操作控件（不含发送）。
   ///
-  /// 顺序就是用户建议 ⑤ 定的：附件 → 权限档 → 模型选择 → 思考强度。
+  /// 顺序：附件 → 权限档 → 模型选择 → 思考强度。
   ///
   /// [label] 是**三档文字密度**（见 `build` 里那个 `LayoutBuilder` 的注释）：
-  /// 全称 / 短标签 / 纯图标。用户 2026-10-11 的原话是
-  /// "按钮太小了比较难点，也没显示出有用的关键信息" ——
-  /// 所以短标签档**保留文字**（"自动"/"询问"、"默认"/"高"），只压掉长文案；
-  /// 纯图标档才退回 tooltip，且图标按钮本身放大到能轻松点到。
+  /// 全称 / 短标签 / 纯图标。按钮过小时难以点击，且不显示关键信息，
+  /// 因此短标签档**保留文字**（"自动"/"询问"、"默认"/"高"），仅省略长文案；
+  /// 纯图标档退回 tooltip，图标按钮本身放大到便于点击。
   List<Widget> _composerActions(_ComposerLabel density) {
     return [
-      // 附件 + 卡片合成一个 "+" 菜单（用户 2026-10-24 指着 DSH 的排版问"放得下实体 @ 按钮吗"：
-      // 320~720 宽时底行已经有 4 枚状态控件 + 发送，再塞第 5 枚就必然折行 / 挤压）。
-      // 收起一层之后底行仍是 4 枚，入口还在最左；键盘路径另外留了直接输入 `@`。
+      // 附件 + 卡片合并为一个 "+" 菜单（320~720 宽时底行已有 4 个状态控件 + 发送，
+      // 增加第 5 个会导致折行 / 挤压）。
+      // 合并后底行仍为 4 个，入口位于最左；键盘路径另保留直接输入 `@`。
       AppMenuButton<String>(
         onSelected: (v) {
           if (v == 'attach') _pickFiles();
@@ -3791,7 +3782,7 @@ class _ComposerState extends State<_Composer> {
         ],
         // 与右边三枚一样是 44×44 的描边方块：图标按钮光秃秃地待在一排
         // 描边按钮最左边时，它自带的 10px 内边距会让"+"离下一枚明显更远
-        // （用户 2026-11-05："sizedbox 不统一"）。统一外形之后，间距只由
+        // （尺寸不统一）。统一外形后，间距只由
         // `FilterChipRow.spacing` 一个值决定。
         button: (context, controller, isOpen) => Tooltip(
           message: '添加附件 / 插入卡片（@）',
@@ -3811,7 +3802,7 @@ class _ComposerState extends State<_Composer> {
           ),
         ),
       ),
-      // 权限档（用户建议 ⑤）：就在附件按钮和模型选择之间
+      // 权限档：位于附件按钮与模型选择之间
       _PermissionPicker(store: widget.store, density: density),
       _ModelPicker(store: widget.store, density: density),
       _EffortPicker(store: widget.store, density: density),
@@ -3908,7 +3899,7 @@ class _ComposerState extends State<_Composer> {
                   decoration: InputDecoration(
                     isDense: true,
                     // 手机上这个框原来又高又宽，把整个面板吃掉一大截
-                    //（用户 2026-11-08："搜索框占了很大一部分地方"）。
+                    //（搜索框占用空间过大）。
                     contentPadding: const EdgeInsets.symmetric(
                       horizontal: 8,
                       vertical: 6,
@@ -4025,7 +4016,7 @@ class _ComposerState extends State<_Composer> {
   /// 已选中的卡：输入框上方一排 chip，点 × 取消（角色卡一张一个 chip）。
   Widget _cardChips(ThemeData theme) {
     return Padding(
-      // 和输入框贴紧一点（用户 2026-11-08 问能不能调间距）：上面 4、下面 2，
+      // 与输入框间距收紧：上面 4、下面 2，
       // 行高总预算在 `_inputMaxLines` 里按 52/行算过，收一点不会引出溢出。
       padding: const EdgeInsets.only(top: 4, bottom: 2),
       child: Wrap(
@@ -4178,8 +4169,8 @@ class _ComposerState extends State<_Composer> {
 
   /// 空画布 → 提交回工作台（工作台是布局的主入口，不是一个独立工具页）。
   ///
-  /// 不从卡片点、而是自己从空白开始时，先让用户框完再提交；提交出去的同样是
-  /// 一条普通用户消息（`LayoutResubmit.toMessage()`）。
+  /// 从空白画布开始时，先完成框选再提交；提交内容同样是一条普通消息
+  /// （`LayoutResubmit.toMessage()`）。
   Future<void> _openLayoutCanvas() async {
     final result = await Navigator.of(context).push<LayoutResubmit>(
       MaterialPageRoute<LayoutResubmit>(
@@ -4213,9 +4204,9 @@ class _ComposerState extends State<_Composer> {
 
   /// 「从设定图生成角色卡」：选一张设定图 → 开一条新会话 → 附上它并直接发问。
   ///
-  /// 用户 2026-11-04 的新流程：不是让 AI 看一眼就写卡，而是**自上而下把拿不准的部位
-  /// 逐个问清楚**（题目带裁图、选项带候选 / 示例图）。这里只负责把图送进去并起个头，
-  /// 具体怎么问由系统提示第 26 条约束。
+  /// 流程：不直接生成角色卡，而是**自上而下逐项确认不确定的部位**
+  /// （题目带裁图、选项带候选 / 示例图）。此处只负责送入图片并发起，
+  /// 具体提问方式由系统提示第 26 条约束。
   ///
   /// 只在桌面后端上出现入口：手机本地 harness 没有卡片库，也没有后端的裁图能力。
   Future<void> _startCardFromSheet() async {
@@ -4253,7 +4244,7 @@ class _ComposerState extends State<_Composer> {
   ///
   /// 偏偏 [`FileClipboard.writeFiles`] 为了让记事本 / 聊天框之类也能粘，
   /// **故意**额外写了一份文本兜底 —— 而那份文本就是**路径串本身**。
-  /// 于是"复制一个文件、右键粘贴"粘出来的是文件路径（用户 2026-10-18 报的）。
+  /// 因此"复制文件后右键粘贴"得到的是文件路径。
   /// 换掉这一项之后，两条路都走同一个 `_pasteFilesOrText`：有文件 / 图挂附件、都没有才粘文本。
   Widget _composerContextMenu(BuildContext context, EditableTextState state) {
     final items = withReplacedPaste(state.contextMenuButtonItems, () {
@@ -4269,7 +4260,7 @@ class _ComposerState extends State<_Composer> {
   /// 那条"原生通道没接上"的提示**只说一次**（别每次 Ctrl+V 都弹）。
   bool _clipboardNoticeShown = false;
 
-  /// 用户 2026-10-18："ctrl+v不能粘贴附件。"（2026-10-24 补上"截图 / 复制图片"那一半）
+  /// Ctrl+V 粘贴附件（含"截图 / 复制图片"两种来源）。
   ///
   /// # 为什么这里必须异步 + 自己兜底
   ///
@@ -4277,8 +4268,8 @@ class _ComposerState extends State<_Composer> {
   /// —— 没法 `await` 了再决定吃不吃这个事件。所以这里的做法是：
   /// **先把事件吃掉**，然后异步判；都不是就自己把文本粘进输入框。
   ///
-  /// ⚠ 兜底那一步不能省：不还回去的话，用户按 Ctrl+V 会**什么都粘不上**
-  /// （事件被我们吃掉了，而 `DefaultTextEditingShortcuts` 没机会处理）。
+  /// ⚠ 兜底步骤不可省略：不归还事件时，按 Ctrl+V 会**无法粘贴任何内容**
+  /// （事件已被拦截，`DefaultTextEditingShortcuts` 无法处理）。
   KeyEventResult _onComposerKey(FocusNode node, KeyEvent event) {
     if (event is! KeyDownEvent) return KeyEventResult.ignored;
     if (!FileClipboard.supported) return KeyEventResult.ignored;
@@ -4307,8 +4298,8 @@ class _ComposerState extends State<_Composer> {
     }
     // 不是文件 —— 再看是不是**一张图**（截图工具 / 浏览器里复制图片）。
     //
-    // 用户 2026-10-24："允许我在 AI 工作台 Ctrl+V 粘贴附件。" 截图那条路以前是空的：
-    // Flutter 的 `Clipboard` 只读文本，而截图在 `CF_DIB` / `CF_BITMAP` 里。
+    // Ctrl+V 粘贴附件：截图此前无法粘贴，
+    // Flutter 的 `Clipboard` 只读文本，而截图位于 `CF_DIB` / `CF_BITMAP` 中。
     final image = await FileClipboard.readImage();
     if (!mounted) return;
     if (image != null && await _attachClipboardImage(image)) return;
@@ -4393,7 +4384,7 @@ class _SendIntent extends Intent {
 /// 界面上不会报任何错、只会安安静静粘出一串 `D:\...`（见 `_composerContextMenu`）。
 ///
 /// 为什么要补末尾那一手：光标落在只读位置之类的场景下，内置项里**压根没有**「粘贴」，
-/// 不补的话用户在这一档就没有任何粘贴入口了。
+/// 不补充时该档位没有任何粘贴入口。
 @visibleForTesting
 List<ContextMenuButtonItem> withReplacedPaste(
   List<ContextMenuButtonItem> items,
@@ -4467,12 +4458,11 @@ class _Banner extends StatelessWidget {
 
 /// 输入区底行控件的**三档文字密度**。
 ///
-/// 用户 2026-10-11："AI 工作台界面下方的控件，有时候按钮太小了比较难点，
-/// 也没显示出有用的关键信息；在其他特定宽度下，控件变成两行排列也很难看。"
+/// 按钮过小时难以点击，且不显示关键信息；特定宽度下控件变为两行排列。
 ///
-/// 老版只有两档（全称 / 纯图标），中间那一大片宽度没档位 —— 于是要么文字被挤爆，
-/// 要么退成四个没有信息的小图标。现在补上中间的**短标签**档：
-/// 关键信息（哪一档权限、哪个思考强度、哪个模型）**在任何宽度都看得见**。
+/// 旧版只有两档（全称 / 纯图标），中间宽度没有对应档位 —— 文字被压缩，
+/// 或退化为四个无信息的图标。现在增加中间的**短标签**档：
+/// 关键信息（权限档、思考强度、模型）**在任何宽度都可见**。
 enum _ComposerLabel {
   /// 全称：`自动允许（无需批准）`、模型名 + 能力徽标、思考强度全名。
   full,
@@ -4485,18 +4475,18 @@ enum _ComposerLabel {
 }
 
 // ---------------------------------------------------------------------------
-//  权限档（用户建议 ⑤）
+//  权限档
 // ---------------------------------------------------------------------------
 
 /// 权限两档：**询问**（默认）/ **自动允许（无需批准）**。
 ///
-/// 位置就是用户指定的：输入区底部、附件按钮与模型选择之间。
+/// 位置：输入区底部、附件按钮与模型选择之间。
 /// 真源在后端（`ai.tools.policy.permissionMode`），切档写回后端 ——
 /// 后端每次 Run 现读策略，于是"切到自动允许"会**即时**把那段规则注入系统提示，
 /// 并且 AI 调工具不再走审批闸门。路径白名单不受影响，越界写照样被拒。
 ///
-/// 名字来自用户建议：「完全权限」听着像"什么都能干"，其实它只免掉"问一下"，
-/// 文件夹白名单一点都没放宽 —— 所以改叫「自动允许（无需批准）」。
+/// 「完全权限」这一名称不准确：它只免除审批，
+/// 文件夹白名单没有任何放宽 —— 因此改为「自动允许（无需批准）」。
 class _PermissionPicker extends StatelessWidget {
   final AiWorkspaceStore store;
 
@@ -4516,12 +4506,12 @@ class _PermissionPicker extends StatelessWidget {
     final text = full ? AiToolPolicy.modeFullLabel : AiToolPolicy.modeAskLabel;
     // 短标签档：`自动允许（无需批准）` → `自动`；`询问` 本来就短，原样用。
     // ⚠ 短标签**必须仍然能区分两档**（"自动" vs "询问"）——
-    // 退回纯图标之后，用户点不准又看不出现在是哪一档，那正是用户抱怨的那件事。
+    // 退回纯图标后点击精度不足，也无法判断当前档位。
     final shortText = full ? '自动' : AiToolPolicy.modeAskLabel;
     // ⚠ 不要在这里再包一层 `Padding(horizontal: 4)`：那会让"附件 → 权限"
     // 的间距变成 4（行间距）+4（这里）+4（权限自己）＝ 12，而"模型 → 思考"
-    // 只有 4。整排的间距只允许由 `FilterChipRow.spacing` 决定（2026-11-05
-    // 用户："sizedbox 不统一"）。
+    // 只有 4。整排间距只由 `FilterChipRow.spacing` 决定
+    // （此前各控件尺寸不统一）。
     return AppMenuButton<String>(
       tooltip: full
           ? '当前是$text，AI 调用工具不会等你批准。可读 / 可写目录范围不变，越界仍会被拒。点一下改回「${AiToolPolicy.modeAskLabel}」。'
@@ -4553,7 +4543,7 @@ class _PermissionPicker extends StatelessWidget {
               : () =>
                     controller.isOpen ? controller.close() : controller.open(),
           child: Container(
-            // 三档都保证 ≥44 高（用户："按钮太小了比较难点"）
+            // 三档均保证 ≥44 高
             constraints: const BoxConstraints(minHeight: 44),
             padding: EdgeInsets.symmetric(
               horizontal: density == _ComposerLabel.full ? 10 : 12,
@@ -4601,8 +4591,8 @@ class _PermissionPicker extends StatelessWidget {
 ///
 /// 只显示**当前模型声明过**的档位；两个例外总是可选或按声明出现：
 /// · 「默认」—— 不发任何思考参数、任何网关都成立，所以永远可选
-///   （用户要求"能默认不指定思考强度，且不用去改模型声明"）；
-/// · 「关闭」—— **真的发关闭参数**（2026-11-09 用户报「没有关闭思考的档位」），
+///   （默认不指定思考强度，且无需修改模型声明）；
+/// · 「关闭」—— **实际发送关闭参数**，
 ///   只在模型目录里声明了关闭取值（`off` / `disabled`）时出现。
 /// **「默认」不承诺"不会思考"**（2026-09-20 改名的原因，见 [AiReasoningEffort.off]：
 /// 本机在用的聚合网关关不掉思考，叫「关闭」就是撒谎）—— 所以两档必须分开列。
@@ -4654,7 +4644,7 @@ class _EffortPicker extends StatelessWidget {
                 : Icons.radio_button_off,
             // 线上表达（例如 "→ high"）放第二行，别跟标题挤在一行。
             // 「默认」没有"线上表达"（我们什么都不发），就把它的真实含义写在那儿 ——
-            // 用户报的 bug 正是"以为选了关闭就不会思考"，这一行是那个 bug 的正面回答。
+            // 该行用于说明"选择关闭即不思考"这一行为。
             subtitle:
                 e.hint ??
                 (model?.effortWireValue(e) == null
@@ -4670,7 +4660,7 @@ class _EffortPicker extends StatelessWidget {
               ? () => controller.isOpen ? controller.close() : controller.open()
               : null,
           child: Container(
-            // 三档都保证 ≥44 高（用户："按钮太小了比较难点"）
+            // 三档均保证 ≥44 高
             constraints: const BoxConstraints(minHeight: 44),
             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
             decoration: BoxDecoration(
@@ -4692,7 +4682,7 @@ class _EffortPicker extends StatelessWidget {
                       : null,
                 ),
                 // 纯图标档才把文字收进 tooltip（短标签档**保留档位名** ——
-                // "现在是什么思考强度"正是用户要看见的关键信息）
+                // "当前思考强度"属于关键信息）
                 if (density != _ComposerLabel.icon) ...[
                   const SizedBox(width: 5),
                   Text(
@@ -4845,9 +4835,9 @@ class _AttachmentTile extends StatelessWidget {
   Widget _preview(BuildContext context) {
     if (thumbUrl == null) return _iconFallback(context);
     final dpr = MediaQuery.devicePixelRatioOf(context);
-    // **附件不打码**（用户 bug 2026-09-20 之后定的规矩）：附件是用户自己挑的文件，
+    // **附件不打码**：附件是主动选择上传的文件，
     // 库里没有、也不该有"这条是不是 NSFW"的标记 —— 按"没标记就不糊"的判据，
-    // 这里本来就不该再包一层（以前无脑糊，用户自己的参考图一上传就是一片马赛克）。
+    // 这里不添加打码层（此前无条件打码，上传的参考图会整体打码）。
     return Image.network(
       thumbUrl!,
       width: _size,
@@ -4883,7 +4873,7 @@ class _AttachmentTile extends StatelessWidget {
   }
 }
 
-/// 消息气泡里的附件：只读的小缩略图（用户消息发出去之后回头看得到自己发了什么）。
+/// 消息气泡里的附件：只读的小缩略图（发送后仍可回看）。
 class _MessageAttachment extends StatelessWidget {
   final String name;
   final String? thumbUrl;
@@ -4900,7 +4890,7 @@ class _MessageAttachment extends StatelessWidget {
     final theme = Theme.of(context);
     // 历史消息里的附件块**只有 attachmentId**（没有原始文件名 / modality），
     // 所以 `name` 经常就是一串 UUID。别把它当扩展名判据（那会把图片判成"其它"，
-    // 用户点一下又被丢去浏览器 —— 2026-11-04 的现场）。
+    // 会被转到浏览器打开）。
     // 有缩略图 = 后端认得出这是图片，直接按图片预览。
     final isImage = thumbUrl != null;
     final label = attachmentDisplayName(name, hasPreview: isImage);
@@ -4987,11 +4977,11 @@ class _Badge extends StatelessWidget {
 //  右侧上下文：模型能力 / Skills / ComfyUI
 // ---------------------------------------------------------------------------
 
-/// 右侧栏顶部的**实时进度**（用户"其他建议"第 1 条）。
+/// 右侧栏顶部的**实时进度**。
 ///
 /// 显示两件事：
 ///  - ComfyUI 队列（运行中 / 等待中 + 正在跑的那个任务名）；
-///  - AI / 用户最近提交的任务（状态、耗时、产物数）。
+///  - 最近提交的任务（状态、耗时、产物数）。
 ///
 /// 没有活动时**整块不占位** —— 右侧栏本来就窄，闲着的时候不该被一张空卡片吃掉高度。
 class _ComfyProgress extends StatelessWidget {
@@ -5116,7 +5106,7 @@ BoxDecoration panelCardDecoration(ThemeData theme) => BoxDecoration(
 
 /// 右侧栏里的一块：统一的卡片容器 + 一行标题（可选右侧动作）。
 ///
-/// 用户建议（2026-09-20）：「给右边栏除了实时进度以外的内容也拿类似容器分别包裹起来」。
+/// 右侧栏除实时进度外的内容也使用相同容器分组。
 /// 包裹之后每块自己成一张卡，"哪几行属于同一块、到哪里算下一块"一眼可见。
 class _PanelCard extends StatelessWidget {
   /// 标题行左侧的文字（为空则只画 [children]，由内容自带标题）。
@@ -5321,7 +5311,7 @@ class _PendingApprovalsState extends State<_PendingApprovals> {
             Padding(
               padding: const EdgeInsets.only(top: 2),
               child: Text(
-                // 用户拍板过的那条规矩，写在卡片上：手机点过提交**不算**批准
+                // 卡片说明：手机点过提交**不算**批准
                 '手机上点「提交」只是排队，真正提交要在这里点「批准」。',
                 style: theme.textTheme.labelSmall?.copyWith(
                   color: theme.colorScheme.outline,
@@ -5417,9 +5407,8 @@ class _PendingApprovalsState extends State<_PendingApprovals> {
 
 /// 手机上的卡片选择器（**底部弹层**）。
 ///
-/// 2026-11-08 用户："窗口高度太低，元素太小，很难操作" —— 把它塞回输入区
-/// 就是跟键盘抢高度，只能二选一。弹层是独立路由：自己的高度（约 2/3 屏）、
-/// 自己的滚动，键盘弹起时整体上移，列表始终能看清、点得着。
+/// 放回输入区会与键盘争用高度，只能二选一。弹层是独立路由：自有高度（约 2/3 屏）、
+/// 独立滚动，键盘弹起时整体上移，列表始终可见、可点击。
 class _CardPickerSheet extends StatefulWidget {
   final List<CharacterCard> characters;
   final List<StyleCard> styles;
@@ -5650,8 +5639,8 @@ class _CardPickerSheetState extends State<_CardPickerSheet> {
 
 /// 「待审批」横幅的**轮询壳**：自己每 5 秒拉一次 `GET /api/ai/pending`。
 ///
-/// 不依赖右侧栏那个 watcher：窄屏 / 上下文面板收起时它根本没起，用户就看不到
-/// "有人等你点批准"（2026-11-08 真机就这样错过了 300 秒，提交超时被拒）。
+/// 不依赖右侧栏的 watcher：窄屏 / 上下文面板收起时它不会启动，
+/// 因此看不到"有待审批项"（该情况下会错过 300 秒等待，提交超时被拒）。
 ///
 /// 只读 store 的公开字段（`pendingOverview` / `refreshPending`），
 /// **不改 store**（另一个子代理正在改它的会话列表）。
