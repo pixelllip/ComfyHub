@@ -1,4 +1,4 @@
-//! `civitai` 的单元测试（主体代码在 [`civitai`](super) —— 2026-09-30 按用户要求与主体分离）。
+//! `civitai` 的单元测试（主体代码在 [`civitai`](super) —— 与主体分离）。
 //!
 //! `use super::*;` 照旧：子模块能看见父模块的私有项，所以用例一行都不用改。
 
@@ -79,7 +79,7 @@ fn 字段取值与底模兜底() {
     assert_eq!(to_model(&no_name).unwrap().name, "#9");
 }
 
-/// 体积分档（用户建议 ②）：小的用 MB、大的用 GB，**拿不到就说不知道**。
+/// 体积分档：小的用 MB、大的用 GB，**无法获取时如实说明**。
 #[test]
 fn 体积标签按量级分档() {
     let with = |bytes: i64| CivitaiModel {
@@ -175,7 +175,7 @@ fn 渲染的抬头与条目形状() {
     assert_eq!(render(&[], "x", false, true), "");
 }
 
-/// 结构化结果（用户建议 ⑦："登记在数据库中"）：可空键**省掉**而不是写 null。
+/// 结构化结果（"登记在数据库中"）：可空键**省略**而不是写 null。
 #[test]
 fn 结构化结果的键取舍() {
     let m = to_model(&model_json()).unwrap();
@@ -428,7 +428,7 @@ async fn nsfw_搜索走成人站_base_并明写_nsfw_参数() {
     assert_eq!(outcome.meta["tokenless"], false);
 }
 
-/// 没配令牌时的 NSFW 搜索（2026-09-20 用户决定放宽）：**照搜**，
+/// 未配令牌时的 NSFW 搜索（已放宽）：**照常搜索**，
 /// 但正文里如实写明这次是匿名通道 —— 放宽的是"能不能搜"，没有放宽"要不要说实话"。
 #[tokio::test]
 async fn nsfw_没令牌也照搜并在正文里写明匿名通道() {

@@ -57,7 +57,7 @@ fn 参数键序不同也算同一组参数() {
     assert!(lookup(&policy, "comfy_get_status", &json!({ "a": 1, "b": 3 })).is_none());
 }
 
-/// 纪律 2：命中**必须如实说**，而且模型与用户要**同时**看得见
+/// 约束 2：命中**必须如实说明**，且模型与界面要**同时**可见
 /// （正文给模型，摘要 `preview` 就是工具卡上那一行小字）。
 #[test]
 fn 命中时正文与摘要都如实标注() {
@@ -117,14 +117,14 @@ fn 会改世界的工具一律不进缓存() {
         "comfy_learn_workflow",
         "save_character_card",
         "save_style_card",
-        // ⚠ 它的 `mutating` 是 `false`（不改用户机器上的文件），但它会往库里写提示词 ——
+        // ⚠ 它的 `mutating` 为 `false`（不改动本机文件），但它会向库中写入提示词 ——
         //   `invalidates` 里那条显式例外盯的就是它
         "comfy_load_workflow",
     ] {
         assert!(freshness(name).is_none(), "{name} 不该进缓存（它会改世界）");
         assert!(invalidates(name), "{name} 跑成功之后必须清缓存");
     }
-    // 闸门（缓存一个提问 = 吞掉用户的选择）与"自己更严的去重"（`load_skill` 一轮只放行一次）
+    // 闸门（缓存提问会丢弃作答）与"自身更严的去重"（`load_skill` 一轮只放行一次）
     for name in ["ask_user_question", "load_skill"] {
         assert!(freshness(name).is_none(), "{name} 不该进缓存");
     }
@@ -144,7 +144,7 @@ fn 会改世界的工具一律不进缓存() {
     }
 }
 
-/// 磁盘类工具按 `mtime + 长度` 校验：用户在自己的编辑器里存一次，
+/// 磁盘类工具按 `mtime + 长度` 校验：在其他编辑器中保存一次，
 /// 下一次调用就必须重新读（TTL 只能把窗口缩小，`stat` 能把它关掉）。
 #[test]
 fn 磁盘类工具按文件变动失效() {

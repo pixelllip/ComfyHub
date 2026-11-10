@@ -2,7 +2,7 @@
 //!
 //! # 为什么是 Keenable
 //!
-//! 用户 2026-09-20 定的规则：**只用通用方案**（不碰各家的原生内置搜索 —— OpenAI 的
+//! 规则：**只用通用方案**（不使用各家的原生内置搜索 —— OpenAI 的
 //! `web_search`、Anthropic 的 `web_search_20250305` 那些）。Keenable 是"给 AI Agent
 //! 重建的搜索索引"，一次调用就返回排好序的**正文**，关键在于**默认免密钥**。
 //!
@@ -405,7 +405,7 @@ impl KeenableClient {
                 format!("{hint}｜返回：{detail}")
             };
             // 与 danbooru / Civitai 同一条：5xx 或 4xx 都是"对方回了"，
-            // 出网路径要跟着说，否则用户分不清"没走代理"和"服务端挂了"。
+            // 出网路径需一并说明，否则无法区分"未走代理"与"服务端异常"。
             return Err(ToolFailure::new(
                 code,
                 format!("{message}（本次出网路径：{route}）"),
@@ -608,8 +608,8 @@ pub use crate::tools::tools::{take_utf16, utf16_len};
 
 /// 解析可选的 Keenable 密钥。
 ///
-/// 解密失败（换过 Windows 用户等）**不能被当成"没有 key"**：那样会静默降级成免密钥，
-/// 用户以为在用 key，实际在裸奔。所以只有"**桌面上没有配**"才回 `None`。
+/// 解密失败（如更换账户）**不能视为"没有 key"**：否则会静默降级为免密钥，
+/// 会误认为在使用 key，实际未携带。因此只有"**桌面上未配置**"才返回 `None`。
 pub fn resolve_key(state: &AppState) -> Result<Option<String>, ToolFailure> {
     use axum::http::StatusCode;
     match crate::mobile::auth::resolve_credential(state, CREDENTIAL_REF) {

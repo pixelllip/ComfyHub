@@ -153,7 +153,7 @@ pub fn prompt_from_row(row: &Row<'_>) -> rusqlite::Result<PromptDto> {
         extra_params: parse_json_object(extra_text.as_deref()),
         notes: row.get("notes")?,
         // 老库 / 老查询没带这一列时退回 `keep`（**绝不能变成"只发正面"**：
-        // 那会悄悄把用户的负面提示词丢掉，而 turbo 之外的模型很吃负面）
+        // 否则会静默丢弃负面提示词，而 turbo 之外的模型依赖负面提示词）
         negative_mode: row
             .get::<_, Option<String>>("negative_mode")?
             .unwrap_or_else(|| "keep".to_string()),
@@ -350,15 +350,15 @@ pub fn media_from_row(row: &Row<'_>) -> rusqlite::Result<MediaDto> {
 /// 一个**集合**的摘要（2026-10-18 手动集合）。
 ///
 /// 给"移到集合…"的选择器用：它要知道有哪些集合、各是什么 kind（不混图像和视频）、
-/// 有几个成员、是算法分的还是用户建的。
+/// 有几个成员、由算法分组还是手动创建。
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MediaCollectionDto {
     pub id: i64,
     pub kind: String,
-    /// `auto` = 算法分组出来的；`manual` = 用户建的（或被用户改过的）
+    /// `auto` = 算法分组生成的；`manual` = 手动创建（或已修改过的）
     pub origin: String,
-    /// 用户起的名字。**算法分出来的没有名字**（界面按"算法分组"标记显示）。
+    /// 手动设置的名称。**算法分组的没有名称**（界面按"算法分组"标记显示）。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
     pub size: i64,
