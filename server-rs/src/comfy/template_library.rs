@@ -1,8 +1,8 @@
 //! **官方模板工作流库** —— ComfyUI 安装包自带的那套「模板」（Templates）。
 //!
-//! 为什么需要它：用户换上一个新模型（Qwen-Image / FLUX / Wan…）时，最靠得住的"这个模型怎么用"
+//! 需要它的原因：更换新模型（Qwen-Image / FLUX / Wan…）时，最可靠的"该模型如何使用"
 //! 就是官方模板 —— 它已经连好了加载器、采样器、VAE、尺寸，还是官方跟着版本维护的。
-//! 在这之前，AI 只能看用户的 `user\<用户>\workflows`（那是**用户自己存过的**），
+//! 在此之前，AI 只能查看 `user\<账号>\workflows`（即**自行保存的**），
 //! 新模型第一次用的时候那里必然是空的。
 //!
 //! # 真源与形状（2026-11 的 ComfyUI）
@@ -23,7 +23,7 @@
 //!
 //! 1. **只读**：不写文件、不写库、不联网（模板跟着 ComfyUI 版本走，不另设更新源）；
 //! 2. **有界**：只在认出来的 ComfyUI 根（与它的上一级）底下找，深度 ≤ [`MAX_DEPTH`]、
-//!    最多看 [`MAX_VISITED`] 个目录 —— 用户把 ComfyUI 装在盘根也不会扫全盘；
+//!    最多查看 [`MAX_VISITED`] 个目录 —— ComfyUI 安装在盘根时也不会扫描全盘；
 //! 3. **缺件如实计数**：bundle 包没装 / 文件不在，都不许让整次列举失败，
 //!    更不许"假装有"（模型会拿一个不存在的 path 去 `comfy_load_workflow`）；
 //! 4. **不猜节点**：模板是界面格式（`nodes` / `links`，其中一部分是组节点 subgraph），
@@ -44,7 +44,7 @@ use crate::comfy::comfy_dirs::{format_of, sha256_hex, MAX_FILE_BYTES};
 /// 索引所在的那个包（它只有 `manifest.json` + `loader.py`）。
 pub const CORE_PACKAGE: &str = "comfyui_workflow_templates_core";
 
-/// 想看别处的索引时用（测试 / 用户自己的模板集）—— **最高优先**。
+/// 需要查看其他位置的索引时使用（测试 / 自定义模板集）—— **最高优先**。
 pub const ENV_MANIFEST: &str = "COMFYHUB_TEMPLATE_MANIFEST";
 
 /// `manifest.json` 里的 `bundle` → 实际装模板正文的包名。
@@ -141,7 +141,7 @@ pub fn libraries(homes: &[PathBuf]) -> Vec<Library> {
     let mut out: Vec<Library> = Vec::new();
     let mut seen: BTreeSet<PathBuf> = BTreeSet::new();
 
-    // ① 显式指定的索引（测试 / 用户自己的集）
+    // ① 显式指定的索引（测试 / 自定义模板集）
     if let Ok(raw) = std::env::var(ENV_MANIFEST) {
         let raw = raw.trim();
         if !raw.is_empty() {

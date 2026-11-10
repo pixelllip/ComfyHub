@@ -3,9 +3,9 @@
 //!
 //! # 它要解决什么
 //!
-//! 用户 bug ⑤：`prompts` 库**只收"捕获过的运行"与"手动读进来的文件"**，
-//! 所以**首次使用时库必然是空的** —— 而用户机器上 `user\<用户>\workflows\*.json` 早就存在。
-//! 于是"库里搜不到"绝不能回一句"库里没有"就收摊：模型据此会跟用户说
+//! `prompts` 库**只收"捕获过的运行"与"手动读进来的文件"**，
+//! 因此**首次使用时库必然为空** —— 而本机 `user\<账号>\workflows\*.json` 早已存在。
+//! 因此"库中搜不到"不能直接返回"库里没有"：模型据此会说明
 //! "得先在 ComfyUI 里跑一次才会被捕获"，而那份工作流一直躺在磁盘上。
 //!
 //! 所以这条路是**两段**：先搜库；库里 0 条时**自动回头看本机的工作流文件**
@@ -53,7 +53,7 @@ pub fn search_json(
             size: Some(limit),
             // ⚠ **AI 侧要连自动捕获的一起搜**：`comfy_find_workflow` 找的是"库里能跑的
             // 工作流"，而那些正是自动捕获来的 —— 不传 true 就等于把它们藏起来，
-            // 表现是"AI 说库里没有，用户却在画廊里看得到"（见 PromptQuery 的注释）。
+            // 表现为"AI 报告库中不存在，而画廊中可见"（见 PromptQuery 的注释）。
             include_captured: true,
             // 不按"有没有关联产物"筛（那是界面上的入口）
             has_media: None,
@@ -70,7 +70,7 @@ pub fn search_json(
         // `runnable = graph != null` —— 于是**默认档（includeGraph=false）下每一条都报
         // `runnable: false` + "这条没有 API 节点图（老数据 / 只导入了图片），不能直接提交"**。
         // 那是**假话**（库里大多数提示词都有 API 图），而代价正是这个仓库最怕的那种：
-        // AI 会据此告诉用户"这些工作流都不能提交"。所以这里**恒查一次图**来定 `runnable`，
+        // AI 据此会说明"这些工作流均不可提交"。因此这里**始终查一次图**来确定 `runnable`，
         // 只在 `includeGraph=true` 时才把图本身附上（图的体积才是当初想省的东西）。
         let graph = crate::comfy::capture::prompt_api_graph(state, p.id)
             .ok()
@@ -166,7 +166,7 @@ pub fn tool_find_workflow(state: &AppState, arguments: &Value) -> Result<ToolOut
         return Ok(ToolOutcome::new(text, found));
     }
 
-    // 库里没有 → **必须**回头看一眼本机（用户 bug ⑤：首次使用时库必然是空的）
+    // 库中没有 → **必须**再查一次本机（首次使用时库为空）
     let local = crate::comfy::comfy_dirs::workflows_json(
         state,
         crate::comfy::comfy_dirs::WorkflowQuery {

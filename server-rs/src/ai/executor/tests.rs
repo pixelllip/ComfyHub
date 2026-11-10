@@ -1,4 +1,4 @@
-//! `executor` 的单元测试（主体代码在 [`executor`](super) —— 2026-09-30 按用户要求与主体分离）。
+//! `executor` 的单元测试（主体代码在 [`executor`](super) —— 与主体分离）。
 //!
 //! `use super::*;` 照旧：子模块能看见父模块的私有项，所以用例一行都不用改。
 
@@ -189,7 +189,7 @@ fn messages_without_parts_fall_back_to_text() {
     assert!(turns_of(&empty, &AttachmentPlan::empty()).is_empty());
 }
 
-/// 用户消息里的卡片 mention：`modelText` 必须按序拼回正文，模型才不会丢卡。
+/// 请求消息中的卡片 mention：`modelText` 必须按序拼回正文，模型才不会丢失卡片。
 #[test]
 fn mention_parts_contribute_their_model_text() {
     let m = message(
@@ -221,7 +221,7 @@ fn mention_parts_contribute_their_model_text() {
     assert_eq!(turns[0].content, "[CHARACTER CARD]\n凛\n银发保留构图");
 }
 
-/// `/技能` 的正文快照只从用户消息的 skill mention 里取。
+/// `/技能` 的正文快照只从请求消息的 skill mention 中获取。
 #[test]
 fn explicit_skill_body_comes_from_the_user_message() {
     let mut m = message(
@@ -245,7 +245,7 @@ fn explicit_skill_body_comes_from_the_user_message() {
     assert_eq!(found[0].0, "demo-skill");
     assert_eq!(found[0].1.as_deref(), Some("3"));
     assert_eq!(found[0].2, "按这个做");
-    // 没有用户消息 id / 对不上：不误加载
+    // 无请求消息 id / 不匹配：不加载
     assert!(explicit_skills_of(&[], Some("u1")).is_empty());
 }
 
@@ -287,7 +287,7 @@ fn take_reason_strips_the_ui_only_field() {
     assert_eq!(array, "[1,2]");
 }
 
-/// 首轮模型没起标题时的兜底（用户 2026-10-25：两轮都叫「新对话」，列表里分不清）。
+/// 首轮模型未生成标题时的兜底（现象：两轮都显示「新对话」，列表中无法区分）。
 #[test]
 fn 首条用户消息兜底成标题且去掉卡片标记() {
     // 工作台把 `@` 选的卡拼在正文前面：去掉槽位标记后，第一行是卡名 —— 比「新对话」有信息量

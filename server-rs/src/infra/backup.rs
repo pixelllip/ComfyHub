@@ -53,7 +53,7 @@ pub const AUTO_PREFIX: &str = "comfyhub-";
 pub const BEFORE_PREFIX: &str = "before-restore-";
 /// 自动备份保留份数（按 mtime 从新到旧）。
 pub const KEEP_AUTO: usize = 10;
-/// 保险备份保留份数。它比自动备份更该留着（用户可能恢复错了一份），但也不能无限攒。
+/// 保险备份保留份数。其重要性高于自动备份（可能恢复了错误的版本），但不能无限累积。
 pub const KEEP_BEFORE: usize = 5;
 
 /// 一条备份的元信息（`GET /api/system/backups` 的 `items[]`）。
@@ -329,7 +329,7 @@ fn inspect(path: &Path) -> Result<(), String> {
         .query_row("PRAGMA integrity_check", [], |row| row.get(0))
         .map_err(|e| {
             // 把 "file is not a database" 翻成人话：这个文件根本不是 SQLite 库
-            // （用户从别处拷了个 .db / 文件被别的程序截断，两种都落在这里）
+            // （从其他位置复制的 .db / 被其他程序截断的文件，两种情况都归入此处）
             if e.to_string().contains("not a database") {
                 "这不是一个 SQLite 数据库（文件头不对）".to_string()
             } else {
@@ -383,7 +383,7 @@ pub fn restore_prepare(
     }
     inspect(&source)?;
 
-    // ① 保险：先把"现在这份"拍下来。用户选错备份时这是唯一的退路 ——
+    // ① 保险：先保存"当前这份"。选择错误备份时这是唯一的回退点 ——
     //    它拍不出来（磁盘满 / 目录不可写）就不该继续：没有退路的恢复比不恢复更糟。
     let safety = create_with_prefix(conn, project_root, BEFORE_PREFIX)
         .map_err(|e| format!("恢复前的保险备份没写成，先解决磁盘问题再恢复（{e}）"))?;
@@ -435,7 +435,7 @@ pub fn last_restore(db_path: &Path) -> Option<LastRestore> {
 /// **开库之前**调用：有标记就把它做完。
 ///
 /// 返回 `Some(结果)` 表示这次启动真的处理了一次恢复（成功或失败都会写结果文件）。
-/// 失败时**不抛**：后端要照常起来 —— 起不来用户连"恢复失败"这句话都看不到。
+/// 失败时**不抛出**：后端需正常启动 —— 无法启动时连"恢复失败"的提示都看不到。
 pub fn apply_pending(db_path: &Path) -> Option<LastRestore> {
     let marker = marker_path(db_path);
     if !marker.exists() {
@@ -531,7 +531,7 @@ fn write_json_atomic<T: Serialize>(path: &Path, value: &T) -> Result<(), String>
     let tmp = path.with_extension("json.tmp");
     std::fs::write(&tmp, text).map_err(|e| format!("写临时文件失败（{}）：{e}", tmp.display()))?;
     // 用 copy 覆盖而不是"先删再 rename"：删掉之后崩在 rename 之前，标记就**丢了** ——
-    // 用户以为恢复成功、其实下次启动什么都不会发生。copy 最差只留下半截 JSON（能被
+    // 会误认为恢复成功，而下次启动不会发生任何事。copy 最差只留下不完整 JSON（可被
     // `apply_pending` 认出来并如实报错），目标文件本身永远不会消失。
     std::fs::copy(&tmp, path).map_err(|e| format!("替换文件失败（{}）：{e}", path.display()))?;
     let _ = std::fs::remove_file(&tmp);
