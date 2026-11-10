@@ -12,7 +12,7 @@
 //! 1. **白名单展开**（`writeRoots` / `readRoots` → 绝对路径）—— 系统提示里要如实写出
 //!    "只能写哪、只能读哪"，那是模型判断"能不能动这个文件"的唯一依据（Kotlin `render:1483`）；
 //! 2. **权限档**（`ask` / `full`）—— `full` 时提示词要多一段"这次不必等批准"，
-//!    并且 `ask` 的工具在渲染时**不再标「需要用户批准」**；
+//!    并且 `ask` 的工具在渲染时**不再标「需要批准」**；
 //! 3. **逐工具覆盖**（`overrides`）—— 标「已被禁用」（`deny`）以及"可调用的工具"清单里
 //!    被策略剔除的那些；
 //! 4. **两条预算**（`maxToolSteps` / `maxCallsPerRun`）—— 工具循环的轮数与调用数上限
@@ -42,7 +42,7 @@ pub const KEY: &str = "ai.tools.policy";
 pub const PERMISSION_ASK: &str = "ask";
 pub const PERMISSION_FULL: &str = "full";
 
-/// 出厂写白名单（只有一个目录：用户要求"默认不能修改 comfy 目录以外的内容"）。
+/// 出厂写白名单（仅一个目录："默认不得修改 comfy 目录以外的内容"）。
 pub const DEFAULT_WRITE_DIR: &str = "comfyui";
 /// 出厂读白名单（产物目录只读）。
 pub const DEFAULT_READ_DIRS: &[&str] = &["comfyui", "storage"];
@@ -50,8 +50,8 @@ pub const DEFAULT_READ_DIRS: &[&str] = &["comfyui", "storage"];
 /// **任何工具都不许读也不许写**的路径段（Kotlin `ToolPolicyConfig.FORBIDDEN_SEGMENTS`）。
 ///
 /// 这些是运行期数据与依赖：`.git`（版本库）、`.mysql`（老库，现在只剩搬迁来源）、
-/// `.run`（日志 / 探测脚本）、`node_modules`。**与用户白名单无关** ——
-/// 用户就算把白名单放宽到项目根，这几段照样拒绝。
+/// `.run`（日志 / 探测脚本）、`node_modules`。**与自定义白名单无关** ——
+/// 即使把白名单放宽到项目根，这几段仍然拒绝。
 pub const FORBIDDEN_SEGMENTS: [&str; 4] = [".git", ".mysql", ".run", "node_modules"];
 
 /// 单次读取上限：**2MB**（Kotlin `ToolPolicyConfig.DEFAULT_MAX_READ_BYTES`）。
@@ -63,7 +63,7 @@ pub const DEFAULT_MAX_READ_BYTES: i64 = 2 * 1024 * 1024;
 ///
 /// ⚠ 这两项与 `maxComfyQueriesPerRun` / `maxWebQueriesPerRun` 一样，在 Kotlin 侧是
 /// **界面上不可改、由 `normalizeStored` 强制回落到代码常量**的：老库里冻着
-/// `maxReadBytes:262144`，只改代码默认值对老用户完全无效。所以这里**根本不读配置**，
+/// `maxReadBytes:262144`，仅修改代码默认值对已有配置无效。因此这里**不读取配置**，
 /// 直接用常量（读了反而会与 Kotlin 不一致）。
 pub const DEFAULT_MAX_WRITE_BYTES: i64 = 4 * 1024 * 1024;
 
@@ -107,9 +107,9 @@ pub struct ToolPolicyConfig {
     pub permission_mode: String,
     /// 单次回复最多**工具轮数**（`ToolPolicyConfig.maxToolSteps`，出厂 **25**）。
     ///
-    /// ⚠ 到顶**不是失败**：那一轮不执行工具、如实告诉用户"已达轮数上限、再发一条就能接着做"
+    /// ⚠ 达到上限**不是失败**：那一轮不执行工具，并如实提示"已达轮数上限、再发一条即可继续"
     /// （Kotlin `HarnessRunner` 的原话就是这句）。写成 `TOOL_LOOP_LIMIT` 把整轮 Run 弄失败，
-    /// 用户已经看到的那段回答就会挂上一个红叉 —— 而那件事本来只是"这轮到此为止"。
+    /// 已显示的那段回答会被标记为失败，而该情形只是"这轮到此为止"。
     pub max_tool_steps: i64,
     /// 单个 Run 最多**工具调用次数**（出厂 48）——与轮数是两条线，见
     /// [`crate::tools::tools::budget_exceeded_note`] 里为什么措辞必须分开。
@@ -132,21 +132,21 @@ impl Default for ToolPolicyConfig {
 
 /// 单次回复的工具轮数上限（`ToolPolicyConfig.DEFAULT_MAX_TOOL_STEPS`）。
 ///
-/// **16 → 25（2026-09-27 用户拍板）**：真机那次"没有可用工作流时让 AI 自己搭一份"
+/// **16 → 25**："没有可用工作流时让 AI 自行搭建一份"
 /// （总纲 §17）用了 **22 次调用**，其中一半是侦察（读权重索引 / 查节点契约 / 搜模型），
 /// 16 轮会在**最后一步**（`comfy_submit`）把它掐断。上界放到 [`MAX_TOOL_STEPS_LIMIT`]，
 /// 让"搭图"这类长链路够用，又不会离 `max_calls_per_run`（48）太远。
 pub const DEFAULT_MAX_TOOL_STEPS: i64 = 25;
 /// `maxToolSteps` 的**旧出厂值**（2026-09-27 那次"16 → 25"之前的默认）。
 ///
-/// 为什么要单独认它（2026-09-28 从用户库里查出来的真问题）：那次改动只动了**默认值**，
-/// 而用户的 `app_settings.ai.tools.policy` 里**早就把 16 落成了一份显式配置**
+/// 需要单独处理的依据：该次改动只修改了**默认值**，
+/// 而 `app_settings.ai.tools.policy` 中**早已存在一份显式配置 16**
 /// （实测：`{"…","maxToolSteps":16,…}`）—— 显式配置永远盖过默认值，默认怎么改都不生效。
 /// 真机现场就是会话 `8a306e34` 的最后一轮被掐断，原话
 /// 「已达到本次回复的工具轮数上限 16」—— 明明代码里已经写着 25。
 ///
 /// 所以这里把"**正好等于旧出厂值**"的那一份当成"从未显式设置过"，升到新默认；
-/// 用户自己挑过的其它值（8 / 40 …）一个字节都不动。
+/// 手动选择的其他值（8 / 40 …）不改动。
 pub const LEGACY_DEFAULT_MAX_TOOL_STEPS: i64 = 16;
 /// `maxToolSteps` 的硬上界（设置页能选到、`PUT /api/ai/tools/policy` 也只会夹到这里）。
 ///
@@ -158,7 +158,7 @@ pub const DEFAULT_MAX_CALLS_PER_RUN: i64 = 48;
 /// 把"**旧出厂值** 16"升级成新默认（纯函数，用例直接喂配置，不用起库）。
 ///
 /// 判据只有一个：`max_tool_steps` **正好等于** [`LEGACY_DEFAULT_MAX_TOOL_STEPS`]。
-/// 别把这条写成"小于新默认就升"——那会把用户自己挑的 8 / 12 一起改掉，
+/// 不得写成"小于新默认即升级"——那会一并修改手动选择的 8 / 12，
 /// 而他明明是有意调低的（设置页里那些值都在选项里）。
 pub fn migrate_legacy_max_tool_steps(config: &mut ToolPolicyConfig) {
     if config.max_tool_steps == LEGACY_DEFAULT_MAX_TOOL_STEPS {
@@ -211,16 +211,16 @@ fn persist_migrated_max_tool_steps(
 pub struct ToolPolicy {
     pub project_root: PathBuf,
     pub config: ToolPolicyConfig,
-    /// 用户配的写白名单（空 → 出厂默认 `<根>\comfyui`）。
+    /// 配置的写白名单（空 → 出厂默认 `<根>\comfyui`）。
     pub write_roots: Vec<PathBuf>,
-    /// 用户配的读白名单（空 → `<根>\comfyui` + `<根>\storage`）。
+    /// 配置的读白名单（空 → `<根>\comfyui` + `<根>\storage`）。
     pub read_roots: Vec<PathBuf>,
     /// **自动发现的**只读目录（Kotlin `ToolPolicy.autoReadRoots`）。
     ///
-    /// 与 `read_roots` 刻意分开两件事：`read_roots` 是**用户配过的**（落库、界面可改）；
+    /// 与 `read_roots` 分开的原因：`read_roots` 是**显式配置的**（落库、界面可改）；
     /// 这一份是**每次现算的探测结果**（[`crate::comfy::comfy_dirs::auto_read_roots`]），不落库 ——
-    /// 用户换了 ComfyUI 的安装位置、或者头一次装上 ComfyUI，下一次工具调用就自动认得
-    /// （用户 bug ④）。它**只影响读**，写仍然只认 [`Self::write_roots`]。
+    /// 更换 ComfyUI 安装位置或首次安装 ComfyUI 时，下一次工具调用即可识别。
+    /// 它**只影响读**，写仍然只认 [`Self::write_roots`]。
     pub auto_read_roots: Vec<PathBuf>,
     pub permission_mode: String,
 }
@@ -260,7 +260,7 @@ impl ToolPolicy {
         self
     }
 
-    /// 实际生效的读白名单 = 用户配的 + 自动发现的（**去重、保持顺序**，Kotlin `distinct()`）。
+    /// 实际生效的读白名单 = 配置的 + 自动发现的（**去重、保持顺序**，Kotlin `distinct()`）。
     pub fn effective_read_roots(&self) -> Vec<PathBuf> {
         let mut out: Vec<PathBuf> =
             Vec::with_capacity(self.read_roots.len() + self.auto_read_roots.len());
@@ -277,7 +277,7 @@ impl ToolPolicy {
         self.permission_mode == PERMISSION_FULL
     }
 
-    /// 生效权限：用户覆盖 → 出厂档 → **再按权限档放宽**（只把 `ask` 变成 `allow`；
+    /// 生效权限：显式覆盖 → 出厂档 → **再按权限档放宽**（只把 `ask` 变成 `allow`；
     /// `deny` 不动 —— 那是"禁用这个工具"，不是"要不要问一下"）。
     pub fn access_for(&self, tool_name: &str, default_access: &str) -> ToolAccess {
         let base = ToolAccess::parse(self.config.overrides.get(tool_name).map(String::as_str))
@@ -291,8 +291,8 @@ impl ToolPolicy {
 
     /// 读配置（读失败 / JSON 坏 → 出厂默认，**绝不因为设置坏了就放开权限**）。
     ///
-    /// 顺带把**自动发现的只读目录**挂上：`read_file` 能不能读用户自己的 ComfyUI 工作流
-    /// 文件，全靠这一条（用户 bug ④ 要的正是"读放宽、写不放宽"）。
+    /// 同时挂上**自动发现的只读目录**：`read_file` 能否读取本机的 ComfyUI 工作流
+    /// 文件依赖这一条（约束为"放宽读、不放宽写"）。
     pub fn load(state: &AppState) -> Result<Self, ApiError> {
         // 一次读两行：策略本身 + 这次升级的**一次性标记**
         let (raw, migrated) = state.with(|conn| {
@@ -321,17 +321,17 @@ impl ToolPolicy {
             .unwrap_or_default();
         // 旧出厂值 16 → 新默认（见 [`LEGACY_DEFAULT_MAX_TOOL_STEPS`]）。
         //
-        // **一次性**：标记写下去之后就不再动它 —— 否则用户哪天在设置页里特意选了 16，
+        // **一次性**：标记写入后不再改动 —— 否则在设置页特意选择 16 时，
         // 下一次读配置又会被悄悄改回 25（那是把一个明确的选择当成没选）。
         let mut config = config;
         if !migrated && config.max_tool_steps == LEGACY_DEFAULT_MAX_TOOL_STEPS {
             config.max_tool_steps = DEFAULT_MAX_TOOL_STEPS;
             // 顺手把升级后的值写回库：不写回去的话"读一次升一次"看起来没差别，
-            // 但下次用户点保存写回来的仍是那份旧的 16。
+            // 但下次保存写回的仍是那份旧的 16。
             let _ = persist_migrated_max_tool_steps(state, &raw, config.max_tool_steps);
         }
         let project_root = state.project_root();
-        // 探测失败 / 配置里没有输出目录 → 空表，**不是错误**（读白名单照常只有用户配的那些）
+        // 探测失败 / 配置中没有输出目录 → 空表，**不是错误**（读白名单仍只有配置的那些）
         let configured_output = crate::ai::ai_settings::configured_output_dir(state)
             .ok()
             .flatten();
@@ -354,7 +354,7 @@ impl ToolPolicy {
     //  路径准入（Kotlin `resolveRead` / `resolveWrite`，P4 第 40 步）
     // ------------------------------------------------------------------
 
-    /// 读路径：必须落在**生效读白名单**内（用户配的 + 自动发现的 ComfyUI 目录）。
+    /// 读路径：必须落在**生效读白名单**内（配置的 + 自动发现的 ComfyUI 目录）。
     pub fn resolve_read(&self, raw: &str) -> Result<PathBuf, ToolFailure> {
         let roots = self.effective_read_roots();
         self.resolve(raw, &roots, "读")
