@@ -714,7 +714,7 @@ async fn the_approval_is_visible_before_anyone_can_click_it() {
     );
 
     // ★ push 一回来（`applied`）它就**必须**已经挂在待审批列表上了：
-    //   手机要先拿到 `applied`、用户才可能在桌面上点 —— 顺序反过来就是 R8 那个坑
+    //   手机要先拿到 `applied`，桌面上才可能触发 —— 顺序颠倒即 R8 那个问题
     let listed = pending_approval(&fixture.state, &call_id).expect("受理之后必须立刻看得见");
     assert_eq!(listed["name"], json!("comfy_submit"));
     assert_eq!(listed["conversationId"], json!("c1"));

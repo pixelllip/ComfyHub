@@ -38,7 +38,7 @@ pub fn scratch(label: &str) -> PathBuf {
         .duration_since(std::time::SystemTime::UNIX_EPOCH)
         .map(|since| since.as_nanos())
         .unwrap_or(0);
-    // 标签来自用例代码，不是用户输入；仍然清一遍路径分隔符，省得拼出子目录
+    // 标签来自用例代码，不是外部输入；仍然清理一遍路径分隔符，避免拼出子目录
     let safe: String = label
         .chars()
         .map(|c| {

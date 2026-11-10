@@ -1,4 +1,4 @@
-//! `capture_poller` 的单元测试（主体代码在 [`capture_poller`](super) —— 2026-09-30 按用户要求与主体分离）。
+//! `capture_poller` 的单元测试（主体代码在 [`capture_poller`](super) —— 与主体分离）。
 //!
 //! `use super::*;` 照旧：子模块能看见父模块的私有项，所以用例一行都不用改。
 

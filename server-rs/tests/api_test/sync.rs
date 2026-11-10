@@ -985,7 +985,7 @@ async fn sync_bootstrap_refuses_tables_outside_the_scope() {
 
 /// 测试里的 AppState **没有监听任何端口**（`port == 0`）→ 如实回空数组。
 ///
-/// 这是刻意的"宁可什么都不说"：报一个我们其实没在听的地址，用户会以为是网络问题。
+/// 这是刻意的"宁可什么都不说"：报一个实际未监听的地址会被误认为网络问题。
 #[tokio::test]
 async fn net_urls_is_empty_when_we_are_not_listening() {
     let app = router_for(state());
