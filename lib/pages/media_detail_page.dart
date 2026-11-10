@@ -1219,7 +1219,7 @@ class _InfoPanel extends StatelessWidget {
     final store = context.read<LibraryStore>();
     final p = prompt;
     // `promptTags` 是合并集合；这里把"只在提示词上"的那部分单独标出来，
-    // 免得用户以为它们也是产物的标签、删了却没反应。
+    // 免得误以为它们也是产物的标签、删了却没反应。
     final promptOnly = media.promptTags
         .where((t) => !media.ownTags.contains(t))
         .toList();

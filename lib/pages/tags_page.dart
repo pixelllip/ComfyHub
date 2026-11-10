@@ -12,9 +12,9 @@ import 'tag_results_page.dart';
 
 /// 标签卡的最小宽度：**360 宽的窗口下的一列**（360 减去左右各 16 的列表内边距）。
 ///
-/// 用户 2026-11-05 定的底线：标签卡再窄就放不下 16 个英文字符的标签名
-/// （左边有颜色点，右边有计数与两个操作按钮）。宽窗口按这个宽度分列，
-/// 所以任何一列都不会比最小窗口下的那张卡更窄。
+/// 下限：标签卡再窄则无法容纳 16 个英文字符的标签名
+/// （左侧有颜色点，右侧有计数与两个操作按钮）。宽窗口按该宽度分列，
+/// 因此任何一列都不窄于最小窗口下的卡片。
 const double kTagCardMinWidth = 328;
 
 class TagsPage extends StatefulWidget {
@@ -43,7 +43,7 @@ class _TagsPageState extends State<TagsPage> {
   @override
   Widget build(BuildContext context) {
     final store = context.watch<LibraryStore>();
-    // 电脑端标题始终在 AppBar；手机端保留滚动联动（用户 2026-11-05）。
+    // 电脑端标题始终在 AppBar；手机端保留滚动联动。
     final phone = useCollapsingPageTitle;
 
     var tags = store.tags.where((t) {
@@ -107,7 +107,7 @@ class _TagsPageState extends State<TagsPage> {
                   onChanged: (v) => setState(() => _query = v.trim()),
                 ),
                 const SizedBox(height: 10),
-                // 分类筛选行**折行显示**（用户要求：一行放不下就两行、三行，
+                // 分类筛选行**折行显示**（一行放不下时使用两行、三行，
                 // 不要横向滚动）。以前是 `SingleChildScrollView(horizontal)`：
                 // 分类一多 / 窗口一窄，右侧的分类和排序就被切在屏幕外。
                 FilterChipRow(
@@ -185,18 +185,17 @@ class _TagsPageState extends State<TagsPage> {
                       builder: (context, constraints) {
                         // 列数 = 可用宽度 / [kTagCardMinWidth]（328 = 360 窗口的一列）。
                         //
-                        // ⚠ 这里刻意**不用**通用的 550（用户 2026-10-12：
-                        // "标签页的卡片宽度过大，缩小为原来一半"）：标签卡里只有
-                        // 一个名字 + 一行分类/说明 + 一个计数 + 两个按钮，
-                        // 按 550 分列时在 1440 窗口上每张 ≈656 宽，名字只占左边
-                        // 一小截、右边全是空的。现在以"360 窗口下能完整显示
-                        // 16 个英文字符"为下限，宽窗口按这个下限分列。
+                        // ⚠ **不使用**通用的 550：标签卡只包含
+                        // 名称 + 一行分类/说明 + 计数 + 两个按钮，
+                        // 按 550 分列时在 1440 窗口上每张约 656 宽，名称只占左侧
+                        // 一小部分、右侧为空。现在以"360 窗口下完整显示
+                        // 16 个英文字符"为下限，宽窗口按该下限分列。
                         //
                         // 卡片高度固定，所以直接用 GridView（`mainAxisExtent`），
                         // 不用 `AdaptiveColumnList` —— 那个是给"每行等高"的卡片用的。
                         final columns = adaptiveColumnCount(
                           constraints.maxWidth,
-                          // **下限就是 360 宽窗口下的一列**（用户 2026-11-05）：
+                          // **下限为 360 宽窗口下的一列**：
                           // 再窄卡片就放不下 16 个英文字符的标签名了。
                           minColumnWidth: kTagCardMinWidth,
                         );
@@ -272,8 +271,7 @@ class _TagsPageState extends State<TagsPage> {
                                             .labelSmall,
                                       ),
                                     ),
-                                    // 按钮**不许为了省宽度而缩小命中区**（用户
-                                    // 2026-11-05："标签卡片按钮太小，很难按到"）。
+                                    // 按钮**不得为节省宽度而缩小命中区**。
                                     // 44 是视觉尺寸，默认的 padded 会把命中区补到 48；
                                     // 省下来的宽度靠"计数不用 Chip + 卡片留白收紧"。
                                     IconButton(
@@ -340,12 +338,13 @@ class _TagsPageState extends State<TagsPage> {
 
   /// 给库里已有的提示词与产物补一遍自动标签。
   ///
-  /// 只追加、不删除：用户自己加 / 删过的标签不会因为点这一下被覆盖。
+  /// 只追加、不删除：手动加 / 删过的标签不会因为点这一下被覆盖。
   Future<void> _autoTag(BuildContext context, LibraryStore store) async {
     final ok = await confirmDialog(
       context,
       title: '为已有内容补标签',
       message: '会根据提示词、底模和 LoRA 给已有内容补上标签。已有的标签不会删除。',
+      confirmText: '开始补标签',
     );
     if (!ok || !context.mounted) return;
     final messenger = ScaffoldMessenger.of(context);

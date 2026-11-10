@@ -1,7 +1,7 @@
 // 标签页的回归：卡片宽度**最多 275**（= 通用列宽的 half），
 // 长文案不会把固定高度的卡片撑破。
 //
-// 为什么是 275（用户 2026-10-12："标签页的卡片宽度过大，缩小为原来一半"）：
+// 取 275 的依据（标签页卡片宽度缩小为原来一半）：
 // 标签卡里只有一个名字 + 一行分类/说明 + 一个计数 + 两个按钮，按通用的 550 分列时
 // 1440 窗口上每张 ≈656 宽 —— 名字只占左边一小截、右边全空着。回归见 `_cardWidth`。
 //
@@ -47,6 +47,8 @@ MockClient _mockClient() {
       ];
     } else if (path == '/api/tags/categories') {
       body = [_longCategory];
+    } else if (path == '/api/tags/auto-apply') {
+      body = {'prompts': 3, 'media': 2, 'tags': 9};
     } else if (path == '/api/stats') {
       body = {
         'prompts': 0,
@@ -157,6 +159,22 @@ void main() {
       titleWidth,
       greaterThanOrEqualTo(140),
       reason: '360 宽下，标题至少要留出 16 个英文字符的位置',
+    );
+  });
+
+  testWidgets('标签页：补标签按钮会调用后端并如实报出新增条数', (tester) async {
+    await pumpTags(tester, const Size(1200, 900));
+
+    await tester.tap(find.byTooltip('为已有内容补标签'));
+    await tester.pumpAndSettle();
+    expect(find.text('为已有内容补标签'), findsOneWidget, reason: '先确认再执行');
+
+    await tester.tap(find.text('开始补标签'));
+    await tester.pumpAndSettle();
+    expect(
+      find.textContaining('已为 2 条产物和 3 条提示词补上标签'),
+      findsOneWidget,
+      reason: '结果要说清楚补了多少条，不能只报"成功"',
     );
   });
 }

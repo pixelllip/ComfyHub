@@ -134,7 +134,7 @@ class _TagEditorState extends State<TagEditor> {
   }
 }
 
-/// 弹出标签编辑框；返回 `null` = 取消，返回列表 = 用户确认后的完整标签集合。
+/// 弹出标签编辑框；返回 `null` = 取消，返回列表 = 确认后的完整标签集合。
 ///
 /// 产物详情 / 画廊右键都用它：编辑的是**产物自身的标签**（提示词的标签另算），
 /// 所以初始值必须是 `MediaAsset.ownTags`，不能传合并后的 `promptTags`。

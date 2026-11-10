@@ -1,7 +1,6 @@
 //! 自动标签：从**提示词正文**与**模型信息**推断人看得懂的标签。
 //!
-//! 用户 2026-11-10：「现在本项目只会给产物机械地打上 ComfyUI 的 tag，不会根据提示词、
-//! 模型加别的 tag」。这一层就是那条需求的实现，全部是**本地确定性规则**，不联网、不调模型：
+//! 入库与「给已有内容补标签」共用这一层；全部是**本地确定性规则**，不联网、不调模型：
 //!
 //! | 来源 | 例子 | 分类 |
 //! | --- | --- | --- |
@@ -9,14 +8,14 @@
 //! | 底模文件名 | `anima-base-v1.0.safetensors` → `Anima` | 模型 |
 //! | LoRA 文件名 | `add_detail.safetensors` → `add detail` | LoRA |
 //! | 产物类型 | 视频 → `视频` | 类型 |
-//! | NSFW 标记 | 用户 / AI 标记过 → `NSFW` | 内容 |
+//! | NSFW 标记 | 手动或 AI 标记过 → `NSFW` | 内容 |
 //!
 //! # 四条纪律
 //!
 //! 1. **纯函数、可单测**：推断只看传入的字段，不读库、不看环境变量。入库与「给存量补标签」
 //!    走的是同一个 [`infer`] —— 两条路的标签集合必须一致。
-//! 2. **只加不减**：自动标签永远只做追加（`INSERT OR IGNORE`），绝不替用户删标签。
-//!    用户手动删掉的自动标签，下次点「补标签」会回来；这是"补"的语义，不是覆盖。
+//! 2. **只加不减**：自动标签永远只做追加（`INSERT OR IGNORE`），绝不删除已有标签。
+//!    手动删掉的自动标签，下次点「补标签」会回来；这是"补"的语义，不是覆盖。
 //! 3. **宁可少打，不许乱打**：英文词按词边界匹配（`cat` 不会命中 `location`），
 //!    推断不出模型家族时用清理过的文件名，而不是把整条路径塞进标签。
 //! 4. **分类是给人筛的**：分类字符串直接进 `tags.category`，界面上的分类筛选就按它分组。
@@ -146,6 +145,26 @@ const PROMPT_RULES: &[(&str, &str, &str)] = &[
     ("soldier", "士兵", "角色"),
     ("法师", "法师", "角色"),
     ("mage", "法师", "角色"),
+    ("长发", "长发", "角色"),
+    ("long hair", "长发", "角色"),
+    ("短发", "短发", "角色"),
+    ("short hair", "短发", "角色"),
+    ("蓝眼", "蓝眼", "角色"),
+    ("blue eyes", "蓝眼", "角色"),
+    ("红眼", "红眼", "角色"),
+    ("red eyes", "红眼", "角色"),
+    ("校服", "校服", "角色"),
+    ("school uniform", "校服", "角色"),
+    ("和服", "和服", "角色"),
+    ("kimono", "和服", "角色"),
+    ("泳装", "泳装", "角色"),
+    ("swimsuit", "泳装", "角色"),
+    ("盔甲", "盔甲", "角色"),
+    ("armor", "盔甲", "角色"),
+    ("剑", "剑", "角色"),
+    ("sword", "剑", "角色"),
+    ("翅膀", "翅膀", "角色"),
+    ("wings", "翅膀", "角色"),
     // ---------------- 场景 ----------------
     ("风景", "风景", "场景"),
     ("landscape", "风景", "场景"),
@@ -194,6 +213,18 @@ const PROMPT_RULES: &[(&str, &str, &str)] = &[
     ("海滩", "海滩", "场景"),
     ("沙滩", "海滩", "场景"),
     ("beach", "海滩", "场景"),
+    ("天空", "天空", "场景"),
+    ("sky", "天空", "场景"),
+    ("云", "云", "场景"),
+    ("cloud", "云", "场景"),
+    ("花", "花", "场景"),
+    ("flower", "花", "场景"),
+    ("树", "树", "场景"),
+    ("tree", "树", "场景"),
+    ("水", "水", "场景"),
+    ("water", "水", "场景"),
+    ("火", "火", "场景"),
+    ("fire", "火", "场景"),
     // ---------------- 画质 ----------------
     ("杰作", "杰作", "画质"),
     ("masterpiece", "杰作", "画质"),
@@ -233,6 +264,19 @@ const PROMPT_RULES: &[(&str, &str, &str)] = &[
     ("symmetry", "对称", "构图"),
     ("景深", "景深", "构图"),
     ("depth of field", "景深", "构图"),
+    ("侧面", "侧面", "构图"),
+    ("from side", "侧面", "构图"),
+    ("profile", "侧面", "构图"),
+    ("背影", "背影", "构图"),
+    ("back", "背影", "构图"),
+    ("坐姿", "坐姿", "构图"),
+    ("sitting", "坐姿", "构图"),
+    ("站姿", "站姿", "构图"),
+    ("standing", "站姿", "构图"),
+    ("躺姿", "躺姿", "构图"),
+    ("lying", "躺姿", "构图"),
+    ("看镜头", "看镜头", "构图"),
+    ("looking at viewer", "看镜头", "构图"),
     // ---------------- 氛围 ----------------
     ("暗黑", "暗黑", "氛围"),
     ("dark", "暗黑", "氛围"),
@@ -253,6 +297,12 @@ const PROMPT_RULES: &[(&str, &str, &str)] = &[
     ("cozy", "温馨", "氛围"),
     ("戏剧性", "戏剧性", "氛围"),
     ("dramatic", "戏剧性", "氛围"),
+    ("微笑", "微笑", "氛围"),
+    ("smile", "微笑", "氛围"),
+    ("哭泣", "哭泣", "氛围"),
+    ("crying", "哭泣", "氛围"),
+    ("生气", "生气", "氛围"),
+    ("angry", "生气", "氛围"),
 ];
 
 /// 提示词最多留几条标签。
@@ -463,7 +513,12 @@ fn keyword_matches(text: &str, keyword: &str) -> bool {
             return true;
         }
         // 从下一个字符继续找（不能停在同一个位置，否则死循环）
-        let next = start + text[start..].chars().next().map(char::len_utf8).unwrap_or(1);
+        let next = start
+            + text[start..]
+                .chars()
+                .next()
+                .map(char::len_utf8)
+                .unwrap_or(1);
         if next >= text.len() {
             break;
         }
@@ -484,7 +539,7 @@ pub struct AutoTagReport {
     pub tags: usize,
 }
 
-/// 给库里已有的提示词与产物补一遍自动标签（用户点「为已有内容补标签」时走这里）。
+/// 给库里已有的提示词与产物补一遍自动标签（界面上的「为已有内容补标签」按钮走这里）。
 ///
 /// 只追加、不删除；同一个标签已经在某条内容上就跳过。整个扫描在一个写事务里，
 /// 中途出错不会留下"一半有标签、一半没有"的库。
@@ -502,7 +557,8 @@ pub fn apply_existing(state: &AppState) -> Result<AutoTagReport, ApiError> {
                     row.get::<_, Option<String>>(1)?.unwrap_or_default(),
                     row.get(2)?,
                     row.get(3)?,
-                    row.get::<_, Option<String>>(4)?.unwrap_or_else(|| "IMAGE".into()),
+                    row.get::<_, Option<String>>(4)?
+                        .unwrap_or_else(|| "IMAGE".into()),
                 ))
             })?;
             rows.collect::<rusqlite::Result<Vec<_>>>()?
@@ -530,20 +586,16 @@ pub fn apply_existing(state: &AppState) -> Result<AutoTagReport, ApiError> {
                 let rows = stmt.query_map([prompt_id], |row| {
                     Ok((
                         row.get(0)?,
-                        row.get::<_, Option<String>>(1)?.unwrap_or_else(|| "IMAGE".into()),
+                        row.get::<_, Option<String>>(1)?
+                            .unwrap_or_else(|| "IMAGE".into()),
                         row.get::<_, i64>(2).unwrap_or(0) != 0,
                     ))
                 })?;
                 rows.collect::<rusqlite::Result<Vec<_>>>()?
             };
             for (media_id, media_kind, nsfw) in media_rows {
-                let media_tags = infer_parts(
-                    &positive,
-                    checkpoint.as_deref(),
-                    &loras,
-                    &media_kind,
-                    nsfw,
-                );
+                let media_tags =
+                    infer_parts(&positive, checkpoint.as_deref(), &loras, &media_kind, nsfw);
                 let added = repo::append_media_auto_tags(tx, media_id, &media_tags)?;
                 if added > 0 {
                     report.media += 1;
@@ -567,7 +619,13 @@ mod tests {
 
     #[test]
     fn prompt_keywords_become_categorized_tags() {
-        let tags = infer_parts("1girl, cyberpunk city at night, ink painting", None, &[], "IMAGE", false);
+        let tags = infer_parts(
+            "1girl, cyberpunk city at night, ink painting",
+            None,
+            &[],
+            "IMAGE",
+            false,
+        );
         let names = names(&tags);
         assert!(names.contains(&"少女"), "{names:?}");
         assert!(names.contains(&"赛博朋克"), "{names:?}");
@@ -575,7 +633,8 @@ mod tests {
         assert!(names.contains(&"夜晚"), "{names:?}");
         assert!(names.contains(&"水墨"), "{names:?}");
         assert!(
-            tags.iter().any(|t| t.name == "赛博朋克" && t.category == "风格"),
+            tags.iter()
+                .any(|t| t.name == "赛博朋克" && t.category == "风格"),
             "{tags:?}"
         );
     }
@@ -583,8 +642,14 @@ mod tests {
     #[test]
     fn english_keywords_respect_word_boundaries() {
         assert!(keyword_matches("1girl, solo", "girl"), "数字前缀要能命中");
-        assert!(!keyword_matches("location", "cat"), "location 里的 cat 不算");
-        assert!(!keyword_matches("girlfriend", "girl"), "girlfriend 里的 girl 不算");
+        assert!(
+            !keyword_matches("location", "cat"),
+            "location 里的 cat 不算"
+        );
+        assert!(
+            !keyword_matches("girlfriend", "girl"),
+            "girlfriend 里的 girl 不算"
+        );
         assert!(keyword_matches("cat_ears", "cat"), "下划线是词边界");
         assert!(keyword_matches("best quality, 8k", "best quality"));
         assert!(keyword_matches("cyberpunk city", "cyberpunk"));
@@ -626,7 +691,8 @@ mod tests {
         assert!(names.contains(&"视频"), "{names:?}");
         assert!(names.contains(&"NSFW"), "{names:?}");
         assert!(
-            tags.iter().any(|t| t.name == "视频" && t.category == "类型"),
+            tags.iter()
+                .any(|t| t.name == "视频" && t.category == "类型"),
             "{tags:?}"
         );
     }

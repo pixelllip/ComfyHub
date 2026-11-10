@@ -140,8 +140,9 @@ version: 1
 | 用户要的 | 先读 |
 | --- | --- |
 | 判断用途 / 选工作流 / 复制后改 / TextGenerate 摘线 | **本 skill** |
-| Krea 2 的提示词、参数、从**用户自己的 krea2 工作流**识别节点键 | `krea-2`（模板只作结构样例，不是起点） |
-| MOSS-Image 的提示词、Layout JSON、两份模板 | `moss-image` |
+| 写 / 改 / 扩写提示词正文（含参考图、角色卡、画风卡、预设） | `t2i-prompt`（提示词主引擎；有参考图时与 `r2i-prompt` 同源） |
+| Krea 2 的参数、LoRA、从**用户自己的 krea2 工作流**识别节点键 | `krea-2`（模板只作结构样例，不是起点；正文写作用 `t2i-prompt`） |
+| MOSS-Image 的文件、参数、Layout JSON、两份模板 | `moss-image`（正文写作用 `t2i-prompt`） |
 | 换底模 / LoRA / VAE / 把骨架绑到新模型 | `workflow-recipe` |
 | 跑不起来 / 0.01 秒空跑 / 白跑 / 参数档位 | `comfy-workflow-audit` |
 | 把用户发来的图投放进 ComfyUI / 覆盖 LoadImage | `img2img-reference` |

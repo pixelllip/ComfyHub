@@ -53,7 +53,7 @@ pub fn write_router() -> Router<AppState> {
         .route("/api/prompts/{id}/tags", post(add_tags))
         .route("/api/prompts/{id}/tags/{tag_id}", delete(remove_tag))
         .route("/api/media/{id}", patch(patch_media).delete(delete_media))
-        // 产物标签（2026-11-10）：用户手动加 / 删。整体替换走 `PATCH /api/media/{id}`
+        // 产物标签（2026-11-10）：手动加 / 删。整体替换走 `PATCH /api/media/{id}`
         // 的 `tags`；这两条是"只加一条 / 只删一条"的细粒度入口。
         .route("/api/media/{id}/tags", post(add_media_tags))
         .route("/api/media/{id}/tags/{tag_id}", delete(remove_media_tag))

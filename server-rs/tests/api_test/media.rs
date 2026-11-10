@@ -156,7 +156,7 @@ async fn media_list_uses_the_same_keys_and_filters() {
     // ★ 布尔筛选**必须收 `1` / `0`**（2026-10-11 修的真 bug）：
     // axum 的 `Query` 对 `Option<bool>` 只认 `true`/`false`，发 `1` 会**整个请求 400** ——
     // 而 Dart 那边（`listMedia` 的 `favorite: favorite ? '1' : '0'`）发的就是 `1`。
-    // 表现：画廊点一下「仅收藏」→ "加载失败 HTTP 400"，用户完全猜不到是那个开关干的。
+    // 表现：画廊点击「仅收藏」→ "加载失败 HTTP 400"，无法判断与该开关相关。
     // 这条用例盯的就是"再也不许回到只认 true/false"。
     for flag in ["1", "true"] {
         let (status, body) = get_json(
@@ -191,7 +191,7 @@ async fn media_list_uses_the_same_keys_and_filters() {
     //
     // 曾经写成"未分组的 或 不是任何集合成员" —— 那等于把所有集合成员全排除掉，
     // 于是**集合的格子在画廊里根本不出现**，而且 `pages=1` 翻页也补不回来
-    // （用户看到的是"这几张图没了"）。
+    // （表现为"这些图片消失"）。
     //
     // 现场构造：一条未分组的 + 一个两成员的集合 → 折叠后必须剩 **2** 格。
     state
@@ -444,7 +444,7 @@ async fn media_file_rejects_path_traversal_and_missing_files() {
     let (status, _) = get_json(router_for(state.clone()), "/api/media/100/file").await;
     assert_eq!(status, StatusCode::NOT_FOUND, "目录穿越必须被挡住");
 
-    // 文件不在磁盘上（比如被用户删了）
+    // 文件不在磁盘上（例如已被删除）
     state
         .with(|conn| {
             conn.execute(
@@ -733,7 +733,7 @@ async fn media_tags_can_be_added_and_removed_individually() {
     assert_eq!(missing.0, StatusCode::NOT_FOUND, "body={}", missing.1);
 }
 
-/// 「给已有内容补标签」：从提示词 / 底模 / LoRA 推断，只追加、不删用户标签。
+/// 「给已有内容补标签」：从提示词 / 底模 / LoRA 推断，只追加、不删除已有标签。
 #[tokio::test]
 async fn auto_apply_tags_backfills_prompts_and_media() {
     let state = state();
@@ -745,7 +745,11 @@ async fn auto_apply_tags_backfills_prompts_and_media() {
     )
     .await;
     assert_eq!(applied.0, StatusCode::OK, "body={}", applied.1);
-    assert_eq!(applied.1["prompts"], 2, "两条提示词都该补上标签：{}", applied.1);
+    assert_eq!(
+        applied.1["prompts"], 2,
+        "两条提示词都该补上标签：{}",
+        applied.1
+    );
     assert_eq!(applied.1["media"], 1, "产物 100 也要补：{}", applied.1);
     assert!(
         applied.1["tags"].as_u64().unwrap_or(0) > 0,
@@ -761,11 +765,11 @@ async fn auto_apply_tags_backfills_prompts_and_media() {
         names.contains(&"赛博朋克"),
         "cyberpunk 应推断出风格标签：{names:?}"
     );
-    assert!(names.contains(&"Krea"), "底模 krea2 应推断出模型标签：{names:?}");
     assert!(
-        names.contains(&"anima"),
-        "LoRA 文件名应成为标签：{names:?}"
+        names.contains(&"Krea"),
+        "底模 krea2 应推断出模型标签：{names:?}"
     );
+    assert!(names.contains(&"anima"), "LoRA 文件名应成为标签：{names:?}");
 
     // 幂等：再补一遍不应再新增
     let again = send_json(
@@ -780,7 +784,6 @@ async fn auto_apply_tags_backfills_prompts_and_media() {
     assert_eq!(again.1["media"], 0, "{}", again.1);
     assert_eq!(again.1["tags"], 0, "{}", again.1);
 }
-
 
 #[tokio::test]
 async fn delete_media_removes_row_file_and_thumb() {
