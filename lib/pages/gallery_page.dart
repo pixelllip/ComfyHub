@@ -35,11 +35,11 @@ class GalleryPage extends StatefulWidget {
 ///
 /// * 面板最窄 / 最宽：再窄里面的成员格子没法看，再宽就喧宾夺主。
 ///
-/// ⚠ **"停靠还是弹窗"不由这几个数决定**（用户 2026-10-18："能不能让我自由选择…"）：
+/// ⚠ **"停靠或弹窗"不由这几个数决定**：
 /// 形态**只看设置**（`SettingsStore.collectionDetailWide` / `collectionDetailNarrow`，
 /// 见 [_libraryBody]），这里的宽度算式只管"停靠时这块面板多宽"。
 /// 以前还有一条"扣掉面板后网格剩不下 `kCollectionGridMinWidth` 就退回弹窗"的
-/// 自动回退 —— **已删**：那正是替用户做决定，他要的是"我自己定"。
+/// 自动回退 —— **已删除**：该行为替代使用方做决定。
 const double kCollectionPanelMinWidth = 300;
 const double kCollectionPanelMaxWidth = 480;
 
@@ -61,9 +61,9 @@ class _GalleryPageState extends State<GalleryPage> {
   /// * `size` = 这一项覆盖多少张产物（单条 = 1，集合 = 整组成员数）；
   /// * `collection` = 非空表示"这一项代表整个集合"；
   /// * `kind` = 这一项的产物类型（`IMAGE` / `VIDEO` / …）——「移到集合…」要靠它
-  ///   把"装不下这一批"的目标置灰并说明原因（一个集合只装一种，用户 2026-10-18 拍板）。
+  ///   把"装不下这一批"的目标置灰并说明（一个集合只装一种）。
   ///
-  /// ⚠ 用户 2026-10-18 拍板："集合格子拖动时，动整组。" 所以选中态**不能只存代表 id**
+  /// ⚠ 集合格子拖动时移动整组，因此选中态**不能只存代表 id**
   /// —— 以前 `Set<int>` 里一个集合格子和一张单图长得一模一样，批量删就只删掉了封面
   /// （这正是"一次只能删一张"的另一面）。
   final Map<int, ({int size, int? collection, String kind})> _picked = {};
@@ -71,11 +71,11 @@ class _GalleryPageState extends State<GalleryPage> {
   bool _selectionMode = false;
   bool _busy = false;
 
-  /// 正"点开"的那个集合（用户 2026-10-18："点进文件夹，在弹窗展开文件夹列出所有图片"）。
+  /// 正在"点开"的集合（在弹窗中展开并列出所有图片）。
   ///
   /// ⚠ 它**不是 `showDialog`**：模态弹窗会铺一层 `ModalBarrier`，把底下的画廊整个
   /// 挡在命中测试之外 —— 那样"把成员拖出文件夹、拖到画廊里的另一个格子上"
-  /// 根本收不到落点（这恰恰是用户要的那条拖动逻辑）。
+  /// 无法收到落点（这正是所需的拖动行为）。
   /// 所以这里做成**同一个页面里的浮层**：画廊还在，落点也还在。
   MediaAsset? _openFolder;
   List<MediaAsset>? _folderMembers;
@@ -86,7 +86,7 @@ class _GalleryPageState extends State<GalleryPage> {
   /// 集合名真源在后端（`GET /api/media/collections`），前端不自己猜。
   MediaCollection? _folderCollection;
 
-  /// 集合弹窗里的**多选**（用户 2026-10-18："在集合内我不能多选操作"）。
+  /// 集合弹窗中的**多选**。
   bool _folderSelection = false;
   final Set<int> _folderPicked = {};
 
@@ -176,13 +176,13 @@ class _GalleryPageState extends State<GalleryPage> {
   @override
   Widget build(BuildContext context) {
     final store = context.watch<LibraryStore>();
-    // 电脑端标题**始终在 AppBar 里**（用户 2026-11-05：电脑端恢复原状）；
+    // 电脑端标题**始终在 AppBar 里**；
     // 手机端保留"大标题在正文里、滚走后在 AppBar 淡入"的联动。
     // 判据是**平台**，不是窗口宽度 —— 电脑窗口拉窄不该长成手机的样子。
     final phone = useCollapsingPageTitle;
 
     // ContextMenuScope：右键菜单的宿主。它**不铺 ModalBarrier**，所以菜单开着时
-    // 画廊照样能滚（用户 bug ②）。一个页面只挂一个。
+    // 画廊仍可滚动。一个页面只挂一个。
     // 外面套 Builder：让下面的 context 落在 Scope **之内**，右键菜单才找得到宿主。
     return ContextMenuScope(
       child: Builder(
@@ -313,7 +313,7 @@ class _GalleryPageState extends State<GalleryPage> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // 搜索栏 + **折叠按钮**（用户 2026-10-11 定：按钮放搜索栏右侧）
+          // 搜索栏 + **折叠按钮**（按钮位于搜索栏右侧）
           Row(
             children: [
               Expanded(
@@ -346,8 +346,8 @@ class _GalleryPageState extends State<GalleryPage> {
               ),
             ],
           ),
-          // 收起时**露出当前生效的筛选摘要** —— 否则用户看不出自己在筛选状态，
-          // 会以为"图怎么少了"（用户 2026-10-11 明确要求）。
+          // 收起时**显示当前生效的筛选摘要** —— 否则无法判断处于筛选状态，
+          // 会误认为"图片数量减少"。
           if (collapsed)
             Padding(
               padding: const EdgeInsets.only(top: 6),
@@ -380,7 +380,7 @@ class _GalleryPageState extends State<GalleryPage> {
     return parts.join(' · ');
   }
 
-  /// 筛选选项**按功能分区**，但**不"一种一行"**（2026-10-11 用户改的口径）：
+  /// 筛选选项**按功能分区**，但**不"一种一行"**：
   /// 组内联排、组与组之间一条竖线，宽窗口一行塞得下两三组，窄窗口整组换行。
   ///
   /// 为什么分区：这些 chip 原来是一条扁平的流，"一键清除"那种**破坏性**动作
@@ -420,7 +420,7 @@ class _GalleryPageState extends State<GalleryPage> {
               ),
               selected: store.mediaOnlyFavorite,
               // 这一档**无视集合**（见 `LibraryStore.mediaFavoritesFlat`）：
-              // 还开着的集合面板已经不符合这个语义，顺手收起，别让用户对着两个矛盾的视图。
+              // 已打开的集合面板不再符合该语义，一并收起，避免出现两个冲突视图。
               onSelected: (v) {
                 _closeFolder();
                 store.setMediaOnlyFavorite(v);
@@ -540,7 +540,7 @@ class _GalleryPageState extends State<GalleryPage> {
 
   /// 集合面板的宽度：**随可用宽度缩放**，并夹在一个合理区间里。
   ///
-  /// 用户 2026-10-18："面板是固定宽度，在窄屏很难用。" —— 固定 380 在 900 出头的小窗口上
+  /// 面板固定宽度在窄屏难以使用 —— 固定 380 在 900 出头的小窗口上
   /// 会把网格挤到只剩一点点，而在 2560 的大屏上又显得局促。
   ///
   /// ⚠ 这两个数**不是布局断点**（断点仍然只有 `kWideLayoutMinWidth` 一个）：
@@ -572,7 +572,7 @@ class _GalleryPageState extends State<GalleryPage> {
           // 判定完全来自后端（`collectionId` + `collectionSize > 1`），前端不猜。
           //
           // ⚠ 例外是「仅收藏」：那一档**无视集合**，每个收藏都要显示成**单张图**
-          // （用户 2026-10-24）。后端的折叠也确实是关掉的，这里再把格子的
+          // 后端的折叠同样关闭，这里再把格子的
           // "集合外观"关掉 —— 两件事必须同时做，不然会看到一个只含收藏的文件夹。
           final favoritesFlat = store.mediaFavoritesFlat;
           final grouped = m.isCollection && !favoritesFlat;
@@ -583,8 +583,7 @@ class _GalleryPageState extends State<GalleryPage> {
                   selectionMode: _selectionMode,
                   selected: _picked.containsKey(m.id),
                   onToggleSelect: () => _togglePick(m),
-                  // 点文件夹 = **展开列出成员**（用户 2026-10-18："点进文件夹…再选择其一
-                  // 进入它的详情"），不再直接跳封面的详情页。
+                  // 点文件夹 = **展开列出成员**，不再直接跳转封面详情页。
                   onTap: () => _showFolder(m),
                 )
               : MediaThumb(
@@ -595,7 +594,7 @@ class _GalleryPageState extends State<GalleryPage> {
                   onTap: () => _openDetail(m.id),
                 );
           return GestureDetector(
-            // 长按 = 进"整理/多选"模式（两件事合成一个模式，用户 2026-10-18 拍板）。
+            // 长按 = 进入"整理/多选"模式（两件事合并为一个模式）。
             // ⚠ 集合格子进来时**整组计入**，不然"选了一组、删掉一张"又会重演。
             onLongPress: () => setState(() {
               _selectionMode = true;
@@ -645,7 +644,7 @@ class _GalleryPageState extends State<GalleryPage> {
     }
 
     final theme = Theme.of(context);
-    // 页码请求走后端分页：`mediaPage` 是"用户要看第几页"。
+    // 页码请求走后端分页：`mediaPage` 表示目标页码。
     // 相邻页由 store 预取（`ensureMediaPage`），拖动时两页要同时在树里。
     final pageBusy = store.mediaPage != store.media.page;
     final grid = Column(
@@ -679,11 +678,10 @@ class _GalleryPageState extends State<GalleryPage> {
     final open = _openFolder != null;
     // ⚠ 两件事**分工**，别混：
     //
-    //  · **形态**（停靠 / 弹窗）只由**用户的设置**决定 —— 宽档读
-    //    `collectionDetailWide`、窄档读 `collectionDetailNarrow`
-    //    （用户 2026-10-18："能不能让我自由选择在电脑/手机排版的画廊的集合详情行为？"）。
-    //    这里**刻意没有任何"空间不够就回退弹窗"的分支**：那是上一版替用户做的决定，
-    //    而这次他要的恰恰是"我自己定" —— 选了停靠就停靠，哪怕窗口很窄。
+    //  · **形态**（停靠 / 弹窗）只由**设置**决定 —— 宽档读
+    //    `collectionDetailWide`、窄档读 `collectionDetailNarrow`。
+    //    这里**没有"空间不够就回退弹窗"的分支**：选择停靠时即停靠，
+    //    即使窗口很窄。
     //  · **面板宽度**由 [collectionPanelWidth] 决定（随可用宽度缩放、夹在 300~480）。
     //    它是"停靠时面板长什么样"，跟"停靠还是弹窗"是两件事 —— 一个字都不改。
     final settings = context.watch<SettingsStore>();
@@ -703,7 +701,7 @@ class _GalleryPageState extends State<GalleryPage> {
                     Expanded(child: grid),
                     // 停靠：面板**占真实布局空间**（网格自己收窄），谁都不遮谁 ——
                     // 于是"让开 / 回来 / 只藏不销毁"整套机制都不需要。
-                    // （选停靠的是**用户**，不是"窗口够宽"这个判据，见上面 [docked]）
+                    // （由设置决定是否停靠，不以"窗口够宽"为判据，见上面 [docked]）
                     SizedBox(
                       width: panelWidth,
                       child: LayoutBuilder(
@@ -715,7 +713,7 @@ class _GalleryPageState extends State<GalleryPage> {
                 )
               : grid,
         ),
-        // 用户选了弹窗才用居中弹窗（虚化背景；拖出去时它彻底让开，见 `_folderLayer`）
+        // 选择弹窗模式时才使用居中弹窗（虚化背景；拖出时完全让开，见 `_folderLayer`）
         if (open && !docked) _folderLayer(theme),
         // 拖动中给一条"移出集合"的落点提示（两种形态都有；
         // 现在**随手松手**也算移出，它只是顺手接得住）
@@ -801,15 +799,15 @@ class _GalleryPageState extends State<GalleryPage> {
           icon: media.favorite ? Icons.star_border : Icons.star,
           label: media.favorite ? '取消收藏' : '收藏',
         ),
-        // 手动标记成人内容（用户 bug 2026-09-20）：AI 没声明过的（自己导入的、老数据）
-        // 由用户说了算 —— 「预览图模糊」只作用于标记过的条目。
+        // 手动标记成人内容：AI 未声明的（自行导入的、旧数据）
+        // 由手动标记决定 —— 「预览图模糊」只作用于标记过的条目。
         MenuOption(
           value: 'nsfw',
           icon: media.nsfw ? Icons.visibility : Icons.visibility_off_outlined,
           label: media.nsfw ? '取消 NSFW 标记' : '标记为 NSFW',
         ),
         // ⚠ 集合格子必须**两个删除项并列**，且名字里带数量 ——
-        // 这是"删一张 / 删整组"的唯一区分点（用户 bug 2026-10-18）。
+        // 这是"删一张 / 删整组"的唯一区分点。
         if (isGroup)
           MenuOption(
             value: 'deleteGroup',
@@ -825,8 +823,7 @@ class _GalleryPageState extends State<GalleryPage> {
           danger: true,
           dividerBefore: !isGroup,
         ),
-        // 归类纠错（用户 2026-10-18："生成的内容自动分类到错误的集合…允许用户处理"）：
-        // 整组拆开 = 每个成员都打上"用户已移出"，之后回填不会再把它们吸回来。
+        // 归类纠错：整组拆开 = 每个成员都标记"已移出"，之后回填不会再把它们收回。
         if (isGroup)
           MenuOption(
             value: 'detachGroup',
@@ -894,12 +891,12 @@ class _GalleryPageState extends State<GalleryPage> {
   /// 把一批产物**移出集合**（归类纠错的正解）。
   ///
   /// 后端在 `clearCollection` 时同时写 `collection_opt_out = 1` —— 少了那一步，
-  /// 用户刚拆出来的图会在**下次启动**被回填静默吸回原组（这条是本仓库最隐蔽的坑之一）。
+  /// 刚拆出的图片会在**下次启动**被回填静默收回原组。
   /// 拖动载荷：把一格变成"可拖的"。
   ///
   /// 桌面与触屏**两套手势**，因为翻页方式不同：
   /// * 桌面用**滚轮**翻页 ⇒ 即时左键拖不会跟滚动打架，而且这也正是文件管理器的习惯
-  ///   （用户 2026-10-18 报"电脑端画廊并不支持拖动行为"，就是长按拖在鼠标上不直观）；
+  ///   （长按拖在鼠标上不直观，桌面端表现为"不支持拖动"）；
   /// * 触屏上必须长按才起拖，否则轻轻一划就变成拖图。
   Widget _dragPayload(
     MediaAsset media,
@@ -995,7 +992,7 @@ class _GalleryPageState extends State<GalleryPage> {
   /// 展开的那一组在后端叫什么（名字 / 算法分组还是手动集合）。
   ///
   /// 读不到就返回 `null`，标题退回中性的「集合」—— 不能因此把面板关上：
-  /// 用户来这里是看图的，名字只是标题。
+  /// 进入该页面的目的是查看图片，名称仅作标题。
   Future<MediaCollection?> _collectionMeta(int? collectionId) async {
     if (collectionId == null) return null;
     try {
@@ -1026,8 +1023,8 @@ class _GalleryPageState extends State<GalleryPage> {
 
   /// 展开面板的标题：**集合自己的名字**，不再一律写"这一组"。
   ///
-  /// * 有名字（用户起的 / 新建时自动给的）= 用名字；
-  /// * 算法分出来的没名字 = 「算法分组」（如实说，不假装是用户起的名）；
+  /// * 有名称（手动填写 / 新建时自动生成）= 使用名称；
+  /// * 算法分组无名称 = 「算法分组」（如实显示，不显示为手动命名）；
   /// * 老手动集合没名字 = 「未命名集合」，点旁边的铅笔就能补一个。
   String _folderTitleText() {
     final meta = _folderCollection;
@@ -1093,13 +1090,12 @@ class _GalleryPageState extends State<GalleryPage> {
     }
   }
 
-  /// 展开的文件夹：**居中弹窗 + 虚化背景**（用户 2026-10-18："虚化后面的内容，
-  /// 然后在正中心展开"）。
+  /// 展开的文件夹：**居中弹窗 + 虚化背景**。
   ///
   /// # 为什么它是页面里的一层，而不是 `showDialog`
   ///
-  /// 用户要的拖动逻辑是："把内容移出到弹窗外、弹窗关闭，再移动到某个元素上，
-  /// 松手完成移动。" —— **拖到一半时弹窗必须让开**。而 `showDialog` 有两条硬伤：
+  /// 拖动逻辑：将内容拖出弹窗后弹窗关闭，再移动到目标元素上，松手完成移动。
+  /// **拖动过程中弹窗必须让开**。`showDialog` 有两个限制：
   /// ① 弹窗里挂着 `Draggable`，一旦 pop，那棵子树连同它的 State 一起被销毁，
   /// 拖拽当场断掉；② 它铺的 `ModalBarrier` 会把底下的画廊整个挡在命中测试之外，
   /// 那样松手也落不到格子上。
@@ -1153,12 +1149,12 @@ class _GalleryPageState extends State<GalleryPage> {
     );
   }
 
-  /// 集合面板本体：**停靠还是居中弹窗由用户的设置决定**
+  /// 集合面板本体：**停靠或居中弹窗由设置决定**
   /// （`SettingsStore.collectionDetailWide` / `collectionDetailNarrow`，见 [_libraryBody]）。
   /// [docked] 只影响它自己的外观（圆角 / 阴影 / 尺寸），不参与"谁决定形态"。
   ///
   /// ⚠ **整个面板本身是一个落点**：只把成员格子做成落点的话，"把外面的一张加进这一组"
-  /// 就没有地方可放 —— 用户 2026-10-18 报的 B 的那个 bug 正是这个。
+  /// 就没有可放置的位置。
   Widget _folderPanel(
     ThemeData theme,
     BoxConstraints constraints, {
@@ -1174,7 +1170,7 @@ class _GalleryPageState extends State<GalleryPage> {
       clipBehavior: Clip.antiAlias,
       color: theme.colorScheme.surfaceContainerHigh,
       child: SizedBox(
-        // 手机（窄屏）上**限制弹窗大小**：用户拍板的"手机 UI 限制弹窗大小就可以了"
+        // 手机（窄屏）上**限制弹窗大小**：
         width: docked
             ? constraints.maxWidth
             : (constraints.maxWidth * 0.78).clamp(320.0, 620.0),
@@ -1238,7 +1234,7 @@ class _GalleryPageState extends State<GalleryPage> {
                           _folderMemberTile(theme, members[i]),
                     ),
             ),
-            // 集合内**多选**（用户 2026-10-18："在集合内我不能多选操作"）
+            // 集合内**多选**
             if (_folderSelection && picked > 0)
               Container(
                 padding: const EdgeInsets.symmetric(
@@ -1351,7 +1347,7 @@ class _GalleryPageState extends State<GalleryPage> {
   /// 拖动中：指针离开弹窗 → 弹窗让开（**只藏不销毁**，否则拖拽当场断）。
   ///
   /// ⚠ **一旦让开就一直让开**，不再"拖回来就重新挡住"。之前那版会让开又回来，
-  /// 结果是窗口中间那一片格子**永远落不到** —— 用户 2026-10-18 报的正是这个。
+  /// 结果是窗口中间的格子**始终无法接收落点**。
   void _onFolderDragMove(DragUpdateDetails details) {
     if (_folderDragging) return;
     final rect = _folderRect;
@@ -1369,7 +1365,7 @@ class _GalleryPageState extends State<GalleryPage> {
   /// 落到了某个落点上（某个格子 / 底部那条）：这一趟的目的已经达到。
   ///
   /// **只在"拖出去过"时才收掉弹窗** —— 在弹窗内部把一张拖到另一张上，不该把弹窗关掉
-  /// （用户 2026-10-18："在集合内拖动内容（终点在集合弹窗内），会导致集合弹窗关闭"）。
+  /// （在集合内拖动内容且终点位于集合弹窗内时，集合弹窗会关闭）。
   void _finishFolderDrag() {
     final left = _folderDragging;
     _endFolderDrag();
@@ -1378,9 +1374,8 @@ class _GalleryPageState extends State<GalleryPage> {
 
   /// 松手在**所有落点之外**。
   ///
-  /// 用户 2026-10-18："我还希望集合弹窗内将内容拖动到弹窗外，能够直接解除移出集合，
-  /// 而不再只能拖动到屏幕底。" —— 拖出弹窗之后**随便在哪儿松手**都算移出，
-  /// 不用去够底部那条横条（它现在只是一条提示，顺手也能落）。
+  /// 将内容拖出集合弹窗后，**在弹窗外任意位置松手**都算移出集合，
+  /// 不需要拖到底部横条（该横条仅作提示，也可作为落点）。
   Future<void> _folderDragOut(int mediaId) async {
     final left = _folderDragging;
     _endFolderDrag();
@@ -1482,7 +1477,7 @@ class _GalleryPageState extends State<GalleryPage> {
                 color: selected ? theme.colorScheme.primary : Colors.white70,
               ),
             ),
-          // 收藏标记（用户 2026-10-24）：集合里的成员被收藏时也要**看得出来**，
+          // 收藏标记：集合内的成员被收藏时也要**可见**，
           // 与画廊里散图的星标一致 —— 以前展开后收藏状态整个消失了。
           // 小图上不加渐变（那是 `MediaThumb` 的做法），改成垫一枚半透明圆底，
           // 浅色缩略图上星标也读得清；它在右上角，不与左上角的勾选圈打架。
@@ -1538,14 +1533,14 @@ class _GalleryPageState extends State<GalleryPage> {
 
   /// 拖到某一格上松手。
   ///
-  /// 三种情况，语义都来自用户拍板的那几条：
+  /// 三种情况的语义：
   /// 1. 拖的是**集合格子** → **整组一起过去**（这是"动整组"的落点）；
   /// 2. 目标已经在某个集合里 → 并进去；
   /// 3. 目标还没有集合 → **当场新建一个**（目标 + 拖过来的）—— 这就是手机里
   ///    "把两个图标拖到一起就成了一个文件夹"。
   ///
-  /// kind 不一致**在前端就先拦一道**并说人话：后端也会拒（400），但让用户等到一次
-  /// 往返之后才看到红字，不如当场说。
+  /// kind 不一致时**前端先拦截**并提示：后端同样会拒绝（400），
+  /// 但需要等待一次往返才显示错误，因此当场提示。
   Future<void> _dropOnto({
     required int draggedId,
     required MediaAsset target,
@@ -1589,12 +1584,12 @@ class _GalleryPageState extends State<GalleryPage> {
   ///
   /// ⚠ 别只看 `_picked`：**桌面可以直接拖，不需要先勾选**。
   /// "拖集合格子 = 动整组"这条与"有没有先选过它"无关 —— 只看 `_picked` 的话，
-  /// 桌面上拖一个集合格子只会搬走封面那一张（正是用户报的那类 bug）。
+  /// 桌面端拖动一个集合格子只会移动封面那一张。
   Future<List<int>?> _expandOne(int mediaId) async {
     // ① 弹窗里勾了一批 → 拖其中任意一张 = **整批一起走**。
     // ⚠ 这里必须看 `_folderPicked`：弹窗里的多选与画廊主界面那个 `_picked`
     // **是两套**，只看后者的话"集合内多选之后拖一张"只会搬走那一张
-    // （用户 2026-10-18："同时要做到可以多选拖拽"）。
+    // （同时需要支持多选拖拽）。
     if (_folderPicked.length > 1 && _folderPicked.contains(mediaId)) {
       return List.of(_folderPicked);
     }
@@ -1748,7 +1743,7 @@ class _GalleryPageState extends State<GalleryPage> {
   /// 批量**移到集合…**：选一个已有的，或者当场新建一个。
   ///
   /// kind 不一致的目标在选择器里就**置灰并说明原因** —— 不等后端回 400，
-  /// 规则要在点下去之前就看得见（用户拍板："手动集合不许混图像和视频"）。
+  /// 规则需在操作前可见（手动集合不得混放图片和视频）。
   Future<void> _bulkMove() async {
     final store = context.read<LibraryStore>();
     final ids = await _expandPicks();
@@ -1823,11 +1818,11 @@ class _GalleryPageState extends State<GalleryPage> {
 
   /// 「重新自动整理」：把**已存的**产物按当前规则重算一遍分组。
   ///
-  /// 用户 2026-10-18："把我数据库目前存入的图片重新自动整理。"
+  /// 将库中现有图片重新自动整理。
   ///
-  /// 为什么要先问一句：它会**解散现有的自动分组**再重算 —— 用户看到的是"我的组
-  /// 刚才还在这儿，现在散了"。所以确认框里要把"哪些会被动、哪些不会"说清楚：
-  /// 手动建/改过的集合与已移出的产物后端一个都不碰。
+  /// 该操作会**解散现有自动分组**后重新计算，因此需要确认。
+  /// 确认框需说明"哪些会被修改、哪些不会"：
+  /// 手动创建 / 修改过的集合与已移出的产物不会被改动。
   Future<void> _regroup() async {
     final ok = await confirmDialog(
       context,
@@ -1852,7 +1847,7 @@ class _GalleryPageState extends State<GalleryPage> {
 
   /// 跑一个会改库的动作。
   ///
-  /// ⚠ **成功不播报**（用户 2026-10-18："不许播报那么多提示"）：移动 / 移出 / 删除改完，
+  /// ⚠ **成功不提示**：移动 / 移出 / 删除完成后，
   /// 格子当场就变了，再弹一条"已把 N 张并进这一组"纯属噪音 —— 一屏操作下来能弹七八条，
   /// 把真正要看的东西盖住。只有**结果看不出来**的动作才 `announce: true`
   /// （例如"重新自动整理"到底重算了多少张）。**失败一律播报**，那时候不说话才是真的坏。
@@ -1880,7 +1875,7 @@ class _GalleryPageState extends State<GalleryPage> {
         );
       }
       if (mounted) {
-        // 改完归属之后展开的文件夹已经过期了 —— 收起它，让用户看到刷新后的画廊
+        // 修改归属后展开的文件夹已过期 —— 收起它，显示刷新后的画廊
         _closeFolder();
         _exitSelection();
       }
@@ -1894,7 +1889,7 @@ class _GalleryPageState extends State<GalleryPage> {
 
 /// 收起筛选栏时露出的"当前生效的筛选摘要"。
 ///
-/// 用户 2026-10-11 明确要求：收起来之后**必须**能看出自己在筛选状态，
+/// 收起后**必须**能判断当前处于筛选状态，
 /// 否则会以为"图怎么少了"。
 class _FilterSummary extends StatelessWidget {
   final String text;
@@ -2092,7 +2087,7 @@ class CollectionTarget {
 
 /// 选一个目标集合，或者当场新建一个。
 ///
-/// 为什么要有 `mediaKind`：一个集合只装一种（用户 2026-10-18 拍板"不许混图像和视频"），
+/// `mediaKind`：一个集合只装一种（不得混放图片和视频），
 /// 所以装不下的目标要**在点下去之前就置灰并说明原因**，而不是等后端回 400。
 Future<CollectionTarget?> showCollectionPicker(
   BuildContext context, {
@@ -2146,8 +2141,7 @@ class _CollectionPickerDialogState extends State<_CollectionPickerDialog> {
 
   /// 集合封面的小预览。没有封面 id 时退回原来的文件夹图标。
   ///
-  /// 用户 2026-11-07 的原话："至少给我一个预览吧？" —— 一排
-  /// 「未命名集合（3 张）」长得完全一样，不喂一张图根本选不中。
+  /// 一排「未命名集合（3 张）」外观完全相同，没有预览图时无法选中。
   Widget _collectionCover(
     ThemeData theme,
     MediaCollection collection, {
@@ -2313,7 +2307,7 @@ class _CollectionPickerDialogState extends State<_CollectionPickerDialog> {
 class _RenameCollectionDialog extends StatefulWidget {
   final String initial;
 
-  /// 给算法分组多解释一句：起了名字它就归用户，重新整理不会解散。
+  /// 算法分组的补充说明：命名后归为手动分组，重新整理不会解散。
   final bool explainManual;
 
   const _RenameCollectionDialog({

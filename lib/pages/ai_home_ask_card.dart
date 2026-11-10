@@ -1,26 +1,26 @@
 part of 'ai_home_page.dart';
 
 // ---------------------------------------------------------------------------
-//  提问卡（用户建议 ⑥，2026-09-20）
+//  提问卡
 // ---------------------------------------------------------------------------
 
-/// 一张提问卡的**历史记录形态**：AI 当场问过什么、用户答了什么。
+/// 一张提问卡的**历史记录形态**：AI 的提问与对应的回答。
 ///
 /// 与 [_ToolCallCard] 刻意分开画：
 ///  - 工具卡是"我在干什么"（参数 + 结果预览，读的多、点的少）；
 ///  - 提问卡是"我需要你告诉我一件事"（问题 + 可点的选项）。
 ///
-/// **不在这里放输入框**（用户 bug 2026-09-21）：AI 提问期间，输入区整块被
-/// [_AskComposer] 接管，打字的地方只有底下一个；卡片里再放一个只会让人不知道
-/// 该往哪儿写。所以这里是"问题 + 选项按钮"，要自己写的就点最后那行进底部输入框。
+/// **不在此处放输入框**：AI 提问期间，输入区整块由
+/// [_AskComposer] 接管，输入位置只有底部一个；卡片内再放一个会导致输入位置不明确。
+/// 因此这里是"问题 + 选项按钮"，需要自行输入时点击最后一行进入底部输入框。
 ///
-/// 用户答完之后卡片**不消失**，而是切成"已回答"—— 历史里一眼能看出这一轮
-/// 是基于什么信息做的（与工具卡一样，都是这条回复的上下文）。
+/// 回答之后卡片**不消失**，而是切换为"已回答"—— 历史中可辨认这一轮的
+/// 输入信息（与工具卡一样，都属于该回复的上下文）。
 class _AskCard extends StatefulWidget {
   /// **整张卡**：同一次 `ask_user_question` 问的所有题（至少一条，按题号排）。
   ///
-  /// 多问改造（2026-09-22）之前这里只有一条；只画第一条会让剩下的题在界面上
-  /// 凭空消失（用户以为只问了一件事，模型却在等 N 个答案）。
+  /// 此前此处只有一条；只渲染第一条会使其余问题在界面上
+  /// 消失（否则会误认为只问了一件事，而模型在等待 N 个答案）。
   final List<AiQuestion> questions;
 
   /// 后端根地址（裁图 / 选项图的相对路径补它）。
@@ -56,19 +56,19 @@ class _AskCard extends StatefulWidget {
 class _AskCardState extends State<_AskCard> {
   bool _busy = false;
 
-  /// 用户手动点开来过 —— 之后**不再**跟着状态自动折回去。
+  /// 已手动展开 —— 之后**不再**随状态自动折回。
   ///
-  /// "等回答 → 已回答"会让卡片从"可点选项"变成"记着答案"；要是每次都替用户决定
+  /// "等回答 → 已回答"会让卡片从"可点选项"变为"记录答案"；若每次都自动决定
   /// 展开还是收起，他刚点开看清楚、答案一到就被折回去，很难受。
   bool _expandedByUser = false;
 
-  /// 用户手动折起来了 —— 已回答时**不再**自动展开。
+  /// 已手动折起 —— 已回答时**不再**自动展开。
   bool _collapsedByUser = false;
 
   /// 这一帧该展开吗。
   ///
-  /// 折叠是**默认**（用户 bug 2026-09-21：气泡里那张卡和底部被接管的输入区把整组选项
-  /// 画了两遍）。回答完又默认展开成"问题 + 答案"两行 —— 那才是历史里要留的信息。
+  /// 折叠是**默认**（气泡中的卡与被接管的输入区会把整组选项
+  /// 渲染两遍）。回答后默认展开为"问题 + 答案"两行，即历史中需要保留的信息。
   bool get _expanded {
     if (_expandedByUser) return true;
     if (_collapsedByUser) return false;
@@ -178,7 +178,7 @@ class _AskCardState extends State<_AskCard> {
           // 折叠态 = 图二那种"一条记录"：头部 + 问题（+ 答案）就够，
           // **不再把选项画一遍** —— 提问期间能点的那份在底部被接管的输入区里。
           // 一卡多题时**逐题**列出来（题号 + 文字，答过的把答案跟在后面）：
-          // 折起来也不能让某一题消失，否则用户根本不知道模型问了 N 件事。
+          // 折起后也不能让某一题消失，否则无法知道模型问了 N 件事。
           for (var i = 0; i < widget.questions.length; i++) ...[
             if (i > 0) const SizedBox(height: 6),
             if (paged) ...[
@@ -191,7 +191,7 @@ class _AskCardState extends State<_AskCard> {
               const SizedBox(height: 2),
             ],
             // 裁图只在**展开**时画：一卡 5 题时各贴一张图会把气泡撑成一整屏
-            // （用户 2026-11-04 的现场）。等回答时看底部那张当前题的图就够；
+            // 。等待回答时查看底部当前题的图即可；
             // 答完之后卡片默认展开，历史里再连着答案一起看。
             _AskQuestionHead(
               question: widget.questions[i].question,
@@ -231,7 +231,7 @@ class _AskCardState extends State<_AskCard> {
           if (_expanded && paged) ...[
             const SizedBox(height: 6),
             // 多题卡不在气泡里再画一遍选项：作答入口只有底部那一块（一张卡分页），
-            // 两边都放会让人不知道该往哪儿点（用户 bug 2026-09-21 的原话）。
+            // 两处都放会导致点击位置不明确。
             Text(
               '在下面的答题卡里按「第 N/M 题」逐题作答，也可以逐题跳过。',
               style: theme.textTheme.labelSmall?.copyWith(
@@ -256,7 +256,7 @@ class _AskCardState extends State<_AskCard> {
             ],
             const SizedBox(height: 6),
             // --- 最后一行：固定留给"自己决定" ---
-            // 用户 bug 2026-09-21 的原话就是"最末尾选项固定让用户决定（输入你的答案）"。
+            // 末尾选项固定为"由自己输入答案"。
             _AskOptionRow(
               index: q.options.length,
               label: '自己输入答案',
@@ -275,7 +275,7 @@ class _AskCardState extends State<_AskCard> {
               Align(
                 alignment: Alignment.centerRight,
                 child: TextButton(
-                  // 跳过 = 如实告诉模型"用户没有回答"，它会基于已有信息继续
+                  // 跳过 = 如实告知模型"未回答"，模型基于已有信息继续
                   onPressed: _busy ? null : () => widget.onSkip(q.questionId),
                   style: TextButton.styleFrom(
                     padding: const EdgeInsets.symmetric(horizontal: 8),
@@ -370,8 +370,7 @@ class _AskOptionRow extends StatelessWidget {
                   child: Row(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      // 图片在**选项文字前面**（用户 2026-11-04 的口径：
-                      // "如果有能力找到这种发型的示例图要贴到选项描述开头中"）。
+                      // 图片位于**选项文字前面**。
                       if (imageUrl != null) ...[
                         _AskOptionThumb(
                           key: Key('ask-option-image-$index'),
@@ -409,8 +408,8 @@ class _AskOptionRow extends StatelessWidget {
 
 /// 提问卡的**题干 + 配图**：问题在左（占大部宽度）、部位截图在右。
 ///
-/// 用户 2026-11-04 的现场：图铺满整行时上下都是黑边，鼠标一停还弹出「点击放大」
-/// 把脸挡住；改成"左侧问题、右侧截图"之后，图只占一条窄栏，问题仍能一眼读完。
+/// 图铺满整行时上下出现黑边，鼠标停留时「点击放大」会遮挡内容；
+/// 改为"左侧问题、右侧截图"后，图只占一条窄栏，问题可完整阅读。
 /// 窄窗口（< 560）放不下两栏，退回上下排。
 class _AskQuestionHead extends StatelessWidget {
   final String question;
@@ -474,7 +473,7 @@ class _AskQuestionHead extends StatelessWidget {
 /// 提问卡里的**题目配图**：AI 从设定图上裁下来的那一块。
 ///
 /// 点一下走应用内大图（与聊天里的附件同一条路）。**刻意不加 Tooltip**：
-/// 鼠标停在图上时那句「点击放大」会正好盖住要看的细节（用户 2026-11-04）；
+/// 鼠标停在图上时「点击放大」会遮挡细节；
 /// 只在右下角放一个很小的放大镜图标。
 class _AskQuestionImage extends StatelessWidget {
   final String url;
@@ -580,7 +579,7 @@ class _AskOptionThumb extends StatelessWidget {
 }
 
 // ---------------------------------------------------------------------------
-//  提问输入区（用户 bug 2026-09-21：AI 提问时**接管**聊天下部的输入模块）
+//  提问输入区（AI 提问时**接管**聊天下部的输入模块）
 // ---------------------------------------------------------------------------
 
 /// AI 提问期间**替换掉普通输入框**的那一块。
@@ -590,13 +589,13 @@ class _AskOptionThumb extends StatelessWidget {
 /// 底下给"跳过 / 停止"。它是**唯一的**作答入口，所以不会出现
 /// "气泡里一个输入框、底下又一个输入框，不知道往哪儿写"。
 ///
-/// 多问改造（2026-09-22，用户拍板的形态）：一次 `ask_user_question` 可以问**最多 5 题**，
+/// 多问形态：一次 `ask_user_question` 可以问**最多 5 题**，
 /// 界面是**一张卡分页**：
 ///  · 顶上一行写「第 N/M 题」；
 ///  · 底行是「上一题 / 跳过本题 / 下一题」，**最后一页**那个按钮变成「提交」；
 ///  · `multiSelect` 的题画复选框（选项上限 5），每题都保留"自己输入"；
-///  · **答案可以为空**：整卡提交时没作答的题按"跳过"发（= 告诉模型"用户没回答"，
-///    不是"没问过"）。一题一页地答完才收卡片 —— 只答一题就走会让模型白等剩下的。
+///  · **答案可以为空**：整卡提交时未作答的题按"跳过"发送（= 告知模型"未回答"，
+///    而非"未提问"）。需逐题答完后才收起卡片 —— 只答一题会使模型继续等待其余问题。
 ///
 /// 与气泡里那张提问卡的分工：
 ///  · 卡片 = 记录（问过什么、答了什么，跟着这条回复走）；
@@ -660,7 +659,7 @@ class _AskComposerState extends State<_AskComposer> {
   /// 多选题的答案拼成一段文字发回去。
   ///
   /// 后端那条回答接口只收**一个** `optionIndex`（多选的 `optionIndexes` 还没开在 HTTP 上），
-  /// 而模型拿到的本来就是"用户说了什么"这段文字 —— 所以多选拼成「A、B」发，
+  /// 而模型收到的是回答文字 —— 因此多选拼接为「A、B」发送，
   /// 不为了一个结构化字段去改已经跑通的后端合同。
   String _joinedOptions(AiQuestion q, Set<int> picked) {
     final idx = picked.toList()..sort();
@@ -693,7 +692,7 @@ class _AskComposerState extends State<_AskComposer> {
     widget.store.pendingQuestionFocus.unfocus();
   }
 
-  /// 跳过**当前这一题**（后端当作"用户没有回答"放行，模型基于已有信息继续）。
+  /// 跳过**当前这一题**（后端按"未回答"放行，模型基于已有信息继续）。
   Future<void> _skipCurrent() async {
     if (_busy) return;
     final q = widget.questions[_pageIndex];
@@ -745,7 +744,7 @@ class _AskComposerState extends State<_AskComposer> {
       } else if (single != null) {
         ok = (await store.answerQuestion(q.questionId, optionIndex: single)).ok;
       } else {
-        // 这一题用户什么也没选：按"跳过"发 —— 模型会如实说缺什么，不会假装他答了
+        // 该题未选择：按"跳过"发送 —— 模型会说明缺失信息，不显示为已回答
         ok = (await store.skipQuestion(q.questionId)).ok;
       }
       if (!ok) {
@@ -767,8 +766,8 @@ class _AskComposerState extends State<_AskComposer> {
   /// Enter：**最后一页**提交整卡，中间页翻到下一题；Shift+Enter 换行。
   ///
   /// 必须拦在**文本字段外面**：多行 `TextField` 自己没有"Enter 提交"这个动作
-  /// （`onSubmitted` 在 `maxLines > 1` 时根本不会触发），而用户对答题框的直觉
-  /// 就是"打完按回车发出去"（DSH 的提问框也是这个规矩）。
+  /// （`onSubmitted` 在 `maxLines > 1` 时不触发），而答题框的常见操作
+  /// 是"输入后按回车发送"（DSH 的提问框同样如此）。
   KeyEventResult _onKey(FocusNode node, KeyEvent event) {
     if (event is! KeyDownEvent) return KeyEventResult.ignored;
     final isEnter =
@@ -863,7 +862,7 @@ class _AskComposerState extends State<_AskComposer> {
                       ),
                     ),
                     const Spacer(),
-                    // 多题卡要一眼看出"还有几题"（用户给的 DSH 形态就是「第 N/M 题」）
+                    // 多题卡需显示"还有几题"（参照 DSH 的「第 N/M 题」）
                     Text(
                       paged ? '第 ${page + 1}/$total 题' : '等你回答',
                       key: const Key('ask-page-indicator'),
@@ -913,7 +912,7 @@ class _AskComposerState extends State<_AskComposer> {
                           const SizedBox(height: 6),
                           _AskOptionRow(
                             // 带 key：气泡里那张提问卡**折叠时不该有**这些行，
-                            // 用例靠 key 区分"选项到底画了几份"（用户 bug 2026-09-21）
+                            // 测试用例依靠 key 区分"选项渲染份数"
                             key: Key('ask-composer-option-$i'),
                             index: i,
                             label: q.options[i],
@@ -966,7 +965,7 @@ class _AskComposerState extends State<_AskComposer> {
                     ),
                   ),
                 ),
-                // --- 最后一行：固定"自己输入答案"（用户 bug 2026-09-21）---
+                // --- 最后一行：固定"自己输入答案" ---
                 const SizedBox(height: 6),
                 _customAnswerRow(theme, focus, controller, q, paged),
               ],
@@ -1011,7 +1010,7 @@ class _AskComposerState extends State<_AskComposer> {
                   ),
                 ),
               const SizedBox(width: 4),
-              // 最后一页就是「提交」（用户给的形态）；中间页是「下一题」。
+              // 最后一页为「提交」；中间页为「下一题」。
               // ⚠ key 固定为 `ask-answer-submit`：它在单题卡上仍然就是"提交"那个按钮。
               FilledButton(
                 key: const Key('ask-answer-submit'),
