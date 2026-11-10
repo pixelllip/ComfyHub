@@ -280,7 +280,7 @@ pub(crate) fn credential_store_path(state: &AppState) -> std::path::PathBuf {
 /// ⚠ **读写共用一个形状**（`Deserialize` 也是它）：`PUT /providers/{id}/models` 的 body
 /// 就是界面从 GET 拿到的那份（原样改几个字段再传回来）。
 /// 所以两份 DTO 是**同一个结构体**，不是"照着再写一个入参"——
-/// 后者迟早会出现"GET 给的键 PUT 不认"（用户改了名字却存不进去）。
+/// 后者会出现"GET 返回的键 PUT 不接受"（改名后无法保存）。
 ///
 /// 可空键与集合键都要 `default`：界面只传改过的字段时，缺的键按 Kotlin 的默认值走
 /// （`inputModalities = emptyList()` / `capabilitySource = "manual"` / `enabled = true`）。
@@ -432,7 +432,7 @@ pub fn model_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<AiModelDto> {
         // NULL → 回落成 model_id（Kotlin `toModel` 就是 `?: getString("model_id")`）。
         // 本 schema 里 `display_name` 是 NOT NULL，所以这条路只在**老 MySQL 库搬过来的脏行**
         // 上才走得到 —— 但"回落"与"回落到空串"是两回事：列表里出现一行没有名字的模型，
-        // 用户既点不出所以然，也搜不到。
+        // 无法判断原因，也无法搜索。
         display_name: display_name.unwrap_or(model_id),
         input_modalities: parse_string_array(
             row.get::<_, Option<String>>("input_modalities")?.as_deref(),
@@ -463,7 +463,7 @@ pub fn model_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<AiModelDto> {
         ),
         // ⚠ NULL → **false**（Kotlin 的裸 `getBoolean("enabled")` 在 NULL 上就给 false）。
         // 本 schema 里是 NOT NULL DEFAULT 1，所以只在脏行上才走得到 ——
-        // 但"NULL 当成启用"会让一条本该被用户关掉的模型悄悄可用（那是能花钱的）。
+        // 但"NULL 视为启用"会使一个已关闭的模型变为可用（会产生费用）。
         enabled: row.get::<_, Option<i64>>("enabled")?.unwrap_or(0) != 0,
     })
 }
@@ -536,7 +536,7 @@ fn scalar_text(value: &serde_json::Value) -> Option<String> {
 ///
 /// ⚠ 三条判定**顺序与文案**都照抄 Kotlin：空 → 太长 → 形态。
 /// 把"形态"提到"太长"前面的话，一个 100 字符的合法 kebab-case 会收到"只能是小写 kebab-case"，
-/// 而它其实是合法的 —— 用户会去改一个根本没错的地方。
+/// 而它实际合法 —— 会导致去修改一个本无问题的地方。
 pub fn require_provider_id(raw: Option<&str>) -> Result<String, ApiError> {
     let id = raw.unwrap_or("").trim().to_string();
     if id.is_empty() {
@@ -622,7 +622,7 @@ pub fn require_model_id(raw: &str) -> Result<String, ApiError> {
     Ok(id)
 }
 
-/// 校验并规范化 Base URL：**只去掉末尾的 `/`**，不擅自改写用户路径
+/// 校验并规范化 Base URL：**只去除末尾的 `/`**，不改写路径
 /// （Anthropic 兼容网关的路径经常不是 `/v1`）。
 ///
 /// # 为什么不用 `url::Url` 当裁判（**实测出来的四处不一致**）
@@ -641,11 +641,11 @@ pub fn require_model_id(raw: &str) -> Result<String, ApiError> {
 /// | `https://api.example.com/路径` | **通过**（非 ASCII 是允许的） | `Ok` |
 ///
 /// 也就是说**光靠 `url` crate 会放过一批 Java 拒绝的串，还会拒掉一批 Java 接受的串** ——
-/// 前者是"用户填了个我们发不出去的地址却存进了库"，后者是"用户填对了却存不进去"。
+/// 前者是"填入了无法发出的地址却被保存"，后者是"地址合法却无法保存"。
 /// 所以这里按 Java 的规则**自己解析**（纯函数、逐条对着真值表有用例）。
 ///
 /// ⚠ 返回的是**原文 trim 过**（去掉末尾 `/`），不是解析器重排后的 URL：
-/// `url` crate 会补 `/`、小写化 host、百分号编码，拿它当返回值就会**悄悄改写用户的路径**。
+/// `url` crate 会补 `/`、转小写 host、百分号编码，以其结果作为返回值会**改写原路径**。
 pub fn normalize_base_url(raw: Option<&str>, trust: &str) -> Result<String, ApiError> {
     let text = raw.unwrap_or("").trim().to_string();
     if text.is_empty() {
@@ -835,13 +835,13 @@ const TRANSPORTS: [&str; 3] = ["inline_base64", "url", "comfy_input"];
 /// 能力来源（`AiModelDto.capabilitySource` 的四个合法值）。
 const CAPABILITY_SOURCES: [&str; 4] = ["builtin", "discovered", "manual", "tested"];
 /// 思考等级（`ReasoningEffort` 的**全部 7 档**，`off` 也在内 —— 少一档就等于
-/// "用户在界面上选得了、存不进去"）。
+/// "界面上可选择但无法保存"）。
 const REASONING_LEVELS: [&str; 7] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 
 /// 保存模型目录时的逐条校验（`AiRoutes.validateModel` + `AiValidation.validateThinkingEfforts`）。
 ///
 /// **每一档都有稳定码 + 人话**：模型目录是附件准入与思考强度的唯一真源（AIH-011/AIH-028），
-/// 少校验一条，用户就能存进去一个"看着配好了、一用就 400"的模型。
+/// 缺少一条校验，就会保存一个"配置看似正确、调用即 400"的模型。
 pub fn validate_model(model: &AiModelDto) -> Result<(), ApiError> {
     require_model_id(&model.id)?;
     require_display_name(Some(&model.display_name))?;
@@ -1011,14 +1011,14 @@ pub fn update_provider(
 
 /// 删除 provider（`deleteProvider`）。`ai_models` 靠 `ON DELETE CASCADE` 一起走（R1）。
 ///
-/// **密钥跟着走**（2026-09-28 用户 bug「删除 provider 时，密钥被设置成不自动删除」）：
+/// **密钥随之处理**（现象：「删除 provider 时，密钥被设置为不自动删除」）：
 /// provider 没了，它那把托管 key 再也没有界面入口能摸到，却还留在
 /// `credentials.dpapi.json` 里 —— 删 provider 时把**不再被任何 provider 引用**的那把
 /// 一并清掉。三条边界：
 ///  · env 来源的 key 是只读的（`credentials::unset` 也动不了它），直接跳过；
 ///  · ref 被别的 provider 共用时留着（删的是引用，不是 key 本身）；
 ///  · 清理是**尽力而为**：provider 已经删掉了，key 那步失败不再把整个请求打成 5xx
-///    （那只会让用户面对"提示失败、provider 却真没了"的中间态）。
+///    （否则会出现"提示失败、provider 已被删除"的中间状态）。
 pub fn delete_provider(state: &AppState, id: &str) -> Result<bool, ApiError> {
     let reference = get_provider_row(state, id)?
         .and_then(|row| row.credential_ref)
@@ -1064,7 +1064,7 @@ fn unset_orphan_credential(state: &AppState, reference: &str) {
 /// 全量替换某 Provider 的模型目录（`AiRepo.replaceModels`，AIH-011）。
 ///
 /// **一个事务里删旧插新**：分开做的话，中途失败就会留下一个"模型全没了"的 provider ——
-/// 而界面显示的是一份合法的空目录（"这个网关没有模型"），用户会去查网关。
+/// 而界面显示的是一份合法的空目录（"该网关没有模型"），导致去检查网关。
 ///
 /// ⚠ `providerId` 一律以路径参数为准（Kotlin `m.copy(providerId = providerId)` 同）——
 /// body 里那一列是客户端抄来的，信它就会出现"给 A 存了一堆写着 B 的模型"。
@@ -1073,7 +1073,7 @@ fn unset_orphan_credential(state: &AppState, reference: &str) {
 /// Kotlin 的 `AiModelDto.providerId` 没有默认值 → 反序列化失败 → `400 {"error":"BadRequestException",
 /// "detail":"Failed to convert request body to class …"}`（一个**机器码**，界面显示不出人话）；
 /// 这里因为反正要用路径参数覆盖它，缺了就按空串收下 —— 结果是**同一件事做得更好**：
-/// 客户端少传一个我们本来就要覆盖的字段，不该变成一句用户看不懂的报错。
+/// 客户端少传一个本就要覆盖的字段，不应变成难以理解的报错。
 /// 真实客户端（Flutter）永远是把 GET 到的那份原样改几个字段传回来，所以不会走到这条岔路。
 pub fn replace_models(
     state: &AppState,
@@ -1130,7 +1130,7 @@ pub fn replace_models(
 ///
 /// 与 [`replace_models`] 的区别就在这：主键是 `(provider_id, model_id)`，所以"库里已经有
 /// 同 id 的行"时会直接主键冲突 —— 调用方必须先查库、只把**缺失**的那些传进来。
-/// 那正是"绝不覆盖用户改过的行"所需要的保护（`builtin.rs` 就是这么用的）。
+/// 这正是"绝不覆盖已修改的行"所需的保护（`builtin.rs` 即如此使用）。
 pub fn insert_model(state: &AppState, model: &AiModelDto) -> Result<AiModelDto, ApiError> {
     state.write(|tx| {
         tx.execute(
@@ -1174,7 +1174,7 @@ pub fn insert_model(state: &AppState, model: &AiModelDto) -> Result<AiModelDto, 
 /// **只更新"能力声明"相关的列**（`AiRepo.updateModelCapabilities`，内置目录对齐用）。
 ///
 /// 刻意不碰 `display_name` / `enabled` / 附件相关列 / `capability_verified_at`：
-/// 用户改过的显示名、用户关掉的模型、用户的实测时间，都不是"对齐能力"该动的东西。
+/// 已修改的显示名、已关闭的模型、实测时间，均不属于"对齐能力"应改动的内容。
 pub fn update_model_capabilities(
     state: &AppState,
     model: &AiModelDto,

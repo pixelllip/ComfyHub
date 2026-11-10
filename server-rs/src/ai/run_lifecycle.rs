@@ -7,7 +7,7 @@
 //!
 //! | 端点 | 语义 |
 //! | --- | --- |
-//! | `POST /api/ai/conversations/{id}/runs` | 校验 → 落用户消息 + 助手占位 → 建 Run → **202** |
+//! | `POST /api/ai/conversations/{id}/runs` | 校验 → 落请求消息 + 助手占位 → 建 Run → **202** |
 //! | `GET /api/ai/runs/{id}` | 这一次 Run 的状态（刷新页面后也能看到它是不是还在跑） |
 //! | `GET /api/ai/runs/{id}/events?after=N` | **SSE**：事件流，`after` 断线续传 |
 //! | `POST /api/ai/runs/{id}/cancel` | 取消（`{cancelled, status}`） |
@@ -55,7 +55,7 @@ pub const HEARTBEAT_SECONDS: u64 = 15;
 ///
 /// Kotlin 那边没有这一条 —— 这里加它是因为 Rust 侧的执行器是**进程内**的，
 /// 一个卡住的上游连接不会有人来打断它。**不是**与 Kotlin 的行为差异：
-/// 超过这个时长的 Run 在两边都是"用户已经关掉页面了"。
+/// 超过该时长的 Run 在两端的判定均为"页面已关闭"。
 pub const RUN_TIMEOUT_HOURS: i64 = 2;
 
 /// `POST /api/ai/conversations/{id}/runs` 的入参（`AiRunStartRequest`）。
@@ -72,7 +72,7 @@ pub struct RunStartRequest {
     pub attachment_ids: Vec<String>,
     #[serde(default)]
     pub retry_of_run_id: Option<String>,
-    /// 用户**看到的**那条正文（卡片块已剥掉）。缺省 = `text`（老客户端）。
+    /// 界面**显示的**那条正文（卡片块已剥离）。缺省 = `text`（旧客户端）。
     #[serde(default)]
     pub display_text: Option<String>,
     /// `@` 卡片与 `/技能` 的结构化快照；界面用它画小卡片，模型用 `modelText` / 技能正文。
@@ -252,7 +252,7 @@ pub fn model(state: &AppState, provider_id: &str, model_id: &str) -> Result<Mode
 /// 返回 `(落库值, 发给上游的值)`：落库一律是 `off` 或等级名（Run 的"当时生效值"），
 /// 发给上游的 `off` 是 `None`（"不指定"与"明确关掉"在上游是两件事）。
 ///
-/// # ⚠ 发给上游的是**表里的值**，不是等级名（2026-10-25 用户 bug：思考强度映射档位错误）
+/// # ⚠ 发给上游的是**表里的值**，不是等级名（思考强度映射档位错误）
 ///
 /// 模型表 `thinkingEfforts` 的语义是"等级名 → 线上值"（网关改名时能对上，
 /// 例如 `{"max": "high"}`、或 Anthropic 那种 `{"max": "4096"}` 预算）。
@@ -294,7 +294,7 @@ pub fn thinking_effort(
             ),
         ));
     }
-    // **「关闭」是单独一档**（2026-11-09 用户报「没有关闭思考的档位」）：它不发空参数，
+    // **「关闭」是单独一档**（现象：「没有关闭思考的档位」）：它不发送空参数，
     // 而是把目录里声明的关闭取值发出去（DeepSeek 是 `none`，落到 `thinking.type=disabled`）。
     // 目录里的键历史上叫 `off`（内置规则与老库都是这么存的），新写入的叫 `disabled` —— 两个都认。
     if requested == "disabled" {
@@ -350,14 +350,14 @@ pub fn thinking_effort(
 /// `POST /api/ai/conversations/{id}/runs`。
 ///
 /// 顺序**照抄 Kotlin**（`AiRoutes.kt:358`），每一步都不能挪：先校验（不通过就是一封
-/// 400 + 稳定码，**一个字节都不写库**），再落用户消息与助手占位，最后才建 Run。
+/// 400 + 稳定码，**不写入任何数据**），再落请求消息与助手占位，最后才建 Run。
 /// 顺序错了的表现是"消息进去了、Run 没建成"—— 会话里凭空多一条提问。
 /// 把界面传来的 `@` 卡片 / `/技能` 引用变成有序块。
 ///
 /// 两条纪律：
-/// * **卡片的快照与正文都只是用户消息的一部分**，不校验内容（那是用户自己的卡），只限大小；
-/// * **技能的正文绝不采信前端** —— 只认 `name`，由后端现读磁盘（用户可能刚改过，
-///   前端那份也可能是伪造的），并在这里就把"停用 / 不合法 / 不允许用户调用"挡掉。
+/// * **卡片的快照与正文都属于请求消息的一部分**，不校验内容（卡片由前端提供），只限制大小；
+/// * **技能的正文绝不采信前端** —— 只认 `name`，由后端现读磁盘（内容可能刚被修改，
+///   前端那份也可能是伪造的），并在此处拦截"停用 / 不合法 / 不允许调用"。
 fn prepare_mentions(
     state: &AppState,
     mentions: &[RunMention],
@@ -420,7 +420,7 @@ fn prepare_mentions(
             payload["digest"] = json!(found.digest);
             payload["source"] = json!(found.source);
             payload["body"] = json!(found.body);
-            // 给模型的一句说明（用户只点了技能、没写正文时，这条消息也得有内容）。
+            // 给模型的一句说明（仅选择技能、未写正文时，该消息仍需有内容）。
             payload["modelText"] = json!(format!(
                 "（用户手动调用了技能「{name}」，请按系统提示中的技能规则执行。）"
             ));
@@ -490,7 +490,7 @@ pub fn start(
     // ④ 附件准入（R9）：**创建 Run 之前**用库里的事实再验一次。
     //
     // 三条纪律（AIH-030）：
-    //  ① 判定在这里、在 append 用户消息**之前**完成 —— 不通过就直接返回，**上游请求数为 0**；
+    //  ① 判定在此处、append 请求消息**之前**完成 —— 不通过则直接返回，**上游请求数为 0**；
     //  ② 事实取自**库里**（`ai_attachments`），前端声明只是线索（AIH-027）；
     //  ③ 不许把 blocker 降级成占位符再继续发（"看起来发出去了、其实没有"是明令禁止的）。
     //
@@ -592,8 +592,8 @@ pub fn start(
         None => None,
     };
 
-    // ⑥ 用户消息：重试时**复用原来那条**，绝不新增一行
-    //    （用户报的"发送消息时容易出现同一条语句重复"就是这么来的）
+    // ⑥ 请求消息：重试时**复用原来那条**，不新增记录
+    //    （"发送消息时同一条语句重复出现"即由此产生）
     let user_message_id = match retry_of.as_ref().and_then(|r| r.user_message_id.clone()) {
         Some(id) => Some(id),
         None => {
@@ -601,7 +601,7 @@ pub fn start(
             // 少了它界面画不出缩略图、执行器也不知道"这条消息带了图"（R9 的"不许静默丢弃"）。
             //
             // 卡片 / 技能引用放在正文**前面**：与 `_composeOutgoing` 的槽位顺序一致，
-            // 模型读到的仍是"[卡正文] + 用户这句话"。界面渲染时它们会变成小卡片。
+            // 模型读到的仍是"[卡正文] + 输入的正文字句"。界面渲染为小卡片。
             let mut parts = prepare_mentions(state, &req.mentions)?;
             parts.push(crate::ai::conversations::AiMessagePartDto {
                 r#type: "text".into(),
@@ -644,7 +644,7 @@ pub fn start(
     //
     // ⚠ "空"的判据是 **`isEmptyReply()` 的两条同时成立**（正文空 **且** 一个块都没有）——
     // 只看正文会把"说了半句话 + 一张工具卡"的失败回复当成空壳，重试时**就地清掉**：
-    // 用户报过的"429 之后看不到已经回复完的内容"正是这么丢的（R6 第三条纪律）。
+    // "429 之后看不到已回复内容"正是如此丢失（R6 第三条约束）。
     let assistant_message_id = match retry_assistant {
         Some((message_id, text))
             if text.trim().is_empty() && !assistant_has_parts(state, &message_id)? =>
@@ -800,7 +800,7 @@ impl Stream for SseStream {
         // 一次 poll 里做完所有同步的活；**绝不在这里 await 一个未被 poll 的 future**
         // （那正是"第一个 await 还没完成就被丢弃 → 事务半截回滚"那类 bug 的来源）
         //
-        // ⚠ **先把总线里攒着的那几条补写进库，再读**（2026-09-28 用户 bug：
+        // ⚠ **先把总线中积压的条目写入库，再读取**（
         // 「首段思考要等到第一个工具调用才显示」的根因）。
         //
         // 事件总线是**批写**的（[`crate::ai::runs::EVENT_BATCH`] = 200 条一次事务，
@@ -809,7 +809,7 @@ impl Stream for SseStream {
         // 一次 Run 的开头恰好就是这样：`run.started` / `message.started` /
         // 几条 `reasoning.delta` 加起来远不到 200 条，全压在批里；
         // 而第一条 `tool.requested` 是**闸门类事件**、那边会 `flush`（见 `executor`），
-        // 于是那一下把憋着的思考**一起**放出来 —— 用户看到的就是
+        // 于是该次操作把积压的思考**一并**放出 —— 表现为
         // "思考过程要等第一个工具调用出现才显示"。
         //
         // 刷在这里的代价可以忽略：没攒到东西时 `flush` 连事务都不开（空批直接返回），
