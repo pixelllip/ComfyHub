@@ -1,4 +1,4 @@
-//! `capability_catalog` 的单元测试（主体代码在 [`capability_catalog`](super) —— 2026-09-30 按用户要求与主体分离）。
+//! `capability_catalog` 的单元测试（主体代码在 [`capability_catalog`](super) —— 与主体分离）。
 //!
 //! `use super::*;` 照旧：子模块能看见父模块的私有项，所以用例一行都不用改。
 
@@ -56,7 +56,7 @@ fn 内置匹配按包含且先命中先用() {
 
     // `deepseek-flash`（官方现行 id）：档位必须是**恒等映射**（`max → max`）。
     // 这条少掉时它落到"手工声明"，而真机上那份手工表被填成了 `max → high` ——
-    // 用户看到的正是"思考强度映射档位错误"（选「最大」，实际发的是 high）。
+    // 表现正是"思考强度映射档位错误"（选「最大」，实际发送的是 high）。
     let flash = lookup(&overlays, "deepseek-flash").unwrap();
     assert_eq!(flash.modalities, vec!["text", "image"]);
     assert_eq!(flash.thinking_format.as_deref(), Some("deepseek"));
@@ -140,7 +140,7 @@ fn 覆盖层去前缀只在唯一命中时才认() {
 /// ★ 最终 `reasoning=false` 时，档位与方言**一律清空**（不管哪层给过）。
 ///
 /// 留着就会与 `validate_model` 打架：那一条会拒掉"声明了档位却没勾推理"，
-/// 而用户看到的是"导入进来的模型存不进去"。
+/// 而表现为"导入的模型无法保存"。
 #[test]
 fn 不支持推理时档位与方言一律清空() {
     let d = dir("reasoning");

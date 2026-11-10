@@ -472,7 +472,7 @@ async fn preflight_warns_about_models_it_cannot_see_but_still_submits() {
         .collect::<Vec<_>>()
         .join("\n");
     assert!(joined.contains("anima-base-v1.0.safetensors"), "{joined}");
-    // ⚠ 文案 2026-09-30 由用户自己精简过（去掉了"没有拦"三个字）——
+    // ⚠ 文案已精简（去掉了"没有拦"三个字）——
     //   "这一档不拦"这件事**由行为本身钉住**（上面那两条：提交照常发生、只提交一次），
     //   这里不再断言具体措辞。
     assert!(
@@ -490,7 +490,7 @@ async fn the_audit_blocks_pure_frontend_nodes_before_anything_is_sent() {
     // 服务端根本没有这个类 —— 带着它提交，ComfyUI 会在验证阶段整片丢节点（0.01 秒空跑、零产物）。
     //
     // ⚠ 这一条钉的是**审核那一档真的接上了**：实例侧的 `preflight_refusal` 对这类**故意跳过**
-    // （它的措辞是"让用户装/启用节点包"，而前端类装也装不上），所以只有
+    // （其措辞为"安装 / 启用节点包"，而前端类无法安装），因此只有
     // `workflow_audit::blocking_refusal` 接着才算拦得住 —— 没接线时这条图会直接发出去。
     let (base, submitted, gateway) = fake_comfy(object_info(), history_with_output()).await;
     let fixture = Fixture::new("audit-frontend", &base);
@@ -576,7 +576,7 @@ async fn the_audit_warns_but_still_submits_on_the_post_override_graph() {
         .filter_map(|v| v.as_str())
         .collect::<Vec<_>>()
         .join("\n");
-    // ⚠ 文案 2026-09-30 由用户自己精简过（去掉了"没有拦"）—— "不拦"这件事由上面那三条钉住
+    // ⚠ 文案已精简（去掉了"没有拦"）—— "不拦"这件事由上面那三条覆盖
     //   （返回 Ok、只提交一次、发出去的是覆盖后的图），这里只钉结论本身。
     assert!(
         joined.contains("Danbooru tag"),

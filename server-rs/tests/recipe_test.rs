@@ -28,7 +28,7 @@ use comfyhub_server_rs::web::routes::AppState;
 // ---------------------------------------------------------------------------
 
 /// 一份**故意少了 Krea2 那几个类**的节点定义表 —— 真机现场就是这样：
-/// 用户的 Krea 2 图像编辑工作流里有 `Krea2EditModelPatch`，而他当时跑着的实例没装那个节点包。
+/// `Krea 2` 图像编辑工作流中包含 `Krea2EditModelPatch`，而当时运行的实例未安装该节点包。
 fn object_info_fixture() -> Value {
     json!({
         "CheckpointLoaderSimple": { "input": { "required": {
@@ -299,7 +299,7 @@ async fn 学界面格式工作流时默认拒掉有缺口的骨架() {
     );
     assert!(out.payload["recipeId"].as_i64().unwrap() > 0);
     assert!(out.content.contains("【工作流配方】"), "{}", out.content);
-    // ⚠ **第 68 步之前**这里断言的是"必须补一句『本后端还没实现「模拟用户行为」』"。
+    // ⚠ **第 68 步之前**这里断言的是"必须补一句『本后端尚未实现「模拟前端行为」』"。
     //   那个能力现在真的做了（`workflow_frontend.rs`），所以那条补白**不许再出现**；
     //   而"显示节点真的被丢掉了"这件事由上面那条"缺省值必须是 true"的用例盯着。
     //   它落在**配方行的 warnings** 里（转换警告与归纳警告同一栏，Kotlin 也是这么存的），
@@ -820,7 +820,7 @@ async fn 端点学界面格式文件_缺口时回_400_unsupported_nodes() {
         "关掉之后显示节点必须如实进缺口：{gaps:?}"
     );
 
-    // ⚠ 路径准入与 `comfy_load_workflow` 同一条：**禁写段读也不许**（与用户白名单无关）。
+    // ⚠ 路径准入与 `comfy_load_workflow` 同一条：**禁写段读也不允许**（与白名单无关）。
     //   这里刻意用 `.git` 而不是"项目根之外的文件"——后者是**允许**的：
     //   本机 ComfyUI 根的上一级会被自动放进读白名单（那只放宽读，见 AGENTS §10）。
     let (status, denied) = send_json(
