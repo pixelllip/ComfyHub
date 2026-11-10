@@ -979,7 +979,7 @@ fn anthropic_interpret() {
     );
 }
 
-/// 对话端点：三家对 `/v1` 的处理**刻意不一样**（照抄 Kotlin，别顺手统一）。
+/// 对话端点：三家对 `/v1` 的处理**刻意不同**（照抄 Kotlin，不要一并统一）。
 #[test]
 fn chat_urls_match_kotlin() {
     assert_eq!(

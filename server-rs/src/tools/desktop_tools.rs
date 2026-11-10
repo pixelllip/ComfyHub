@@ -253,7 +253,7 @@ pub const DESKTOP_TOOLS: &[DesktopToolSpec] = &[
         // ⚠ 逐字来自 Kotlin `ToolRegistry.kt` 的 `comfy_prune_workflow`（R12/R13），同样是
         //   机器抽取（续行不缩进的理由见上面 `comfy_audit_workflow` 那条）；schema 里
         //   `\"89.image\"` 那些转义是**裸字符串里的字面量** —— 它本来就是那段 JSON Schema
-        //   正文的一部分，所以这里不能"顺手 unescape"。
+        //   正文的一部分，因此此处不能额外 `unescape`。
         input_schema: r#"{"type":"object","properties":{"graph":{"type":"object","description":"API 格式节点图（comfy_load_workflow 的 apiGraph / comfy_get_run 的 raw 原样传进来）"},"analyze":{"type":"boolean","description":"true = 只分析「哪些分支用不上」，一个字都不改（用户说\"删掉无用节点\"时先走这条，拿到结果先问用户）"},"removeFrom":{"type":"array","items":{"type":"string"},"description":"要摘掉的输入或节点：[\"89.image\"] 或 [\"89\"]（摘的是它所在的那条分支；输出节点与上游共享节点不会被误摘）"},"keep":{"type":"array","items":{"type":"string"},"description":"可选：明确要求保留的节点 id（防止误伤）"},"injections":{"type":"array","description":"可选：要插进去的节点（典型：显存/加速补丁）","items":{"type":"object","properties":{"at":{"type":"string","description":"插在哪个输入上：节点id.输入名，例如 3.model"},"classType":{"type":"string","description":"节点类名，例如 SageAttention"},"inputs":{"type":"object","description":"可选：这个补丁节点自己的输入值（自动接上游的那个输入会由后端补上）","additionalProperties":true},"nodeId":{"type":"string","description":"可选：指定新节点编号"}},"required":["at","classType"],"additionalProperties":false}}},"required":["graph"],"additionalProperties":false}"#,
         scope: "DESKTOP",
         access: "ALLOW",

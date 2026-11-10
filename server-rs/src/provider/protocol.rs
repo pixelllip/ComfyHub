@@ -62,7 +62,7 @@ impl Api {
 
     /// 对话端点（`HarnessRunner.chatUrl` 的逐字对应物）。
     ///
-    /// ⚠ `/v1` 的处理**三家不一样**，照抄别"顺手统一"：
+    /// ⚠ `/v1` 的处理**三家不同**，照抄且不要"一并统一"：
     /// completions 是 `<base>/chat/completions`（base 里本来就有 `/v1`），
     /// 另外两家在 base 没带 `/v1` 时**补一个**。
     pub fn chat_url(self, base_url: &str) -> String {
@@ -735,7 +735,7 @@ pub struct OpenAiResponsesAdapter;
 /// `openai-responses` 铺成 `reasoning` 项（空 `content` 表示这一轮没思考），
 /// `openai-completions` 铺成助手消息的 `reasoning_content` 字段（空串同理）。
 ///
-/// ⚠ 别的方言没有实测过，不许顺手加：空 `content` 的 `reasoning` 项对 OpenAI 官方
+/// ⚠ 其他方言未经实测，不得一并加入：空 `content` 的 `reasoning` 项对 OpenAI 官方
 /// 是不合法条目（它要 `id` / 加密内容），多塞一个就把本来能跑的请求变成 400。
 fn reasoning_echo_required(reasoning: &ReasoningRequest) -> bool {
     // `effort: none` 时不校验回传（实测：同一个请求体 200），补了反而可能被拒

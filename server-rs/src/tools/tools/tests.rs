@@ -173,7 +173,7 @@ fn comfy_查询额度只认_comfy_类工具且只在成功时计数() {
     assert_eq!(session.comfy_queries_in_window, 0);
     assert_eq!(session.calls_in_window, 4, "总调用额度照旧要记");
 
-    // comfy_* 三件查询都算（它们是"顺手再确认一下"的重灾区）
+    // `comfy_*` 三件查询都算（它们常被用于"再次确认"）
     session.spend_call("comfy_get_status");
     session.spend_call("comfy_list_workflows");
     session.spend_call("comfy_get_run");

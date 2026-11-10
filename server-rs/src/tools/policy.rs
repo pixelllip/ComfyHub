@@ -172,7 +172,7 @@ pub const MIGRATION_KEY: &str = "ai.tools.policy.migrated.maxtoolsteps16to25";
 /// 把升级后的值写回 `app_settings`（**合并**原 JSON，保住我们这一版不认识的键 —— 与
 /// `ai_settings::save_config` 同一条纪律），并落一次性标记。
 ///
-/// 返回 `Err` 时调用方**不当失败**：升级是"顺手做的好事"，写不进去顶多是下次再算一遍，
+/// 返回 `Err` 时调用方**不视为失败**：升级属于附带操作，写不进去最多下次重新计算，
 /// 绝不能让一次设置迁移把工具策略的读取整个搞挂。
 fn persist_migrated_max_tool_steps(
     state: &AppState,
@@ -326,7 +326,7 @@ impl ToolPolicy {
         let mut config = config;
         if !migrated && config.max_tool_steps == LEGACY_DEFAULT_MAX_TOOL_STEPS {
             config.max_tool_steps = DEFAULT_MAX_TOOL_STEPS;
-            // 顺手把升级后的值写回库：不写回去的话"读一次升一次"看起来没差别，
+            // 同时把升级后的值写回库：不写回时"每次读取都重新升级"看起来无差别，
             // 但下次保存写回的仍是那份旧的 16。
             let _ = persist_migrated_max_tool_steps(state, &raw, config.max_tool_steps);
         }

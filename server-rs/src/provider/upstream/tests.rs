@@ -107,7 +107,7 @@ fn reasoning_passback_error_is_recognised() {
 /// 再"补一次"拿到的是逐字节相同的请求 —— [`build_echo_retry`] 必须返回 `None`，
 /// 让降档直接发生（少烧一次 400 的往返与输入 token）。
 /// 反过来，模型没声明方言时把 `echo_all` 打开**真的**会多一个 reasoning 项 ——
-/// 那种情况必须重发（这条分支是 2026-11-01 加的，别顺手删掉）。
+/// 该情况必须重发（该分支为后来新增，不要一并删除）。
 #[test]
 fn echo_retry_is_skipped_when_the_body_would_not_change() {
     let silent = ChatTurn {

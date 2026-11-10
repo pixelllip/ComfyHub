@@ -84,7 +84,7 @@ pub fn refine_from_body(body: &str) -> Option<&'static str> {
     {
         return Some("QUOTA_EXCEEDED");
     }
-    // 混合网关最常见的坑：模型不属于当前协议的端点
+    // 混合网关最常见的问题：模型不属于当前协议的端点
     if has("not supported on this endpoint")
         || has("unsupported_model")
         || (has("use /") && has("provider/v1"))
@@ -304,7 +304,7 @@ where
         //   ① 补一个空 `content` 的 reasoning 项重发 —— 思考照旧开着。
         //      这是根因的修法：缺的是"这一轮的思维链条目"，不是"思考这个能力"。
         //      ⚠ `deepseek` 方言下第一次构建就已经补过了，重发只会得到**同一个请求**
-        //      （2026-11-09 现场：400 之后那次"重发"的请求体逐字节相同，白烧一次）——
+        //      （400 之后那次"重发"的请求体逐字节相同，属一次无效消耗）——
         //      所以先比对请求体，没变化就直接进第 ② 档。
         //   ② 只有补了还被拒，才把强度降成 `effort: none`（那一档上游不校验回传）。
         //      降档是**最后手段**：它会把这个 Run 余下所有轮次的思考一起关掉，
@@ -526,7 +526,7 @@ pub fn is_reasoning_passback_error(detail: &str) -> bool {
 ///
 /// `deepseek` 方言下第一次 [`Adapter::build_body`] 就已经把缺的条目补齐了
 /// （[`crate::provider::protocol`] 的 `reasoning_echo_required` 认方言，不认 `echo_all`），
-/// 所以被 400 之后那次"补了再发"拿到的请求体**逐字节相同** —— 重发只是白烧一次往返
+/// 因此 400 之后那次"补全后重发"的请求体**逐字节相同** —— 重发只是一次无效往返
 /// 和一次输入 token（2026-11-09 现场：400 之后重发的就是同一条请求）。
 ///
 /// 返回 `Some((新的思考参数, 新请求体))` 表示重发有意义；`None` 表示补了也白补，直接降档。

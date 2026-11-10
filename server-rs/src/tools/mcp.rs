@@ -1403,7 +1403,7 @@ pub fn prepare_launch_with(args: &Value, desktop: Option<Desktop>) -> LaunchPlan
 /// 把补好的 argv 写回参数对象（先擦掉旧的 `extra_args` 再写新的）。
 ///
 /// ⚠ 模型经常把数组写成**一个 JSON 字符串**（现场实测 `{"extra_args": "[\"--port\", \"8189\"]"}`，
-/// 而 schema 声明的是数组）—— 这里顺手归一成真正的数组，那是它本来就该是的样子。
+/// 而 schema 声明的是数组）—— 此处归一为真正的数组，这是其应有的形式。
 fn with_argv(args: &Value, argv: &[String]) -> Value {
     let mut out = Map::new();
     if let Some(map) = args.as_object() {
@@ -2013,7 +2013,7 @@ pub async fn warmup(registry: &Arc<McpRegistry>, project_root: &Path) {
 /// 「调用 mcp 的 nodes 工具总是失败」）。
 ///
 /// 现场：`UnexpectedToolError: Error executing tool nodes` + 一整段 python traceback
-/// （工具函数里的异常被 MCP SDK 包成这一句，isError 回来）。根因不止一种，别一刀切：
+/// （工具函数中的异常被 MCP SDK 包装为这一句，`isError` 返回）。原因不止一种，不要统一处理：
 /// - `PermissionError [Errno 13]`（写凭据锁 / 缓存被拒）—— 受限会话里这是**最常见**的
 ///   （见 [`apply_comfy_cli_write_redirection`] 的文件头），跟 ComfyUI 在不在线无关；
 /// - 连不上 ComfyUI —— 节点查询要先连上 ComfyUI 拿 object_info。

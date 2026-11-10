@@ -33,7 +33,7 @@
 //!   在 Rust 侧的工具路径上**不会发生**：`tool_find_model` 总是构造出 Civitai 客户端
 //!   （凭据解不开时它只是"没有登录态"，与 Civitai 自己的语义一致）。所以那一档只留给
 //!   单测（`civitai: None`），错误文案照抄。
-//! * Kotlin 用 `catch (e: Exception)` 兜"连出网都没走到就炸了"（解析 / 本地 bug）。
+//! * Kotlin 用 `catch (e: Exception)` 兜住"尚未发起请求即异常"（解析 / 本地 bug）。
 //!   Rust 侧所有失败都是 [`ToolFailure`] / [`SourceOutcomeError`]，没有可捕获的裸异常，
 //!   所以那两档 `"查询失败（…）：这是本机的处理出了问题"` 没有对应物。
 //! * Kotlin 的 `ModelFinder` 是个**窄接口**（单测塞假件）。Rust 用**真 HTTP + 进程内假

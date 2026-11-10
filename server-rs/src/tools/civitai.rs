@@ -64,7 +64,7 @@ pub const CONNECT_TIMEOUT_SECONDS: u64 = 5;
 pub const DEFAULT_TIMEOUT_SECONDS: u64 = 25;
 pub const MAX_TIMEOUT_SECONDS: u64 = 60;
 
-/// 一次最多回几条（再多也没人看，还白烧 token）。
+/// 一次最多返回几条（再多也不会被查看，只会浪费 token）。
 pub const MAX_LIMIT: i64 = 20;
 
 /// 上游自己允许的 `limit` 上限（2026-09-20 实测：`limit=100` 200、`limit=101` 400）。
