@@ -1,6 +1,6 @@
 //! 产物**集合**的成组判定：哪几张图属于"同一批、只做了一点点微调"。
 //!
-//! 设计依据（用户 2026-10-11 拍板，逐条别改）：
+//! 设计依据（逐条固定，不得随意修改）：
 //!
 //! 1. **判据主要来自提示词** —— "它决定了产物的走向"。
 //!    所以 [`group_key`] 里**只有 kind + 正提示词 + 负提示词**，别的什么都不进。
@@ -16,13 +16,13 @@
 //!
 //! 这条不是偷懒，是**唯一自洽**的选择：只要拉开一点参数阈值（steps 差多少算新组、
 //! cfg 差多少算新组），就会出现"同一句提示词、同一份工作流，只因为调了 cfg 就被拆成两组"，
-//! 而那正是用户说的"step/cfg 不是主要因素"。反过来把参数全忽略，判定就退化成
+//! 即"step/cfg 不是主要因素"。反过来把参数全部忽略，判定会退化为
 //! **一个纯函数、只看文本** —— 可解释、可回填、可测。
 //!
 //! # 代价（写在这里，别当没发生）
 //!
 //! * **同模板不同采样器的图会被并成一组**（`euler a` 与 `dpmpp_2m` 出的图确实会不一样）。
-//!   这是刻意接受的：用户要的语义是"我一直在调同一张图"，不是"参数完全一致"。
+//!   这是刻意接受的：语义为"持续调整同一张图"，而不是"参数完全一致"。
 //! * `extra_params`（自由 JSON）同样不进输入 —— 它没有稳定语义，进去只会让判定飘。
 //! * **孤儿产物（没关联提示词）不进组**（[`Assigned::Orphan`]）。2026-10-11 在真库上量出来
 //!   才定的：那次回填把 21 张互不相干的手动导入图按"都是 IMAGE"并成了一组。
@@ -37,7 +37,7 @@
 //!
 //! # 拼 key 的坑（踩过就别再踩）
 //!
-//! 归一化后的片段**可能含 ASCII 控制字符**（用户提示词里粘贴进 `\u{1}`、`\r` 都可能），
+//! 归一化后的片段**可能含 ASCII 控制字符**（提示词中可能粘贴 `\u{1}`、`\r`），
 //! 所以**不能**拿控制字符当分隔符 —— 那样 `["a", "b\u{1}c"]` 与 `["a\u{1}b", "c"]`
 //! 会拼出同一个 key（**造出假分组，而且不报错**）。
 //! 现在的写法是**长度前缀**（`len ⊗ "+"'len2 0x1F 片段 ⊗ ...`），消除歧义且不用防转义。
@@ -354,7 +354,7 @@ fn normalize_negative(text: Option<&str>) -> Vec<String> {
 pub enum Origin {
     /// 算法分出来的。
     Auto,
-    /// 用户拆开 / 合并出来的 —— **重算只动 Auto**，别把用户刚拆开的又合回去。
+    /// 手动拆开 / 合并产生的 —— **重算只处理 Auto**，不得把手动拆分的重新合并。
     Manual,
 }
 
@@ -371,9 +371,9 @@ impl Origin {
 ///
 /// ⚠ **孤儿产物（没关联提示词）不进组** —— 这条是 2026-10-11 在真库上量出来才定的：
 /// 那次回填把 **21 张互不相干的手动导入图**（全都没有提示词）按"都是 IMAGE"并成了一组。
-/// 那不是用户要的"同批微调"，点进去左右翻 21 张不认识的图毫无意义。
+/// 这不属于"同批微调"，浏览 21 张无关图片没有意义。
 ///
-/// 判据本来就该是**提示词**（用户原话"它决定了产物的走向"）——
+/// 判据应为**提示词**（它决定产物的走向）——
 /// 没有提示词就没有"走向"可判，所以**宁可不分组**：详情页箭头禁用，退化成普通格子。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Assigned {
@@ -391,7 +391,7 @@ pub enum Assigned {
 ///
 /// ⚠ 第 2 档是 2026-10-18 补的。少了它，所有"提示词解析不出来"的运行（自建工作流、
 /// 非标准文本节点、特殊图生图链路）会**全部并进同一个 `IMAGE ⊗ ∅` 集合** ——
-/// 那就是用户报的"生成的内容自动分类到错误的集合"。捕获入库时每次运行都会插一条
+/// 即"生成的内容被自动分类到错误的集合"。捕获入库时每次运行都会插入一条
 /// prompts 行（`capture_ingest.rs` 的 `create_captured_prompt`），正文原样写入、不判空，
 /// 所以这一档在真机上很常见，而不是理论情况。
 ///
@@ -444,8 +444,8 @@ fn endpoint_of(conn: &Connection, media_id: i64) -> Result<Option<Endpoint>, Wri
 /// 按 `group_key` 查/建集合并把产物挂上去。
 ///
 /// 匹配规则：**`group_key` 相等**，且**优先挂到最近建的 `auto` 集合**。
-/// 为什么优先 auto：用户拆开之后会留下 `manual` 集合，而新产物该进的是"算法那一组"，
-/// 不是被拆出来的那一份 —— 否则用户拆一次，之后所有新图都往那个小堆里塞。
+/// 优先 auto 的依据：拆分后留下 `manual` 集合，而新产物应进入"算法那一组"，
+/// 而不是拆分出的那一份 —— 否则拆分一次后，所有新图都进入该小集合。
 fn attach(conn: &Connection, media_id: i64, ep: &Endpoint) -> Result<i64, WriteError> {
     let key = group_key(ep);
     let existing: Option<(i64, i64)> = conn
@@ -571,9 +571,9 @@ pub fn pending_grouped(conn: &Connection) -> Result<(usize, usize), WriteError> 
 /// 把**还没分组**的产物按同一套规则分一遍（存量归并 / 规则改了之后重算）。
 ///
 /// 五条纪律：
-/// 1. **只动 `collection_id IS NULL` 的行** —— 用户手动拆开/合并过的（`origin='manual'`）
-///    以及已经分好组的，一律不碰。用户刚拆开又被合回去是最气人的那种 bug。
-/// 2. **`collection_opt_out = 0`**（2026-10-18 加）—— "用户明确把这一条移出集合"的行
+/// 1. **只处理 `collection_id IS NULL` 的行** —— 已手动拆分/合并的（`origin='manual'`）
+///    以及已分组的行一律不改动。拆分后被重新合并属于需避免的问题。
+/// 2. **`collection_opt_out = 0`** —— "已明确移出集合"的行
 ///    `collection_id` 也是 NULL（那正是"移出"的写法），只判第 1 条等于**把刚拖出去的那张
 ///    又吸回来**，而且一个错都不报。这两条判据必须成对出现，少了任何一条都是静默失败。
 /// 3. **只给"同款 >= 2 张"的桶建组**（2026-10-18 加）—— 一个组只有一张图没有意义
@@ -588,7 +588,7 @@ pub fn backfill(conn: &Connection) -> Result<usize, WriteError> {
     let mut done = 0usize;
     for (ep, ids) in pending_buckets(conn)? {
         // 独苗不建组（纪律 3）：它保持 `collection_id = NULL` 留在散图里。
-        // ⚠ `collection_opt_out` **不写** —— 那不是"用户移出"，将来同款再来一张时
+        // ⚠ `collection_opt_out` **不写** —— 该行并非"主动移出"，同类新条目出现时
         // 回填该把它们并起来（写了就被第 2 条永久挡住）。
         if ids.len() < 2 {
             continue;
@@ -606,16 +606,16 @@ pub fn backfill(conn: &Connection) -> Result<usize, WriteError> {
 /// 与 [`backfill`] 的分工（这两件事**不能**合并成一个函数）：
 /// * [`backfill`] 只补 `collection_id IS NULL` 的行 —— 已经分好组的**永远不会**被重算，
 ///   所以它是"老库补课"，不是"按现在的规则整理一遍"；
-/// * 这里是用户点了「重新自动整理」时的全量重算：算法分出来的组先全拆，再按当前
+/// * 这是「重新自动整理」触发的全量重算：算法分组先全部解散，再按当前
 ///   [`RULE_VERSION`] 的规则重新分。
 ///
 /// 五条纪律（顺序与判据都有理由，别调）：
 /// 1. **先解散 `auto`、再 [`backfill`]** —— 反过来那些还没解散的老组在 `backfill` 眼里
 ///    是"已分组"，会**整组被跳过**：表现是"点了没反应"，而且一个错都不报。
-/// 2. **只解散 `origin = 'auto'`** —— `manual` 集合（用户新建的、以及用户移进移出过的，
-///    见 [`mark_manual`]）的成员 `collection_id` **一个字都不许动**。用户刚整理好的组
+/// 2. **只解散 `origin = 'auto'`** —— `manual` 集合（新建的、以及移入移出过的，
+///    见 [`mark_manual`]）的成员 `collection_id` **不得改动**。已整理好的分组
 ///    被算法合回去是这条功能最气人的那种 bug。
-/// 3. **`collection_opt_out` 原样保留** —— 解散只把 `collection_id` 置 NULL；用户明确
+/// 3. **`collection_opt_out` 原样保留** —— 解散只把 `collection_id` 置 NULL；已明确
 ///    移出的那几条仍然被 [`backfill`] 的 `AND collection_opt_out = 0` 挡在外面，
 ///    不会被吸回来（判据只有那一处，这里不重写一遍）。
 /// 4. **收尾是"结构上不可能出现"的，所以这里没有收尾调用**（2026-10-18 改）——
@@ -628,13 +628,13 @@ pub fn backfill(conn: &Connection) -> Result<usize, WriteError> {
 ///    **不变式**被一次防御性收尾悄悄兜住；现在由 §13 的
 ///    `重新整理之后_单成员自动集合也不留` 用例正面盯着：规则一退化，它就红。
 /// 5. 返回"这次分了多少条"，口径与 [`backfill`] **完全一致**（孤儿 / 已移出 / 正文空白 /
-///    独苗都不算），调用方据此给用户报数。
+///    单成员集合不计入），调用方据此汇报数量。
 pub fn regroup_auto(conn: &Connection) -> Result<usize, WriteError> {
     // ① 解散 auto：先把成员摘下来（`collection_id = NULL`），再删集合行。
     //
     // ⚠ 顺序不能反。虽然 `media_assets.collection_id` 是 `ON DELETE SET NULL`，但外键
     // 开关（`PRAGMA foreign_keys`）不是每个连接都保证打开 —— 显式置 NULL 才是"一定
-    // 会被摘下来"的那条路。`collection_opt_out` **不写**，保持用户原来的选择。
+    // 会被摘除"的路径。`collection_opt_out` **不写**，保持原有选择。
     conn.execute(
         "UPDATE media_assets SET collection_id = NULL
           WHERE collection_id IN (SELECT id FROM media_collections WHERE origin = ?1)",
@@ -653,7 +653,7 @@ pub fn regroup_auto(conn: &Connection) -> Result<usize, WriteError> {
 }
 
 // ---------------------------------------------------------------------------
-//  用户手动改归属（2026-10-18）：移出 / 移进
+//  手动修改归属：移出 / 移进
 // ---------------------------------------------------------------------------
 
 /// 读一条产物当前所属集合（不在任何集合 = `None`）。产物不存在回 [`WriteError::NotFound`]。
@@ -667,15 +667,15 @@ fn collection_of(conn: &Connection, media_id: i64) -> Result<Option<i64>, WriteE
     .ok_or(WriteError::NotFound)
 }
 
-/// **用户手动把一条产物移出集合**（"我碰过它，它归我"）。
+/// **手动把一条产物移出集合**（"已手动处理，归属为手动"）。
 ///
 /// ⚠ 必须同时写 `collection_opt_out = 1`。只把 `collection_id` 置成 NULL 的话，
 /// **下次启动**的 [`backfill`] 会按提示词把它重新算回原来那一组 ——
-/// 用户会看到"我明明拖出来了，重启又回去了"，而且**一个错都不报**。
+/// 否则会表现为"已拖出但重启后恢复"，且**不报任何错误**。
 ///
 /// 移出之后**源集合**要收尾（[`prune_singleton_auto`]，唯一实现）：
 /// 搬空了 → 删掉（不留点不开的空格子）；是 `auto` 且只剩 1 个成员 → 一并解散；
-/// 是 `manual` → **一个字都不动**（用户自己建的组，只剩一张也留着）。
+/// 是 `manual` → **不改动**（手动创建的组，仅剩一张也保留）。
 pub fn detach(conn: &Connection, media_id: i64) -> Result<(), WriteError> {
     // 顺手当 NotFound 的判据（产物不在就别去动集合）
     let from = collection_of(conn, media_id)?;
@@ -695,8 +695,8 @@ pub fn detach(conn: &Connection, media_id: i64) -> Result<(), WriteError> {
 
 /// 给一个还没名字的集合起个默认名（`集合 1`、`集合 2`…）。
 ///
-/// 只在"用户建了组但没填名字"或"用户碰了算法组、它转成手动"时用。挑第一个没被
-/// 占用的编号，别让界面上出现两个同名的组；用户自己起的名字**原样不动**。
+/// 仅在"创建组但未填名字"或"修改算法组使其转为手动"时使用。选取第一个未被
+/// 占用的编号，避免界面出现同名组；手动填写的名称**原样保留**。
 fn default_title(conn: &Connection) -> Result<String, WriteError> {
     let mut n = 1i64;
     loop {
@@ -716,12 +716,12 @@ fn default_title(conn: &Connection) -> Result<String, WriteError> {
 /// 移进之后要把 `origin` 从 `auto` 翻成 `manual`。
 ///
 /// 为什么必须翻：`auto` 集合的 `group_key` 是"算法算出来的那一组"的指纹 ——
-/// 用户往里塞了一张提示词不同的图之后，这个指纹就**不再描述它的内容**了，
+/// 加入一张提示词不同的图后，该指纹**不再描述其内容**，
 /// 而 `attach` 还在按这个 key 往它里面吸新图（把不相关的图越吸越多）。
-/// 用户碰过它，它就是手动的了；要回到算法分组只能显式"重新自动分组"。
+/// 已修改即归为手动；恢复算法分组只能通过"重新自动分组"。
 ///
 /// 翻成手动时**顺手给一个默认名字**：否则界面上会显示成"未命名集合"，
-/// 用户还得自己再改一次（2026-11-07 用户要求"新建集合要有默认编组名"）。
+/// 否则需要再手动修改一次（"新建集合要有默认编组名"）。
 fn mark_manual(conn: &Connection, collection_id: i64) -> Result<(), WriteError> {
     let row: Option<(String, Option<String>)> = conn
         .query_row(
@@ -750,14 +750,14 @@ fn mark_manual(conn: &Connection, collection_id: i64) -> Result<(), WriteError> 
     Ok(())
 }
 
-/// **用户手动把一条产物移进某个集合**。
+/// **手动把一条产物移进某个集合**。
 ///
 /// 判据两条，都是"不猜、不将就"：
 /// 1. 目标集合必须存在；
-/// 2. **kind 必须相同** —— 图像集合里放视频会被明确拒绝（用户 2026-10-18 拍板
+/// 2. **kind 必须相同** —— 图像集合中放入视频会被明确拒绝（
 ///    "手动集合不允许混图像和视频"）。拒绝要说人话，不许静默不动。
 ///
-/// 移进来会把 `collection_opt_out` 清掉（用户改主意了），源集合随后收尾
+/// 移入会清除 `collection_opt_out`（归属已改变），源集合随后收尾
 /// （[`prune_singleton_auto`]：空了删掉、`auto` 且只剩一张的一并解散），
 /// 目标若是算法分组出来的则**就地转成手动**（见 [`mark_manual`]）。
 pub fn move_into(conn: &Connection, media_id: i64, target: i64) -> Result<(), WriteError> {
@@ -794,10 +794,10 @@ pub fn move_into(conn: &Connection, media_id: i64, target: i64) -> Result<(), Wr
     )?;
     // ⚠ 顺序有意义：**先翻手动、再收尾**。翻完之后目标集合（哪怕只剩 1 个成员）
     // 已经是 `manual`，下面的收尾绝不会把它当成"单成员 auto 组"解散掉 ——
-    // 用户刚点的那一下不能被算法吃掉。
+    // 手动操作的结果不能被算法覆盖。
     mark_manual(conn, target)?;
     // 源集合收尾（唯一实现见 [`prune_singleton_auto`]）：搬空的删掉、
-    // `auto` 且只剩 1 个成员的一并解散（用户报的"旧集合元素为 1 没有自动解散"）。
+    // `auto` 且只剩 1 个成员的一并解散（"旧集合元素为 1 未自动解散"）。
     if from.is_some() {
         prune_singleton_auto(conn)?;
     }
@@ -873,12 +873,12 @@ pub fn summary(conn: &Connection, id: i64) -> Result<CollectionSummary, WriteErr
     .ok_or(WriteError::NotFound)
 }
 
-/// **给集合改名**（用户在集合详情里点「重命名」）。
+/// **给集合改名**（集合详情中的「重命名」）。
 ///
 /// 两条纪律：
 /// 1. **空名字要明确拒绝**：界面上一旦允许清空，展开详情又回到"这一组"——
-///    用户 2026-11-07 要的正是"每个集合都有名字"；
-/// 2. **改名同时把 `origin` 翻成 `manual`**：用户给它起了名字，这一组就归用户了；
+///    约束："每个集合都有名字"；
+/// 2. **改名同时把 `origin` 置为 `manual`**：已设置名称，该组转为手动；
 ///    否则下次「重新自动整理」会把它当 `auto` 解散，名字跟着没。
 pub fn rename(conn: &Connection, id: i64, title: &str) -> Result<CollectionSummary, WriteError> {
     let title = title.trim();
@@ -903,7 +903,7 @@ pub fn rename(conn: &Connection, id: i64, title: &str) -> Result<CollectionSumma
 /// 选中的产物 **kind 必须一致**（同上：不混图像和视频），不一致就明确拒绝。
 ///
 /// 成员从**老集合**搬走之后，老集合要收尾（[`prune_singleton_auto`]，唯一实现）：
-/// 搬空的删掉、`auto` 且只剩 1 个成员的一并解散。用户报的
+/// 搬空的删除、`auto` 且只剩 1 个成员的一并解散。
 /// "将内容从一个集合调到另一个集合的时候，如果旧集合元素为 1，旧集合没有自动解散"
 /// 在"新建集合并移入"这条路上同样成立 —— 所以这里也要收。
 pub fn create_manual(
@@ -937,8 +937,8 @@ pub fn create_manual(
         }
     }
     let kind = kind.ok_or(WriteError::NotFound)?;
-    // 用户没填名字（或只填了空白）就给它一个默认名 —— 展开详情不能显示"这一组"
-    // （用户 2026-11-07 的要求）。显式名字仍然原样保留，只去首尾空白。
+    // 未填名字（或仅空白）时使用默认名 —— 展开详情不能显示"这一组"
+    // 显式名称原样保留，只去除首尾空白。
     let title = match title.map(str::trim).filter(|t| !t.is_empty()) {
         Some(title) => title.to_string(),
         None => default_title(conn)?,
@@ -988,13 +988,13 @@ fn manual_key(media_ids: &[i64]) -> String {
 ///
 /// 为什么必须有这一步：`media_assets.collection_id` 是 `ON DELETE SET NULL`，
 /// 所以**删产物不会带走集合行**。少了它会有两个后果：
-/// ① "删到 0 张还留一个空组"（用户看到的是一个点不开的空格子）；
+/// ① "删到 0 张仍保留空组"（界面显示为无法点开的空格子）；
 /// ② 集合行**永久累积**（每删一批就多一个孤儿集合，而且它会跟着同步到手机）。
 ///
 /// ⚠ **写路径不要直接调它**（删产物 / 移出 / 移进 / 新建手动集合一律走
 /// [`prune_singleton_auto`]，它把"空了删掉"和"`auto` 只剩一张解散"合成了一条收尾路径）：
 /// 单独调这个只做了前半件，于是"删一张"与"移走一张"两条入口的终态就不一致了
-/// （用户 2026-10-18 报的正是后者）。它现在只作为 [`prune_singleton_auto`] 的最后一步存在。
+/// 它现在只作为 [`prune_singleton_auto`] 的最后一步存在。
 pub fn prune_all_empty(conn: &Connection) -> Result<usize, WriteError> {
     Ok(conn.execute(
         "DELETE FROM media_collections
@@ -1006,9 +1006,9 @@ pub fn prune_all_empty(conn: &Connection) -> Result<usize, WriteError> {
 /// 解散**算法分出来的、只剩 1 个成员**的集合：把最后那张放回散图
 /// （`collection_id = NULL`），再把集合行删掉。返回解散了几个。**幂等**。
 ///
-/// # 为什么"只剩一张"也要解散（用户 2026-10-18 报的 bug）
+/// # "只剩一张"也解散的依据
 ///
-/// 用户原话："将内容从一个集合调到另一个集合的时候，如果旧集合元素为 1，
+/// "将内容从一个集合调到另一个集合时，如果旧集合元素为 1，
 /// 旧集合没有自动解散。" 一个 `auto` 集合的语义是"同一句提示词的一批微调"（见文件头），
 /// 只剩一张时它不再是一批，而界面上仍然是一个叠放封面 + 数量角标、点进去只有一张的格子。
 /// 判据是**集合的语义**，不是"空 / 非空" —— 所以只清 0 成员的 [`prune_all_empty`]
@@ -1017,8 +1017,8 @@ pub fn prune_all_empty(conn: &Connection) -> Result<usize, WriteError> {
 ///
 /// # 只碰 `origin = 'auto'`（**硬纪律**，别放宽）
 ///
-/// `manual` 集合是**用户自己建的**（可能还改了标题），只剩一张也必须原样留着 ——
-/// 解散它等于删用户的东西。用户碰过的 `auto` 集合在 [`move_into`] 里已经就地翻成
+/// `manual` 集合是**手动创建的**（可能已改标题），只剩一张也必须保留 ——
+/// 解散该集合等同于删除其数据。已修改的 `auto` 集合在 [`move_into`] 中已就地转为
 /// `manual`（[`mark_manual`]），所以这里天然放过它。
 ///
 /// # 不变量（三条，顺序有意义，别调）
@@ -1026,7 +1026,7 @@ pub fn prune_all_empty(conn: &Connection) -> Result<usize, WriteError> {
 /// 1. **先摘成员、再删集合行**：`media_assets.collection_id` 虽然是 `ON DELETE SET NULL`，
 ///    但外键开关（`PRAGMA foreign_keys`）不保证每个连接都打开 —— 显式置 NULL 才是
 ///    "一定会被摘下来"的那条路；
-/// 2. **`collection_opt_out` 一个字都不写**：那张图不是"用户明确移出的"，它只是这一组
+/// 2. **`collection_opt_out` 不写入**：该图并非"主动移出"，只是在当前分组中
 ///    不够成组。写了它就会被 [`backfill`] 永久挡在外面（以后同款提示词再来一张，
 ///    它也回不去那个本该 >= 2 的组）；
 /// 3. **最后再 [`prune_all_empty`]**：不变量 1、2 之间可能留下 0 成员的残留
@@ -1073,7 +1073,7 @@ pub fn prune_singleton_auto(conn: &Connection) -> Result<usize, WriteError> {
 
 /// 找出**与这条预设同款提示词**的产物 id（按时间升序）。
 ///
-/// 用户 2026-10-11："如果有用这套预设同款提示词的产物，自动关联预设，显示在关联产物中。"
+/// 使用同一提示词的产物需自动关联预设，并显示在关联产物中。
 ///
 /// # 为什么不建一张关联表
 ///
@@ -1198,8 +1198,8 @@ pub fn media_count_of_preset(conn: &Connection, prompt_id: i64) -> Result<i64, W
 ///
 /// 「未关联产物」筛选吃它：一个预设的"有没有关联产物"不能只看
 /// `media_assets.prompt_id == 预设 id` —— 从画廊存下来的预设，产物指向的是
-/// **自动捕获那条**提示词行，直连判定会说"未关联"，而用户明明是从那张图存的
-/// （2026-10-11 用户报的"实际已经跟产物关联，但是主界面卡片依然显示未关联"）。
+/// **自动捕获的那条**提示词行，直连判定会返回"未关联"，而该图正是从该行保存的
+/// （现象："已与产物关联，但主界面卡片仍显示未关联"）。
 ///
 /// 一次遍历算完所有预设，避免"每个预设各查一遍"的 N 次查询。
 pub fn prompt_ids_with_media(conn: &Connection) -> Result<Vec<i64>, WriteError> {
