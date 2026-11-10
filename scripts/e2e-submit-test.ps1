@@ -298,7 +298,7 @@ try {
     # 合成捕获的产物**单独生成一张内容不同的图**：入库靠 SHA-256 判重，
     # 后面第 2 幕提交后捕获用的也是这张目录里的 png —— 共用同一张的话，
     # 提交链路的入库会全部判成"与已有文件相同"，mediaIds=[]，第 2 幕必红
-    # （AGENTS 记过同样的坑：每次都要给一张内容一定不同的图）。
+    # （AGENTS 记录过同类问题：每次都要提供一张内容不同的图）。
     $synthPng = Join-Path $OutDir 'e2e_submit_synth_00001_.png'
     & $python (Join-Path $E2eDir 'make_png.py') $synthPng `
         --size (Get-Random -Minimum 200 -Maximum 520) `

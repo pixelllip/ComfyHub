@@ -15,7 +15,7 @@
 //! 四条断言对应四条纪律：
 //!  1. **只有真的提交了、真的收进来了，才有 `mediaIds`**（模型不能凭空说"生成了"）；
 //!  2. **`overrides` / `connections` 应用在提交出去的那张图上**（假实例记的 body 就是证据）；
-//!  3. **预检拦住时一个字节都不发**（拿不到能加载的模型就当场拒，不白烧一轮显卡）；
+//!  3. **预检拦截时不发送任何数据**（无法加载模型时立即拒绝，避免无效消耗）；
 //!  4. **超时如实报 `timeout`**，既不假装完成也不假装失败。
 
 use std::sync::{Arc, Mutex};
@@ -445,7 +445,7 @@ async fn preflight_blocks_unknown_node_classes_before_anything_is_sent() {
 #[tokio::test]
 async fn preflight_warns_about_models_it_cannot_see_but_still_submits() {
     // 模型文件不在实例候选里 → **只警告不拦**（盘扫还没搬，见 `preflight_refusal` 的说明）。
-    // 这一条直接钉住"误拦比白跑更糟"这个口径：提交照常发生，警告如实带回。
+    // 这一条固定"误拦比无效执行更差"的口径：提交照常发生，警告如实返回。
     let (base, submitted, gateway) = fake_comfy(object_info(), history_with_output()).await;
     let fixture = Fixture::new("preflight-warn", &base);
     write_png(&fixture.dir.join("output").join("unit.png"), [1, 2, 3]);

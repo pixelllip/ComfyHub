@@ -234,7 +234,7 @@ async fn media_list_uses_the_same_keys_and_filters() {
     )
     .await;
     assert_eq!(by_tag["total"], 1, "按提示词的标签也能筛到产物");
-    // 给半截名字筛不到（这条防的是"某天有人顺手把 IN 改成 LIKE"）
+    // 半截名称无法筛到（这条防止"把 `IN` 改成 `LIKE`"的改动）
     let (_, partial) = get_json(
         router_for(state.clone()),
         "/api/media?tags=%E8%B5%9B%E5%8D%9A",

@@ -221,7 +221,7 @@ pub(crate) fn state_with_workflow_files() -> (
 //  上传（P4 第 6 步）：multipart 多文件 + sha256 判重
 // ===========================================================================
 
-/// 造一个 multipart 体（省得引第三方 crate：这一小段手工拼就够，且**结构与 curl 一致**）。
+/// 构造一个 multipart 体（避免引入第三方 crate：这一小段手工拼接即可，且**结构与 curl 一致**）。
 pub(crate) fn multipart_body(
     boundary: &str,
     fields: &[(&str, &str)],

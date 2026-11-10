@@ -66,7 +66,7 @@ function Assert-That {
 
 function Convert-JsonOrNull {
     # ⚠ PowerShell 里 `try/catch` 是**语句**不是表达式：不能写在哈希表字面量里
-    # （写成 `@{ json = (try { … } catch { … }) }` 会把 try 当成命令名，整段当场炸掉 —— 踩过）
+    # （写成 `@{ json = (try { … } catch { … }) }` 会把 `try` 当作命令名，整段直接失败）
     param([string]$Text)
     if ([string]::IsNullOrWhiteSpace($Text)) { return $null }
     try { return $Text | ConvertFrom-Json } catch { return $null }

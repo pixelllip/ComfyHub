@@ -461,7 +461,7 @@ async fn approval_gate_opens_before_the_user_can_click() {
     assert_eq!(run["status"], "completed", "{run}");
 
     // 落库的行：`approval` 记录决定、`status` 记录执行结果，**且只有一行** ——
-    // 顺手把 `status` 也写成 `approved`（或让两列互相顶替）会让原地更新匹配不上，
+    // 一并把 `status` 写成 `approved`（或让两列互相顶替）会使原地更新无法匹配，
     // 同一次调用在库里变成两行，而 `/api/ai/pending` 又会把它当成"还在等人批"。
     let calls = comfyhub_server_rs::ai::runs::list_tool_calls(&state, &run_id).unwrap();
     assert_eq!(
@@ -489,7 +489,7 @@ async fn approval_gate_opens_before_the_user_can_click() {
     assert_eq!(types.last().unwrap(), "run.completed");
 
     // 闸门类事件**立刻落库**（不是攒批）：另一台设备连上来时它必须已经在库里，
-    // 否则那边就是"白等一场"（M1 的纪律）。
+    // 否则对方会一直空等（M1 的约束）。
     let requested_seq = state
         .with(|conn| {
             conn.query_row(
@@ -757,7 +757,7 @@ async fn failed_calls_do_not_spend_the_budget() {
 async fn unknown_tool_is_reported_as_tool_not_found() {
     // ⚠ 这里用一个**永远不存在**的名字，而不是"还没搬的工具"。
     //
-    // 历史上这条用例三次被"顺手搬走一件工具"弄红：第 40 步之前用 `read_file`（搬了），
+    // 该用例此前三次因"一并移除某个工具"而失败：第 40 步之前用 `read_file`（已移除），
     // 后来用 `comfy_env_report`（§18 搬了），再后来用 `comfy_find_workflow`（同一轮搬了）——
     // 每次红的原因都变成"撞上真的分支"（撞审批闸门 / 真的去提交 / 真的读库），
     // 而那与"未知工具要回 TOOL_NOT_FOUND"一点关系都没有，白花一轮去查。

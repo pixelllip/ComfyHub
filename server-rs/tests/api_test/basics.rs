@@ -852,7 +852,7 @@ async fn put_prompt_replaces_tags_and_missing_is_404() {
     assert_eq!(fallback.1["kind"], "IMAGE");
 }
 
-/// 收藏回执是 `{id, favorite}` 两个键（Kotlin 侧踩过"混类型 map → 500"的坑）。
+/// 收藏回执是 `{id, favorite}` 两个键（Kotlin 侧出现过"混类型 map → 500"的问题）。
 #[tokio::test]
 async fn favorite_returns_id_and_flag() {
     let (status, body) = send_json(

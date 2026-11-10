@@ -527,7 +527,7 @@ async fn credentials_downlink_requires_an_authorized_device() {
     std::env::remove_var(reference);
 }
 
-/// 开关与轮换：打开开关顺手发令牌；轮换 = 全局令牌换新 + **所有设备立刻失效**。
+/// 开关与轮换：打开开关即发放令牌；轮换 = 全局令牌换新 + **所有设备立即失效**。
 #[tokio::test]
 async fn auth_switch_and_rotate_behave_as_documented() {
     let _serial = auth_test_lock().lock().await;

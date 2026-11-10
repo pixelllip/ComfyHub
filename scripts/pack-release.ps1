@@ -275,7 +275,7 @@ if ($Clean) {
     # 2026-09-30：后端从 `<根>\server\` 挪到了 `<根>\backend\`（App 自己的资产），
     # `jre\` 随 Kotlin 后端一起退役。老发布目录里这两样都还在，只按清单清会永久留下
     # —— 而 `server\comfyhub-server-rs.exe` 正好是**旧的**那一份，留着会让人以为
-    # "后端在这儿"（`backend_paths.dart` 还会把它当兼容候选）。这里顺手清掉。
+    # "后端在这儿"（`backend_paths.dart` 仍会把它当兼容候选）。此处一并清除。
     [void]$owned.Add('server')
     [void]$owned.Add('jre')
     foreach ($e in ($owned | Select-Object -Unique)) {

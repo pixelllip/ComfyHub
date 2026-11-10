@@ -36,7 +36,7 @@ static int g_active_window_count = 0;
 //
 // ⚠ 这个数字与 Dart 侧是**一对**：`lib/app.dart` 的 `kWideLayoutMinWidth`（900）
 // 把 360~900 划成"手机形态"，那一档要能在 360 上不溢出
-// （回归 `test\phone_layout_overflow_test.dart`）。改这里顺手也看一眼那边。
+// （回归 `test\phone_layout_overflow_test.dart`）。修改此处时同时检查该用例。
 //
 // 注意 `ptMinTrackSize` 是**物理像素**，而 Flutter 的布局是逻辑像素：
 // 150% 缩放的屏幕上 360 逻辑 = 540 物理。所以要按当前窗口 DPI 换算，

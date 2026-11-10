@@ -564,7 +564,7 @@ async fn comfy_get_run_accepts_both_keys_and_reformats_time() {
 
     // 数字 prompt_id 那个入口也认（模型很自然会把 capturedPromptId 拿来查）。
     // ⚠ `capture_runs.prompt_id` 上有外键 → 只能指向真实存在的提示词（夹具里是 10/11）；
-    // 这也顺手是"外键真的在生效"的又一次实据（第一版写成指向 capture_runs 自己的 id，当场被拒）。
+    // 这同时也是"外键确实生效"的一处实证（第一版写成指向 capture_runs 自身的 id，立即被拒）。
     state
         .with(|conn| {
             conn.execute(
@@ -629,7 +629,7 @@ async fn comfy_list_workflows_reads_the_same_dirs_as_the_endpoint() {
         br#"{"nodes":[],"links":[]}"#,
     )
     .unwrap();
-    // 坏 JSON / 非 .json / 空文件：**一份都不许列**（列出来只会让 AI 白跑一趟）
+    // 损坏 JSON / 非 .json / 空文件：**均不得列出**（列出只会让 AI 执行一次无效调用）
     std::fs::write(workflows.join("broken.json"), b"{ not json").unwrap();
     std::fs::write(workflows.join("empty.json"), b"").unwrap();
     std::fs::write(workflows.join("note.txt"), b"{}").unwrap();
@@ -1061,7 +1061,7 @@ async fn poll_captures_a_run_into_prompts_and_media() {
         state.media_dir().join(&asset.4).is_file(),
         "产物要真的落进 storage/media"
     );
-    // 图片顺手写缩略图（画廊列表用它）
+    // 图片同时写入缩略图（画廊列表使用）
     assert!(comfyhub_server_rs::media::thumbs::thumb_path(state.media_dir(), asset.0).is_file());
     let tags: Vec<String> = state
         .with(|conn| {

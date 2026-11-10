@@ -14,7 +14,7 @@ async fn capture_workflows_lists_files_with_the_same_keys() {
         vec!["count", "dirs", "files", "hint", "total"],
         "少一个键 = 界面上少一块内容"
     );
-    // 只列真的能用的：坏 JSON 不列（列了 AI 会白跑一趟 comfy_load_workflow）
+    // 只列确实可用的：损坏 JSON 不列（列出会让 AI 执行一次无效的 `comfy_load_workflow`）
     assert_eq!(body["total"], 1, "body={body}");
     let file = &body["files"][0];
     let mut file_keys = keys(file);

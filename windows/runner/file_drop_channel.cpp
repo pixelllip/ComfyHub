@@ -116,7 +116,7 @@ void FileDropChannel::HandleDropFiles(WPARAM wparam) {
 
   std::vector<std::string> paths = ReadDroppedPaths(drop);
   if (paths.empty()) {
-    // 空的一批不往 Dart 推：监听方没必要为"一次没内容的拖放"白跑一趟
+    // 空批次不向 Dart 推送：监听方不必为"一次无内容的拖放"做无效处理
     // （Dart 侧同样有一条"空列表不推"的兜底）。
     return;
   }
