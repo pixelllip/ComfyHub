@@ -60,11 +60,11 @@ const COLS: &str =
                   ORDER BY y.created_at ASC, y.id ASC LIMIT 3
                ) x), '') AS collection_preview";
 
-/// 列表排序用的 `ORDER BY` 片段（**不许直接拼用户输入**，只认这几档）。
+/// 列表排序用的 `ORDER BY` 片段（**不得直接拼接外部输入**，只接受这几档）。
 fn order_clause(sort: Option<&str>) -> &'static str {
     // `created_at` 只到毫秒：同一批入库（一次运行里几张图、或一次轮询收几条）很容易撞在
     // 同一个毫秒上。**必须带 id 兜底**，否则同毫秒的几条在翻页 / 刷新之间顺序不稳定，
-    // 用户看到的是"图在乱跳"。（2026-11-09 查入库顺序时一起补的。）
+    // 表现为"图片顺序跳动"。
     match sort {
         Some("oldest") => "m.created_at ASC, m.id ASC",
         Some("updated") => "m.updated_at DESC, m.id DESC",
@@ -122,7 +122,7 @@ impl MediaQuery {
 /// 宽松的布尔参数：`1/0/true/false/yes/no/on/off` 都认，其余**当没传**。
 ///
 /// **绝不报错** —— 一个筛选参数写错不该让整个列表变成 400（那正是这个 bug 的形状：
-/// 用户看到的是"加载失败 HTTP 400"，完全猜不到是"仅收藏"那个开关干的）。
+/// 表现为"加载失败 HTTP 400"，无法判断与"仅收藏"开关相关）。
 ///
 /// `pub(crate)`：`PromptQuery`（提示词 / 预设列表）也吃同一份判据 ——
 /// 两处各写一遍的话，"产物列表收 1、提示词列表不收"这种漂移不会有用例变红。
@@ -240,13 +240,13 @@ pub fn search(state: &AppState, q: &MediaQuery) -> Result<Paged<MediaDto>, ApiEr
         // ⚠⚠ 这里的写法踩过一次（2026-10-11，上线前真库上量出来的）：
         // 曾经写成"未分组的 **或** 不是任何集合成员"，那等于**把所有集合成员全排除掉** ——
         // 25 条产物折叠后回 21（只有孤儿），**4 个集合的格子在画廊里根本不出现**，
-        // 而且 `pages=1` 所以翻页也补不回来。用户看到的是"这几张图没了"。
+        // 且 `pages=1`，翻页也无法补回。表现为"这些图片消失"。
         // 正确语义是"**未分组的** ∪ **每个集合里最早的那条**"。
         //
         // ⚠ 代价（刻意取舍，别当 bug）：**搜索 / 标签筛选只认代表那条**。
         // 否则会出现"搜到了这一组的第 3 张，但那一组在列表里根本不显示"——
-        // 用户看到的是"搜索结果少了几组，而且看不出为什么"。
-        // 折叠视图下用户看到的就是代表，所以按代表筛是一致的。
+        // 表现为"搜索结果缺少若干分组，且没有提示"。
+        // 折叠视图中显示的是代表项，因此按代表筛选结果一致。
         let collapse = q.collapse();
         let representative_only = if where_sql.is_empty() {
             "WHERE (m.collection_id IS NULL OR NOT EXISTS (

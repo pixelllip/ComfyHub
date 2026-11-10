@@ -24,7 +24,7 @@
 //!   每次请求都要多起一个子进程；而且 `ProxyOverride` 根本没读 —— 系统里写着的
 //!   "这些地址别走代理"被当成了耳旁风。
 //! * **`ProxyOverride` 必须照办**（含 `<local>`）：它是"本机 / 内网直连"这条纪律的
-//!   用户可编辑版本，不认它就会把用户自己指定的域名塞给代理。
+//!   可编辑版本，不读取它会把自行指定的域名交给代理。
 //! * **不带点的名字按内网处理**：`nas` / `comfy` / 单标签主机名在 Windows 的
 //!   `<local>` 里就是"本机网络"，公网域名一定带点。
 //! * **PAC（`AutoConfigURL`）读不了就如实说**：它是一段 JS，Rust 侧没解释器。
@@ -56,7 +56,7 @@ const LOCAL_SUFFIXES: [&str; 7] = [
     ".localdomain",
 ];
 
-/// WinINET 的设置键（`HKCU`：当前用户，后端由 App 拉起，跟着用户走）。
+/// WinINET 的设置键（`HKCU`：当前账户，后端由 App 启动，跟随账户）。
 #[cfg(windows)]
 const INTERNET_SETTINGS_KEY: &str =
     r"HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings";
@@ -71,7 +71,7 @@ pub enum Route {
 }
 
 impl Route {
-    /// 给人看的短句（进错误信息 —— 用户看不到我们的日志，但看得到工具报错）。
+    /// 面向上层显示的短句（进入错误信息 —— 日志不可见，但工具报错可见）。
     pub fn describe(&self) -> String {
         match self {
             Route::Direct => "直连（DIRECT）".to_string(),
@@ -279,7 +279,7 @@ pub fn route_for(
         return Route::Direct;
     };
     // 系统代理的例外表（`ProxyOverride`）只对它自己那一档生效：
-    // 用户显式设了 `COMFYHUB_HTTPS_PROXY` 就照他的来。
+    // 显式设置了 `COMFYHUB_HTTPS_PROXY` 则按该值执行。
     if system.bypasses(host) {
         return Route::Direct;
     }
@@ -332,7 +332,7 @@ pub struct OutboundStatus {
     pub warning: Option<String>,
 }
 
-/// 系统代理那几项（照原样给界面，方便用户对着系统设置核对）。
+/// 系统代理相关项（原样返回界面，便于与系统设置核对）。
 #[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct SystemStatus {
@@ -353,7 +353,7 @@ impl Default for SystemStatus {
     }
 }
 
-/// PAC 那句提醒：**读不了就明说**，别让用户以为"配了代理却不用"。
+/// PAC 的提示：**无法读取时明确说明**，避免被理解为"已配置代理但未使用"。
 const PAC_WARNING: &str = "系统的联网设置用的是自动配置脚本（PAC），这个脚本本项目读不了，\
 所以现在公网是直连。要让请求走代理，请在系统设置里改成手动填代理地址，\
 或者设环境变量 COMFYHUB_HTTPS_PROXY（例如 http://127.0.0.1:7890）。";
@@ -389,7 +389,7 @@ pub fn status_for(
         }
     };
     // PAC 只在"它本来该提供代理、我们却用不上"的时候才提醒：
-    // 用户已经用环境变量指定了代理（或显式 direct），就不必再唠叨。
+    // 已通过环境变量指定代理（或显式 direct），不再追加提示。
     let warning = if source == "none" && sys.auto_config.is_some() {
         Some(PAC_WARNING.to_string())
     } else {

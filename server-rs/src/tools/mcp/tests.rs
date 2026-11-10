@@ -1,4 +1,4 @@
-//! `mcp` 的单元测试（主体代码在 [`mcp`](super) —— 2026-09-30 按用户要求与主体分离）。
+//! `mcp` 的单元测试（主体代码在 [`mcp`](super) —— 与主体分离）。
 //!
 //! `use super::*;` 照旧：子模块能看见父模块的私有项，所以用例一行都不用改。
 
@@ -109,7 +109,7 @@ async fn 服务端_is_error_如实带回来() {
     assert_eq!(result.text, "Error executing tool xxx");
 }
 
-/// 用户 bug（2026-09-28）「调用 mcp 的 nodes 工具总是失败」：UnexpectedToolError
+/// 现象「调用 MCP 的 nodes 工具总是失败」：UnexpectedToolError
 /// 要翻成"下一步做什么"的人话，而不是让模型原样复读一段 python traceback。
 #[test]
 fn unexpected_tool_error_翻成人话并给出下一步() {
@@ -125,10 +125,10 @@ fn unexpected_tool_error_翻成人话并给出下一步() {
     assert!(humanize_mcp_failure("nodes", "HTTP 500: internal", "").is_none());
 }
 
-/// 用户 bug（2026-09-28）「MCP 调用总是失败，系统被强行误解为 comfy 没在运行」：
+/// 现象「MCP 调用总是失败，被误判为 ComfyUI 未运行」：
 /// 真实根因是 `PermissionError [Errno 13]`（受限会话里 comfy-cli 写
 /// `%LOCALAPPDATA%\comfy-cli\secrets.json.lock` 被拒），**不是** ComfyUI 没在运行 ——
-/// 旧版把它一律译成"先确认 ComfyUI 在线"，把模型（和用户）往错误方向带。
+/// 旧版一律译为"先确认 ComfyUI 在线"，导致模型向错误方向排查。
 #[test]
 fn 权限被拒_不再误导为_comfy_没在运行() {
     let traceback = "UnexpectedToolError: Error executing tool nodes\n\
@@ -495,11 +495,11 @@ fn 不存在的输入输出目录不补() {
 }
 
 /// ⚠ **`--input` 是 `--input-directory` 的 argparse 缩写**，判"调用方写过没有"不能只比全名
-/// （2026-09-30 用户 bug：调用方写的 `--input <安装目录>\input` 没被认出来，我们后补的
+/// （调用方写的 `--input <安装目录>\input` 未被识别，后补的
 /// `--input-directory <共享>\input` 排在后面 —— argparse 后写的赢，于是实例挂的是共享那份，
 /// 而投放工具按另一份配置推、把底图与人物图写进了安装目录 → 提交 400 `Invalid image file`）。
 ///
-/// 实测证据（用户实例自己的 `/system_stats`）：
+/// 实测证据（实例自身的 `/system_stats`）：
 /// `main.py --input …\ComfyUI-Installs\ComfyUI\ComfyUI\input …
 ///  --input-directory …\ComfyUI-Shared\input …`，而 `LoadImage` 的候选名单是**共享**那份。
 #[test]
@@ -589,7 +589,7 @@ fn 读生效的_input_output_取最后一次() {
     );
 }
 
-/// 受限会话里把 comfy-cli 的"家目录 + config.ini"一并指进项目内（2026-09-28 用户 bug
+/// 受限会话中将 comfy-cli 的"家目录 + config.ini"一并指向项目内（
 /// 「通过 CLI 启动 comfyui 总是失败」的那半：config.ini 那关就是靠这个绕过去的）。
 ///
 /// 为什么必须抄 config.ini：comfy-cli 的工作区（`default_workspace`）就记在里面，
