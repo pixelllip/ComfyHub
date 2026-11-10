@@ -1,4 +1,4 @@
-//! `comfy_progress` 的单元测试（主体代码在 [`comfy_progress`](super) —— 2026-09-30 按用户要求与主体分离）。
+//! `comfy_progress` 的单元测试（主体代码在 [`comfy_progress`](super) —— 与主体分离）。
 //!
 //! `use super::*;` 照旧：子模块能看见父模块的私有项，所以用例一行都不用改。
 
@@ -456,7 +456,7 @@ fn ws_url_只连明文且带同一个_client_id() {
         ws_url("http://127.0.0.1:8188", "cid"),
         Some("ws://127.0.0.1:8188/ws?clientId=cid".to_string())
     );
-    // 尾斜杠 / 空白都要归一化（用户设置页里手打的地址常有尾斜杠）
+    // 尾斜杠 / 空白都要归一化（设置页中手动输入的地址常有尾斜杠）
     assert_eq!(
         ws_url("  http://127.0.0.1:8188/  ", "cid"),
         Some("ws://127.0.0.1:8188/ws?clientId=cid".to_string())

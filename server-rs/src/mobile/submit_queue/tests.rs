@@ -1,4 +1,4 @@
-//! `submit_queue` 的单元测试（主体代码在 [`submit_queue`](super) —— 2026-09-30 按用户要求与主体分离）。
+//! `submit_queue` 的单元测试（主体代码在 [`submit_queue`](super) —— 与主体分离）。
 //!
 //! `use super::*;` 照旧：子模块能看见父模块的私有项，所以用例一行都不用改。
 
@@ -220,7 +220,7 @@ async fn 没人批准就按时收尾成被拒() {
     );
     assert_eq!(job.outcome_code.as_deref(), Some(code::APPROVAL_TIMEOUT));
     // `elapsed_ms` 由库自己按 `created_at` 与 `now` 算（跨进程也不会算错）——
-    // 它是回执里给用户看的"卡了多久"。**0 就意味着那段 julianday 算不出来**（返回了 NULL）。
+    // 它是回执中显示的"卡了多久"。**0 表示那段 julianday 无法计算**（返回了 NULL）。
     assert!(job.elapsed_ms > 0, "耗时要按真实读数记，不能是 0：{job:?}");
     assert_eq!(
         state

@@ -1,4 +1,4 @@
-//! `comfy_dirs` 的单元测试（主体代码在 [`comfy_dirs`](super) —— 2026-09-30 按用户要求与主体分离）。
+//! `comfy_dirs` 的单元测试（主体代码在 [`comfy_dirs`](super) —— 与主体分离）。
 //!
 //! `use super::*;` 照旧：子模块能看见父模块的私有项，所以用例一行都不用改。
 
@@ -211,7 +211,7 @@ fn 没有目录时给出可操作的那句话_而不是空清单() {
 #[test]
 fn 返回的路径不带_windows_逐字前缀() {
     // `canonicalize()` 在 Windows 上给 `\\?\D:\…`，而 Kotlin `toRealPath()` 给 `D:\…`。
-    // 这个前缀会**原样出现在接口里**（`dirs` 与每个文件的 `path`），用户 / AI 都会看到，
+    // 该前缀会**原样出现在接口里**（`dirs` 与每个文件的 `path`），界面与 AI 都会看到，
     // 还会被贴进对话当参数 —— 实测真库副本上第一版就是 `\\?\D:\Comfy-Desktop\…`。
     let root = tmpdir("verbatim");
     let home = make_home(&root);

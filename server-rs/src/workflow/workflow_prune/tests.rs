@@ -1,4 +1,4 @@
-//! `workflow_prune` 的单元测试（主体代码在 [`workflow_prune`](super) —— 2026-09-30 按用户要求与主体分离）。
+//! `workflow_prune` 的单元测试（主体代码在 [`workflow_prune`](super) —— 与主体分离）。
 //!
 //! `use super::*;` 照旧：子模块能看见父模块的私有项，所以用例一行都不用改。
 
@@ -310,7 +310,7 @@ fn 分析_用不上的分支连成一片_孤立节点单独列出且不建议删
     assert_eq!(branch.entry, "80", "入口应当是分支的梢（下游那个）");
     let suggest: HashSet<String> = branch.suggest_remove().into_iter().collect();
     assert_eq!(suggest, expected);
-    // 人话标签（用户要照着它做决定，不能只给节点 id）
+    // 可读标签（需据此做决定，不能只给节点 id）
     assert!(!branch.label.trim().is_empty());
     assert!(
         branch.kinds.iter().any(|k| k.contains("放大")),

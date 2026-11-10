@@ -1,4 +1,4 @@
-//! `comfy_launch` 的单元测试（主体代码在 [`comfy_launch`](super) —— 2026-09-30 按用户要求与主体分离）。
+//! `comfy_launch` 的单元测试（主体代码在 [`comfy_launch`](super) —— 与主体分离）。
 //!
 //! `use super::*;` 照旧：子模块能看见父模块的私有项，所以用例一行都不用改。
 
@@ -157,7 +157,7 @@ fn pid_file_round_trip() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
-/// 起完实例**必须把"它读哪个 input"留档**（2026-09-30 用户 bug：投放工具与实例
+/// 启动实例后**必须记录"它读取哪个 input"**（现象：投放工具与实例
 /// 各读各的 input，图投进安装目录、实例读共享目录 → 提交 400 `Invalid image file`）。
 ///
 /// 留档里要能看到 argv 与解析出来的 input/output：调用方自己写的 `--input` 也要认

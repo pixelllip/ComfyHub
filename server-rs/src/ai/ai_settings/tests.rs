@@ -1,4 +1,4 @@
-//! `ai_settings` 的单元测试（主体代码在 [`ai_settings`](super) —— 2026-09-30 按用户要求与主体分离）。
+//! `ai_settings` 的单元测试（主体代码在 [`ai_settings`](super) —— 与主体分离）。
 //!
 //! `use super::*;` 照旧：子模块能看见父模块的私有项，所以用例一行都不用改。
 
@@ -70,7 +70,7 @@ fn policy_dto_的键集合就是_kotlin_那十一个() {
             "writeRoots",
         ]
     );
-    // GET 回的是**展开后的绝对路径**（不是用户当初填的 "comfyui" 那几个字）
+    // GET 返回的是**展开后的绝对路径**（不是最初填写的 "comfyui" 那几个字）
     assert_eq!(json["writeRoots"][0], r"D:\proj\comfyui");
     assert_eq!(json["defaultWriteRoot"], r"D:\proj\comfyui");
     assert_eq!(json["permissionMode"], "ask");

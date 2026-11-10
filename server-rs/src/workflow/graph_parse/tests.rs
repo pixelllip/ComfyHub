@@ -1,4 +1,4 @@
-//! `graph_parse` 的单元测试（主体代码在 [`graph_parse`](super) —— 2026-09-30 按用户要求与主体分离）。
+//! `graph_parse` 的单元测试（主体代码在 [`graph_parse`](super) —— 与主体分离）。
 //!
 //! `use super::*;` 照旧：子模块能看见父模块的私有项，所以用例一行都不用改。
 
@@ -482,7 +482,7 @@ fn longest_text_fallback_takes_the_first_on_ties() {
 
 /// 运行时生成的正向提示词：图里只有空槽，最终文本在 `/history` 的 `outputs` 里。
 ///
-/// 真机形状（用户 2026-10-25 的 `test_00901_.png`）：
+/// 真机结构（来自 `test_00901_.png`）：
 /// `KSampler.positive → CLIPTextEncode.text → PreviewAny.source → ComfySwitchNode → TextGenerate`。
 #[test]
 fn final_positive_reads_the_runtime_output() {

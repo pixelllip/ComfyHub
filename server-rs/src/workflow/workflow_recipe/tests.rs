@@ -1,4 +1,4 @@
-//! `workflow_recipe` 的单元测试（主体代码在 [`workflow_recipe`](super) —— 2026-09-30 按用户要求与主体分离）。
+//! `workflow_recipe` 的单元测试（主体代码在 [`workflow_recipe`](super) —— 与主体分离）。
 //!
 //! `use super::*;` 照旧：子模块能看见父模块的私有项，所以用例一行都不用改。
 
@@ -1301,7 +1301,7 @@ fn 同名且实例能加载才自动写覆盖键() {
     assert!(report.ready);
     // 角色是**按清单里那个文件所在的目录推**的（不用调用方猜）
     assert_eq!(report.bindings[0].role.as_deref(), Some("diffusion_models"));
-    // 没动的槽位照样列出来（用户看得见"还有哪些是原值"）
+    // 未改动的槽位同样列出（可看出"还有哪些保持原值"）
     assert!(report
         .untouched
         .iter()

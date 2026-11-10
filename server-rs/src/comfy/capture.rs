@@ -80,7 +80,7 @@ const KEY_CAPTURE: &str = "capture.config";
 ///
 /// ⚠ 发布包/源码树两条路的默认值来自脚本传的环境变量（Kotlin 侧是 `AppConfig`），
 /// 所以这里也认 `COMFYHUB_COMFY_URL` / `COMFYHUB_COMFY_OUTPUT` ——
-/// 否则 Rust 版会在"用户还没在设置页改过"时给出一份与 Kotlin 不同的默认值。
+/// 否则 Rust 版会在"设置页尚未修改过"时给出一份与 Kotlin 不同的默认值。
 pub fn capture_config(state: &AppState) -> Result<CaptureConfig, ApiError> {
     let raw: Option<String> = state.with(|conn| {
         Ok(conn
@@ -164,7 +164,7 @@ fn normalize(config: CaptureConfig) -> CaptureConfig {
             .output_dir
             .map(|d| d.trim().to_string())
             .filter(|d| !d.is_empty()),
-        // 夹到合法区间：轮询太快会把 ComfyUI 问崩，太慢用户以为坏了
+        // 夹到合法区间：轮询太快会使 ComfyUI 负载过高，太慢会被误认为故障
         poll_seconds: config.poll_seconds.clamp(1, 600),
         auto_tag: config.auto_tag.trim().to_string(),
         max_per_poll: config.max_per_poll.clamp(1, 500),
