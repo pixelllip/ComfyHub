@@ -25,7 +25,7 @@
 //!
 //! # 2026-09-27：`ai_runs` / `ai_tool_calls` **进同步范围**（总纲 §7 待定项 1 拍板）
 //!
-//! 用户的原话是"进同步"。理由是**手机要能显示桌面那次 Run 的工具过程**（跑过哪些工具、
+//! 需求原文是"进同步"。依据是**手机需能显示桌面那次 Run 的工具过程**（跑过哪些工具、
 //! 成没成、花了多久）—— 那件事只有这两张表有；`ai_run_events`（62 万行调试日志）照旧不进来。
 //!
 //! 三条连带后果（都别踩）：
@@ -60,7 +60,7 @@ pub const SYNCED: &[&str] = &[
     "ai_message_parts",
     "ai_attachments",
     "capture_runs",
-    // 2026-09-27 用户拍板（§7 待定项 1 = 进）：手机要能显示桌面那次 Run 的工具过程
+    // 已确定（§7 待定项 1 = 进）：手机需能显示桌面那次 Run 的工具过程
     "ai_runs",
     "ai_tool_calls",
 ];
@@ -153,7 +153,7 @@ pub fn manifest(state: &AppState) -> Result<SyncManifest, ApiError> {
             if exists.is_none() {
                 continue;
             }
-            // 表名来自**编译期常量白名单**（不是用户输入），所以 format! 不是注入面
+            // 表名来自**编译期常量白名单**（不是外部输入），因此 format! 不构成注入面
             let count: i64 =
                 conn.query_row(&format!("SELECT COUNT(*) FROM {name}"), [], |row| {
                     row.get(0)

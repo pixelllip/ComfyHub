@@ -1,4 +1,4 @@
-//! `workflow_fit` 的单元测试（主体代码在 [`workflow_fit`](super) —— 2026-09-30 按用户要求与主体分离）。
+//! `workflow_fit` 的单元测试（主体代码在 [`workflow_fit`](super) —— 与主体分离）。
 //!
 //! `use super::*;` 照旧：子模块能看见父模块的私有项，所以用例一行都不用改。
 
@@ -18,7 +18,7 @@ fn graph(pairs: Vec<(&str, Value)>) -> Map<String, Value> {
     m
 }
 
-// --- 用户现场：参考图 ---------------------------------------------------
+// --- 实际情形：参考图 ---------------------------------------------------
 
 #[test]
 fn 用户没给图时工作流里的_load_image_必须报成缺图() {
@@ -460,7 +460,7 @@ fn 缺模型时给出该搜什么_装到哪_以及本机沾边但不够像的那
 
 #[test]
 fn 沾边的要报出来_只共用一个通用词的不算替代品() {
-    // 报错的名字比不报更糟：用户看到"本机有个 sd15.safetensors"会以为那就是他的模型，
+    // 报错名称比不报更差：看到"本机有个 sd15.safetensors"会误认为那就是目标模型，
     // 而它跟 krea2TurboInt8 毫无关系。所以"沾边"要有下限（分数 + 至少一个 ≥3 字的公共词）。
     let mut inv = inventory_with(&["sd15.safetensors", "xl_base_1.0.safetensors"]);
     for m in inv.models.iter_mut() {
