@@ -17,7 +17,7 @@ class AiCredentialStatus {
   ///
   /// ⚠ `keystore` **只在手机上出现**，而且它绝不能与 `managed` 混为一谈：
   /// 桌面的密钥**不下行**（总纲 §3.3：`ai_providers` 不同步），
-  /// 混了用户就会以为"桌面配过、手机也能用" —— 而手机上其实一把都没有。
+  /// 混用会让"桌面配过、手机也能用"的假设成立，而手机上实际没有任何密钥。
   final String source;
   final bool writable;
 
@@ -88,15 +88,15 @@ enum AiApi {
 
 /// 思考强度（AIH-056）。
 ///
-/// "等级"是给用户看的，**能不能选、发什么值由模型目录决定**：
+/// "等级"用于界面显示；**可选范围与发送值由模型目录决定**：
 /// 模型声明了 `thinkingEfforts` 就只显示其中的等级；没声明推理能力就完全不给选。
 ///
 /// 等级表与 pi-ai / DSH 对齐：`默认 → 极低 → 低 → 中 → 高 → 极高 → 最大`。
-/// 前沿模型常常只声明到"极高"（没有 `max`），少了这一档就只能把用户的选择压回"高"。
+/// 前沿模型常常只声明到"极高"（没有 `max`），缺少该档位时选择会被压回"高"。
 enum AiReasoningEffort {
   /// 最低档：**不指定思考等级**，交给网关自己决定。
   ///
-  /// 2026-09-20 由「关闭」改名而来（用户报的 bug：选了「关闭」却仍然在思考）。
+  /// 由「关闭」改名而来：原名会误示不思考，实际仍取决于网关默认。
   /// 真机核对（本机在用的 command-code-goat 网关）表明这个前提是错的：
   ///
   ///  · 它的 `reasoning_effort` 只认 `low|medium|high|xhigh|max`（报错原文），**没有 off**；
@@ -113,7 +113,7 @@ enum AiReasoningEffort {
   off('off', '默认', hint: '不发思考参数，由网关决定，有的网关（如聚合站）仍会思考'),
   /// 关闭思考：**真的发一个关闭取值**，不是"什么都不发"。
   ///
-  /// 2026-11-09 用户报「没有关闭思考的档位」—— 之前只有 [off]（发空参数），
+  /// 此前只有 [off]（空参数），对默认开启思考的网关无法关闭。
   /// 对默认开思考的网关（DeepSeek）等于关不掉。取值来自模型目录里声明的 `off`
   /// （内置规则与老库都这么存）或 `disabled` 键：DeepSeek 是 `none`，落到
   /// `thinking.type=disabled`（completions）或 `reasoning.effort=none`（Responses）。
@@ -129,7 +129,7 @@ enum AiReasoningEffort {
   const AiReasoningEffort(this.wire, this.label, {this.hint});
 
   /// 线上 / 入库用的值。**`off` 这个名字保留**：它是数据库与 API 里的既有取值，
-  /// 改它要动历史 Run 与各地图里的 `off` 键，而用户看到的是 [label]「默认」。
+  /// 改它要动历史 Run 与各地图里的 `off` 键，而界面显示的是 [label]「默认」。
   final String wire;
   final String label;
 
@@ -391,13 +391,13 @@ class AiModel {
 
   /// 可选的思考档位（固定顺序：默认 → 关闭 → 极低 → 低 → 中 → 高 → 极高 → 最大）。
   ///
-  /// **「默认」永远可选**（用户要求："允许我默认不指定思考强度，不影响模型声明"）：
+  /// **「默认」永远可选**：
   /// 它不发任何思考参数、任何网关都成立，所以不要求模型在 `thinkingEfforts` 里声明 `off`
-  /// —— 否则"只想安静地问一句"的用户得先去改模型声明，这是本末倒置。
+  /// —— 否则不指定思考等级时需先修改模型声明。
   /// **但它不承诺"不会思考"**：网关若默认开思考，它照样会思考（看 [AiReasoningEffort.off]）。
   ///
-  /// **「关闭」只在模型声明了关闭取值时出现**（[canDisableThinking]，2026-11-09 用户报
-  /// 「没有关闭思考的档位」）：这一档会真的发 `none` / `disabled`，没声明就发等于赌网关认不认。
+  /// **「关闭」只在模型声明了关闭取值时出现**（[canDisableThinking]；缺少该档位时
+  /// 无法关闭思考）：这一档会发送 `none` / `disabled`，未声明时发送等于依赖网关识别。
   /// 真正的思考档位仍然**只列模型声明过的**，不猜、不降级（AIH-056 第 2 条）。
   List<AiReasoningEffort> get selectableEfforts {
     if (!reasoning) return const [];
@@ -411,7 +411,7 @@ class AiModel {
     ];
   }
 
-  /// 该等级的线上表达（网关改名时显示给用户看）。数字表示 Anthropic 的思考预算。
+  /// 该等级的线上表达（网关改名时用于界面显示）。数字表示 Anthropic 的思考预算。
   /// 「关闭」没有自己的键，读的是 `off` / `disabled` 两个历史键（见 [disabledEffortWire]）。
   String? effortWireValue(AiReasoningEffort effort) =>
       effort == AiReasoningEffort.disabled
@@ -420,7 +420,7 @@ class AiModel {
   AiThinkingFormat? get thinkingFormatEnum =>
       AiThinkingFormat.parse(thinkingFormat);
 
-  /// 能力来源提示：让用户知道这个声明是人填的还是探测来的（AIH-011）。
+  /// 能力来源提示：标明该声明来自人工填写还是探测（AIH-011）。
   String get capabilitySourceLabel => switch (capabilitySource) {
     'builtin' => '内置',
     'discovered' => '探测所得',
@@ -454,14 +454,14 @@ class AiProviderTestResult {
         modelCount: (json['modelCount'] as num?)?.toInt(),
       );
 
-  /// 给用户看的完整说明：稳定错误码在前，便于报障时对齐。
+  /// 完整说明：稳定错误码在前，便于报障时对齐。
   String get display => errorCode == null ? message : '[$errorCode] $message';
 }
 
 /// 模型发现候选（AIH-009）。
 ///
 /// 能力字段是**预填建议**而非断言：`capabilitySource` 说明判断从哪来
-/// （接口声明 / 内置目录 / 未识别），用户加入前可以改。
+/// （接口声明 / 内置目录 / 未识别），加入前可以修改。
 class AiModelCandidate {
   final String id;
   final String displayName;
@@ -517,7 +517,7 @@ class AiModelCandidate {
         capabilityNote: json['capabilityNote']?.toString(),
       );
 
-  /// 能力来源的中文标签 —— 必须让用户看得出"这是谁说的"。
+  /// 能力来源的中文标签 —— 必须标明来源。
   String get sourceLabel => switch (capabilitySource) {
     'discovered' => '接口声明',
     'builtin' => '内置目录',
@@ -780,9 +780,9 @@ class AiTokenUsage {
 
   /// 大数字压缩成 `1.2K` / `15K` / `2.5M` / `1.1B`，聊天里不占地方。
   ///
-  /// **单位逐级上台阶 K → M → B**（用户 2026-09-24："当数 token 用量字过大时，
-  /// 切换 K/M/B 的单位"）。老实现只有 `k` 一档，`1_500_000` 会写成 **`1500k`** ——
-  /// 四位数还带单位，比不压缩还长，正是用户看到的那一幕。
+  /// **单位逐级上台阶 K → M → B**：token 用量数值过大时切换 K/M/B 单位。
+  /// 旧实现只有 `k` 一档，`1_500_000` 会写成 **`1500k`** —— 四位数仍带单位，
+  /// 比不压缩更长。
   ///
   /// 小数位口径沿用老实现：**换算后整数位不到两位才留一位小数**（`1.2K` / `15K`），
   /// 正好整数的尾巴（`2.0K`）去掉，别写成 `2.0K` 白占一个字。
@@ -976,7 +976,7 @@ String stripStepMarkers(String text) {
 /// 后端给的 `parts` 已经是权威的有序块，这里只是把**相邻的同类块合并**成段，
 /// 免得一个气泡里冒出十几个碎段。
 ///
-/// `step` 段（用户建议 2026-09-28）的 `text` 是**环节名**（后端从 `[步骤]…[/步骤]` 里摘的，
+/// `step` 段的 `text` 是**环节名**（后端从 `[步骤]…[/步骤]` 里摘的，
 /// 只可能是那六个之一）：界面按它把这一环节里的工具卡折进一组。
 class AiMessageSegment {
   /// reasoning / text / step（工具卡的位置占位是 `tool_call`，`text` 是 callId）
@@ -1089,10 +1089,9 @@ class AiMessage {
   bool get isUser => role == 'user';
 }
 
-/// 用户发消息时附带的一张卡 / 一个技能（只在 `POST .../runs` 与用户消息 parts 里出现）。
+/// 发送消息时附带的一张卡 / 一个技能（只在 `POST .../runs` 与消息 parts 中出现）。
 ///
-/// 为什么要带 snapshot：卡和技能都可能在下一次打开会话之前被改掉，而用户点开
-/// 这条消息想核对的是"我**当时**发出去的是哪一版"。
+/// 携带 snapshot：卡和技能可能在下次打开会话前被修改，快照用于核对发送时的版本。
 class OutgoingMention {
   const OutgoingMention({
     required this.kind,
@@ -1119,7 +1118,7 @@ class OutgoingMention {
   };
 }
 
-/// 一条要发出去的用户消息：给模型的正文 + 用户看到的正文 + 卡片/技能引用。
+/// 一条要发送的消息：给模型的正文 + 界面显示的正文 + 卡片/技能引用。
 class OutgoingMessage {
   const OutgoingMessage({
     required this.text,
@@ -1134,7 +1133,7 @@ class OutgoingMessage {
   /// 给模型的完整正文（含卡片块）。
   final String text;
 
-  /// 用户看到的正文（不含卡片块，也不含 `/技能` 那个标记）。
+  /// 界面显示的正文（不含卡片块，也不含 `/技能` 标记）。
   final String displayText;
 
   final List<OutgoingMention> mentions;
@@ -1239,7 +1238,7 @@ class AiAttachmentUploadResult {
 
 /// AI 附件缓存统计（`GET /api/ai/attachments/stats`）。
 ///
-/// 裁图 / 搜图 / 用户上传都落成附件；这里只做展示，**清理规则在后端**
+/// 裁图 / 搜图 / 上传都落成附件；这里只做展示，**清理规则在后端**
 /// （被消息 / 提问引用的一个都不删，未引用的留 `graceDays` 天，超 `maxBytes` 淘汰）。
 class AiAttachmentCacheStats {
   final int count;
@@ -1415,7 +1414,7 @@ class AiSkill {
   final String? whenToUse;
   final String? version;
 
-  /// builtin（项目自带、只读）/ user（用户或 AI 注册、可删）
+  /// builtin（项目自带、只读）/ user（人工或 AI 注册、可删）
   final String source;
   final bool enabled;
   final bool userInvocable;
@@ -1475,17 +1474,17 @@ class AiSkill {
 
   bool get isBuiltin => source == 'builtin';
 
-  /// 列表上的来源徽标：内置 / 本机 / 用户。
+  /// 列表上的来源徽标：内置 / 本机 / 自定义。
   ///
-  /// `local` = 手机本机投放口里那份（桌面连不上时的回落）。它不是"用户自建"——
-  /// 用户自建的 skill 在电脑上，手机只读副本；两者的处置（能不能改、能不能删）不一样。
+  /// `local` = 手机本机投放口里那份（桌面连不上时的回落）。它不属于"自建"——
+  /// 自建的 skill 在电脑上，手机只读副本；两者的处置（能否修改、能否删除）不同。
   String get sourceLabel => switch (source) {
     'builtin' => '内置',
     'local' => '本机',
     _ => '用户',
   };
 
-  /// 有没有需要提醒用户的问题（不合法或冲突）。
+  /// 有没有需要提示的问题（不合法或冲突）。
   bool get hasWarning =>
       (validationError ?? '').isNotEmpty || (conflict ?? '').isNotEmpty;
 
@@ -1526,7 +1525,7 @@ class AiSkillDetail {
   );
 }
 
-/// skills 投放口的位置（用户建议：不要「从 DSH 导入」按钮，改成"往文件夹里拷"）。
+/// skills 投放口的位置（不提供「从 DSH 导入」按钮，改为向文件夹复制）。
 ///
 /// 两种运行布局都由后端算好：源码树是 `<项目根>\storage\ai\skills`，
 /// 发布包是 `<根>\storage\ai\skills`（便携式）。
@@ -1579,7 +1578,7 @@ class AiSkillRescanResult {
             const [],
       );
 
-  /// 要给用户看的话：**失败条目也要说**，不能只报"成功 N 个"。
+  /// 界面提示文案：**失败条目也要报告**，不能只报"成功 N 个"。
   String get summary {
     final parts = <String>['扫描到 ${skills.length} 个 skill'];
     if (registered > 0) {
@@ -1599,7 +1598,7 @@ class AiMemory {
   final int entryCount;
   final int maxChars;
 
-  /// 条数上限（用户要求：条数太多，查找 / 改动 / 删除都会变难）
+  /// 条数上限（条数过多会增加查找 / 修改 / 删除难度）
   final int maxEntries;
 
   const AiMemory({
@@ -1642,8 +1641,8 @@ class AiMemory {
 /// 一张卡（角色卡 / 画风卡）的公共形状。
 ///
 /// 每张卡只有**一版正面提示词** [prompt]：整段自然语言。
-/// 2026-10-24 用户口径：**不再保留 Danbooru tag 版** —— 一句话描述比 tag 栈更耐改
-/// （换底模 / 换 tag 体系都不用重写），要 tag 版时让 AI 按用户要求当场另翻一版即可。
+/// **不保留 Danbooru tag 版**：自然语言描述比 tag 栈更稳定（换底模 / 换 tag 体系
+/// 都无需重写）。需要 tag 版时由 AI 按要求即时转换。
 /// 老库里存着的 tag 版由后端迁移转成自然语言灌进 [prompt]（已有正文的卡不动）。
 ///
 /// [examples] 是这张卡的**示例产物**（画廊里的 mediaId）：
@@ -1737,7 +1736,7 @@ class AiToolInfo {
   /// allow / ask / deny
   final String access;
 
-  /// 是否被用户设置覆盖过（没覆盖 = 出厂默认）。
+  /// 是否被设置覆盖过（未覆盖 = 出厂默认）。
   final bool overridden;
 
   const AiToolInfo({
@@ -1789,8 +1788,8 @@ class AiToolPolicy {
 
   /// **自动发现**的只读目录（本机 ComfyUI 的安装 / 共享目录）。
   ///
-  /// 与 [readRoots] 分开：那一份是用户配的（可加可删），这一份是后端每次现算的探测结果
-  /// （用户 bug ④："应该自动发现 comfy 目录，给 comfy 的目录默认白名单"）。
+  /// 与 [readRoots] 分开：前者由配置提供（可增删），后者是后端每次计算的探测结果
+  /// （自动发现 ComfyUI 目录，并加入默认白名单）。
   /// 界面上只展示、不编辑。
   final List<String> autoReadRoots;
 
@@ -1804,7 +1803,7 @@ class AiToolPolicy {
   /// 出厂默认的写入目录：界面上要大声说明"默认只能写这里"。
   final String? defaultWriteRoot;
 
-  /// 权限档（用户建议 ⑤）：`ask` 默认，需要审批的工具要用户点批准；
+  /// 权限档：`ask` 默认，需要审批的工具需手动批准；
   /// `full` 自动允许（无需批准），见 [modeFullLabel]。
   final String permissionMode;
 
@@ -1813,9 +1812,8 @@ class AiToolPolicy {
 
   /// 界面上给两档起的名字。
   ///
-  /// `full` 以前叫「完全权限」，用户指出这个名字不准确：它只免掉"问一下"，
-  /// 并没有放开文件夹白名单。所以改叫「自动允许（无需批准）」——
-  /// 名字直接说清它做了什么、没做什么（用户建议）。
+  /// `full` 原名为「完全权限」，该名称不准确：它只免除审批，并未放开文件夹白名单。
+  /// 现名「自动允许（无需批准）」直接说明其范围。
   static const modeAskLabel = '询问';
   static const modeFullLabel = '自动允许（无需批准）';
 
@@ -1891,9 +1889,9 @@ class AiToolPolicy {
       : '默认只能写 $defaultWriteRoot，其它位置一律拒绝。';
 }
 
-/// NSFW 内容设置（2026-09-20 用户要求：把那段"越狱"系统提示词做成开关 + 预览图模糊选项）。
+/// NSFW 内容设置：把"越狱"系统提示词做成开关，并提供预览图模糊选项。
 ///
-/// 两个开关**放一起**（用户原话），而且**真源在后端**（`app_settings` 的 `ai.nsfw`）：
+/// 两个开关**放在一起**，**真源在后端**（`app_settings` 的 `ai.nsfw`）：
 /// [enabled] 决定后端拼系统提示词时注不注入那一段，前端自己存一份就会出现
 /// "界面显示开着、后端其实没注入"这种自相矛盾的状态。
 ///
@@ -1935,11 +1933,10 @@ class AiNsfwSettings {
   );
 }
 
-/// AI 向用户提的一个问题（用户建议 ⑥，2026-09-20："让 AI 像 deepseek harness 一样
-/// 支持提问功能，回答结束时不中断当前对话"）。
+/// AI 提出的一个问题（支持提问功能，回答结束后不中断当前对话）。
 ///
-/// 它与「需要批准的工具」长得像、语义完全不同：批准是"允不允许"，提问是"缺哪条信息"；
-/// 而且**这次 Run 不会因此结束** —— 用户答完，答案作为工具结果喂回模型，同一个回复接着做。
+/// 它与「需要批准的工具」语义不同：批准是"允不允许"，提问是"缺少哪条信息"；
+/// 而且**这次 Run 不会因此结束** —— 回答作为工具结果返回模型，同一回复继续执行。
 class AiQuestion {
   final String questionId;
   final String runId;
@@ -1948,7 +1945,7 @@ class AiQuestion {
 
   /// **发起这次提问的工具调用号**（`tool.requested` 里的 `callId`，形如 `call_00_…`）。
   ///
-  /// 必须与 [questionId] 分开存（用户 bug 2026-09-21 的根因）：
+  /// 必须与 [questionId] 分开存储：
   /// `user.question` 事件里只有 `questionId`（后端生成的 UUID），**没有 `callId`**；
   /// 而气泡里那张卡的"槽位"是按 `callId` 排的（`tool.requested` 先到）。
   /// 两者混用就会出现"工具卡在跑、提问卡消失、输入区不接管"——
@@ -1974,20 +1971,20 @@ class AiQuestion {
   /// 这里只拿结果地址 —— 前端不碰解码、也不自己拼附件路径。
   final String? imageUrl;
 
-  /// 允许自己敲一段（后端目前恒为 true —— 选项不一定对得上用户的需求）。
+  /// 允许自由输入（后端目前恒为 true —— 选项不一定覆盖实际需求）。
   final bool allowFreeText;
 
   /// 可选小标题（例如「参考图」「输出尺寸」）。
   final String? header;
 
-  /// 用户已经答过（界面切成"已回答"）。
+  /// 已作答（界面切换为"已回答"）。
   final bool answered;
   final String? answer;
   final int? optionIndex;
 
   /// 同一张提问卡里的第几题（0 基）与总题数；单问时是 `0 / 1`。
   ///
-  /// 2026-09-22 用户拍板的形态（照 DeepSeek Harness）：**一张卡装多个问题、分页、
+  /// 形态参照 DeepSeek Harness：**一张卡装多个问题、分页、
   /// 可逐题跳过、最后一页按钮变「提交」、答案可为空**。同一次 `ask_user_question`
   /// 调用生成的多条共享 [groupId]，界面按它把这几条画成同一张卡的 N 页。
   final int index;
@@ -1999,7 +1996,7 @@ class AiQuestion {
   /// 多选题：选项可以多选（界面画复选框）。后端上限 5 个选项。
   final bool multiSelect;
 
-  /// 多选题用户勾了哪几个（自己敲的自由文本仍走 [answer]）。
+  /// 多选题已勾选的选项（自由文本仍走 [answer]）。
   final List<int> optionIndexes;
 
   /// 分组键：老数据 / 单问没有 `groupId`，就用 `questionId` 归一组。
@@ -2130,7 +2127,7 @@ class AiToolCallState {
 
   /// 模型写的一句"为什么调用"（后端从参数里摘出来，**不会传给工具**）。
   ///
-  /// 用户 2026-10-21：工具卡不要只显示 `comfy_load_workflow` 这种机器名。
+  /// 工具卡不只显示 `comfy_load_workflow` 这类机器名。
   /// 有它就把它当标题（一眼看出这次在干什么），工具名退到副标题。
   final String? reason;
   final AiToolCallStatus status;
@@ -2147,23 +2144,23 @@ class AiToolCallState {
 
   /// 这次工具调用**产出的画廊产物 id**（`comfy_submit` 的 mediaIds）。
   ///
-  /// 用于在回复末尾贴「画廊入口卡」（用户建议 ⑤）：AI 真的生成了东西，
-  /// 就该在回复下面给一个能点开看详情的入口，而不是让用户自己去画廊里翻。
+  /// 用于在回复末尾贴「画廊入口卡」：生成产物后在回复下方提供可打开详情的入口，
+  /// 不需要到画廊中查找。
   final List<int> mediaIds;
 
   /// 这次工具调用**声明为成人内容**的那几个产物 id（`comfy_submit` 的 `nsfwMediaIds`）。
   ///
-  /// 用户 bug 2026-09-20：模糊开关一开，回复里的产物卡把**所有**缩略图都糊了。
+  /// 模糊开关开启时，回复中的产物卡曾把**所有**缩略图都打码。
   /// 现在只糊 AI 明说过的那几张（它提交时写了 `nsfw=true`），其余正常内容一律不糊。
   final List<int> nsfwMediaIds;
 
   /// 这次工具调用入库的**提示词 id**（`comfy_submit` 的 `capturedPromptId`）。
   ///
-  /// 产物只是"结果图"，**生成它的那份工作流同样属于本次的产物**（用户建议 ①）：
+  /// 产物只是"结果图"，**生成它的那份工作流同样属于本次的产物**：
   /// 有了它就能在回复末尾直接打开这次真正跑过的工作流 / 把它拖回 ComfyUI 复现。
   final int? promptId;
 
-  /// `ask_user_question` 提的那个问题（用户建议 ⑥）；别的工具为 null。
+  /// `ask_user_question` 提的那个问题；其他工具为 null。
   ///
   /// 有值时气泡里画的**不是工具卡而是提问卡**（带按钮 / 输入框），
   /// 因为"等你回答"和"等你批准"是两件事，UI 不能混。
@@ -2180,7 +2177,7 @@ class AiToolCallState {
   /// `layout_propose` 给出的候选布局（2026-11-03）。
   ///
   /// 与 [mediaIds] 同源：只认工具**结构化结果**（`jsonPayload.layoutTemplates`），
-  /// 不解析正文。回复末尾因此能画一张"2D 布局模板"卡，而不是让用户去别处找。
+  /// 不解析正文。回复末尾因此能画一张"2D 布局模板"卡，不需要到其他位置查找。
   final List<LayoutCandidate> layoutCandidates;
 
   /// 这张卡要画几题：优先用 [questions]，没有就退回 [question]。
@@ -2188,7 +2185,7 @@ class AiToolCallState {
       ? questions
       : (question == null ? const <AiQuestion>[] : [question!]);
 
-  /// 工具名 → 用户看得懂的"用途"（没有 `reason` 时至少不显示机器名）。
+  /// 工具名 → 可读的"用途"（没有 `reason` 时至少不显示机器名）。
   ///
   /// ⚠ 这张表只是**界面兜底**：模型写了 `reason` 就用它，那张表不参与任何执行 / 安全判定。
   /// 新增工具时在这里补一行即可；漏了会退回工具名（不会崩）。
@@ -2412,7 +2409,7 @@ class AiToolCallState {
         final i = indexOf[id];
         final prev = i == null ? null : out[i];
         // 提问工具的结果里记着"问了什么、答了什么"：重开 App 之后那张卡要照原样显示
-        // （已完成状态），不能变成一张空白卡片（用户建议 ⑥）。
+        // （已完成状态），不能显示为空白卡片。
         final asked = map['question'] is Map
             ? AiQuestion.fromJson(
                 Map<String, dynamic>.from(map['question'] as Map),
@@ -2497,7 +2494,7 @@ class AiToolCallState {
     layoutCandidates: layoutCandidates ?? this.layoutCandidates,
   );
 
-  /// 待用户批准：气泡上要出「批准 / 拒绝」。
+  /// 等待批准：气泡上显示「批准 / 拒绝」。
   bool get needsApproval => status == AiToolCallStatus.pendingApproval;
 
   bool get isRunning => status == AiToolCallStatus.running;
@@ -2511,8 +2508,8 @@ class AiToolCallState {
 
   /// 工具的**结果正文**（`preview`）。
   ///
-  /// 与 [noteText] 分开是用户 2026-10-25 的要求：工具卡里"参数"和"结果"各占一块，
-  /// 失败原因作为第三块"说明"—— 不许像以前那样把 `error` 顶到结果的位置上。
+  /// 与 [noteText] 分开：工具卡中"参数"与"结果"各占一块，
+  /// 失败原因作为第三块"说明"；`error` 不得放到结果位置。
   String get resultText => (preview ?? '').trim();
 
   /// 失败 / 拒绝的**说明**（稳定错误码或消息）；成功时为空。
@@ -2528,7 +2525,7 @@ class AiToolCallState {
 }
 
 // ---------------------------------------------------------------------------
-//  ComfyUI 提交任务与实时进度（用户建议 ① 与"其他建议"第 1 条）
+//  ComfyUI 提交任务与实时进度
 // ---------------------------------------------------------------------------
 
 /// 一次提交给 ComfyUI 的运行（后端 `ComfySubmission`）。

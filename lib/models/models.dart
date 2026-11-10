@@ -9,10 +9,10 @@ library;
 
 /// `GET /api/system/confinement` —— **"这个后端能不能写工作区外"**。
 ///
-/// 为什么界面上要有它（2026-09-29 用户 bug）：受限这件事原本只有 `doctor` 与工具文案会说，
-/// 界面上看不到，于是模型如实转述成"input 目录权限不够"，用户去改 ACL —— 白忙一场。
+/// 该状态需在界面显示：此前只在 `doctor` 与工具文案中出现，界面不可见，
+/// 模型转述为"input 目录权限不够"，排查方向因此偏离。
 /// 受限是**环境事实**，得让人一眼看见；而且必须连**判据**一起给
-/// （[imageInsideProject]：后端映像落在项目内），否则用户没法自查。
+/// （[imageInsideProject]：后端映像落在项目内），供自行核对。
 class ConfinementInfo {
   final bool restricted;
 
@@ -23,7 +23,7 @@ class ConfinementInfo {
   ///
   /// ⚠ 别把这句说成"在工作区内"：源码树布局下两者相等，但发布包里根目录就是包目录、
   /// 并不是被沙箱框住的地方（实测那里 `restricted=false`）。所以文案只说"落在运行根目录里"，
-  /// 让用户自己对照自己的布局。
+  /// 供对照布局。
   final bool imageInsideProjectRoot;
 
   /// 写不进的那些（人话形式：`产物目录 D:\…（permissiondenied（os error 5））`）
@@ -65,12 +65,12 @@ class ConfinementInfo {
   /// 一句话说明"为什么" —— **判据在前、结论在后**，别反过来。
   ///
   /// 「后端被关在项目里」那种说法太含糊（听着像 ComfyUI 出问题了），
-  /// 说清是**后端映像落在运行根目录里**用户才能自己去核对。
+  /// 说明**后端映像落在运行根目录里**，供自行核对。
   String get headline => restricted
       ? (imageInsideProjectRoot ? '后端映像落在运行根目录里，写不进项目外的目录' : '后端写不进项目外的目录')
       : '后端可以正常读写项目外';
 
-  /// 给用户看的细节（判据 + 写不进的目录）。
+  /// 界面细节（判据 + 写不进的目录）。
   String get detail {
     final lines = <String>[];
     if (serverImage != null && serverImage!.isNotEmpty) {
@@ -93,7 +93,7 @@ class ConfinementInfo {
 ///
 /// 存在的理由（2026-11-09）：danbooru 挂维护、Cloudflare 回 503，而工具报错只写
 /// "暂时不可用"，看着就像"本项目没吃代理"。真相是**路由是通的、503 是对方回的** ——
-/// 这件事得在界面上看得见，用户才能自己核对，而不是靠猜。
+/// 该状态必须在界面可见，供自行核对。
 class OutboundInfo {
   /// `proxy` = 公网走代理；`direct` = 公网直连
   final String route;
@@ -342,7 +342,7 @@ class Prompt {
 
   /// 发送模式：`keep`（默认，照原样带上负面提示词）/ `positive_only`。
   ///
-  /// **有些 turbo 模型不认负面提示词**（用户 2026-10-11），所以预设要能表达
+  /// **部分 turbo 模型不支持负面提示词**，因此预设需要能表达
   /// "我只发正面"。这是**预设的属性**（写提示词时的意图）——
   /// 与"目标工作流认不认负面"是两件事，后者在提交那条路上兜底检查。
   final String negativeMode;
@@ -414,7 +414,7 @@ class Prompt {
     ),
     notes: j['notes'] as String?,
     // 老后端没有这个键时退回 keep —— **绝不能默认成只发正面**
-    // （那会悄悄丢掉用户的负面提示词，而 turbo 之外的模型很吃负面）
+    // （否则会静默丢失负面提示词，非 turbo 模型对此依赖较强）
     negativeMode: (j['negativeMode'] as String?) ?? 'keep',
     favorite: (j['favorite'] as bool?) ?? false,
     source: j['source'] as String?,
@@ -556,10 +556,10 @@ class MediaAsset {
   final bool hasWorkflow;
   final bool favorite;
 
-  /// 是否成人内容（用户 bug 2026-09-20）。
+  /// 是否成人内容。
   ///
   /// **只决定预览图打不打码**，不影响能不能看：AI 用 `comfy_submit` 的 `nsfw`
-  /// 声明过、或用户手动标记过才为 true。默认 false —— 以前没有这一项，
+  /// 声明过、或手动标记过才为 true。默认 false —— 此前没有这一项，
   /// 「NSFW 预览图模糊」开关一开会把风景图、甚至音频封面全都糊住。
   final bool nsfw;
   final String? notes;
@@ -688,7 +688,7 @@ class MediaAsset {
 ///
 /// 两种集合本来就是两种东西，界面上必须分得清：
 /// * `auto` = 算法按提示词分出来的（**没有名字**，可以重新算）；
-/// * `manual` = 用户建的、或者被用户改过的（有名字，算法不再动它）。
+/// * `manual` = 手动创建或修改过的（有名称，算法不再改动）。
 class MediaCollection {
   final int id;
   final String kind;
@@ -696,14 +696,14 @@ class MediaCollection {
   /// `auto` / `manual`
   final String origin;
 
-  /// 用户起的名字。算法分出来的为 null。
+  /// 手动填写的名称。算法分组为 null。
   final String? title;
   final int size;
 
   /// 选择器里给这一组显示一张封面（第一张成员的 media id）。
   ///
   /// 没有它时选择器只能显示"未命名集合（3 张）"——几个未命名集合长得一模一样，
-  /// 用户根本分不出要把图移进哪一个（2026-11-07 用户："至少给我一个预览吧？"）。
+  /// 无法判断应移入哪一个集合（需要预览图）。
   final int? coverMediaId;
 
   /// 封面是不是 NSFW（选择器里照样打码，别为了"看一眼封面"把规则破了）。
@@ -723,14 +723,14 @@ class MediaCollection {
 
   /// 界面上显示的名字：手动集合用人起的名字；没有名字时——
   /// * `manual`（老版本建的 / 后端还没补默认名）：如实说「未命名集合」；
-  /// * `auto`（算法分组）：说「算法分组」，别让人以为是用户起的。
+  /// * `auto`（算法分组）：显示「算法分组」，避免误认为手动命名。
   String get label {
     final named = title?.trim() ?? '';
     if (named.isNotEmpty) return named;
     return isManual ? '未命名集合（$size 张）' : '算法分组（$size 张）';
   }
 
-  /// 装不装得下 [mediaKind]（一个集合只装一种，用户 2026-10-18 拍板）。
+  /// 是否可容纳 [mediaKind]（一个集合只装一种）。
   bool accepts(String mediaKind) =>
       kind.toUpperCase() == mediaKind.toUpperCase();
 
@@ -748,7 +748,7 @@ class MediaCollection {
 
 /// `POST /api/media/export` 的结果（2026-10-27）。
 ///
-/// 后端把原件 + 工作流 / 提示词信息按「类型目录 / 集合文件夹」写进用户选的目录，
+/// 后端把原件 + 工作流 / 提示词信息按「类型目录 / 集合文件夹」写入选定目录，
 /// 这里只带**回执**：多少条成功、多少条失败、清单落在哪。界面据此说人话，
 /// **不自己猜成功失败**。
 class MediaExportReport {
@@ -1062,11 +1062,11 @@ class CaptureStatus {
   );
 }
 
-/// ComfyUI 安装位置探测结果（用户"其他建议"第 3 条）。
+/// ComfyUI 安装位置探测结果。
 ///
-/// 发布包是便携式的：用户把包解压到哪、ComfyUI 装在哪，两边都不知道。
+/// 发布包是便携式的：包的解压位置与 ComfyUI 安装位置均不固定。
 /// 后端按特征文件（`main.py` + `comfy/` 或 `output/` + `models/`）探测，
-/// 探测结果**不会自动生效** —— 用户点「使用这个目录」才会写进配置。
+/// 探测结果**不会自动生效** —— 点「使用这个目录」后才写进配置。
 class ComfyLocation {
   /// 探测到的 ComfyUI 根目录（找不到为 null）。
   final String? home;
@@ -1074,13 +1074,13 @@ class ComfyLocation {
   /// 大概率可直接读产物的输出目录。
   final String? outputDir;
 
-  /// 从哪里找到的（给用户看的一句话）。
+  /// 来源说明（界面文案）。
   final String? source;
 
   /// 当前设置里已经生效的输出目录。
   final String? configuredOutputDir;
 
-  /// 没找到时给用户的建议。
+  /// 未找到时的提示。
   final String? note;
 
   const ComfyLocation({
@@ -1172,10 +1172,10 @@ class ImportFolderResult {
       '其中 $promptsCreated 个带内嵌工作流，已自动建提示词';
 }
 
-/// 「导入本机工作流文件」的结果（用户 bug ⑤）。
+/// 「导入本机工作流文件」的结果。
 ///
 /// 现场：`prompts` 库过去只有两个入口 —— 自动捕获（轮询 ComfyUI `/history`）与 AI 手动按路径读，
-/// 所以**首次使用时库里是空的**，而用户机器上早就存着一堆工作流（`user\<用户>\workflows`）。
+/// 所以**首次使用时库为空**，而本机已存在若干工作流（`user\<账号>\workflows`）。
 /// 设置页这颗按钮就是"一次把它们读进库"。
 class ImportWorkflowsResult {
   final List<String> dirs;
@@ -1267,7 +1267,7 @@ class ComfyWorkflowFile {
   };
 }
 
-/// `GET /api/capture/workflows` 的结果（文件清单 + 一句给用户看的话）。
+/// `GET /api/capture/workflows` 的结果（文件清单 + 界面文案）。
 class ComfyWorkflowList {
   final List<ComfyWorkflowFile> files;
   final List<String> dirs;

@@ -50,10 +50,10 @@ class LayoutCandidate {
 
 /// "把改好的布局提交回工作台"所需要的全部内容。
 ///
-/// 它同时是**画布页的返回值**与**重新提交的那条用户消息**：
+/// 它同时是**画布页的返回值**与**重新提交的消息**：
 ///
 /// * [toMessage] 拼出一段模型读得懂的正文（散文 + 带标记的 JSON）；
-/// * [tryParse] 把那条消息读回来 —— 用户消息气泡因此能画成一张布局卡
+/// * [tryParse] 把那条消息读回来 —— 消息气泡因此能显示为布局卡
 ///   （而不是一屏 JSON），点「再次修改」还能接着改**这一版**。
 class LayoutResubmit {
   const LayoutResubmit({required this.spec, this.note = ''});
@@ -67,7 +67,7 @@ class LayoutResubmit {
   final LayoutSpec spec;
   final String note;
 
-  /// 拼成一条用户消息。模型看到的是"要求 + 散文 + 规格 JSON"。
+  /// 拼成一条消息。模型看到的是"要求 + 散文 + 规格 JSON"。
   ///
   /// 散文用 `LayoutSpec.translate()` 的纯函数投影：即使模型读不懂 JSON，
   /// "谁在哪、占多大"也还在正文里。
@@ -85,10 +85,10 @@ class LayoutResubmit {
         '```json\n$payload\n```';
   }
 
-  /// 从一条用户消息里读回布局（不是这种消息 → null）。
+  /// 从一条消息里读回布局（不是这种消息 → null）。
   ///
   /// 只认 [header] + 最后一个 ```json 围栏 + `comfyhubLayout` 键：
-  /// 三个条件缺一个都当普通文本，宁可少一张卡，也不误吃用户自己贴的 JSON。
+  /// 三个条件缺一个都当普通文本，宁可少一张卡，也不误识别手动粘贴的 JSON。
   static LayoutResubmit? tryParse(String text) {
     if (!text.contains(header)) return null;
     final fence = text.lastIndexOf('```json');
