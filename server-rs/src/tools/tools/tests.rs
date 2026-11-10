@@ -1,11 +1,11 @@
-//! `tools` 的单元测试（主体代码在 [`tools`](super) —— 2026-09-30 按用户要求与主体分离）。
+//! `tools` 的单元测试（主体代码在 [`tools`](super) —— 与主体分离）。
 //!
 //! `use super::*;` 照旧：子模块能看见父模块的私有项，所以用例一行都不用改。
 
 use super::*;
 
 /// T1：`comfy_recent_successes` 必须是**已实现、只读、出厂 ALLOW** 的桌面工具
-/// （只读工具出厂就放行，不该让用户为每一次"查上次成功"点批准）。
+/// （只读工具出厂即放行，不需要为每次"查询上次成功"确认）。
 #[test]
 fn comfy_recent_successes_是只读的_allow_工具() {
     assert!(IMPLEMENTED.contains(&"comfy_recent_successes"));
@@ -38,7 +38,7 @@ fn specs_only_include_implemented_tools() {
             "{} 的 schema 必须是对象",
             spec.name
         );
-        // 用户 2026-10-21：工具卡要显示"为什么调用"。schema 里没这个可选字段，
+        // 工具卡需显示"为什么调用"。schema 中没有该可选字段，
         // 模型就算想写也会被 `additionalProperties:false` 拒掉。
         assert_eq!(
             spec.parameters["properties"]["reason"]["type"], "string",
@@ -89,7 +89,7 @@ fn specs_only_include_implemented_tools() {
 
 /// 联网额度是一条**独立的线**（Kotlin `ToolContext.webInWindow` +
 /// `ToolPolicyConfig.DEFAULT_MAX_WEB_QUERIES_PER_RUN`）：只认联网类工具、
-/// 只在**真跑成功**之后计数、用户答完提问时归零。
+/// 只在**实际执行成功**之后计数、完成作答时归零。
 ///
 /// 为什么单列一条用例：这份预算的唯一执行点在执行器里按**工具类别**判，
 /// 而"哪些工具算联网"那份映射在 `ai_settings` —— 两处一漂移，
@@ -122,7 +122,7 @@ fn 联网额度只认联网类工具且只在成功时计数() {
     );
     assert!(!session.has_web_queries_left());
 
-    // 用户真答了提问 → 联网额度也归零（与总调用额度同一档重置）
+    // 完成作答 → 联网额度也归零（与总调用额度同一档重置）
     session.reset_budget();
     assert!(session.has_web_queries_left());
     assert_eq!(session.web_queries_in_window, 0);
@@ -132,7 +132,7 @@ fn 联网额度只认联网类工具且只在成功时计数() {
 /// 那两条额度的语义是"别拿外部服务当轮询器"，而命中缓存时**一次外部请求都没发**。
 ///
 /// 为什么单列一条：这条线一漂移，表现就是"明明没打扰人家，却被告知额度用尽"
-/// （模型的手被捆住、用户看到一句 `QUERY_BUDGET_EXCEEDED`），而**不会有任何别的用例变红**。
+/// （模型被限制、界面显示一句 `QUERY_BUDGET_EXCEEDED`），且**不会有其他用例失败**。
 #[test]
 fn 命中缓存的那一次不占联网与_comfy_额度() {
     let mut session = ToolSession::default();
@@ -219,7 +219,7 @@ fn comfy_查询额度只认_comfy_类工具且只在成功时计数() {
     assert!(crate::ai::ai_settings::is_comfy_query("comfy_use_media"));
     assert!(crate::ai::ai_settings::is_comfy_query("comfy_make_mask"));
 
-    // 用户真答了提问 → 与联网同一档归零
+    // 完成作答 → 与联网同一档归零
     session.reset_budget();
     assert!(session.has_comfy_queries_left());
     assert_eq!(session.comfy_queries_in_window, 0);
@@ -274,7 +274,7 @@ fn file_tool_defaults_match_the_kotlin_registry() {
         assert_eq!(default_access(name), "ALLOW", "{name} 的出厂档");
         assert!(!is_mutating(name), "{name} 是只读的");
     }
-    // `comfy_sync_history` 会写库 → 出厂 ASK（用户点头才动）
+    // `comfy_sync_history` 会写库 → 出厂 ASK（确认后才执行）
     assert!(is_implemented("comfy_sync_history"));
     assert_eq!(default_access("comfy_sync_history"), "ASK");
     assert!(is_mutating("comfy_sync_history"));
@@ -291,9 +291,9 @@ fn file_tool_defaults_match_the_kotlin_registry() {
     assert!(is_implemented("comfy_env_report"));
     assert_eq!(default_access("comfy_env_report"), "ALLOW");
     assert!(!is_mutating("comfy_env_report"));
-    // `comfy_diagnose_workflow`（2026-10-17 用户"对于错误接线要能向用户指出"）：
+    // `comfy_diagnose_workflow`（"对于错误接线要能指出"）：
     // **只读**（读文件 / 读库 / 问一次 /object_info），出厂 ALLOW ——
-    // 它是"看一份图接得对不对"，不该每问一次都等用户点批准
+    // 它是"检查一份图接线是否正确"，不需要每次都等待确认
     assert!(is_implemented("comfy_diagnose_workflow"));
     assert_eq!(default_access("comfy_diagnose_workflow"), "ALLOW");
     assert!(!is_mutating("comfy_diagnose_workflow"));
@@ -303,7 +303,7 @@ fn file_tool_defaults_match_the_kotlin_registry() {
     assert_eq!(default_access("comfy_find_workflow"), "ALLOW");
     assert!(!is_mutating("comfy_find_workflow"));
     // `comfy_list_templates`（官方模板，2026-11-07）：**只读本机 site-packages**，
-    // 不联网、不写盘 → 出厂 ALLOW。新模型第一次用时用户的 workflows 还是空的，
+    // 不联网、不写盘 → 出厂 ALLOW。新模型首次使用时 workflows 仍为空，
     // 模板是"这个模型官方怎么跑"的唯一可靠答案，不该每查一次都等批准。
     assert!(is_implemented("comfy_list_templates"));
     assert_eq!(default_access("comfy_list_templates"), "ALLOW");
@@ -316,14 +316,14 @@ fn file_tool_defaults_match_the_kotlin_registry() {
         assert!(!is_mutating(name), "{name} 只报不改");
     }
     // 审核 + 摘拼两件（P4 第 63 步）：同样**只报不改**（摘出来的图是**内联**返回的，
-    // 真要落盘得由 write_file 或用户在 ComfyUI 里做）→ 出厂 ALLOW、mutating=false
+    // 实际落盘需由 write_file 或在 ComfyUI 中完成）→ 出厂 ALLOW、mutating=false
     for name in ["comfy_audit_workflow", "comfy_prune_workflow"] {
         assert!(is_implemented(name), "{name} 应当已实现");
         assert_eq!(default_access(name), "ALLOW", "{name} 的出厂档");
         assert!(!is_mutating(name), "{name} 只报不改");
     }
     // 联网三件 + 定向查询（P4 第 64 步）：**出厂全部 ASK**（查询词会离开本机，
-    // 用户点一下才发），且全部只读（`download_model` 那条写盘路由保持 deny）。
+    // 确认后才发送），且全部只读（`download_model` 的写盘路由保持 deny）。
     // 档位改成 ALLOW 的后果是"查询词静默出本机"，界面上不会有任何变化。
     for name in ["web_search", "web_fetch", "civitai_search", "find_model"] {
         assert!(is_implemented(name), "{name} 应当已实现");
@@ -422,7 +422,7 @@ fn 节点契约查询不占_comfy_查询额度() {
 /// **一条真附件**（题目配图），并让选项图与选项文字一一对齐。
 ///
 /// 为什么这条要在 `question_specs` 这一层钉：裁图发生在**开卡之前**，
-/// 出错了不该白占一张卡的额度；而且选项图一旦错位，用户会把"齐刘海"看成"斜刘海"。
+/// 出错时不应占用一次额度；且选项图错位会导致"齐刘海"被看成"斜刘海"。
 #[test]
 fn 带图提问把设定图裁成附件_选项图与文字对齐() {
     use crate::media::attachments;

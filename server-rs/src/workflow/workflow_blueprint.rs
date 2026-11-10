@@ -1,11 +1,11 @@
 //! 工作流「蓝图」：把一份工作流归一化成**可绘制的节点-连线模型**，并在同一次遍历里
-//! 做**接线体检**（用户 2026-10-17：「让捕获的工作流能像 ComfyUI 一样用蓝图预览乃至修改，
-//! 特别注意有些**前端 only** 的节点」「对于**错误接线**要能向用户指出」）。
+//! 做**接线体检**（"让捕获的工作流能像 ComfyUI 一样用蓝图预览乃至修改，
+//! 特别注意有些**前端 only** 的节点""对于**错误接线**要能指出"）。
 //!
 //! # 它解决什么
 //!
 //! 今天「查看工作流」只是把 JSON 原文丢进一个 `SelectableText`（`lib/widgets/workflow_viewer.dart`）——
-//! 用户看不出这张图有几个节点、谁连着谁、哪几个是旁路的、哪根线接错了。
+//! 无法判断这张图有几个节点、连接关系、哪些是旁路节点、哪根线接错。
 //! 而**接线错误是不报错的**：`Anything Everywhere` 广播、旁路穿透、Set/Get 跳线这些语义
 //! 只存在于 ComfyUI 前端，服务端拿到的是另一张图 —— 于是最常见的现场是
 //! "图看着没问题、提交上去缺一堆必填输入"，或者"跑完了、出图跟预期完全不同"。
@@ -1033,7 +1033,7 @@ fn diagnose_ui(
     // ⚠ 「哪些节点不参与出图」也在这一节里判：判据必须是**转换之后**的图 ——
     // 界面图里 `Anything Everywhere` 的下游看不出连线（它们由前端广播补上），
     // 直接按界面图算会把"真正在干活的那一串"全报成"不参与出图"（2026-10-17
-    // 在用户的 `krea2 t2i workflow.json` 上实测到：28/29/30/32/35 全被误报）。
+    // 在 `krea2 t2i workflow.json` 上实测：28/29/30/32/35 全被误报）。
     if let (true, Some(info)) = (blueprint.object_info, object_info) {
         diagnose_conversion(blueprint, ui, info);
     }
@@ -1122,7 +1122,7 @@ fn diagnose_classes(blueprint: &mut Blueprint, object_info: Option<&Map<String, 
 /// 把转换那一遍的结论搬进体检报告：**提交前走的就是这条链**，
 /// 于是"蓝图说没问题、提交却缺输入"这种自相矛盾不可能出现。
 ///
-/// 用的是**开 ##模拟用户行为## 之后**的那张图（提交链推荐走的那一份）：广播补的线、
+/// 使用的是**开启 ##模拟前端行为## 之后**的那张图（提交链推荐使用的那一份）：广播补的线、
 /// 丢掉的显示节点、自动补的 `SaveImage` 都在里面 —— 判"谁在干活"只能看它。
 fn diagnose_conversion(
     blueprint: &mut Blueprint,
@@ -1997,27 +1997,27 @@ async fn post_blueprint(
 
 /// 存一份（多半是刚在蓝图上改过的）工作流。
 ///
-/// # 为什么落点是 `<项目根>\comfyui\workflows\` 而不是用户自己的 ComfyUI 目录
+/// # 落点为 `<项目根>\comfyui\workflows\` 而非本机 ComfyUI 目录的依据
 ///
 /// 写入白名单**只有一份**（[`crate::tools::policy::ToolPolicy::resolve_write`]，
-/// AGENTS §10）。在这里另开一条"写用户 ComfyUI 目录"的路，等于让"什么能写"出现第二个判据 ——
+/// AGENTS §10）。在此另开一条"写入本机 ComfyUI 目录"的路径，会使"什么能写"出现第二个判据 ——
 /// 而第二个判据出问题的表现是**静默写到别人机器上的任意路径**。
-/// 存到白名单里那份之后，用户拖进 ComfyUI（或让 AI 用 `comfy_load_workflow` 读回来）都行。
+/// 存到白名单中的那份之后，拖进 ComfyUI（或让 AI 用 `comfy_load_workflow` 读回）均可。
 async fn post_save(
     axum::extract::State(state): axum::extract::State<crate::web::routes::AppState>,
     axum::Json(input): axum::Json<SaveInput>,
 ) -> Result<axum::Json<Value>, crate::web::routes::ApiError> {
-    // 1) 必须是合法 JSON —— 存一份坏文件比不存更糟（用户拖进 ComfyUI 才发现）
+    // 1) 必须是合法 JSON —— 存一份损坏文件比不存更差（拖进 ComfyUI 时才会发现）
     let value = parse_raw(&input.raw)?;
     let text = serde_json::to_string_pretty(&value)
         .map_err(|e| crate::web::routes::ApiError::internal(format!("序列化失败：{e}")))?;
 
-    // 2) 文件名：**只取最后一段**（用户给的名字里带目录也没用，目录由这里定）
+    // 2) 文件名：**只取最后一段**（名称中携带目录不生效，目录由此处决定）
     let name = safe_file_name(input.name.as_deref());
     let policy = crate::tools::policy::ToolPolicy::load(&state)?;
     let target = policy
         .resolve_write(&format!("comfyui/workflows/{name}"))
-        // 码原样带出去（`PATH_DENIED` 是用户要按提示去改权限设置的那一档）
+        // 码原样带出（`PATH_DENIED` 对应需按提示修改权限设置的情形）
         .map_err(|failure| crate::web::routes::ApiError::ai(failure.code, failure.message))?;
     if let Some(parent) = target.parent() {
         std::fs::create_dir_all(parent).map_err(|e| {
@@ -2030,7 +2030,7 @@ async fn post_save(
     Ok(axum::Json(json!({
         "path": target.display().to_string(),
         "bytes": text.len(),
-        // 用户下一步要干什么，一次说清（界面直接展示这一句）
+        // 下一步需执行什么，一次说明（界面直接展示该句）
         "hint": "把这个文件拖进 ComfyUI 就能打开；也可以让 AI 用 comfy_load_workflow 读回来（会自动转成 API 图）",
     })))
 }
