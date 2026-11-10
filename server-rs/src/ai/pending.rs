@@ -41,7 +41,7 @@
 //! 除了桌面 Run 的工具调用，还并进了**手机排队的提交**（`submit_jobs.state='awaiting_approval'`，
 //! 契约 §4.1）。形状**完全同形**（同样 6 个键），所以列表本身、以及点它的那条路
 //! （`POST /api/ai/tool-calls/{callId}/{approve,deny}`）**一个字都没变** ——
-//! 用户看到的还是"有 N 个东西在等你批"。落点为什么不是 `ai_tool_calls` 那张表：
+//! 界面显示的仍是"有 N 个东西在等你批"。落点为何不是 `ai_tool_calls` 那张表：
 //! 见 [`crate::mobile::submit_queue`] 的文件头（一句话：那张表的外键要求先有一个**桌面 Run**，
 //! 而"为了过闸门捏造一个 Run"是被明确禁止的）。
 

@@ -369,7 +369,7 @@ pub fn build(
         &skill_catalog,
         &policy,
         &memory_text,
-        // kit 是"取那一刻"的工件：本次请求带没带图由发起 Run 的那一端在用户轮里如实说明
+        // kit 是"取那一刻"的工件：本次请求带没带图由发起 Run 的那一端在请求轮里如实说明
         false,
         model_sees_images,
         nsfw,

@@ -246,7 +246,7 @@ pub mod event_type {
     pub const MESSAGE_STARTED: &str = "message.started";
     pub const REASONING_DELTA: &str = "reasoning.delta";
     pub const TEXT_DELTA: &str = "text.delta";
-    /// 关键步骤（环节）开始：`[步骤]正在查资料[/步骤]` 摘出来的名字（用户建议 2026-09-28）。
+    /// 关键步骤（环节）开始：`[步骤]正在查资料[/步骤]` 摘出的名称。
     /// 界面靠它**当场**画出环节头，把这个环节的工具卡折进一组。
     pub const STEP_STARTED: &str = "step.started";
     pub const TOOL_REQUESTED: &str = "tool.requested";
