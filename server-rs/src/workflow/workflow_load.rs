@@ -1,7 +1,7 @@
 //! 把**本机的一份工作流文件**读进库（Kotlin `AiWorkflowSearch.loadWorkflowFromFile` 的 Rust 端对照，
 //! P4 第 44 步）。
 //!
-//! 用户 bug ③ 的正面解法：用户甩过来一个 `.json` 路径，别再回答"我只能提交库里的 promptId"。
+//! 该问题的解法：收到一个 `.json` 路径时，不再返回"我只能提交库里的 promptId"。
 //! 流程：读文件 → 认格式（API 原样用 / 界面格式按 `/object_info` 转）→ 入库拿到 `promptId`
 //! → 返回节点摘要与**缺口清单**。
 //!
@@ -12,7 +12,7 @@
 //!
 //! # 一处**只在真机上才出现**的坑（Kotlin 那边踩过，这里是照抄它的解法）
 //!
-//! `run_key` 是文件内容算出来的，而**用户可以在界面里把那条提示词删掉** ——
+//! `run_key` 由文件内容计算，而**该提示词可在界面中被删除** ——
 //! 删除会把 `capture_runs.prompt_id` 置空，于是这份文件再也导不进来，
 //! 只会永远回一句"正在被另一次调用加载"。所以"抢不到 + 那条记录是 `success` 但
 //! `prompt_id` 已经没了"这一档要**带 force 重抢**；正在处理中（`running`）的仍然让开。
@@ -20,10 +20,10 @@
 //! # 两处能力（P4 第 68 步起都在，见 [`crate::workflow::workflow_convert`] 文件头）
 //!
 //! 1. **组节点（subgraph）按定义展开**成内部真节点；
-//! 2. **「模拟用户行为」（`emulateFrontend`）**（[`crate::workflow::workflow_frontend`]）：
+//! 2. **「模拟前端行为」（`emulateFrontend`）**（[`crate::workflow::workflow_frontend`]）：
 //!    广播型节点按声明的类型 / 名字填空、显示节点丢掉、一个输出节点都没有时补 `SaveImage`。
 //!    替前端做了什么**如实列在结果里**（`frontendEmulated` / `frontendBroadcast` /
-//!    `frontendInjected` + 一句 `frontendHint`）—— 用户看得到才敢信这次跑的就是他工作流里的意思。
+//!    `frontendInjected` + 一句 `frontendHint`）—— 可见才能确认执行内容一致。
 //!    `emulateFrontend=false` 时一个字都不改，纯前端节点照旧进 `unsupportedNodes`。
 //! 3. **参考图**（2026-10-25「载入工作流时自动带图」）：结果里的 `referenceImages` 把
 //!    `LoadImage` 指向的文件解析成**真实路径 + 原始分辨率**（[`crate::workflow::reference_images`]）；
@@ -261,7 +261,7 @@ pub async fn load_from_file(
         && claim.existing_prompt_id.is_none()
         && claim.existing_status.as_deref() == Some("success")
     {
-        // 库里的提示词被用户删掉了（`prompt_id` 被置空）→ 这份文件再也不该永远说"正在加载"
+        // 库中的提示词已被删除（`prompt_id` 置空）→ 该文件不应一直显示"正在加载"
         capture_ingest::begin_run(state, &run_key, SOURCE, Some(&raw), true)
             .map_err(|e| LoadFailure::new("CONFIG_ERROR", e.human()))?
     } else {
@@ -407,8 +407,8 @@ pub async fn load_from_file(
     if !warnings.is_empty() {
         out.insert("warnings".into(), json!(warnings));
     }
-    // ## 模拟用户行为 ##：把"替前端做了哪几件事"如实列出来 ——
-    // 用户看得到才敢信这次跑的就是他工作流里的意思（用户建议 ②）
+    // ## 模拟前端行为 ##：把"代为完成了哪几件事"如实列出 ——
+    // 可见才能确认执行内容与工作流一致
     if !frontend_rewritten.is_empty() {
         out.insert("frontendEmulated".into(), json!(frontend_rewritten));
     }

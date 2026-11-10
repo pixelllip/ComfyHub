@@ -4,7 +4,7 @@
 //!
 //! | 层 | 文件 | 谁写 | 定位 |
 //! | --- | --- | --- | --- |
-//! | custom | `<storage>\ai\capabilities\custom.json` | 用户 / 界面导出 | 手工修正，最高优先 |
+//! | custom | `<storage>\ai\capabilities\custom.json` | 手动 / 界面导出 | 手工修正，最高优先 |
 //! | remote | `<storage>\ai\capabilities\remote.json` | 在线数据集（models.dev） | 主力更新源 |
 //! | builtin | [`crate::provider::capability_rules`]（**生成**的 119 条） | 随版本发布 | 家族级兜底 |
 //!
@@ -16,7 +16,7 @@
 //!
 //! 1. **档位 / 方言必须与"支持推理"一致**：最终 `reasoning=false` 时一律清空
 //!    （不管哪层给过）—— 留着就会出现"声明了档位却没勾推理"，而保存时
-//!    `validate_model` 会拒掉这一行（用户看到的是"导入的模型存不进去"）。
+//!    `validate_model` 会拒绝该行（表现为"导入的模型无法保存"）。
 //! 2. **坏文件当"该层不存在"，不许抛**：目录坏了不能让对话也起不来（Kotlin 同）。
 
 use std::collections::BTreeMap;
@@ -41,7 +41,7 @@ pub struct Capability {
     pub modalities: Vec<String>,
     pub tools: bool,
     pub reasoning: bool,
-    /// 命中的规则，便于向用户解释"为什么给它勾了图片"
+    /// 命中的规则，用于解释"为什么为其勾选了图片"
     pub matched_by: String,
     /// 预填的思考档位（AIH-056）：等级 → 线上表达；空 = 声明了推理但**不预填**档位
     pub thinking_efforts: Vec<(String, String)>,
@@ -61,8 +61,8 @@ pub struct RawRule {
 
 /// 保守默认（`ModelCapabilityCatalog.UNKNOWN`）：目录里没有、接口也没说 → **仅文本**。
 ///
-/// 图片要用户自己勾（勾错了会被 Provider 拒绝，但不会被我们静默丢弃）。
-/// 工具**默认给上**（用户要求）：很多网关不声明工具能力、但实际都支持。
+/// 图片需手动勾选（勾错会被 Provider 拒绝，但不会被静默丢弃）。
+/// 工具**默认启用**：许多网关不声明工具能力，但实际支持。
 pub fn unknown() -> Capability {
     Capability {
         modalities: vec!["text".to_string()],
@@ -149,7 +149,7 @@ pub struct Overlays {
 
 /// 读两层覆盖层（Kotlin 的 `reload(dir)`，但**每次现读**而不是缓存）。
 ///
-/// 为什么不缓存：`custom.json` 是用户手写/界面导出的，缓存了就会出现
+/// 不缓存的原因：`custom.json` 由手动编写或界面导出，缓存后会出现
 /// "手工改完目录、重启前不生效"（与 Skills / 长期记忆同一条纪律：**磁盘是真源**）。
 pub fn load_overlays(dir: &Path) -> Overlays {
     Overlays {
@@ -254,7 +254,7 @@ fn lookup_builtin(
 /// 覆盖层匹配：**精确 id** → **去前缀**（两个方向），去前缀要求**唯一命中**。
 ///
 /// 「两个条目都叫 `…/dup` 时宁可不命中，绝不猜」—— 猜错的代价是给模型勾错模态，
-/// 而那是**会发出错误请求**的（会被网关拒，但用户看不出为什么）。
+/// 而那是**会发出错误请求**的（会被网关拒绝，但无法判断原因）。
 fn resolve_overlay(overlay: Option<&OverlayFile>, id: &str) -> Option<OverlayEntry> {
     let overlay = overlay?;
     if let Some(hit) = overlay.entries.get(id) {

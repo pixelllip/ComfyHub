@@ -1,4 +1,4 @@
-//! `capture_ingest` 的单元测试（主体代码在 [`capture_ingest`](super) —— 2026-09-30 按用户要求与主体分离）。
+//! `capture_ingest` 的单元测试（主体代码在 [`capture_ingest`](super) —— 与主体分离）。
 //!
 //! `use super::*;` 照旧：子模块能看见父模块的私有项，所以用例一行都不用改。
 
@@ -218,7 +218,7 @@ fn memory_db() -> rusqlite::Connection {
     conn
 }
 
-/// 造一条捕获来的提示词；`edited` 模拟"用户改过"（`updated_at != created_at`）。
+/// 构造一条捕获的提示词；`edited` 模拟"已修改"（`updated_at != created_at`）。
 fn captured_prompt(conn: &rusqlite::Connection, loras: &str, edited: bool) -> i64 {
     conn.execute(
         "INSERT INTO prompts (title, kind, positive_prompt, loras, source) \
@@ -272,7 +272,7 @@ fn loras_of(conn: &rusqlite::Connection, id: i64) -> String {
     .unwrap()
 }
 
-/// 只追加缺的 LoRA；用户编辑过的、解析为空的、本来就没有 LoRA 的都不动。
+/// 只追加缺失的 LoRA；已编辑过、解析为空、原本无 LoRA 的均不改动。
 #[test]
 fn lora_backfill_appends_missing_and_never_rewrites_user_edits() {
     let conn = memory_db();
@@ -289,7 +289,7 @@ fn lora_backfill_appends_missing_and_never_rewrites_user_edits() {
     let empty = captured_prompt(&conn, "[]", false);
     attach_capture(&conn, empty, stack_graph(true));
 
-    // ③ 用户编辑过：一个字都不许动
+    // ③ 已编辑过：不做任何改动
     let edited = captured_prompt(&conn, "[]", true);
     attach_capture(&conn, edited, stack_graph(true));
 
@@ -329,7 +329,7 @@ fn lora_backfill_appends_missing_and_never_rewrites_user_edits() {
 }
 
 /// 版本升级那趟（`only_untouched = false`）要能补到"已经被我们顶过 `updated_at`"的行，
-/// 但仍然只追加：用户自己改过的名字 / 权重保持原样。
+/// 但仍只追加：已修改的名称 / 权重保持原样。
 #[test]
 fn lora_backfill_version_upgrade_appends_to_already_touched_rows() {
     let conn = memory_db();
@@ -345,7 +345,7 @@ fn lora_backfill_version_upgrade_appends_to_already_touched_rows() {
     let first = loras_of(&conn, id);
     assert!(first.contains("KNP.safetensors"), "{first}");
 
-    // 模拟"又改了一版识别规则"：把原列表换成一个用户手改过的版本，再跑升级那趟
+    // 模拟"识别规则再次变更"：把原列表替换为手动修改过的版本，再执行升级那趟
     conn.execute(
         "UPDATE prompts SET loras = ?1 WHERE id = ?2",
         params![
@@ -421,7 +421,7 @@ fn runtime_prompt_raw(text: &str) -> Value {
     })
 }
 
-/// 只补空正向的行；用户已经写过的正文字一个字都不动。
+/// 只补正向为空的行；已写入的正文不做改动。
 #[test]
 fn prompt_backfill_fills_only_empty_positive_prompts() {
     let conn = memory_db();
