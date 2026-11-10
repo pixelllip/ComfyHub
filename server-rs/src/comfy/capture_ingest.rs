@@ -164,7 +164,7 @@ pub enum Imported {
 /// 把一个**已经在磁盘上**的文件收进 storage（Kotlin `importFile`）。
 ///
 /// `move = true` 表示源文件是临时文件（下载下来的那份），入库后不再需要；
-/// `false` 表示源文件属于用户（ComfyUI 的 output 目录），**只复制**。
+/// `false` 表示源文件位于外部（ComfyUI 的 output 目录），**只复制**。
 #[allow(clippy::too_many_arguments)]
 pub fn import_file(
     state: &AppState,
@@ -462,8 +462,8 @@ pub fn mark_loras_backfill_done(conn: &rusqlite::Connection) -> rusqlite::Result
     Ok(())
 }
 
-/// 启动时跑的那一趟：**首次**只补"没被编辑过"的行（保护升级前用户手改过的 LoRA）；
-/// 以后版本升级时对所有捕获行再补一遍（只追加，用户改过的名字 / 权重仍不动）。
+/// 启动时执行的那一趟：**首次**只补"未被编辑过"的行（保护升级前手动修改过的 LoRA）；
+/// 后续版本升级时对所有捕获行再补一次（只追加，已修改的名称 / 权重仍不改动）。
 ///
 /// 返回改了几条提示词。
 pub fn run_loras_backfill(conn: &rusqlite::Connection) -> rusqlite::Result<usize> {
@@ -478,13 +478,13 @@ pub fn run_loras_backfill(conn: &rusqlite::Connection) -> rusqlite::Result<usize
 /// # 为什么需要它（2026-10-22 修 `graph_parse` 之后）
 ///
 /// 那之前 `Lora Loader Stack (rgthree)` 这类第三方节点的 LoRA 整批没被识别，已经入库的
-/// `prompts.loras` 却不会自己变 —— 用户重开 App 看到的还是"少几条"。这里按**捕获时的
+/// `prompts.loras` 不会自动变化 —— 重开 App 仍显示"少几条"。这里按**捕获时的
 /// 原始节点图**（`capture_runs.raw`）重解析一遍，把缺的补上。
 ///
-/// # 四条纪律（都为了"别把用户的数据改坏"）
+/// # 四条约束（避免破坏既有数据）
 ///
 ///  1. `only_untouched` = `true` 时**只碰 `updated_at == created_at` 的行**（= 入库后没被
-///     用户编辑过）；`false` 时（版本升级那趟）对所有捕获行都看，但下一条保证不改坏；
+///     已编辑过）；`false` 时（版本升级那趟）对所有捕获行都检查，但下一条保证不破坏；
 ///  2. **只追加、不覆盖**：解析出来但原列表里没有的名字才 push；已有名字的权重、顺序
 ///     原样保留（老记录里 `Krea2ControlLoRALoader` 本来就是对的那一条）；
 ///  3. **解析结果为空就跳过**：绝不用一次解析失败去清空已有数据；
@@ -526,7 +526,7 @@ pub fn backfill_loras(
         if parsed.is_empty() {
             continue;
         }
-        // 库里已有的（含用户手改的）按原样留着，只追加缺的。
+        // 库中已有的（含手动修改的）按原样保留，只追加缺失项。
         let mut merged: Vec<(String, f64)> = crate::web::models::parse_loras(stored_raw.as_deref())
             .into_iter()
             .map(|lora| (lora.name, lora.weight))
@@ -631,7 +631,7 @@ pub fn run_prompt_backfill(conn: &rusqlite::Connection) -> rusqlite::Result<usiz
 ///
 /// # 四条纪律
 ///
-/// 1. **只碰空正向的行**（`TRIM(positive_prompt) = ''`）—— 用户手写或已经解析出来的一个字都不改；
+/// 1. **只处理正向为空的行**（`TRIM(positive_prompt) = ''`）—— 手写或已解析的内容不改动；
 /// 2. **只认能证明"喂给了正向条件"的文本**：先看 [`graph_parse::final_positive`] 的运行时输出，
 ///    再退回 [`graph_parse::parse`] 的解析结果；找不到就跳过，绝不拿旁边的备注 / 负向顶替；
 /// 3. **解析失败不清空、不报错**：脏 raw 直接跳过（老库里有截断的）；
@@ -877,7 +877,7 @@ async fn ingest_inner(
     let mut parsed = crate::workflow::graph_parse::parse(graph);
     // **运行时才生成的提示词**（Krea2 r2i 的 `TextGenerate → ComfySwitchNode → PreviewAny → CLIPTextEncode`）：
     // 节点图里只有 system prompt 与空槽，最终那一整段话只出现在 `/history` 的 `outputs` 里。
-    // 不在这里补，画廊详情里的提示词会一直是空的（用户 2026-10-25 的 `test_00901_.png`）。
+    // 不在此处补齐时，画廊详情中的提示词会一直为空（`test_00901_.png` 即如此）。
     let runtime_outputs = req
         .raw
         .as_ref()
@@ -1215,7 +1215,7 @@ pub async fn poll_once(state: &AppState, config: &CaptureConfig) -> Value {
 
     // history 按提交顺序返回（旧 → 新），**必须顺着这个顺序收**。
     //
-    // ⚠ 2026-11-09 修：以前是 `entries.iter().rev()`（先收最新的），于是"用户在 ComfyUI
+    // ⚠ 修复：此前使用 `entries.iter().rev()`（优先取最新），因此"在 ComfyUI
     // 界面里自己跑的一批"会被**倒着**入库 —— 画廊按 `created_at DESC` 排，最后看到的是
     // 整批反过来（真库 11-09 那批 `test_01452_`…`test_01469_` 的 id 就是 1469→1452）。
     // 反着收只是想"最新的先看见"，代价却是**顺序错乱**；`max_per_poll` 本来就把单轮

@@ -1,10 +1,10 @@
-//! ## 模拟用户行为 ##（`emulateFrontend`）—— Kotlin `FrontendNodes.kt` 的 Rust 端逐行对照
+//! ## 模拟前端行为 ##（`emulateFrontend`）—— Kotlin `FrontendNodes.kt` 的 Rust 端逐行对照
 //! （P4 第 68 步；在这之前它是 `WorkflowConvert` 的两处欠账之一）。
 //!
-//! 用户的原话是：「加入 ##模拟用户行为## 模式，面对一些**仅面向前端的工作流节点**，
+//! 需求为：「加入 ##模拟前端行为## 模式，面对一些**仅面向前端的工作流节点**，
 //! 让 AI 有能力在前端读取、编辑、在 comfy 前端提交」。
 //!
-//! 和真正的浏览器自动化不同（用户当面确认过走**后端 + ComfyUI HTTP API**这条线，
+//! 与真正的浏览器自动化不同（已确认使用**后端 + ComfyUI HTTP API**这条路径，
 //! 不引入浏览器），这里做的是**把前端 JS 在排队前做的那几件事，在后端等价地做掉**：
 //! ComfyUI 官方前端在 `graphToPrompt()` 之后、`POST /prompt` 之前，会调用各扩展的
 //! `beforeRegisterNodeDef` / `onExecuted` 钩子去改写节点图。这一步在服务端是拿不到的
@@ -28,7 +28,7 @@
 //! 广播语义只活在前端。原判据是"`/object_info` 里查得到就原样保留"，于是这类节点
 //! 既不会被等价改写、又不会产出任何东西 —— 它该填的那几路一直空着，提交上去直接
 //! 缺必填输入。现在只对**广播型**放宽：注册了但 `output` 为空 → 仍然当广播节点改写。
-//! 用户的 `krea2 t2i workflow.json` / `krea2 i2i workflow.json` 依赖这一条才跑得起来。
+//! `krea2 t2i workflow.json` / `krea2 i2i workflow.json` 依赖该条才能运行。
 //!
 //! # 判据只有一份
 //!
@@ -51,7 +51,7 @@ use crate::workflow::workflow_convert::{
     as_int, is_widget_input, node_id, primitive_text, ref_of, ui_class, LinkTable,
 };
 
-/// 一次改写的总结（进工具结果，给模型和用户看"到底动了哪几根线"）。
+/// 一次改写的总结（进入工具结果，显示"具体改动了哪几根线"）。
 ///
 /// Kotlin `FrontendNodes.Emulation`。
 #[derive(Debug, Clone, Default)]
@@ -91,7 +91,7 @@ pub fn emulate(
     //   cg-use-everywhere 的 `Anything Everywhere` 就是这样（`input.optional.anything = ["*"]`、
     //   `output = []`）。它在 `/object_info` 里**查得到**，可服务端拿到它什么也不产出，
     //   真正干活的仍旧是前端那次广播。只按「查得到就留下」判，这份图提交上去就会
-    //   **缺一堆必填输入**（用户的 `krea2 t2i workflow.json` / `krea2 i2i workflow.json`
+    //   **缺少多个必填输入**（`krea2 t2i workflow.json` / `krea2 i2i workflow.json`
     //   就是这么坏的，而且不报错）。
     //
     //   判据只加在**广播型**上：显示型节点（`PreviewImage` 之类）注册了就是真节点，
@@ -194,7 +194,7 @@ pub fn emulate(
     }
 
     // --- ③ 一个输出节点都没有：前端会自动挂 SaveImage，这里照做 ---
-    // 只在"原本一张图都存不出来"时补，绝不覆盖用户自己的工作流（那会多写文件）。
+    // 仅在"原本无法保存任何图片"时补，不覆盖既有工作流（否则会写入额外文件）。
     // 接哪一路？**按类型找产出 IMAGE 的节点**（不能看输入名：VAEDecode 的输出压根不在
     // 它的 `inputs` 里，它是把 `samples` 解成图的那个节点）。
     if !out.is_empty() && out.values().all(|value| !is_save_like_node(value)) {
@@ -252,7 +252,7 @@ pub fn open_inputs_of(object_info: &Map<String, Value>, graph: &Map<String, Valu
 ///
 /// ⚠ 与 [`open_inputs_of`] 的差别**只有必填这一条**，而它是"这份图能不能跑"的分水岭：
 /// 可选插口空着是常态（`TextGenerate.video` / `.audio`、`RMBG.background_color` 都是可选），
-/// 把它们算成缺口的表现是**学一份配方直接被拒**（2026-10-17 在用户的
+/// 把它们算作缺口会导致**配方学习直接被拒**（在
 /// `krea2 i2i workflow.json` 上实测：三条可选插口让 `UNSUPPORTED_NODES` 挡下了整份工作流）。
 pub fn required_open_inputs_of(
     object_info: &Map<String, Value>,
@@ -312,7 +312,7 @@ struct BroadcastRoute {
 ///
 /// * **老版本**（`Anything Everywhere` 带 `Input Type` / `Input Name` 控件，存在 `properties` 里）：
 ///   整台节点只有一路来源 + 一条类型/名字规则 —— 与 [`broadcast_spec`] 一起用。
-/// * **新版本**（cg-use-everywhere ≥ 1.x，2026-10-17 在用户的
+/// * **新版本**（cg-use-everywhere ≥ 1.x，在
 ///   `krea2 t2i workflow.json` 上实测）：`properties` 里**没有**类型，节点自己长着
 ///   `anything[CLIP]` / `anything15[MODEL]` / `anything16[VAE]` 这样**每个接了线的输入插口各一路**，
 ///   类型就写在那条插口的 `type` 上。只认老版本的表现是"这份工作流一处广播都填不上"，
