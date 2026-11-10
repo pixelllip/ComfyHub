@@ -55,7 +55,7 @@ pub fn update(state: &AppState, id: i64, input: &MediaUpdate) -> Result<MediaDto
         let mut args: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
 
         // 标签（2026-11-10）：整体替换产物**自身**的标签。先确认产物存在 ——
-        // 否则外键会在 `INSERT` 时炸成 500，而这里应当和别的字段一样回 404。
+        // 否则外键会在 `INSERT` 时返回 500，而此处应与其他字段一样返回 404。
         let mut tags_touched = false;
         if let Some(tags) = input.tags.as_ref() {
             let exists = tx

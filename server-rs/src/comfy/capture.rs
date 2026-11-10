@@ -584,7 +584,7 @@ enum GraphLookup {
 ///
 /// 判据是**结构特征**而不是键名：图 = 每个值都是带 `class_type` 的对象；`extra_data` = 带
 /// `extra_pnginfo` / `client_id` / `create_time` 之一。**不要改成按键名猜** ——
-/// 猜错的后果是把 `extra_data` 当成节点图发给 ComfyUI（提交必炸，且报错信息毫无线索）。
+/// 猜错时会把 `extra_data` 当作节点图发给 ComfyUI（提交必然失败，且报错信息无有效线索）。
 pub mod history {
     use serde_json::{Map, Value};
 

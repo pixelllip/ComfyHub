@@ -77,7 +77,7 @@ pub const SCHEMA_SQL: &str = include_str!("../../../db/schema.sqlite.sql");
 /// 2026-10-11 由 6 提到 7：加产物**集合**（`media_collections` 表 + `media_assets.collection_id`）——
 /// 同一批、只做了一点微调的产物归到一组，详情页可左右切换（判定见 `media/collection.rs`）。
 /// ⚠ 加的是**表 + 列**：老库靠"版本号 bump → 收敛式 DDL 建表" + [`NEW_COLUMNS`] 补列，
-/// 两条路缺一条就是**静默的**（表不存在时产物一入库就炸 `no such table`；
+/// 两条缺少一条即为**静默失败**（表不存在时产物入库即报 `no such table`；
 /// 列不存在时集合永远是 None，界面上什么都不显示）。
 /// 2026-10-11 由 7 提到 8：给 `prompts` 加 `negative_mode`（发送模式：保留 / 只发正面）。
 /// 加的是**列**（走 [`NEW_COLUMNS`]）；bump 的另一个作用是让 `manifest.schemaVersion`
@@ -603,7 +603,7 @@ pub fn open_or_create(path: impl AsRef<Path>) -> Result<Connection, String> {
     //   ⚠ 为什么单测没抓到：它们都用**全新库**（DDL 建表时自带新列），而这只有"老库升级"才会踩到。
     //   `ensure_columns` 对不存在的表是空操作，所以在全新库上这么调也不亏。
     //   （2026-10 角色卡收敛后，DDL 里已经**没有**建在新列上的索引了；顺序照旧保留 ——
-    //    哪天再给新列加索引，就是同一条坑。）
+    //    之后为新列加索引时会遇到同一问题。）
     let added = ensure_columns(&conn).map_err(|e| format!("补列失败：{e}"))?;
     if !added.is_empty() {
         eprintln!(

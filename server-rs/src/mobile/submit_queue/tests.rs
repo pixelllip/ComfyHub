@@ -27,7 +27,7 @@ fn item(payload: Value) -> PushItem {
 }
 
 // ⚠ 一律 `#[tokio::test]`：`accept` 会起后台任务（`tokio::spawn`），
-//   没有运行时会在**落库成功之后**炸在 spawn 上 —— 那正是 R8 顺序的反面。
+//   没有运行时会在**落库成功之后**在 spawn 处失败 —— 那正是 R8 顺序的反面。
 #[tokio::test]
 async fn 缺_conversation_id_是永久性拒绝() {
     let state = state();
@@ -41,7 +41,7 @@ async fn 缺_conversation_id_是永久性拒绝() {
 }
 
 // ⚠ 一律 `#[tokio::test]`：`accept` 会起后台任务（`tokio::spawn`），
-//   没有运行时会在**落库成功之后**炸在 spawn 上 —— 那正是 R8 顺序的反面。
+//   没有运行时会在**落库成功之后**在 spawn 处失败 —— 那正是 R8 顺序的反面。
 #[tokio::test]
 async fn 既没有_prompt_id_也没有_source_ref_是永久性拒绝() {
     let state = state();
@@ -110,7 +110,7 @@ async fn 任务不认识与宽高不合理都是永久性拒绝() {
 }
 
 // ⚠ 一律 `#[tokio::test]`：`accept` 会起后台任务（`tokio::spawn`），
-//   没有运行时会在**落库成功之后**炸在 spawn 上 —— 那正是 R8 顺序的反面。
+//   没有运行时会在**落库成功之后**在 spawn 处失败 —— 那正是 R8 顺序的反面。
 #[tokio::test]
 async fn ref_id_与_payload_queue_id_不一致要拒() {
     let state = state();
@@ -121,7 +121,7 @@ async fn ref_id_与_payload_queue_id_不一致要拒() {
 }
 
 // ⚠ 一律 `#[tokio::test]`：`accept` 会起后台任务（`tokio::spawn`），
-//   没有运行时会在**落库成功之后**炸在 spawn 上 —— 那正是 R8 顺序的反面。
+//   没有运行时会在**落库成功之后**在 spawn 处失败 —— 那正是 R8 顺序的反面。
 #[tokio::test]
 async fn overrides_不是对象要拒() {
     let state = state();
@@ -134,7 +134,7 @@ async fn overrides_不是对象要拒() {
 }
 
 // ⚠ 一律 `#[tokio::test]`：`accept` 会起后台任务（`tokio::spawn`），
-//   没有运行时会在**落库成功之后**炸在 spawn 上 —— 那正是 R8 顺序的反面。
+//   没有运行时会在**落库成功之后**在 spawn 处失败 —— 那正是 R8 顺序的反面。
 #[tokio::test]
 async fn 受理会落一行并把审批挂成_pending() {
     let state = state();
@@ -163,7 +163,7 @@ async fn 受理会落一行并把审批挂成_pending() {
 }
 
 // ⚠ 一律 `#[tokio::test]`：`accept` 会起后台任务（`tokio::spawn`），
-//   没有运行时会在**落库成功之后**炸在 spawn 上 —— 那正是 R8 顺序的反面。
+//   没有运行时会在**落库成功之后**在 spawn 处失败 —— 那正是 R8 顺序的反面。
 #[tokio::test]
 async fn 同一个_queue_id_推两次只受理一次() {
     let state = state();
@@ -181,7 +181,7 @@ async fn 同一个_queue_id_推两次只受理一次() {
 
 /// **决定只能下一次**：批过之后再也改不动（与工具闸门的 `resolve_approval` 同语义）。
 // ⚠ 一律 `#[tokio::test]`：`accept` 会起后台任务（`tokio::spawn`），
-//   没有运行时会在**落库成功之后**炸在 spawn 上 —— 那正是 R8 顺序的反面。
+//   没有运行时会在**落库成功之后**在 spawn 处失败 —— 那正是 R8 顺序的反面。
 #[tokio::test]
 async fn 审批决定只能下一次() {
     let state = state();
@@ -233,7 +233,7 @@ async fn 没人批准就按时收尾成被拒() {
 
 /// 启动恢复：还在等人的按拒绝收尾，正在提交的按"结果不确定"收尾，两条都要有回执。
 // ⚠ 一律 `#[tokio::test]`：`accept` 会起后台任务（`tokio::spawn`），
-//   没有运行时会在**落库成功之后**炸在 spawn 上 —— 那正是 R8 顺序的反面。
+//   没有运行时会在**落库成功之后**在 spawn 处失败 —— 那正是 R8 顺序的反面。
 #[tokio::test]
 async fn 启动恢复把残局收成终态() {
     let state = state();
@@ -276,7 +276,7 @@ async fn 启动恢复把残局收成终态() {
 
 /// 看门狗：租约过期的 `submitting` 会被如实收尾（不重投），没结果的 `awaiting` 按超时拒绝。
 // ⚠ 一律 `#[tokio::test]`：`accept` 会起后台任务（`tokio::spawn`），
-//   没有运行时会在**落库成功之后**炸在 spawn 上 —— 那正是 R8 顺序的反面。
+//   没有运行时会在**落库成功之后**在 spawn 处失败 —— 那正是 R8 顺序的反面。
 #[tokio::test]
 async fn 看门狗按租约收尾不死等() {
     let state = state();
@@ -306,7 +306,7 @@ async fn 看门狗按租约收尾不死等() {
 
 /// 会话不存在 → **保留队列** + 如实记错误（别删、别假装成功）；会话补上来之后能补发。
 // ⚠ 一律 `#[tokio::test]`：`accept` 会起后台任务（`tokio::spawn`），
-//   没有运行时会在**落库成功之后**炸在 spawn 上 —— 那正是 R8 顺序的反面。
+//   没有运行时会在**落库成功之后**在 spawn 处失败 —— 那正是 R8 顺序的反面。
 #[tokio::test]
 async fn 会话还没同步上来时回执留着等() {
     let state = state();
@@ -375,7 +375,7 @@ async fn 会话还没同步上来时回执留着等() {
 
 /// 回执消息的形状：一句人话 + `tool_result` 块（`mediaIds` 是真的才带）。
 // ⚠ 一律 `#[tokio::test]`：`accept` 会起后台任务（`tokio::spawn`），
-//   没有运行时会在**落库成功之后**炸在 spawn 上 —— 那正是 R8 顺序的反面。
+//   没有运行时会在**落库成功之后**在 spawn 处失败 —— 那正是 R8 顺序的反面。
 #[tokio::test]
 async fn 回执消息是助手消息加一个工具结果块() {
     let state = state();

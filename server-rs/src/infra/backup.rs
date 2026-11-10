@@ -314,7 +314,7 @@ pub fn delete(project_root: &Path, name: &str) -> Result<bool, String> {
 /// 检查一个文件是不是"我们认得的一份备份"。
 ///
 /// 三条判据缺一不可：
-/// * `integrity_check` 必须是 `ok`（坏文件宁可当场说，也不能等换进去之后才炸）；
+/// * `integrity_check` 必须为 `ok`（损坏文件应当即报出，而不是替换之后才失败）；
 /// * `user_version` 不能**高于**本进程的 [`db::SCHEMA_VERSION`]（新版本写的库，老版本读不懂；
 ///   反过来允许 —— 老备份会被 `open_or_create` 正常迁移上来）；
 /// * 必须有 `prompts` / `media_assets` 这两张表（一个空的 SQLite 文件 user_version 也是 0，

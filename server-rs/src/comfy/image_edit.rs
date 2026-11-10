@@ -608,7 +608,7 @@ fn read_size(file: &Path) -> Option<(i64, i64)> {
 /// "实例读哪个 input"与"往哪个 input 投"必须是同一个答案（2026-09-30 那个 400 的教训）。
 ///
 /// 返回 `{mediaId, filename, inputDir, width?, height?, hint}`：`width/height` 是**原图尺寸**，
-/// 做遮罩时要照它给（遮罩与底图尺寸不一致 = 采样直接炸）。解不出来就不给这两个键，
+/// 生成遮罩时需按此给出（遮罩与底图尺寸不一致会导致采样失败）。无法解析时不给这两个键，
 /// **但不拦**（模型可以显式给 width/height）。
 pub fn use_media(
     state: &AppState,

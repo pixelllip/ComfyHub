@@ -49,7 +49,7 @@ fn 老库补_capture_runs_的_provenance_两列_且重复打开不炸() {
         .unwrap();
     assert_eq!(kind, "ComfyUI", "老行要拿到列默认值（外部捕获）");
     drop(conn);
-    // 第二次打开：补列那段再来一遍不炸
+    // 第二次打开：补列流程重复执行不报错
     let conn = open_or_create(&path).expect("第二次打开不炸");
     drop(conn);
 }
@@ -63,7 +63,7 @@ fn temp_path(label: &str) -> std::path::PathBuf {
 /// T2（2026-11-09）：老库补 `workflow_recipes.verified_json`，默认 `'[]'`，重复打开幂等。
 ///
 /// 这条防的是"列不在、绑定却以为自己有验证记录"：`CREATE TABLE IF NOT EXISTS` 不给老表补列，
-/// 只 bump 版本号不做 `NEW_COLUMNS` 的话，老库上那句 `SELECT verified_json` 会直接炸
+/// 只 bump 版本号而不处理 `NEW_COLUMNS` 时，老库上那句 `SELECT verified_json` 会直接报错
 /// （或者更糟：被当成空列表，界面上永远是"没验证过"而**不报错**）。
 #[test]
 fn 老库补_workflow_recipes_verified_json_且重复打开不炸() {
@@ -125,7 +125,7 @@ fn 老库补_workflow_recipes_verified_json_且重复打开不炸() {
         .unwrap();
     assert_eq!(raw, "[]", "老配方不能凭空多出验证记录");
     drop(conn);
-    // 第二次打开：补列那段再来一遍不炸
+    // 第二次打开：补列流程重复执行不报错
     let conn = open_or_create(&path).expect("第二次打开不炸");
     drop(conn);
 }
@@ -275,7 +275,7 @@ fn open_or_create_heals_a_database_missing_a_declared_table() {
 /// 为什么单独盯这一条：这次加的是 `media_collections`（表）+ `media_assets.collection_id`（列），
 /// 而两条路**各自都会静默失败**：
 /// * 只 bump 版本号、没进 `NEW_COLUMNS` → 列永远不存在，集合永远是 `None`，界面上什么都不显示；
-/// * 只进 `NEW_COLUMNS`、没 bump → 老库直接早退，表永远不存在，**产物一入库就炸 `no such table`**。
+/// * 只加入 `NEW_COLUMNS`、未 bump → 老库直接早退，表始终不存在，**产物入库即报 `no such table`**。
 ///
 /// 顺带验一个容易踩的语法：`ALTER TABLE ... ADD COLUMN ... REFERENCES`（SQLite 允许，
 /// 但老库补上的这一列是"没有外键约束"的形态）—— 所以这里还要证明**它照样能写、能读**。

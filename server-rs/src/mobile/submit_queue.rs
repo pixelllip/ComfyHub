@@ -452,7 +452,7 @@ fn parse_payload(item: &PushItem) -> Result<ParsedPayload, Reject> {
             ));
         }
     }
-    // 宽高：0 / 负数 / 荒唐的大值都当形状错（别让它一路传进 ComfyUI 再炸在那边）
+    // 宽高：0 / 负数 / 异常大值均按形状错误处理（避免一路传入 ComfyUI 后才失败）
     for (key, value) in [("width", auto.width), ("height", auto.height)] {
         if let Some(v) = value {
             if !(64..=8192).contains(&v) {
@@ -592,7 +592,7 @@ async fn run_inner(state: &AppState, queue_id: &str, approval_timeout: Duration)
 
     let deadline = Instant::now() + approval_timeout;
     loop {
-        // ⚠ **先看库再判时间**：手快先点了批准也不许落空（R8 的老坑）——
+        // ⚠ **先查库再判时间**：提前点击批准也不得落空（R8 的已知问题）——
         // 闸门那一行早就在库里（`accept` 是**同步**落的），所以这里一定读得到。
         match approval_of(state, queue_id) {
             Ok(Some((state_now, approval))) => {

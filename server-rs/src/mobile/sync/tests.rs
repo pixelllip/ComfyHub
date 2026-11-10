@@ -57,7 +57,7 @@ fn synced_scope_matches_the_master_plan() {
 
 /// 每张同步表都能被 `changes` 取到（`pk_kind` 漏一张 = 那条账本被**静默跳过**）。
 ///
-/// `changes_on` 里的 `let Some(kind) = pk_kind(&row.tbl) else { continue }` 就是这个坑：
+/// `changes_on` 里的 `let Some(kind) = pk_kind(&row.tbl) else { continue }` 就是该问题：
 /// 表进了白名单、`pk_kind` 忘了加，表现是"手机收不到这张表的任何变更"，两端都不报错。
 #[test]
 fn every_synced_table_has_a_pk_kind() {

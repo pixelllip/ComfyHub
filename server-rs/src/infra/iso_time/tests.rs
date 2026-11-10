@@ -48,7 +48,7 @@ fn parse_and_format_round_trip() {
     }
 }
 
-/// ★ 这条就是"定时炸弹"本身：库里的 `.000Z` 在 Kotlin 那边发出来**没有小数点**。
+/// ★ 这条即该潜在缺陷本身：库中的 `.000Z` 在 Kotlin 侧输出时**没有小数点**。
 #[test]
 fn dot_zero_collapses_like_kotlin() {
     assert_eq!(

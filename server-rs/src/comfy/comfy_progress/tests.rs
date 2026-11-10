@@ -172,7 +172,7 @@ fn 未知帧与坏帧一律不许_panic() {
             "这条不该被解析成进度事件：{text}（得到 {parsed:?}）"
         );
     }
-    // 喂进跟踪器也不许炸，而且不许凭空造出一条记录
+    // 进入跟踪器也不得抛错，且不得凭空造出一条记录
     let tracker = tracker();
     for text in ["", "not json", r#"{"type": "logs"}"#, r#"{"type": "nope"}"#] {
         tracker.frame(text);
@@ -446,7 +446,7 @@ fn 给提交记录补进度_没有进度时原样不动() {
     assert_eq!(decorated["progress"]["percent"], 20);
     assert_eq!(decorated["progress"]["nodeId"], "3");
     assert_eq!(decorated["status"], "running", "原有字段一个都不许动");
-    // 没有 promptId 的脏记录也不许炸
+    // 没有 promptId 的无效记录也不得抛错
     assert_eq!(tracker.decorate(&json!({})), json!({}));
 }
 
