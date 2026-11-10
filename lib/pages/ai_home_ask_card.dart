@@ -819,6 +819,10 @@ class _AskComposerState extends State<_AskComposer> {
       ),
       padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
       child: Column(
+        // 与普通输入区同一条：写在页面那层 `ConstrainedBox` 里的上限（页面高度的 85%）
+        // 只是**上限**。写成 max 会把它当成实际高度，提问一出现输入区就吃掉大半屏，
+        // 消息区只剩一条缝，底行下面拖着一大片空白。
+        mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           if (store.notice != null)

@@ -416,6 +416,23 @@ void main() {
     // 而这个假后端的流已经把它后面的 run.completed 一起给了（见 `_Fake` 的注释）。
   });
 
+  // 现象（用户截图）：提问一出现，输入区吃掉大半屏，消息区只剩一条缝，
+  // 底行（跳过本题 / 提交）下面拖着一大片空白。
+  // 根因：`_AskComposer` 根 `Column` 用默认的 `mainAxisSize.max`，
+  // 把页面给输入区设的**上限**（窗口高度的 85%）当成了实际高度。
+  // 普通输入区那条 `Column` 早就写成 min 了，接管时丢了这一条。
+  testWidgets('提问接管输入区时按内容取高：底行贴着窗口底部，不吃掉消息区', (tester) async {
+    const size = Size(1400, 900);
+    await _openAsk(tester, _Fake(), size: size);
+
+    final skip = tester.getRect(find.byKey(const Key('ask-skip-current')));
+    expect(
+      size.height - skip.bottom,
+      lessThan(40),
+      reason: '输入区要贴着窗口底部；在半空结束就是"下面拖着一大片空白"',
+    );
+  });
+
   // **根因回归**：`user.question` 事件中没有 `callId`，
   // 提问卡必须贴到 `tool.requested` 那条已经存在的调用上，不能按 `questionId` 另开一条。
   // 另开一条的后果：工具卡一直显示"运行中"，提问卡不出现、输入区不接管。
