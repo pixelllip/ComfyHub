@@ -288,7 +288,7 @@ void main() {
     expect(report.modelsWritten, 3, reason: '两份目录各写一次（1 + 2 条）');
     expect(report.problems, isEmpty);
 
-    // 一条都不删：这是最容易"顺手"写出来、也最难被发现的一种破坏
+    // 一条都不删：这是最容易"顺带"写出、也最难发现的一种破坏
     expect(local.deleted, isEmpty);
     expect(local.calls, isNot(contains('deleteProvider')));
 

@@ -192,7 +192,7 @@ MockClient _backend(_Rec rec) => MockClient((request) async {
 });
 
 /// 宽屏挂上 AI 工作台：只有在 `width >= 1200` 时右侧栏（`_ContextPanel`）才会铺开，
-/// 所以这些用例都按桌面尺寸挂 —— 否则"卡没出现"只是因为右侧栏压根没渲染（假阴性）。
+/// 因此这些用例都按桌面尺寸挂载 —— 否则"卡片未出现"只是因为右侧栏未渲染（假阴性）。
 void _desktop(WidgetTester tester) {
   tester.view.physicalSize = const Size(1600, 1200);
   tester.view.devicePixelRatio = 1.0;

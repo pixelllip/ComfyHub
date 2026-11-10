@@ -67,7 +67,7 @@ MockClient _backend() => MockClient((request) async {
   } else if (path == '/api/ai/providers/local-gw/models') {
     body = [_model('local-gw', 'qwen3', 'Qwen3')];
   } else if (path == '/api/ai/conversations' && request.method == 'POST') {
-    // 冷启动会顺手建一条空会话（`_startFreshConversation`）；回的必须是**一个对象**，
+    // 冷启动会同时创建一条空会话（`_startFreshConversation`）；返回的必须是**一个对象**，
     // 回 `[]` 会让 `load()` 整个失败，页面停在"连接后端失败"。
     body = {
       'id': 'c1',

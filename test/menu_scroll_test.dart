@@ -10,7 +10,7 @@
 // 矩形内成立，所以菜单外的区域照常能滚、能点。
 //
 // 三条用例分别钉住：① 菜单开着还能滚列表；② 菜单外的点击能穿透到页面；
-// ③ 界面里真的不再出现 ModalBarrier（防止有人哪天顺手改回 PopupMenuButton）。
+// ③ 界面中确实不再出现 `ModalBarrier`（防止被改回 `PopupMenuButton`）。
 
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';

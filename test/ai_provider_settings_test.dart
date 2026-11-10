@@ -236,7 +236,7 @@ void main() {
       find.widgetWithText(TextField, 'Base URL'),
       'https://api.deepseek.com/v1',
     );
-    // API Key 顺手填上：创建与存密钥是**两条**请求，两条都要发出去
+    // API Key 同时填写：创建与保存密钥是**两条**请求，两条都要发出
     await tester.enterText(
       find.widgetWithText(TextField, 'API Key（可选）'),
       'sk-e2e-secret',

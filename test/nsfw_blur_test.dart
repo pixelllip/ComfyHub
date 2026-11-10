@@ -141,7 +141,7 @@ void main() {
     expect(find.text('已模糊 · 点击查看'), findsOneWidget);
 
     // 打开详情表示主动查看，详情页不打码。
-    // 详情页不打码，并顺手把"这一条看过了"记下来 —— 回到列表也不再糊。
+    // 详情页不打码，同时记录"这一条已查看" —— 回到列表也不再模糊。
     store.reveal('media:1');
     await tester.pumpAndSettle();
 

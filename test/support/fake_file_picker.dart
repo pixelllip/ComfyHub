@@ -34,7 +34,7 @@ final class FakePlatformFile extends PlatformFile {
   @override
   final Uri uri;
 
-  /// `null` = 真机 picker 没顺手给大小（内部会退回读文件）。
+  /// `null` = 真机 picker 未提供大小（内部会回退为读取文件）。
   final int? size;
 
   @override

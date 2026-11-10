@@ -224,7 +224,7 @@ void main() {
     expect(cache.originalBudgetBytes, 64 * 1024 * 1024);
     cache.setOriginalBudget(2048 * 1024 * 1024);
     expect(cache.originalBudgetBytes, 2048 * 1024 * 1024);
-    // 缩小预算会顺手触发一次 trim（这里盘上是空的，跑通即可）
+    // 缩小预算会同时触发一次 trim（此处磁盘为空，执行通过即可）
     await cache.trim();
   });
 

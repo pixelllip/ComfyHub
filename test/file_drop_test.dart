@@ -158,7 +158,7 @@ void main() {
     // 拿流本身不许抛（"通道不通"那类降级都在这条路径上）
     addTearDown(FileDrop.stream.listen(received.add).cancel);
 
-    // 这一条**与用例顺序无关**：如果本用例先跑，接收者压根没装（回复为 null）；
+    // 这一条**与用例顺序无关**：若本用例先执行，接收者未安装（回复为 `null`）；
     // 如果别的用例先跑过、接收者已经装上了，`supported` 在每一批里还会再判一次。
     // 两种情况都必须是"什么都不出"，所以这里不去断言回复的形状。
     await _push(<String, Object?>{

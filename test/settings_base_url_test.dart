@@ -198,7 +198,7 @@ void main() {
       'flutter.comfyhub.baseUrl': 'http://127.0.0.1:2175',
     });
     // 先确认这份"脏偏好"真的喂进去了（读法与应用一致：**不带 `flutter.`**），
-    // 否则下面的断言只是因为"偏好是空的"而通过 —— 那是假绿灯。
+    // 否则下面的断言只是因为"偏好为空"而通过 —— 属于无效通过。
     expect(
       (await SharedPreferences.getInstance()).getString('comfyhub.baseUrl'),
       'http://127.0.0.1:2175',
@@ -216,7 +216,7 @@ void main() {
     final prefs = await SharedPreferences.getInstance();
     // ⚠ 读的时候用**不带 `flutter.`** 的键（`getString` 自己会加前缀，见
     // shared_preferences 的 `_prefix`）—— 直接拿带前缀的串去读会读到 null，
-    // 断言就变成了"永远为真"的假绿灯。
+    // 断言就变成了"永远为真"的无效通过。
     expect(
       prefs.getString('comfyhub.baseUrl'),
       isNull,
