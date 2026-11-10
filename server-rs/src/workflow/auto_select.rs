@@ -21,7 +21,7 @@
 //!
 //! # "同族"怎么判
 //!
-//! 族名是**用户口语**（anima / krea2 / krea 2 / moss image / moss_image），而模型文件名是
+//! 族名是**常用称呼**（anima / krea2 / krea 2 / moss image / moss_image），而模型文件名是
 //! `silvermoonmixAnimaEvolved_v2329B_int8.safetensors` 这种。判据只有一条：
 //! **两边都去掉非字母数字、转小写之后，模型名里包含族名**。
 //! 所以 "moss image" 与 "moss_image" 是同一个族、"krea 2" 能命中 `krea2Turbo…`。
@@ -39,7 +39,7 @@ use crate::workflow::workflow_recipe::{analyze, Task, Verified};
 pub struct Wanted {
     /// 任务类型（t2i / i2i / edit …）；`None` = 不限
     pub task: Option<Task>,
-    /// 模型族（用户口语；见模块头的匹配判据）；`None` = 不限
+    /// 模型族（常用称呼；见模块头的匹配判据）；`None` = 不限
     pub family: Option<String>,
 }
 

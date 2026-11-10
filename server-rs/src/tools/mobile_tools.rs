@@ -23,7 +23,7 @@ pub struct MobileToolSpec {
     pub input_schema: &'static str,
     /// 线上一律大写（`MOBILE` / `BOTH`）—— 手机侧按它判"这个我能不能执行"。
     pub scope: &'static str,
-    /// 出厂权限档（`ALLOW` / `ASK` / `DENY`）；用户在设置里可以逐工具覆盖。
+    /// 出厂权限档（`ALLOW` / `ASK` / `DENY`）；可在设置中逐工具覆盖。
     pub access: &'static str,
     /// 会不会写数据（prompt 里"（会写数据）/（只读）"那个标记）。
     pub mutating: bool,
@@ -81,7 +81,7 @@ pub const MOBILE_TOOLS: &[MobileToolSpec] = &[
         // 只有手机有这个名字（R11：桌面离线时它无法履行提交契约，所以**不复用** comfy_submit）
         scope: "MOBILE",
         // 排队要过一道本端审批（它会往本机队列里写东西）；**但真正的提交审批在桌面上**
-        // —— 用户拍板过："手机点过提交不算批准"。
+        // —— 已确定："手机点过提交不算批准"。
         access: "ASK",
         mutating: true,
     },

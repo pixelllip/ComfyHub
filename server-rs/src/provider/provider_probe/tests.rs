@@ -1,4 +1,4 @@
-//! `provider_probe` 的单元测试（主体代码在 [`provider_probe`](super) —— 2026-09-30 按用户要求与主体分离）。
+//! `provider_probe` 的单元测试（主体代码在 [`provider_probe`](super) —— 与主体分离）。
 //!
 //! `use super::*;` 照旧：子模块能看见父模块的私有项，所以用例一行都不用改。
 
@@ -6,7 +6,7 @@ use super::*;
 
 #[test]
 fn 模型列表地址的两个候选() {
-    // OpenAI 兼容：首选直接在 Base URL 后面拼 /models（带不带 /v1 由用户填的算数）
+    // OpenAI 兼容：首选直接在 Base URL 后拼 /models（是否带 /v1 以已填写的为准）
     assert_eq!(
         models_url_candidates("https://api.openai.com", "openai-completions"),
         vec![

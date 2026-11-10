@@ -88,7 +88,7 @@ async fn capture_locate_reports_the_home_and_never_writes_on_its_own() {
             .contains_key("configuredOutputDir"),
         "没配过就是 null → 这个键不出现，也不编一个：{body}"
     );
-    // 候选里记了"项目内的 comfyui 目录"这一条，且带判定依据（用户排错要看）
+    // 候选中记录了"项目内的 comfyui 目录"这一条，且带判定依据（排查时需要）
     let candidates = body["candidates"].as_array().unwrap();
     let hit = candidates
         .iter()
@@ -148,7 +148,7 @@ async fn locate_apply_validates_the_dir_and_then_persists_it() {
         output.to_string_lossy()
     );
 
-    // 配上之后 locate 就"就按这个用"（尊重用户配置，不再探）
+    // 配置后 locate 即"按该值使用"（尊重已有配置，不再探测）
     let (_, again) = get_json(router_for(state), "/api/capture/locate").await;
     assert_eq!(
         again["configuredOutputDir"].as_str().unwrap(),

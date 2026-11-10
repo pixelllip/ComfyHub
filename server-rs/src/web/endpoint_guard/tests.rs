@@ -1,4 +1,4 @@
-//! `endpoint_guard` 的单元测试（主体代码在 [`endpoint_guard`](super) —— 2026-09-30 按用户要求与主体分离）。
+//! `endpoint_guard` 的单元测试（主体代码在 [`endpoint_guard`](super) —— 与主体分离）。
 //!
 //! `use super::*;` 照旧：子模块能看见父模块的私有项，所以用例一行都不用改。
 
@@ -86,7 +86,7 @@ fn inferred_trust_matches_the_scope() {
     assert!(assert_allowed("fe80::1", infer_trust("fe80::1")).is_err());
 }
 
-/// 失败文案要**带当前判定**（用户排错全靠那半句）。
+/// 失败文案要**带当前判定**（排查依赖该句）。
 #[test]
 fn the_error_message_names_the_scope() {
     let err = assert_allowed("127.0.0.1", "public").unwrap_err();

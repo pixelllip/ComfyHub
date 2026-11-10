@@ -40,7 +40,7 @@ pub struct DesktopToolSpec {
     pub input_schema: &'static str,
     /// 线上字（桌面专属一律 `DESKTOP`）。
     pub scope: &'static str,
-    /// 出厂权限档（`ALLOW` / `ASK` / `DENY`）；用户在设置里可以逐工具覆盖。
+    /// 出厂权限档（`ALLOW` / `ASK` / `DENY`）；可在设置中逐工具覆盖。
     pub access: &'static str,
     /// 会不会写数据（prompt 里"（会写数据）/（只读）"那个标记）。
     pub mutating: bool,
@@ -169,7 +169,7 @@ pub const DESKTOP_TOOLS: &[DesktopToolSpec] = &[
 **学到的东西是什么**：`task`（t2i/i2i/edit/inpaint/upscale/video/audio，按节点形状判的）、`skeletonHash`（**同一族骨架 = 同一个值**，与模型无关 —— 这就是「泛用」）、`slots`（模型槽位：该改哪个键、原来是什么文件）、`knobs`（能覆盖的提示词/采样/尺寸键）。
 ⚠ **默认拒学「转换有缺口」的图**：界面格式里有节点转不出来（多半是**本机这个实例没装/没启用那几个自定义节点**）时，学下来的会是一条**看着像、其实缺了链**的骨架，而且不报错。被拒时照返回的那几条去查：先确认实例有没有那些节点类，别去改用户的工作流；确实只想学个大概就带 `tolerateUnsupported=true`（配方会标 `complete=false` + 缺口清单，**不许**拿它当完整骨架用）。
 同一个来源学两次只有一行（幂等，按文件 sha256 / promptId / 图哈希）。只读用户的文件，也不往提示词库里塞行。"#,
-        // 它会往本机配方库写一行（不是用户的文件），所以如实标 mutating，
+        // 它会向本机配方库写入一行（不是本地文件），因此如实标注 mutating，
         // 但与 comfy_load_workflow 同档：不拦（知识积累不该每一步都等批准）
         input_schema: r#"{"type":"object","properties":{"path":{"type":"string","description":"本机工作流文件的完整路径（.json；界面格式也行）"},"promptId":{"type":"integer","description":"或者：库里已有 API 图的提示词 id"},"graph":{"type":"object","description":"或者：直接给 API 格式节点图"},"name":{"type":"string","description":"配方名（默认取文件名 / 提示词标题）"},"tolerateUnsupported":{"type":"boolean","description":"转换有缺口时是否照样学（默认 false = 拒学，见描述里那一段）"},"emulateFrontend":{"type":"boolean","description":"界面格式转换时照 ComfyUI 前端行为等价改写（默认 true）"},"notes":{"type":"string","description":"可选备注：这份配方是干什么用的、从哪来的"}},"additionalProperties":false}"#,
         scope: "DESKTOP",
@@ -232,7 +232,7 @@ pub const DESKTOP_TOOLS: &[DesktopToolSpec] = &[
         description: r#"生成一张**局部重绘用的遮罩**放进 ComfyUI 的 input 目录（**白 = 要重新生成的地方**）。两种需求用同一个工作流，只是遮罩反过来：**保背景换人物** = 人物那块 region；**换背景保人物** = 同一个 region 再加 `invert=true`。给了 baseFilename（input 目录里的底图）就照它尺寸生成，**推荐**这么用。region 支持 full / left / right / top / bottom / center / person，或归一化的 "x,y,w,h"（例如 "0.3,0.05,0.4,0.9"）；`feather` 羽化边缘（把人物贴进新背景时 8~24 明显更自然）。**框是估的**：工具会回 approximate=true 与它实际用的框，不准就报新坐标重做 —— 不要指望它做分割，也不要让用户去 ComfyUI 里手画。
 **贴人物图（人物那个 `LoadImage`）用 `mode="subject"`**：这一档**不写遮罩** —— 合成用的 alpha 由工作流里的抠图节点现算（`easy imageRemBg` + `refine_foreground=true`）。它只回 `personFilename`（就是人物 LoadImage 该填的那张，可能是摆放后的新名字）与几个**定位器**诊断（`subjectRatio` / `background` 只说明"我们估的人物在哪、多大"，**不影响画面**）。`subjectFilename` 给**人物图**的文件名；**别给 region**（`region` 在这一档只有裁切作用）。配**用户自己的贴人工作流**（含上面那条抠图链；仓库不再随包带模板）用，**不要**覆盖任何 LoadImageMask。⚠ 那份工作流要求 ComfyUI 里有抠图模型（`models\rembg\BEN2_Base.pth` 1.1GB 或 `RMBG-1.4.pth` 169MB）：**先用 `comfy_get_status` 的 `mattingModels` 查、缺了就告诉用户下哪个**，别让它静默下载。摆放开 `scale` / `x` / `y`（人物像素与定位掩码一起搬，返回里会给新的文件名）。"#,
         // ⚠ 2026-09-27：颜色抠图那一档（`matteSource="color"` + `ring`/`shrink`/`edgeBand`/
-        //   `light*`）整档删除（用户拍板"放弃纯rust编辑，删除它"），描述与 schema 一起收窄 ——
+        //   `light*`）整档删除（已确定"放弃纯 Rust 编辑，删除该档"），描述与 schema 一起收窄 ——
         //   不补这一刀的话，模型会照着旧描述去传 `matteSource`，而工具会明确拒绝它。
         input_schema: r#"{"type":"object","properties":{"mode":{"type":"string","description":"rect（默认，按框画）/ subject（贴人物图：抠图交给工作流，本工具不写遮罩）"},"subjectFilename":{"type":"string","description":"mode=subject 时的人物图文件名（input 目录里的裸文件名，通常是刚 comfy_use_media 投进去的那张）"},"tolerance":{"type":"number","description":"mode=subject 定位器的背景色容差，默认 0.12（只影响估算出来的人物框，不影响画面）"},"bgColor":{"type":"string","description":"mode=subject 定位器的背景色提示（green / magenta / white / #00b140）—— 阶段一用绿幕/品红出图时传它，估出来的人物框更准；不传则从画面四周估"},"baseFilename":{"type":"string","description":"input 目录里的底图文件名（先用 comfy_use_media / comfy_use_attachment 投放）；给了就用它的尺寸"},"width":{"type":"integer","description":"没给 baseFilename 时的画布宽"},"height":{"type":"integer","description":"没给 baseFilename 时的画布高"},"region":{"type":"string","description":"重绘区：full（默认）/ left / right / top / bottom / center / person / \"x,y,w,h\"（归一化 0~1）"},"shape":{"type":"string","description":"rect（默认）或 ellipse"},"invert":{"type":"boolean","description":"反选：只保留这块、其它全重绘（换背景保人物用这个）"},"feather":{"type":"integer","description":"边缘羽化像素，默认 0；8~24 常用于把人物贴进新背景"},"scale":{"type":"number","description":"mode=subject 摆放：人物缩放倍数（1 = 不动）"},"x":{"type":"number","description":"mode=subject 摆放：人物中心放到归一化 x（0~1）"},"y":{"type":"number","description":"mode=subject 摆放：人物中心放到归一化 y（0~1）"},"filename":{"type":"string","description":"可选：固定的遮罩文件名（不给自己按参数算一个，重复调用得到同一个文件）"}},"additionalProperties":false}"#,
         scope: "DESKTOP",

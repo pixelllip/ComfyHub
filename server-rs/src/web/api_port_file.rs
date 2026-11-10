@@ -41,7 +41,7 @@ pub struct ApiPortState {
     pub url: String,
     /// 写文件的时刻（ISO-8601，排查"这个文件是不是几天前的"）
     pub started_at: String,
-    /// 用户/脚本**指定**的候选端口（0 = 一开始就想让系统挑）
+    /// **指定**的候选端口（0 = 一开始就由系统分配）
     pub requested_port: u16,
     /// 是不是从候选端口回落到随机端口的（true = 候选端口没绑上）
     pub fell_back: bool,
@@ -168,7 +168,7 @@ pub fn read(project_root: &Path) -> Option<ApiPortState> {
 
 /// 删除状态文件 —— **只有确认它还是本进程写的那一份才删**。
 ///
-/// 场景：用户点「重启」，新的后端已经起来并写好了新文件，这时旧进程的收尾才跑完；
+/// 场景：点击「重启」后，新的后端已启动并写好新文件，此时旧进程的收尾才结束；
 /// 无条件删会把**新进程的**记录删掉，前端随后就再也找不到后端了。
 pub fn delete_if_owned(project_root: &Path, pid: u32) -> bool {
     let mine = read(project_root)

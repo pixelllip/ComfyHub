@@ -1,4 +1,4 @@
-//! `upstream` 的单元测试（主体代码在 [`upstream`](super) —— 2026-09-30 按用户要求与主体分离）。
+//! `upstream` 的单元测试（主体代码在 [`upstream`](super) —— 与主体分离）。
 //!
 //! `use super::*;` 照旧：子模块能看见父模块的私有项，所以用例一行都不用改。
 
@@ -79,7 +79,7 @@ fn auth_headers_per_protocol() {
 ///
 /// 只认"两样都提到"的正文：既要 `reasoning` / `thinking`，又要"回传"。
 /// 看到 `reasoning` 就重发，会把"这个模型根本不支持思考"那类配置错误悄悄降档 ——
-/// 用户从此看不到真正的原因。
+/// 之后再也看不到真正的原因。
 #[test]
 fn reasoning_passback_error_is_recognised() {
     let real = r#"{"error":{"message":"The `reasoning_text` in the thinking mode must be passed back to the API. (request_id: abc)","type":"invalid_request_error"}}"#;

@@ -1,4 +1,4 @@
-//! `capability_probe` 的单元测试（主体代码在 [`capability_probe`](super) —— 2026-09-30 按用户要求与主体分离）。
+//! `capability_probe` 的单元测试（主体代码在 [`capability_probe`](super) —— 与主体分离）。
 //!
 //! `use super::*;` 照旧：子模块能看见父模块的私有项，所以用例一行都不用改。
 
@@ -486,7 +486,7 @@ fn 坏_json_如实报错且一个字节都不覆盖() {
 
 #[test]
 fn 形状不对的_json_也拒绝覆盖() {
-    // 顶层不是对象 / `entries` 不是对象 → 拒绝（改下去只会把用户的文件弄坏）
+    // 顶层不是对象 / `entries` 不是对象 → 拒绝（写入只会破坏原有文件）
     for raw in [
         r#"[]"#,
         r#"{"entries": 3}"#,
