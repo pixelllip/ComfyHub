@@ -1,12 +1,12 @@
 //! `comfy_prune_workflow`：工作流的**摘节点 / 拼节点**（`WorkflowPrune.kt` +
 //! `ToolRegistry.kt` 里那条工具处理体的逐条对照，P4 第 63 步）。
 //!
-//! # 用户的原话（用户建议 ②，2026-09-20）
+//! # 需求原文
 //!
 //! > "可能要设计工具/skill，让 AI 能够基于基本工作流，摘除无关节点或者拼装必要节点
-//! > （比如这种情况：用户没有提供参考图，但是他引导的工作流的节点用到参考图）"
+//! > （例如：未提供参考图，但引导的工作流的节点需要参考图）"
 //!
-//! 后来用户又补了两个现场：
+//! 另外补充两个场景：
 //! > "我没给参考图，但是给了个需要参考图的工作流，要能识别出该工作流的骨干部分，
 //! >  把无关内容临时摘掉；又比如我显存不足但是硬要跑，这时候可能需要考虑向工作流加入
 //! >  Sage Attention"
@@ -18,7 +18,7 @@
 //! 让模型拿 JSON 自己重写，它得先把整张图读进来、再逐条重写引用 —— 32K 字符的结果上限
 //! 装不下一份 100+ 节点的工作流，而且一个键写错 ComfyUI 只会回一句"节点不存在"。
 //! 所以这里做的是纯函数式的图运算，结果**自带审计清单**（摘了谁、把哪根线接到了哪），
-//! 模型与用户都能核对。
+//! 模型与界面均可核对。
 //!
 //! # 判据是"**可达性**"，不是"节点名字像不像"
 //!
@@ -64,7 +64,7 @@ pub const DEFAULT_MAX_BRANCHES: usize = 12;
 /// 一次摘除 / 拼装的结果（Kotlin `WorkflowPrune.Result`）。
 ///
 /// [`graph`](Self::graph) 是**改好的新图**（原图不动，见"写入留退路"那条纪律）；
-/// 其余字段是给模型与用户核对用的审计清单。
+/// 其余字段是供模型与界面核对的审计清单。
 #[derive(Debug, Clone)]
 pub struct PruneResult {
     pub graph: Map<String, Value>,
@@ -172,7 +172,7 @@ pub fn apply(
 
     // ---- 1) 摘除 ------------------------------------------------------
     //
-    // 用户点的那个位置**一定**要摘掉，摘完之后：
+    // 指定的那个位置**必须**摘掉，摘除之后：
     //   ① 它自己的连线输入清空（= 这条线不再存在）；
     //   ② 由此"没人再要"的上游跟着级联摘掉（`LoadImage` / `ControlNetLoader`
     //      只喂给 `ControlNetApply`，ControlNetApply 一走它们就再也不会被执行）；
@@ -222,10 +222,10 @@ pub fn apply(
     //
     // 判据只有一条，好解释也好验证：**从输出节点反向再也走不到它**。
     //
-    // 两处例外必须留着，否则会变成"顺手删用户的图"：
+    // 两处例外必须保留，否则会误删相关图片：
     //   · **输出节点**永远保留；
     //   · **没有任何连线输入、也没有消费者**的孤立节点不碰 ——
-    //     那是用户"还没接完"的东西（比如刚拖进来的 EmptyLatentImage），
+    //     属于"尚未接通"的节点（例如刚加入的 EmptyLatentImage），
     //     不是我们要摘的那条无关分支。第一版就是把它一起删了。
     let mut cascading = true;
     while cascading {
@@ -267,7 +267,7 @@ pub fn apply(
 
     // ---- 2) 收拾残局：指着被摘节点的输入，接回它自己的上游 --------------
     //
-    // 这一段是"用户还看得见结果"的关键：
+    // 这一段是"结果仍可见"的关键：
     //  · 目标本身的输入一律清掉（`KSampler.positive` 不再接 ControlNet）；
     //  · **只是**把目标当上游、且还有别的连线输入的人，改接回目标的上游
     //    （`ControlNetApply` 摘下之后，它下游那条链不至于断在半空）。
@@ -457,11 +457,11 @@ pub fn apply(
     }
 }
 
-/// 一份"这段是干什么的"人话描述（用户建议 ④：分析出本地**用不上**的节点，
-/// 向用户确认后再删）。
+/// 一份说明"该段作用"的描述（分析本机**用不上**的节点，
+/// 确认后再删除）。
 ///
 /// 判据是几条最常见的类名特征，**认不出就照抄类名** —— 编一个听起来很懂的解释
-/// 比不解释更坏（用户会照着它做决定）。这一段只影响文案，不影响摘除判据。
+/// 比不解释更差（会据此做决定）。这一段只影响文案，不影响摘除判据。
 pub fn describe(class_type: &str) -> String {
     let lower = class_type.to_lowercase();
     let known = if lower.contains("controlnet") {
@@ -512,15 +512,15 @@ pub fn describe(class_type: &str) -> String {
         .unwrap_or_else(|| class_type.to_string())
 }
 
-/// **用不上的分支**分析（用户建议 ④，2026-09-22）。
+/// **用不上的分支**分析。
 ///
-/// > "设计工具，当用户提出类似'删除无用节点'时，分析出本地用不上的节点并向用户再次确认删除，
+/// > "设计工具：当提出类似'删除无用节点'时，分析出本机用不上的节点并再次确认删除，
 /// >  然后执行操作。"
 ///
 /// 判据与摘除完全同源：**从输出节点反向走不到** = 跟出图无关。不去猜"这个类像不像
 /// ControlNet"（那样第三方节点就漏了），所以结果和真摘一次是一致的。
 ///
-/// * `keep`：用户点名要保留的节点（不会进建议）。
+/// * `keep`：指定要保留的节点（不进入建议）。
 /// * `max_branches`：最多报几条分支（一次报 40 段没人看得完）。
 pub fn unused_branches(
     graph: &Map<String, Value>,
@@ -593,7 +593,7 @@ pub fn unused_branches(
 
     // 连成一片的算一条分支 —— 但"连成一片"必须**按数据流方向**连，不是无向连通：
     // 一条分支 = 一个末端（谁也不引用的死节点）＋ 喂给它的所有上游。
-    // 用户在图里点那个末端，整条分支就跟着被摘掉，这正是 `apply` 的级联判据。
+    // 指定末端节点后，整条分支随之被摘除，这正是 `apply` 的级联判据。
     //
     // （第一版按无向连通分组，把 `FaceSwap.face ← LoadImage` 这种"横向喂料"也连进
     // 同一片，于是一片里出现两个互不喂料的梢，入口就选到了错误的那个。）
@@ -711,7 +711,7 @@ impl Branch {
     /// 这条分支要摘的节点 id。
     ///
     /// **整条都给**（不是只给 entry）：`removeFrom` 只写入口时，`apply` 会按"从输出反向
-    /// 再也走不到"级联摘掉同一片 —— 结果是一样的，但显式列全了，用户核对时不会漏。
+    /// 无法到达"级联摘除同一片 —— 结果相同，但显式列全后核对时不会遗漏。
     pub fn suggest_remove(&self) -> Vec<String> {
         self.nodes.iter().map(|node| node.id.clone()).collect()
     }
@@ -823,7 +823,7 @@ impl PruneReport {
 
 /// [id] 这条死数据流最终喂给谁（**顺流而下**找那个谁也不引用的死节点）。
 ///
-/// 它就是"这条分支的梢"：用户在图里点它，`apply` 的级联会把整条一起摘掉。
+/// 它是"该分支的末端"：指定该节点后，`apply` 的级联会把整条一起摘掉。
 /// 多个梢都能到（分叉到两个末端）时取编号大的那个，保证同一份图每次报同一条。
 fn downstream_tip(id: &str, nodes: &Map<String, Value>, dead: &HashSet<String>) -> String {
     let mut cursor = id.to_string();
@@ -1175,9 +1175,9 @@ fn obj_str(object: &Map<String, Value>, key: &str) -> Option<String> {
 ///
 /// 三条纪律都在返回里体现（与 Kotlin 逐字一致）：
 ///  1. **只接受"要摘哪个输入 / 要插什么节点"**，图由后端算 —— 不让模型重写 JSON；
-///  2. `analyze=true` **一个字都不改**（只分析哪条分支用不上，拿到清单先问用户）；
+///  2. `analyze=true` **不做任何改动**（只分析哪条分支用不上，取得清单后先确认）；
 ///  3. 拿不到 `/object_info` 时**只摘不拼**，并把"为什么没插"如实说清楚 ——
-///     乱接一根线的代价是 ComfyUI 回一句看不懂的报错，用户根本查不出来。
+///     随意接一根线的代价是 ComfyUI 返回难以理解的报错，无法排查。
 pub async fn tool_prune_workflow(
     state: &AppState,
     arguments: &Value,
@@ -1226,8 +1226,8 @@ pub async fn tool_prune_workflow(
         .unwrap_or_default();
 
     if remove_from.is_empty() && injections.is_empty() {
-        // `analyze=true`（用户建议 ④）：只分析"哪些分支用不上"，一个字都不改。
-        // 用户说"删掉没用的节点"时走的就是这一条 —— 拿到清单**先问他**，再摘。
+        // `analyze=true`：只分析"哪些分支用不上"，不做任何改动。
+        // "删除无用的节点"走的就是这一条 —— 取得清单后**先确认**，再摘除。
         if bool_arg(arguments.get("analyze")) == Some(true) {
             let report = unused_branches(&graph, &keep, DEFAULT_MAX_BRANCHES);
             let value = report.to_json();
@@ -1259,7 +1259,7 @@ pub async fn tool_prune_workflow(
         };
         if object_info.is_none() {
             // 摘除照样做完（那是纯图运算），只是**不插** —— 乱接一根线的代价
-            // 是 ComfyUI 回一句看不懂的报错，用户根本查不出来。
+            // 是 ComfyUI 返回难以理解的报错，无法排查。
             let detached = apply(&graph, &remove_from, &keep, &[], None);
             let mut out = Map::new();
             out.insert("ok".into(), json!(false));

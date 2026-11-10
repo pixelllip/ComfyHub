@@ -28,14 +28,14 @@
 //!  | 闸门 | 判据 | 拒了之后让模型干什么 |
 //!  | --- | --- | --- |
 //!  | 审核里"必跑不了"的三项 | [`crate::workflow::workflow_audit::audit`] 的 [`Report::blocking_refusal`]：纯前端节点 / 已知版本不兼容节点 / 本机没有的节点类 | 照审核给的那句话做（更新节点包 / 让 `comfy_load_workflow` 照前端行为改写 / 启停实例） |
-//!  | 节点类在不在实例里 | `class_type` 不在 `/object_info` 的键里（**纯前端那一类除外**，见下） | 让用户装/启用那几个自定义节点包，或换实例；**不要**改用户的工作流 |
-//!  | 模型文件实例认不认 | 节点类名含 `Loader` 的、输入值是字符串、而 `/object_info` 给该输入列的候选里有它没有 | 让用户**重启 ComfyUI**（ComfyHub 起实例时会挂上 Desktop 的模型根）；**别去下载** |
+//!  | 节点类在不在实例里 | `class_type` 不在 `/object_info` 的键里（**纯前端那一类除外**，见下） | 提示安装 / 启用对应自定义节点包，或更换实例；**不要**修改工作流 |
+//!  | 模型文件实例认不认 | 节点类名含 `Loader` 的、输入值是字符串、而 `/object_info` 给该输入列的候选里有它没有 | 提示**重启 ComfyUI**（ComfyHub 起实例时会挂上 Desktop 的模型根）；**不要去下载** |
 //!
 //! 后两道是**实例侧**的（`/object_info` 直接说了算）；第一道是第 63 步那份
 //! [`crate::workflow::workflow_audit`] 的第 70 步接线，位置与 Kotlin `Application.kt` 的 `preflight`
 //! lambda（`WorkflowAudit.audit(graph, info, inv).blockingRefusal() ?: ModelPreflight.check(graph, inv)`）
 //! 一致。**只有前两道会拒**；非阻断的那些（参数档位 / 显存 / 提示词风格 / 输出前缀 /
-//! 加载器目录）走 `preflightWarnings` 如实带给模型与用户。
+//! 加载器目录）通过 `preflightWarnings` 如实返回模型与界面。
 //!
 //! ⚠ **拿不到 `/object_info` 就一个都不拦**（Kotlin 同）：误拦一个本来能跑的工作流，
 //! 比白跑一次更糟。⚠ 唯一不看 `/object_info` 的是审核里那两条**静态知识表**
@@ -53,7 +53,7 @@
 //!     `scripts\e2e-submit-test.ps1` 第 4/5 幕就是活证（见 [`preflight_refusal`] 的说明）。
 //!  3. **"实例里没有这个节点类"这一道排在审核之前**：Kotlin 的 `ModelPreflight` **不看节点类**
 //!     （它只管模型文件），所以这个重叠只存在于 Rust 侧，没有 Kotlin 的先后可照搬。
-//!     这一道先说话是因为它的措辞正是本仓库的纪律（"让用户启停/换实例，**不要**改用户的工作流"）；
+//!     这一道先输出，因为其措辞即本仓库约束（"提示启停 / 更换实例，**不要**修改工作流"）；
 //!     而**纯前端**那一类被它**故意跳过**（对那种类说"装节点包"是错的方向），交给审核那一档说。
 
 use std::collections::{BTreeSet, HashSet, VecDeque};
@@ -212,10 +212,10 @@ fn now_iso() -> String {
 ///
 /// 为什么只在这里写：失败 / 超时 / 取消记下来的话，"已验证"就退化成"试过"，
 /// 而床上场景（`docs/workflow-auto-select-plan.md` §1.2 第 ② 档）正是靠这一档
-/// 决定**能不能不打扰用户直接开跑** —— 一次假绿灯就是一次白烧显卡。
+/// 决定**能否无需确认直接执行** —— 一次误判会浪费一次完整生成。
 ///
 /// 三条边界：
-///  * 对不上配方（用户随手跑的工作流 / 没学过它）→ **不记**（那不是配方验证）；
+///  * 对不上配方（临时运行的工作流 / 未学习过）→ **不记录**（不属于配方验证）；
 ///  * 只记**这次真的写进 overrides 且属于槽位键**的那几个值（旋钮键不算"这个模型能用"）；
 ///  * 落库失败只打日志：验证是**下一次**的复利，不该影响这一次已经成功的提交。
 fn record_verified_binding(
@@ -288,9 +288,9 @@ impl WorkflowEdit {
     ///
     /// `overrides` 的键是 `节点id.输入名`（例如 `3.steps`、`6.text`）。三条规矩：
     ///  1. **只在类型兼容时改写**（原来存的是数字就不能塞字符串 —— ComfyUI 会当场 400，
-    ///     而用户看到的是一句莫名其妙的报错）；
+    ///     而界面显示的是一句难以理解的报错）；
     ///  2. 转换不了 / 路径不存在 / 输入本来没有 → **抛错**，让模型自己纠正（绝不静默忽略）；
-    ///  3. 返回实际改掉的清单，工具如实告诉用户"改了哪几个参数"。
+    ///  3. 返回实际修改的清单，工具如实说明"修改了哪几个参数"。
     pub fn apply_overrides(
         graph: &Value,
         overrides: &Map<String, Value>,
@@ -322,7 +322,7 @@ impl WorkflowEdit {
                 .cloned()
                 .ok_or_else(|| format!("节点 {node_id} 没有 inputs（参数路径 {path}）"))?;
             // 只允许覆盖**这个节点本来就有的输入**：凭空加一个字段 ComfyUI 会当未知参数拒掉，
-            // 报错却只会说"节点参数不对"，用户根本查不出来
+            // 报错只显示"节点参数不对"，无法排查
             let previous = inputs.get(field).ok_or_else(|| {
                 let existing: Vec<&str> = inputs.keys().map(String::as_str).collect();
                 let listed: String = existing.join("、").chars().take(200).collect();
@@ -411,7 +411,7 @@ impl WorkflowEdit {
 
     /// 把**最终正面提示词**直接写进正面文本编码器，并从提交图里摘掉原来那一路。
     ///
-    /// # 为什么需要它（用户 2026-10-21）
+    /// # 存在理由
     ///
     /// 很多现成工作流里有一个 `TextGenerate`（本地 LLM 扩写 / 布局编译器）：
     /// 它的输出经过 `ComfySwitchNode` / `Fast Bypasser` 一路接到 `CLIPTextEncode.text`。
@@ -421,15 +421,15 @@ impl WorkflowEdit {
     /// 现在模型可以**自己服从 `TextGenerate.system_prompt`** 写好最终提示词，再走这个参数：
     /// 1. 从每个采样器的 `positive` 输入往上找**最近的** `CLIPTextEncode`（不碰 negative）；
     /// 2. 把它的 `text` 改成字面量 —— 原来那条线**就此断开**；
-    /// 3. **再把 TextGenerate 这一支从提交图里删掉**（2026-10-24 用户口径：摘线 ≠ 绕过）：
+    /// 3. **再把 TextGenerate 这一支从提交图中删除**（摘线 ≠ 绕过）：
     ///    只断线不够，节点还在提交图里，而 ComfyUI 的 `validate_prompt` 校验的是**整张 prompt**
     ///    （不只可达节点）—— 本机没装 TextGenerate 节点包、或它的动态下拉框值不合法时，
     ///    整份报错（`Node type not found: TextGenerate`），哪怕一个输出都没接。
     ///    只删节点不清引用也不行，留下 `39.on_true → [32,0]` 又会 `Node 32 not found`
-    ///    （用户看到的"有节点没接入"）。
+    ///    （界面显示"有节点未接入"）。
     ///    所以这里**成对做**：删 TextGenerate 这一支 + 把指向它的下游一并摘掉 / 把只喂它的
     ///    上游一并清掉，删完校验"没有悬挂引用、至少还剩一个输出"；校验不过就退回只断线。
-    /// 4. 用户自己的文件**一个字节都不动**：改的只是这一次提交的图。
+    /// 4. 原文件**不做任何改动**：只修改本次提交的图。
     ///
     /// 返回 `(改过的图, 改过的 节点id.text, 从提交图里摘掉的节点 id)`。
     /// **找不到正面文本编码器就报错**：静默什么都不改会让模型以为已经按它的提示词出了图。
@@ -658,7 +658,7 @@ fn graph_is_sound(nodes: &Map<String, Value>, removed: &BTreeSet<String>) -> boo
 
 /// 把 `TextGenerate` 这一支从**提交图**里摘掉，返回真正删掉的节点 id（升序）。
 ///
-/// 2026-10-24 用户口径："摘除了还得阻止该节点运行（绕过节点），不然工作流运行时可能
+/// 约束："摘除后还需阻止该节点运行（绕过节点），否则工作流运行时可能
 /// 产生报错（有节点没接入之类）"。两件事必须成对做：
 ///
 /// 1. **删节点**：ComfyUI 的 `validate_prompt` 校验整张 prompt（不只可达节点），
@@ -815,17 +815,17 @@ fn primitive_text(value: &Value) -> Option<String> {
 ///
 /// * Kotlin 的模型预检（`ModelPreflight` + `WorkflowFit`）靠 `ComfyModels` 的**并集清单**
 ///   （`/object_info` ∪ **盘扫**），而**盘扫那一半 Rust 还没搬**（归 `comfy_env_report`）；
-/// * 只按 `/object_info` 的候选判，会把"文件名对不上但盘上真有 / 用户马上要换掉"的图**误拦**——
+/// * 只按 `/object_info` 的候选判定，会把"文件名不一致但盘上存在 / 即将更换"的图**误拦**——
 ///   `scripts\e2e-submit-test.ps1` 第 4/5 幕就是活证：那份界面格式工作流写的
 ///   `e2e_model.safetensors` 不在假实例的候选里，而这在真实场景里只是一次正常的提交
 ///   （Kotlin 那条链同样不拦：它的清单来源与判据都比"单个输入框的候选"宽）。
 ///
 /// **误拦比白跑一次更糟**（Kotlin 那边也是这个口径），所以这一档现在是**警告**：
-/// 提交照常走，但把"实例看不到这些模型文件"如实回给模型与用户。
+/// 提交照常执行，但把"实例看不到这些模型文件"如实返回模型与界面。
 ///
 /// ⚠ **纯前端节点不在这里拦**（`Label (rgthree)` / `Anything Everywhere` / 显示节点…）：
 /// 它们不是"这个实例没装"，而是"**服务端根本没有这个类**" —— 装节点包也装不上，
-/// 那句"让用户装/启用节点包"是错的方向。这一档交给 [`workflow_audit`] 里
+/// 提示"安装 / 启用节点包"是错误方向。这一档交给 [`workflow_audit`] 中
 /// [`crate::workflow::workflow_audit::CHECK_FRONTEND`] 那条结论说（它的修法才对）。
 pub fn preflight_refusal(graph: &Value, info: &Value) -> Option<String> {
     let info = info.as_object()?;
@@ -875,7 +875,7 @@ pub fn preflight_refusal(graph: &Value, info: &Value) -> Option<String> {
 /// 判据与 Kotlin 的模型预检同一类：类名含 `Loader` 的节点、输入是字符串、
 /// 而 `/object_info` 给该输入列的候选里有它没有 —— 那就**很可能**是"盘上有、实例看不到"
 /// （重启实例/改用带共享模型根的实例就能解决），也可能是名字确实写错了。
-/// 两种情形给的动作都是"先确认、别硬提交"，但**不替用户做决定**。
+/// 两种情形的动作均为"先确认、不强行提交"，但**不代替做出决定**。
 pub fn preflight_warnings(graph: &Value, info: &Value) -> Vec<String> {
     let Some(info) = info.as_object() else {
         return Vec::new();
@@ -1023,7 +1023,7 @@ async fn preflight(
 
 /// **这份工作流认不认负面提示词**（2026-10-11）。
 ///
-/// 有些 turbo 模型的工作流根本没有负面输入，用户/模型发过去的负面提示词**无处可放** ——
+/// 部分 turbo 模型的工作流没有负面输入，发送的负面提示词**无处可放** ——
 /// 这件事只能从**目标工作流**上看出来（它是工作流的属性，不是预设的属性）。
 ///
 /// 判据：按 `/object_info` 的声明，图里有没有**连了线**的 `negative` 条件输入。
@@ -1176,7 +1176,7 @@ pub async fn capture_run(
     entry: &Value,
     nsfw: bool,
     // 本次提交时给的标题（`comfy_submit(title=…)`）：**必须带进捕获**，否则
-    // `make_title` 会退回保存节点的 `filename_prefix`（用户看到的是 `test · seed …`）。
+    // `make_title` 会退回保存节点的 `filename_prefix`（界面显示为 `test · seed …`）。
     title: Option<&str>,
 ) -> Result<crate::comfy::capture_ingest::IngestResult, String> {
     let claim =
@@ -1646,7 +1646,7 @@ pub async fn tool_submit(
     if let Some(cap) = negative {
         out.insert("negativeInputs".into(), json!(cap));
     }
-    // 预检的**提示**（不拦）：让模型/用户知道"实例可能看不到这几个模型文件"
+    // 预检的**提示**（不拦截）：使模型与界面知晓"实例可能看不到这几个模型文件"
     if !warnings.is_empty() {
         out.insert("preflightWarnings".into(), json!(warnings));
     }
@@ -1683,7 +1683,7 @@ fn arg_i64(value: &Value) -> Option<i64> {
 ///
 /// 为什么放在服务端：18KB 的 r2i skill 正文让模型在 `overrides` 里复述一遍既贵、又容易抄错
 /// （2026-10-25 的口径：模型只说 skill 名，正文由后端按名读出来写进去）。
-/// 只改**这一次提交的图**，用户的原文件一个字节都不动。
+/// 只修改**本次提交的图**，原文件不做任何改动。
 ///
 /// 能写两种形状：`system_prompt` 直接是内联字符串；或者它连着某个 `*String*` 节点（改它的 `value`）。
 pub fn apply_text_generate_system_prompt(
