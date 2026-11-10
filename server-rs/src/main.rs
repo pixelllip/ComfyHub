@@ -7,7 +7,7 @@
 //! # 谁起我、谁关我（2026-09-30 起）
 //!
 //! **桌面 App 自己直接拉这个 exe**，不再经过 `scripts\comfyhub.ps1` / `server.ps1` /
-//! WMI（那套脚本已按用户要求删掉）。契约在 `lib\core\backend_launcher.dart`，参数是：
+//! WMI（相关脚本已删除）。契约在 `lib\core\backend_launcher.dart`，参数是：
 //!
 //! ```text
 //! <根>\backend\comfyhub-server-rs.exe --db <根>\.db\comfyhub.db --storage <根>\storage \
@@ -51,7 +51,7 @@
 //! | **`POST /api/capture/poll`**（拉一次 `/history` 并**入库**：建提示词 + 产物进画廊） | ✅（P4 第 43 步） |
 //! | **`POST /api/ingest/comfyui`**（推送式捕获：外部把一条已跑完的运行推过来，幂等） | ✅（P4 第 49 步） |
 //! | **`POST /api/capture/import-workflows`**（把本机 ComfyUI 里已保存的工作流文件批量读进库；界面上的「导入本机工作流」按钮） | ✅（P4 第 49 步：`run_key = file:<sha256>` 判重，导两次只有一行） |
-//! | **后台捕获轮询器**（用户自己在 ComfyUI 里跑的东西也会被收）+ `/api/capture/status` 的 `lastPollAt` / `lastError` | ✅（P4 第 47 步：`capture_poller.rs`，逐条对齐 Kotlin `ComfyCapture.start()`；启动等 2.5 秒、停用 5 秒空转、间隔夹 1..600、同一时刻只跑一轮） |
+//! | **后台捕获轮询器**（在 ComfyUI 中手动运行的任务同样被捕获）+ `/api/capture/status` 的 `lastPollAt` / `lastError` | ✅（P4 第 47 步：`capture_poller.rs`，逐条对齐 Kotlin `ComfyCapture.start()`；启动等 2.5 秒、停用 5 秒空转、间隔夹 1..600、同一时刻只跑一轮） |
 //! | `GET /api/{prompts,media}/{id}/workflow`、`GET /api/prompts/{id}/api-graph` | ✅ |
 //! | **`/api/sync/{manifest,changes,push,bootstrap}`**（4 条全落地） | ✅ **含 `kind:"submit_job"` 那条指令**（M5，契约 §4.1）：手机排队 → 桌面**先过审批闸门**（"手机点过提交"不算批准）→ 批准后走**现有 `comfy_submit` 全链路**（R10）→ 结果作为一条助手消息追加进发起那条会话（手机靠普通下行同步看到）。落点 `submit_queue.rs` + `submit_jobs` 表；`push` 本身**不阻塞**（受理 = 落一行 + 起后台任务） |
 //! | `GET /api/ai/providers`（不含密钥）、`GET /api/ai/providers/{id}/models` | ✅ |
@@ -79,13 +79,13 @@
 //! | **生成任务的实时进度 + 当前步骤**（`comfy_progress.rs`：常驻 `ws://<comfyUrl>/ws` + 指数退避重连；`/api/capture/{status,jobs}` 的 `current` 与 `submissions[].progress`、`comfy_get_status` 的 `current` / `currentStep` / `progressConnected`） | ✅（P4 第 72 步。REST 拿不到进度 —— 2026-09-27 实测 `/queue` 没有、`/progress` 404、`/history` 只有跑完的，所以这是唯一来源。`percent` **只**来自 ComfyUI 自己发的 `value/max`（`progress` / `progress_state` 帧），**拿不到就是 `percent` 缺席（进度未知）**，绝不用"已执行节点数/总节点数"冒充；终态也不把 percent 抬到 100） |
 //! | **`GET /api/net/urls`**（这台桌面有哪些**可达地址**：回环 / 局域网 / Tailscale） | ✅（P4 第 73 步：`net_urls.rs`。给手机的「同步与连接」页当候选 —— 手机没法自己扫网段猜桌面地址，而"能不能连上"由客户端打一次真实请求决定，分类只用于显示。端口用**我们实际监听的**那个；`port == 0` 时如实回空数组，不编地址） |
 //! | **联网三工具 + 定向查询**（`web_search` / `web_fetch` / `civitai_search` / `find_model`） | ✅（P4 第 64 步：`web_tools.rs` / `civitai.rs` / `find_model.rs`。四件都是 **WEB 档**，共用 `MAX_WEB_QUERIES_PER_RUN` 那份预算、出厂全 `ASK`；`web_fetch` 的目标过 SSRF 闸门，`find_model` **先查本机再查外网**且**绝不代下**） |
-//! | **官方 comfy-mcp 那 39 个工具**（`system_stats` / `nodes` / `run_workflow` / `launch_comfyui` / `get_logs` …） | ✅（P4 第 45 步：`mcp.rs` 起 `comfy-mcp` 子进程走 JSON-RPC，清单进 `/api/ai/tools` 与下发的 `tools[]`；`launch_comfyui` 由我们**替用户补上共享模型根那三个参数**，失败时把 stderr 尾部带进 `detail`）。⚠ **起 / 停实例请走 `comfy_start` / `comfy_stop`**（2026-09-28）：comfy-cli 启动时要写两个**项目外**的文件（`%LOCALAPPDATA%\comfy-cli\config.ini` 与 `<ComfyUI>\user\comfyui_8188.log`），受限会话里必然 `Errno 13`，而第二个没有参数可改 —— `launch_comfyui` 那条路的失败提示现在直接指过来 |
-//! | **自己起 / 停 ComfyUI**：`comfy_start` / `comfy_stop` | ✅（2026-09-28，用户 bug「通过 CLI 启动 comfyui 总是失败」：`comfy_launch.rs` —— 用工作区自己的 `.venv\Scripts\python.exe` 跑 `main.py`（三个路径参数复用 `mcp::prepare_launch_with`）、`PYTHONUTF8=1`、日志落项目内 `.run\`、pid 只认自己起的那个；起之前先探写权限，**写不进就当场如实拒绝**——子进程**继承**当前进程的限制，实测 WMI / schtasks 全被系统挡掉 |
-//! | **关键步骤（环节）折叠**：`[步骤]…[/步骤]` → `step` 有序块 + `step.started` 事件 | ✅（2026-09-28，用户建议：`step_mark.rs` 流式摘取六个固定环节名 + 系统提示**第 21 条**（`PROMPT_VERSION` v35）+ 界面按环节把连续的工具卡折进一组；摘取**绝不吞内容**，枚举外的名字摘掉但不记环节） |
+//! | **官方 comfy-mcp 那 39 个工具**（`system_stats` / `nodes` / `run_workflow` / `launch_comfyui` / `get_logs` …） | ✅（P4 第 45 步：`mcp.rs` 起 `comfy-mcp` 子进程走 JSON-RPC，清单进 `/api/ai/tools` 与下发的 `tools[]`；`launch_comfyui` 由我们**自动补上共享模型根那三个参数**，失败时把 stderr 尾部带进 `detail`）。⚠ **起 / 停实例请走 `comfy_start` / `comfy_stop`**（2026-09-28）：comfy-cli 启动时要写两个**项目外**的文件（`%LOCALAPPDATA%\comfy-cli\config.ini` 与 `<ComfyUI>\user\comfyui_8188.log`），受限会话里必然 `Errno 13`，而第二个没有参数可改 —— `launch_comfyui` 那条路的失败提示现在直接指过来 |
+//! | **自己起 / 停 ComfyUI**：`comfy_start` / `comfy_stop` | ✅（「通过 CLI 启动 ComfyUI 总是失败」：`comfy_launch.rs` —— 用工作区自己的 `.venv\Scripts\python.exe` 跑 `main.py`（三个路径参数复用 `mcp::prepare_launch_with`）、`PYTHONUTF8=1`、日志落项目内 `.run\`、pid 只认自己起的那个；起之前先探写权限，**写不进就当场如实拒绝**——子进程**继承**当前进程的限制，实测 WMI / schtasks 全被系统挡掉 |
+//! | **关键步骤（环节）折叠**：`[步骤]…[/步骤]` → `step` 有序块 + `step.started` 事件 | ✅（`step_mark.rs` 流式摘取六个固定环节名 + 系统提示**第 21 条**（`PROMPT_VERSION` v35）+ 界面按环节把连续的工具卡折进一组；摘取**绝不吞内容**，枚举外的名字摘掉但不记环节） |
 //! | **工作流审核 + 摘拼**：`comfy_audit_workflow`（七项确定性检查）/ `comfy_prune_workflow`（可达性摘除 + 按 `/object_info` 拼装） | ✅（P4 第 63 步：`workflow_audit.rs` / `workflow_prune.rs`；两件都**只报不改**，改好的图是**内联**返回的） |
 //! | **工作流配方三件**：`comfy_learn_workflow` / `comfy_list_recipes` / `comfy_bind_recipe` + `workflow_recipes` 表 + `/api/ai/workflow-recipes*` | ✅（P4 第 67 步：`workflow_recipe.rs` —— 归纳成「任务 + 骨架指纹 + 模型槽位 + 参数旋钮」，默认**拒学**转换有缺口的图（`UNSUPPORTED_NODES`），绑**只报不改**；学习与绑定与端点**共用一份实现**。**系统提示第 20 条**（P4 第 69 步）已按 Kotlin 原文补进常驻段，`PROMPT_VERSION` 随之 **v32 → v33**；正文真源是 `src/nsfw_prompt.rs`（`gen_prompts.py` 已停用）） |
-//! | **2D 布局模板**：`layout_propose`（`ai/layout_proposal.rs`）+ 工作台里的模板卡 / 「提交回工作台」 | ✅（2026-11-03 用户换思路："AI 生成提示词的同时给出可用的 2D 布局模板，我可打开预览并修改，修改后重新提交给工作台"。工具只出构图草稿（0~1000 框 + 关系），**不生成图片 / 不写库**；后端夹边、补 id、清坏关系并逐条记账，`layoutTemplates` 落进 `tool_result` 块，重开 App 卡片还在。**3D 路线同日搁置**：`docs/layout-3d-design.md` 只留作评估。契约见 `docs/layout-workspace-design.md`） |
-//! | **`WorkflowConvert` 的两处欠账** | ✅ **清零（P4 第 68 步）**：**组节点（subgraph）按定义展开**成内部真节点（`flatten`：重新编号 / 外层控件值填进内部输入 / 输出代理登记成改写）；**「模拟用户行为」（`emulateFrontend`）真的实现**（`workflow_frontend.rs` = Kotlin `FrontendNodes.kt` 的对照：广播填空 / 丢显示节点 / 补 `SaveImage`），改了什么都如实列在 `frontendEmulated` / `frontendBroadcast` / `frontendInjected` 里。工具描述是 Kotlin 的逐字拷贝，**现在它说的是真的**，"本后端还没做这一步"那句 warning 已删除 |
+//! | **2D 布局模板**：`layout_propose`（`ai/layout_proposal.rs`）+ 工作台里的模板卡 / 「提交回工作台」 | ✅（需求："AI 生成提示词的同时给出可用的 2D 布局模板，我可打开预览并修改，修改后重新提交给工作台"。工具只出构图草稿（0~1000 框 + 关系），**不生成图片 / 不写库**；后端夹边、补 id、清坏关系并逐条记账，`layoutTemplates` 落进 `tool_result` 块，重开 App 卡片还在。**3D 路线同日搁置**：`docs/layout-3d-design.md` 只留作评估。契约见 `docs/layout-workspace-design.md`） |
+//! | **`WorkflowConvert` 的两处欠账** | ✅ **清零（P4 第 68 步）**：**组节点（subgraph）按定义展开**成内部真节点（`flatten`：重新编号 / 外层控件值填进内部输入 / 输出代理登记成改写）；**「模拟前端行为」（`emulateFrontend`）已实现**（`workflow_frontend.rs` = Kotlin `FrontendNodes.kt` 的对照：广播填空 / 丢显示节点 / 补 `SaveImage`），改了什么都如实列在 `frontendEmulated` / `frontendBroadcast` / `frontendInjected` 里。工具描述为 Kotlin 的逐字拷贝，**当前与实现一致**，"本后端还没做这一步"那句 warning 已删除 |
 //! | 附件（R9）：`/api/ai/attachments*`、`/api/ai/preflight` 与内联预算 | ✅ **已搬（P4 第 50 步）**：五条端点（上传 multipart 字段 `files` / 详情 / 原件 ETag+Range / 缩略图 / 删除）+ **严格签名判定**（`file_kind.rs`）+ 三层准入（`strict_intake.rs`，第三层在 `POST /runs` 之前、**上游零请求**）+ **图片真的内联进请求体**（三家适配器各自的形状）。⚠ 仍缺：**视频预览帧**（`/thumb` 回 204）与视频/音频/文档的传输方式（三家都只有图片的 `inline_base64`） |
 //! | `/api/capture/{import,import-workflows}`、`/api/ingest/comfyui` | ✅ **三条全搬（P4 第 49/52 步）**：`import-workflows`（批量读工作流文件）、`ingest/comfyui`（推送式捕获）、`import`（导入目录里已生成好的产物，**PNG 内嵌的 prompt 会还原成提示词**） |
 //! | **`/api/media/{id}/poster`**（视频第一帧封面） | ✅（P4 第 51 步：`poster.rs` 起 `scripts\video-poster.ps1`（Windows 缩略图管线，**不依赖 ffmpeg**）；抽不出帧如实回 204） |
@@ -135,7 +135,7 @@ fn parse_args() -> Result<Args, String> {
     let mut backup_dir: Option<PathBuf> = None;
     let mut dry_run = false;
     // 缺省监听回环。`COMFYHUB_ALLOW_REMOTE=1`（App 的「允许手机 / 局域网设备连接」
-    // 开关就是走它）时听 `0.0.0.0`：手机在局域网里才有得连（用户 bug 2026-09-28
+    // 开关就是走它）时监听 `0.0.0.0`：手机在局域网内才能连接（2026-09-28
     // 「手机连接桌面端失败，报 timed out」—— `server.ps1` 以前硬编码 127.0.0.1，
     // 真机连桌面永远超时）。远程访问由配对闸门把关（回环放行、局域网要令牌）。
     let mut host = if remote_allowed() {
@@ -155,7 +155,7 @@ fn parse_args() -> Result<Args, String> {
             // 我们这侧的 stdin 管道立刻回 0，于是优雅退出 —— 它取代了以前的
             // `scripts\watch-owner.ps1`（那个守护脚本随"App 直接起后端"一起删了）。
             "--watch-stdin" => watch_stdin = true,
-            // `--merge-library <源数据目录>`（可给多次）：把别的库里的用户内容合并进
+            // `--merge-library <源数据目录>`（可多次指定）：把其他库中的内容合并进
             // `--db` 那一份，合并完就退出（不起服务）。见 `infra::library_merge`。
             "--merge-library" => {
                 let dir = it.next().ok_or("--merge-library 需要一个数据目录")?;
@@ -302,7 +302,7 @@ fn bind_dual_stack(port: u16) -> std::io::Result<tokio::net::TcpListener> {
     tokio::net::TcpListener::from_std(std_listener)
 }
 
-/// 绑监听：远程模式且 host 是"全部网卡"时走双栈，否则按用户给的地址原样绑。
+/// 绑监听：远程模式且 host 为"全部网卡"时使用双栈，否则按指定地址原样绑定。
 async fn bind_listener(
     host: &str,
     port: u16,
@@ -397,9 +397,9 @@ async fn main() {
 
     // ---- Skills 投放口的自动登记（AGENTS §10）--------------------------------
     //
-    // 用户把 skill 文件夹 / `.md` 拷进 `<storage>\ai\skills` 就算装好：没有 frontmatter 的
+    // 把 skill 文件夹 / `.md` 复制进 `<storage>\ai\skills` 即完成安装：没有 frontmatter 的
     // 在这里补 `name` / `description`（正文不动）。**不能只在点刷新时才做** ——
-    // 用户装完直接重启应用是常态，那时界面上会一直显示"缺少 description"。
+    // 安装后直接重启应用时，界面会持续显示"缺少 description"。
     let auto = comfyhub_server_rs::ai::skills::auto_register(&state);
     if auto.registered > 0 {
         println!(
@@ -465,8 +465,8 @@ async fn main() {
     // ---- 老提示词的 LoRA 回填（2026-10-23）----------------------------------
     //
     // 2026-10-22 修了第三方 LoRA 加载节点（rgthree 的 `lora_01` / 嵌套对象等）的识别，
-    // 但**已经入库**的 `prompts.loras` 不会自己变 —— 用户重开 App 看到的还是"少几条"。
-    // 这里按回填版本跑一次：只补"入库后没被用户编辑过"的行里缺的 LoRA 名字，不改已有条目
+    // 但**已入库**的 `prompts.loras` 不会自动变化 —— 重开 App 仍显示"少几条"。
+    // 这里按回填版本执行一次：只补"入库后未被编辑过"的行中缺失的 LoRA 名称，不改已有条目
     // （四条纪律见 `capture_ingest::backfill_loras`）。同步跑、不塞后台：
     // 界面首次拉列表时就必须是补好的。
     match state.write(|tx| {
@@ -503,7 +503,7 @@ async fn main() {
 
     // ---- 后台捕获轮询器（P4 第 47 步 = O5/O6）-------------------------------
     //
-    // 与 Kotlin `ComfyCapture.start()` 同一件事：**用户自己在 ComfyUI 里跑的东西也要被收**。
+    // 与 Kotlin `ComfyCapture.start()` 一致：**在 ComfyUI 中手动运行的任务同样需要捕获**。
     // 没有它时只有端点/工具触发一次，"AI 说生成了、画廊里却没有"就永远差这一半。
     // 它同时是 `/api/capture/status` 里 `lastPollAt` / `lastError` 的真源。
     state.capture_poller.clone().spawn(state.clone());
@@ -532,7 +532,7 @@ async fn main() {
     // ---- ComfyUI `/object_info` 预热 ---------------------------------------
     //
     // 它是**兆字节级**响应，蓝图 / 配方 / 体检 / 盘查都要它。以前每开一次蓝图重新拉一遍
-    // + 重新解析一遍，于是"点开蓝图"明显比 ComfyUI 自己慢（用户 2026-10-18）。
+    // + 重新解析一次，因此"点开蓝图"明显慢于 ComfyUI 自身。
     // 这里在后台先取一次把缓存填上：ComfyUI 没起时**静默失败**（不缓存失败），
     // 下次真正要用时会照常重试 —— 所以这条预热永远不会让状态变坏。
     {
@@ -574,7 +574,7 @@ async fn main() {
     // 界面上表现为"这个功能好像没做"（而且不报错）。
     //
     // 四条纪律：
-    //  ① **只补 `collection_id IS NULL` 的行** —— 用户手动拆开/合并过的（`origin='manual'`）
+    //  ① **只补 `collection_id IS NULL` 的行** —— 已手动拆分/合并的（`origin='manual'`）
     //     和已经分好组的一律不碰（`collection::backfill` 里守着这条）；
     //  ② **只有"同款 >= 2 张"才算活**（独苗不成组）—— 探针 `pending_grouped` 与回填
     //     **共用同一份分桶**，所以下面那个数字就是"马上要做的事"，不是估算；
@@ -621,7 +621,7 @@ async fn main() {
             }
 
             // 收尾：解散"`auto` 且只剩 1 个成员"的集合 + 清掉 0 成员的空壳
-            //    （用户 2026-10-18 报的"旧集合元素为 1，旧集合没有自动解散"）。
+            //    （"旧集合元素为 1，旧集合未自动解散"）。
             //
             //    ⚠ **必须在归并之后**：归并把产物挂进集合，收尾看的是挂完之后还剩几个成员。
             //    ⚠ 而且**不管有没有归并的活都要跑**，三个理由：
@@ -657,7 +657,7 @@ async fn main() {
     let (addr, listener) = match bind_listener(&args.host, requested_port, dual_stack).await {
         Ok(listener) => {
             // ⚠ **实际端口从 listener 读回来**，不能用 `requested_port`：
-            // 用户给 `--port 0`（"让系统挑一个"）时，那个 0 不是端口 ——
+            // 指定 `--port 0`（由系统分配）时，该 0 不是端口号 ——
             // 写进端口文件的是 0，App 就会去连 `http://127.0.0.1:0`（实测踩到）。
             let addr = listener.local_addr().expect("本地地址");
             (addr, listener)

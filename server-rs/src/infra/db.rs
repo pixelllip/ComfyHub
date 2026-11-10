@@ -83,12 +83,12 @@ pub const SCHEMA_SQL: &str = include_str!("../../../db/schema.sqlite.sql");
 /// 加的是**列**（走 [`NEW_COLUMNS`]）；bump 的另一个作用是让 `manifest.schemaVersion`
 /// 变化，手机据此重走一次 bootstrap（提示词形状变了）。
 /// **2026-10-18 由 8 提到 9：手动集合两列** ——
-/// ① `media_collections.title`（用户给集合起的名字，可空）；
-/// ② `media_assets.collection_opt_out`（用户**明确把这一条移出集合**了）。
+/// ① `media_collections.title`（集合名称，可空）；
+/// ② `media_assets.collection_opt_out`（该条目**已被明确移出集合**）。
 ///
 /// ⚠ ② 不是"锦上添花的标记"，是**正确性的前提**：`backfill` 的判据是
 /// `collection_id IS NULL`，而"移出集合"恰恰就是把它置成 NULL ——
-/// 没有这一列，用户刚拖出去的那张会在**下次启动**被回填静默吸回原组
+/// 缺少该列时，刚拖出的那张会在**下次启动**被回填静默归回原组
 /// （`collection.rs` 里那句"手动拆开过的一律不碰"就只是一句空承诺）。
 /// 2026-10-21 由 9 提到 10：**画风卡 + 卡片示例产物 + 卡片的双版本** ——
 /// ① 新表 `style_cards`（与角色卡同形）；
@@ -97,7 +97,7 @@ pub const SCHEMA_SQL: &str = include_str!("../../../db/schema.sqlite.sql");
 /// 加的是"表 + 列"，所以 bump 版本号与 `NEW_COLUMNS` 两条路都要走。
 ///
 /// 2026-10-24 由 10 提到 11：**卡片回到单版本（只要自然语言）** ——
-/// 用户口径："只保留自然语言版，tag 版删掉；老库里已经存着的 tag 版转成自然语言再删"。
+/// 约束："只保留自然语言版，tag 版删除；老库中已存在的 tag 版转为自然语言后再删除"。
 /// ① 新库的 DDL 不再建 `tag_prompt`（老库那一列留在原地，**再没人读**）；
 /// ② 升级到 11 的那一次把 `tag_prompt` 转成一段自然语言灌进 `prompt`
 ///    （见 [`migrate_card_tags_to_prompt`]）——**只填 prompt 为空的卡**，
@@ -137,7 +137,7 @@ const NEW_COLUMNS: &[(&str, &str, &str)] = &[
         "collection_id",
         "ALTER TABLE media_assets ADD COLUMN collection_id INTEGER NULL REFERENCES media_collections(id) ON DELETE SET NULL",
     ),
-    // 发送模式（2026-10-11）：有些 turbo 模型不认负面提示词，用户要能表达"我只发正面"。
+    // 发送模式：部分 turbo 模型不支持负面提示词，需能表达"只发正面"。
     // 带默认值（`'keep'`）→ 符合"只能加可空列或带默认值的列"的规矩；老库补上之后全是 keep。
     (
         "prompts",
@@ -150,7 +150,7 @@ const NEW_COLUMNS: &[(&str, &str, &str)] = &[
         "title",
         "ALTER TABLE media_collections ADD COLUMN title TEXT NULL",
     ),
-    // 「用户已明确把这一条移出集合」（2026-10-18）。带默认值 0 → 符合加列规矩。
+    // 「该条目已被明确移出集合」。带默认值 0 → 符合加列规则。
     // ⚠ `backfill` 的 WHERE 必须带上 `AND collection_opt_out = 0`，否则"移出"下次启动就复原。
     (
         "media_assets",
@@ -170,7 +170,7 @@ const NEW_COLUMNS: &[(&str, &str, &str)] = &[
         "ALTER TABLE ai_questions ADD COLUMN option_images_json TEXT NULL",
     ),
     // 附件来源（2026-11-04）：upload / crop / search。带默认值 → 符合加列规矩；
-    // 老库里已有的附件一律按 upload 处理（宁可不清理，也不要把用户的图删掉）。
+    // 老库中已有的附件一律按 upload 处理（优先不清理，避免删除图片）。
     (
         "ai_attachments",
         "origin",
@@ -247,18 +247,18 @@ fn column_exists(conn: &Connection, table: &str, column: &str) -> rusqlite::Resu
 /// **老库的数据迁移**：`character_cards.tags`（JSON 数组文本）→ `prompt`（整段文本）。
 ///
 /// 2026-10 角色卡收敛成"名称 / 正面提示词 / 负面提示词"之后，老卡里那套规范 tag 栈
-/// 就只剩 `tags` 那一列——**新代码读的是 `prompt`**，不搬过去等于把用户的卡清空了
+/// 则只剩 `tags` 那一列——**新代码读取 `prompt`**，不迁移等于清空卡片内容
 /// （而列还在、界面上却什么都没有，最难查的一类）。所以**刚补上 `prompt` 列那一刻**
-/// 把它们拼成 `a, b, c` 灌进去：迁移只加不减，宁可留得多，不许丢用户的话。
+/// 拼成 `a, b, c` 写入：迁移只增不减，宁可保留更多，不丢失内容。
 ///
 /// ⚠ **只在"这次真的刚补上这一列"时调**（[`open_or_create`] 用 `added` 判），不许每次开库都跑：
 /// 老库那个 `tags` 列是**留在原地**的，而判据是"prompt 为空 + tags 非空"——每次开库都跑的话，
-/// 用户在界面上清空提示词（`prompt = NULL`）会被下一次启动**从 tags 复活**，
+/// 在界面上清空提示词（`prompt = NULL`）时，下次启动会**从 tags 恢复**，
 /// 表现是"删了又回来"，而那种 bug 极难查。
 ///
 /// 三条边界：
 ///  * **新库没有 `tags` 列** → 空操作（判据是"两个列都在"）；
-///  * **`prompt` 已经有值** → 一个字节都不动（幂等；也不覆盖用户后来手填的）；
+///  * **`prompt` 已有值** → 不做改动（幂等；也不覆盖后续手动填写的）；
 ///  * `tags` 不是合法 JSON（手工改过）→ **原样当文本**用，不丢。
 fn backfill_character_card_prompt(conn: &Connection) -> rusqlite::Result<usize> {
     if !column_exists(conn, "character_cards", "prompt")?
@@ -304,12 +304,12 @@ fn old_tags_to_prompt(raw: &str) -> String {
 
 /// **老库迁移（2026-10-24）**：把两张卡表里残留的 `tag_prompt` 转成自然语言灌进 `prompt`。
 ///
-/// 用户口径：卡片只留自然语言版，tag 版不再占字段。判据是
+/// 约束：卡片只保留自然语言版，tag 版不再占用字段。判据是
 /// "`prompt` 为空 **且** `tag_prompt` 非空" —— 已经有自然语言版的卡**一个字都不动**
-/// （转出来的句式只是保底，不能盖掉用户 / AI 写好的那一段）。
+/// （转换得到的句式仅作保底，不能覆盖已写好的内容）。
 ///
 /// 只在 `user_version < 11` 的那一次升级里跑（见 [`open_or_create`]）：老库那一列留在原地，
-/// 每次开库都跑的话，用户后来**清空**提示词会被下一次启动从 tag 列复活
+/// 每次打开库都执行时，后续**清空**的提示词会在下次启动从 tag 列恢复
 /// （与 [`backfill_character_card_prompt`] 同一条教训）。
 fn migrate_card_tags_to_prompt(conn: &Connection) -> rusqlite::Result<usize> {
     let mut migrated = 0usize;
@@ -345,7 +345,7 @@ fn migrate_card_tags_to_prompt(conn: &Connection) -> rusqlite::Result<usize> {
 ///
 /// 这不是翻译器：它保留每个 tag 的信息（去下划线、按"外观 / 衣着 / 其余"分组），
 /// 拼成 `A girl with red eyes and silver hair, wearing school uniform. Shinku (nte).`。
-/// 迁移用它兜底；用户 / AI 之后可以用 `card-writer` 把句子重写成更顺的一版。
+/// 迁移用它兜底；之后可用 `card-writer` 重新生成更通顺的句子。
 pub(crate) fn tags_to_natural_language(raw: &str) -> String {
     let trimmed = raw.trim();
     // 已经是整句的（没有分隔符、词数够多）**原样保留**：老库里那一列偶尔存的本来就是散文，
@@ -563,7 +563,7 @@ fn capitalize_first(text: &str) -> String {
 ///     `CREATE TABLE IF NOT EXISTS` + `DROP TRIGGER IF EXISTS` + `CREATE TRIGGER`，重跑安全）→ 写版本号；
 ///  3. `version >= SCHEMA_VERSION` → **先核对 DDL 里声明的表是不是都在**：都在就什么都不做
 ///     （**绝不重跑 DDL**：那会重建触发器），缺了就补一遍（见下面那条 ⚠）；
-///  4. `version > SCHEMA_VERSION` → **只警告不拦**（拦了用户就没法回退版本），
+///  4. `version > SCHEMA_VERSION` → **只警告不拦截**（拦截会阻止版本回退），
 ///     并且**绝不把版本号往小写**（只往下写、不往回落）。
 ///
 /// ⚠ **为什么第 3 类里那道"表都在吗"的检查一个字都不能省**（2026-09-27 真机实测抓到）：
@@ -615,7 +615,7 @@ pub fn open_or_create(path: impl AsRef<Path>) -> Result<Connection, String> {
     // 补完列**立刻搬一次数据**：角色卡从 `tags`（JSON 数组）收敛成 `prompt`（整段文本），
     // 不搬就是把老卡读成空卡（列还在、界面却没内容）。
     // ⚠ **只在刚补上这一列的那一次**搬（判据是 `added`）—— 老库的 `tags` 列留在原地，
-    //   每次开库都搬会把用户在界面上清空的提示词"复活"，见函数头那条 ⚠。
+    //   每次打开库都迁移会把已清空的提示词"恢复"，见函数头那条 ⚠。
     if added.iter().any(|c| c == "character_cards.prompt") {
         let migrated =
             backfill_character_card_prompt(&conn).map_err(|e| format!("迁移角色卡失败：{e}"))?;
@@ -625,7 +625,7 @@ pub fn open_or_create(path: impl AsRef<Path>) -> Result<Connection, String> {
     }
     // 2026-10-24：卡片回到单版本。升级到 schemaVersion 11 的那一次，把老库里残留的
     // `tag_prompt` **转成自然语言**灌进 `prompt`（只填空卡；已有正文的一个字节都不动）。
-    // ⚠ 只在 `version < 11` 时跑：老列留在原地，每次开库都跑会把用户清空的提示词复活。
+    // ⚠ 只在 `version < 11` 时执行：旧列保留原处，每次打开库都执行会恢复已清空的提示词。
     if version < 11 {
         let migrated =
             migrate_card_tags_to_prompt(&conn).map_err(|e| format!("迁移卡片 tag 版失败：{e}"))?;
@@ -663,7 +663,7 @@ pub fn open_or_create(path: impl AsRef<Path>) -> Result<Connection, String> {
         Ok(()) => {
             // ⚠ **版本号取 `max(现有, SCHEMA_VERSION)`**，两个方向都要照顾到：
             //  * **只往下写、绝不往回落**：库比后端新时保留它自己的版本号
-            //    （写回 SCHEMA_VERSION 等于把用户的库降级，而那正是"用旧二进制写新库"最危险的事）；
+            //    （写回 SCHEMA_VERSION 等于将库降级，而这正是"用旧二进制写新库"最危险的情形）；
             //  * **但也不能被 DDL 里的那行拖回去**：`db/schema.sqlite.sql` 末尾自己也有一行
             //    `PRAGMA user_version = N`（它是两端共用的文件、Kotlin 侧也读它），
             //    而"库够新、只是缺张表"那条自愈路径里我们**刚跑过一遍 DDL** ——
