@@ -8,9 +8,9 @@
 //! | `list_dir` / `read_file` / `write_file` / `register_skill` / `delete_skill` | `DESKTOP` | 第 40 步，路径准入在 [`crate::tools::policy`] |
 //! | `comfy_get_run` / `comfy_list_workflows` / `comfy_get_status` | `DESKTOP` | 第 41/42 步；前两条只碰本机库与磁盘，`get_status` 会真问一次 ComfyUI 的 `/queue` |
 //! | `comfy_sync_history` | `DESKTOP` | 第 43 步；**会写库**（建提示词 + 产物入库），出厂档 `ASK` |
-//! | `comfy_load_workflow` | `DESKTOP` | 第 44 步；把本机工作流文件读进库（界面格式按 `/object_info` 转 API 图）。组节点按定义展开、「模拟用户行为」（`emulateFrontend`）等价改写纯前端节点并如实列出改了什么（第 68 步） |
-//! | `comfy_use_media` / `comfy_use_attachment` / `comfy_make_mask` | `DESKTOP` | **图像编辑三件**（见 [`crate::comfy::image_edit`]）：把画廊产物 / 用户附件投放进 ComfyUI 的 `input` 目录，以及生成"白=重绘区"的遮罩。三件都要用户批准（会往用户机器上写文件） |
-//! | `comfy_check_inputs` / `comfy_fit_workflow` | `DESKTOP` | 第 62 步的**体检两件**（见 [`crate::workflow::workflow_fit`]）：前者列"还等着外部给输入的位置"（用户没给参考图时的那个现场），后者把图里点名的模型与本机清单对一遍。两件都**只报不改**、出厂 `ALLOW` |
+//! | `comfy_load_workflow` | `DESKTOP` | 第 44 步；把本机工作流文件读进库（界面格式按 `/object_info` 转 API 图）。组节点按定义展开、「模拟前端行为」（`emulateFrontend`）等价改写纯前端节点并如实列出改动（第 68 步） |
+//! | `comfy_use_media` / `comfy_use_attachment` / `comfy_make_mask` | `DESKTOP` | **图像编辑三件**（见 [`crate::comfy::image_edit`]）：把画廊产物 / 聊天附件投放进 ComfyUI 的 `input` 目录，以及生成"白=重绘区"的遮罩。三件都需批准（会向本机磁盘写入文件） |
+//! | `comfy_check_inputs` / `comfy_fit_workflow` | `DESKTOP` | 第 62 步的**体检两件**（见 [`crate::workflow::workflow_fit`]）：前者列"还等着外部给输入的位置"（未提供参考图时的状态），后者把图里点名的模型与本机清单对一遍。两件都**只报不改**、出厂 `ALLOW` |
 //! | `comfy_audit_workflow` | `DESKTOP` | 第 63 步的**审核**（见 [`crate::workflow::workflow_audit`]）：七项检查只报事实，其中"必跑不了"的三项（前端节点 / 版本不兼容 / 本机没有的节点类）会被提交闸门拦下，参数/显存/提示词风格**只提醒**。出厂 `ALLOW` |
 //! | `comfy_prune_workflow` | `DESKTOP` | 第 63 步的**摘节点 / 拼节点**（见 [`crate::workflow::workflow_prune`]）：从输出节点反向做可达性分析摘掉无关分支并把下游的线接回上游，`analyze=true` 时一个字都不改。出厂 `ALLOW`（它不写盘、不提交，改好的图是**内联**返回的） |
 //! | `comfy_learn_workflow` / `comfy_list_recipes` / `comfy_bind_recipe` | `DESKTOP` | 第 67 步的**配方三件**（见 [`crate::workflow::workflow_recipe`]）：把一份具体工作流**归纳**成「任务 + 骨架指纹 + 模型槽位 + 参数旋钮」并存进本机配方库，新模型出现时只做"把骨架绑到新槽位"这一步。学与绑都与 `POST /api/ai/workflow-recipes*` **共用一份实现**；绑**只报不改**（真提交仍走 `comfy_submit`，R10 不动） |
@@ -24,7 +24,7 @@
 //! # 两个清单的差别（别混用）
 //!
 //! - [`catalog`]：**下发给模型**的（剔除 `deny`）—— `specs` 与系统提示都从它派生；
-//! - [`implemented`]：**设置页**看的（含被 `deny` 的）—— 剔掉的话用户点过一次禁用
+//! - [`implemented`]：**设置页**看的（含被 `deny` 的）—— 剔除后曾禁用一次的工具
 //!   就再也开不回来。
 //!
 //! # 与 Kotlin 的对应物
@@ -161,7 +161,7 @@ fn library_failure(error: crate::web::routes::ApiError) -> ToolFailure {
 
 /// 额度用尽时回给模型的话（Kotlin `ToolRegistry.budgetExceededNote`）。
 ///
-/// ⚠ **措辞必须与"轮数上限"那句分开**：2026-09-21 的现场就是用户看到"已达上限 8"
+/// ⚠ **措辞必须与"轮数上限"那句分开**：否则会显示"已达上限 8"
 /// 却以为还有 16 次可调，分不清是哪条线拦住了自己。
 pub fn budget_exceeded_note(limit: i64, resettable: bool) -> String {
     if resettable {
@@ -186,7 +186,7 @@ pub struct ToolSession {
     pub memory_writes: i64,
     /// 本 Run 的工具调用计数（**只增不减**，硬天花板见 [`ABSOLUTE_CALL_CAP`]）
     pub calls: i64,
-    /// **当前这一窗**（一次回复）的调用数 —— 用户回答提问时归零（Kotlin `resetBudget`）
+    /// **当前这一窗**（一次回复）的调用数 —— 回答提问时归零（Kotlin `resetBudget`）
     pub calls_in_window: i64,
     /// 这一窗里**真跑成功**的联网类工具的调用数（Kotlin `ToolContext.webInWindow`）。
     ///
@@ -209,16 +209,16 @@ pub struct ToolSession {
     ///
     /// 与系统提示里那句"本次请求附带图片附件"**是同一个事实**（Kotlin 那边也是同一个
     /// `hasInlineAttachments` 同时喂给两处），所以由执行器在建 session 时一次性钉住。
-    /// `comfy_check_inputs` 靠它区分"投放一下就能解决"与"必须问用户要一张"——
+    /// `comfy_check_inputs` 据此区分"投放即可解决"与"必须请求提供一张"——
     /// 少了这一位，模型会去要一张它已经收到的图。
     pub has_image_attachment: bool,
-    /// 用户这一轮**显式调用**的 skill 名（`/名字`）。带这个标记的技能即使
+    /// 本轮**显式调用**的 skill 名（`/名字`）。带该标记的技能即使
     /// `disable-model-invocation: true` 也允许加载；同时它的正文已经在系统提示里预加载过。
     pub explicit_skills: HashSet<String>,
 }
 
 impl ToolSession {
-    /// 把用户显式调用的 skill 记为"本轮已加载"（正文已经在系统提示里预加载过）。
+    /// 把显式调用的 skill 记为"本轮已加载"（正文已在系统提示中预加载）。
     pub fn mark_explicit_skill(&mut self, name: &str) {
         self.explicit_skills.insert(name.to_string());
         self.loaded_skills.insert(name.to_string());
@@ -231,8 +231,8 @@ impl ToolSession {
 
     /// 真的执行成功一次 → 消耗额度（Kotlin `spendCall`）。
     ///
-    /// ⚠ **只在成功之后调**：越界被拒 / 参数不对 / 用户点拒绝 / 工具自己报错
-    /// 这些"连世界都没碰到"的调用不占额度，否则用户看到的是
+    /// ⚠ **只在成功之后调**：越界被拒 / 参数错误 / 批准被拒 / 工具自身报错
+    /// 这些未产生实际动作的调用不占额度，否则会显示为
     /// "什么都没干就说预算不足"。
     ///
     /// `name` 用来分开记"联网那几件"的次数（Kotlin `spendCall` 里按 `tool.category` 分档）——
@@ -276,8 +276,8 @@ impl ToolSession {
         self.comfy_queries_in_window < crate::tools::policy::MAX_COMFY_QUERIES_PER_RUN
     }
 
-    /// 用户**真的答了**提问 → 把这一窗的额度归零，让他接着把这件事做完
-    /// （用户建议 ③ 的原话："每次完成选择后，重置工具预算"）。
+    /// **完成作答**提问 → 把这一窗的额度归零，以便继续完成后续操作
+    /// （约束："每次完成选择后，重置工具预算"）。
     ///
     /// 返回 `false` = 重置次数已经用完（那就照实回给模型，不许假装额度又满了）。
     pub fn reset_budget(&mut self) -> bool {
@@ -287,7 +287,7 @@ impl ToolSession {
         self.budget_resets += 1;
         self.calls_in_window = 0;
         self.ask_cards_in_window = 0;
-        // 联网额度也归零：与 Kotlin 的 `webInWindow` 同一档（用户答完接着做同一件事）
+        // 联网额度也归零：与 Kotlin 的 `webInWindow` 同一档（作答后继续同一任务）
         self.web_queries_in_window = 0;
         // ComfyUI 那档同理（Kotlin `resetBudget` 清的也是同一批窗内计数）
         self.comfy_queries_in_window = 0;
@@ -331,7 +331,7 @@ pub fn spec_of_view(view: &ToolView<'_>) -> crate::provider::protocol::ToolSpec 
 ///
 /// # 为什么要动全部工具，而不是逐个改 `input_schema`
 ///
-/// 用户 2026-10-21 的要求：工具卡上不要只写 `comfy_load_workflow` 这种机器名，
+/// 工具卡上不只显示 `comfy_load_workflow` 这类机器名，
 /// 要写"这次调用是干什么的"。最可靠的来源是**模型自己**——它在发起调用时最清楚
 /// 为什么调。让它带一句 `reason`，比前端按工具名猜用途准得多。
 ///
@@ -460,7 +460,7 @@ pub fn catalog(policy: &crate::tools::policy::ToolPolicy) -> Vec<ToolView<'stati
 /// 这台后端**真的能跑**的工具（含被 `deny` 的那些），按 name 升序。
 ///
 /// ⚠ 与 [`catalog`] 的差别只有一条：**这里不剔 `deny`**。设置页的权限表要能看见
-/// "哪些被禁用了"并把它改回来 —— 剔掉的话用户一旦点过一次禁用，那个工具就从界面上
+/// "哪些被禁用"并可恢复 —— 剔除后一旦禁用过，该工具就从界面上
 /// 消失、再也开不回来（界面按 `access == "deny"` 画灰）。
 /// 而**下发给模型**的那份必须剔（`catalog`）—— 两份别混用。
 pub fn implemented() -> Vec<ToolView<'static>> {
@@ -490,7 +490,7 @@ pub fn implemented() -> Vec<ToolView<'static>> {
 ///   [`crate::tools::civitai`]，P4 第 64 步；它们本来就是 `BOTH` 档，只是**实现**在这一步才落地）
 /// + comfy 查询三件（`comfy_get_run` / `comfy_list_workflows` / `comfy_get_status`）
 /// + `comfy_load_workflow` / `comfy_submit` / `comfy_sync_history`
-/// + **看产物**（`comfy_view_outputs`，2026-10-29 用户："能不能让 AI 看我直接在 comfy
+/// + **看产物**（`comfy_view_outputs`；需求："能否让 AI 查看直接在 ComfyUI
 ///   运行的产物"：读画廊最近的图片并交给执行器自动附图，见 [`crate::comfy::media_view`]）
 /// + 资料库四件（角色卡 + 画风卡：`search/save_character_card`、`search/save_style_card`）
 /// + **图像编辑三件**（`comfy_use_media` / `comfy_use_attachment` /
@@ -506,7 +506,7 @@ pub fn implemented() -> Vec<ToolView<'static>> {
 ///   见 [`crate::workflow::workflow_recipe`]，P4 第 67 步；学与绑都与
 ///   `POST /api/ai/workflow-recipes*` 共用一份实现）。
 /// + **2D 布局模板**（`layout_propose`，见 [`crate::ai::layout_proposal`]，2026-11-03：
-///   写提示词的同一轮把构图草稿交给用户预览 / 修改，改完再提交回来 —— 只出草稿，
+///   写提示词的同一轮把构图草稿提供预览 / 修改，改完再提交回来 —— 只出草稿，
 ///   不生成图片、不写库）。
 pub const IMPLEMENTED: [&str; 46] = [
     "ask_user_question",
@@ -636,9 +636,9 @@ pub fn specs_with(
 ///
 /// ⚠ 调用方（`executor::handle_call`）在进这里之前已经做过四道闸门：
 /// 工具名在不在清单里（`TOOL_NOT_FOUND`）、策略是不是 `deny`（`TOOL_DENIED`）、
-/// 额度还剩不剩（`TOOL_BUDGET_EXCEEDED`）、要不要用户批准（R8）。**这里只管执行**。
+/// 额度是否耗尽（`TOOL_BUDGET_EXCEEDED`）、是否需要批准（R8）。**这里只负责执行**。
 ///
-/// 它是 `async` 的唯一理由是 [`ask_user_question`]：那一条要**挂在这里等用户**
+/// 它是 `async` 的唯一理由是 [`ask_user_question`]：该条需**在此等待作答**
 /// （Run 不结束）—— 其余工具都是纯本地同步逻辑，包在 async 里不改变行为。
 pub async fn execute(
     state: &AppState,
@@ -671,12 +671,12 @@ pub async fn execute(
         "comfy_get_run" => comfy_get_run(state, arguments),
         // 本机模型清单（`ComfyModels` 的 Rust 版）：**只报不改**，回答"盘上有 / 实例看不到"
         "comfy_env_report" => crate::comfy::comfy_models::tool_env_report(state, arguments).await,
-        // 两段式找工作流：先搜库；库里 0 条就回头看本机（用户 bug ⑤）
+        // 两段式查找工作流：先搜库；库中为 0 条时再查本机
         "comfy_find_workflow" => {
             crate::workflow::workflow_search::tool_find_workflow(state, arguments)
         }
-        // ---- 体检两件（P4 第 62 步：用户建议 ①/⑤）----------------------------
-        // 两件都是**只报不改**：`check_inputs` 列"还等着外部给的位置"（用户没给参考图时
+        // ---- 体检两件（P4 第 62 步）----------------------------
+        // 两件都是**只报不改**：`check_inputs` 列"等待外部输入的位置"（未提供参考图时
         // 模型最容易硬提交），`fit_workflow` 把图里点名的模型与本机清单对一遍。
         // ⚠ `check_inputs` 不碰 `state`，要的是"本次带没带图片附件"——
         //   那个事实在 session 里（与喂给系统提示的是同一个值）。
@@ -694,7 +694,7 @@ pub async fn execute(
         "comfy_get_status" => comfy_get_status(state, arguments).await,
         "comfy_sync_history" => comfy_sync_history(state).await,
         "comfy_load_workflow" => comfy_load_workflow(state, policy, arguments).await,
-        // ---- 审核 + 摘拼两件（P4 第 63 步：用户 2026-09-22 的"审核本地工作流"）---------
+        // ---- 审核 + 摘拼两件（P4 第 63 步）---------
         // `audit` 是**只报事实**的确定性检查（"必跑不了"与"不推荐"分得很清）；
         // `prune` 是它的对偶 —— 分析与摘除都走**同一套可达性判据**（从输出节点反向走不到
         // 的才算无关分支），所以"分析说要摘的那几条"拿去执行一定是同一片。
@@ -704,7 +704,7 @@ pub async fn execute(
         "comfy_prune_workflow" => {
             crate::workflow::workflow_prune::tool_prune_workflow(state, arguments).await
         }
-        // ---- 接线体检（2026-10-17 用户："对于错误接线要能向用户指出"）----------------
+        // ---- 接线体检（错误接线需在界面上指出）----------------
         // 与审核那条的分工：`audit` 审"跑起来会不会崩"（**只认 API 图**），
         // 这条审"接线本身"（界面格式也认 —— 广播节点该填却没填的那几路只有它看得见）。
         // 判据与界面上「看蓝图」那一页**同一份**（`workflow_blueprint::build`）。
@@ -712,7 +712,7 @@ pub async fn execute(
             crate::workflow::workflow_blueprint::tool_diagnose_workflow(state, policy, arguments)
                 .await
         }
-        // ---- 配方三件（P4 第 67 步：用户"新模型该怎么接上已有骨架"）----------------
+        // ---- 配方三件（P4 第 67 步：新模型接入已有骨架）----------------
         // 学（归纳 + 落库）与绑（只报不改地算出该改哪几个 overrides 键）都走
         // `workflow_recipe` 里那两个函数 —— 与 `POST /api/ai/workflow-recipes*`
         // **共用一份实现**：分头写必然漂移，而漂移的表现是"AI 学出来的配方和界面看到的不一样"（不报错）。
@@ -725,10 +725,10 @@ pub async fn execute(
         "comfy_bind_recipe" => {
             crate::workflow::workflow_recipe::tool_bind_recipe(state, arguments).await
         }
-        // ---- 起 / 停实例（2026-09-28 用户 bug「通过 CLI 启动 comfyui 总是失败」）------
+        // ---- 起 / 停实例（「通过 CLI 启动 ComfyUI 总是失败」）------
         // 起法在 [`crate::comfy::comfy_launch`]：用工作区自己的 `.venv\python.exe` 跑 main.py
         // （绕开 comfy-cli —— 它启动时要写两个**项目外**的文件，受限环境里必然 Errno 13）。
-        // 两件都是 `ASK`：起一个占显存的长跑进程 / 杀一个进程，都该用户点一下。
+        // 两件都是 `ASK`：启动占用显存的长跑进程 / 终止进程，均需确认。
         "comfy_start" => crate::comfy::comfy_launch::start(state, arguments).await,
         "comfy_stop" => crate::comfy::comfy_launch::stop(state).await,
         // ---- 提交（P4 第 48 步：**R10 的落点**）------------------------------
@@ -739,7 +739,7 @@ pub async fn execute(
         }
         // ---- 图像编辑三件（图像编辑那一批：投放 + 遮罩）----------------------
         // 两阶段编辑（"先出人物、再换上去" / "换背景保人物"）的地基：ComfyUI 的
-        // LoadImage / LoadImageMask **只能读它自己的 input 目录**，而画廊产物与用户附件
+        // LoadImage / LoadImageMask **只能读自身 input 目录**，而画廊产物与聊天附件
         // 都不在那里 —— 这两件工具是唯一的投放通道，`comfy_make_mask` 则解决
         // "手机 / 平板上画不出遮罩"这件事（与 Kotlin `AiImageEdit` 逐条对照）。
         "comfy_use_media" => crate::comfy::image_edit::tool_use_media(state, arguments).await,
@@ -747,7 +747,7 @@ pub async fn execute(
             crate::comfy::image_edit::tool_use_attachment(state, arguments).await
         }
         "comfy_make_mask" => crate::comfy::image_edit::tool_make_mask(state, arguments).await,
-        // ---- 看产物（2026-10-29：用户"能不能让 AI 看我直接在 comfy 运行的产物"）------
+        // ---- 看产物（查看直接在 ComfyUI 中运行的产物）------
         // 只读画廊最近的图片并返回 `referenceImages`；真正把图附进上下文的是执行器
         // 的 `reference_attach`（与 `comfy_load_workflow` 那条共用一份：能力判据 / 预算 /
         // 去重都不在这里再写一遍）。它是**本机库读**，不碰 ComfyUI，所以出厂 ALLOW。
@@ -766,9 +766,9 @@ pub async fn execute(
         // 它只把模型给的构图草稿规范化成 `layoutTemplates`（坐标 0~1000），界面画缩略图；
         // 不生成图片、不写库、不碰 ComfyUI，所以出厂 ALLOW、不吃任何查询额度。
         "layout_propose" => crate::ai::layout_proposal::tool_propose(arguments),
-        // ---- 联网三件 + 定向查询（P4 第 64 步：用户 2026-09-20 的"只用通用方案"）------
+        // ---- 联网三件 + 定向查询（P4 第 64 步）------
         // 这个类别是**本项目里唯一会把数据送出本机**的那一类（`ai_settings::category_of`
-        // 回 "web"），所以三件事绑在一起：出厂 `ASK`（用户点一下才发出去）、
+        // 返回 "web"），因此三件事绑定：出厂 `ASK`（确认后才发送）、
         // 结果前面套**数据区标记**（RSK-004）、以及共用同一份
         // `MAX_WEB_QUERIES_PER_RUN` 预算（执行器按类别判，见 `executor::handle_call`）。
         "web_search" => crate::tools::web_tools::tool_search(state, arguments).await,
@@ -777,7 +777,7 @@ pub async fn execute(
         "find_model" => crate::tools::find_model::tool_find_model(state, arguments).await,
         // ---- danbooru（联网，唯一会把数据送出本机的工具）----------------------
         // 它是"写角色之前先查 danbooru"那条纪律的执行者：查规范写法与同现 tag，
-        // 结果自己就是给模型看的正文（`save_character_card` 那边只管存用户要的那三样）。
+        // 结果本身即为给模型看的正文（`save_character_card` 只保存所需的三项内容）。
         "danbooru_lookup" => crate::tools::danbooru::tool_lookup(arguments).await,
         // ---- 官方 comfy-mcp 的 39 个工具（P4 第 45 步）------------------------
         //
@@ -948,8 +948,8 @@ pub fn untrusted_banner(kind: &str, query: Option<&str>) -> String {
 /// 一次出网失败的**语义分类**（Kotlin 那边靠 Java 异常类型分的三档）。
 ///
 /// 为什么不能只看 `is_timeout()`：连接超时（5 秒连不上）与读超时（连上了但没回完）
-/// 在用户那边是**两条不同的排查路**（前者多半是代理 / 出网，后者是对方慢），
-/// 而两者混成一句"超时（25 秒）"时用户按"稍后再试"永远好不了 —— 这是 Kotlin 侧
+/// 对应**两条不同的排查路径**（前者多为代理 / 出网，后者为对端响应慢），
+/// 而两者合并为"超时（25 秒）"时按"稍后再试"无法解决 —— 这是 Kotlin 侧
 /// 明确修过的一个"说谎的提示"。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum OutboundError {
@@ -1011,7 +1011,7 @@ fn memory_dir(state: &AppState) -> PathBuf {
 }
 
 /// `list_skills`：**连不合法的一起列出来**（带 `validationError`）——
-/// 静默忽略会让用户看到"装了个 skill 却没生效"而没有任何线索（AIH-038）。
+/// 静默忽略会表现为"安装了 skill 但未生效"且没有提示（AIH-038）。
 fn list_skills(state: &AppState) -> Result<ToolOutcome, ToolFailure> {
     let entries = scan_all(state);
     let skills: Vec<Value> = entries
@@ -1251,7 +1251,7 @@ pub(crate) fn int_arg(arguments: &Value, key: &str) -> Option<i64> {
 /// `list_dir`：列目录（默认 = 写白名单第一个，出厂是 `<根>\comfyui`）。
 ///
 /// 两条与 Kotlin 一致的行为：
-/// - 默认路径取自 **`write_roots` 的第一个**（不是读白名单）—— 那是"用户最可能想看的那个目录"；
+/// - 默认路径取自 **`write_roots` 的第一个**（不是读白名单）—— 即"最可能需要查看的目录"；
 /// - 超过 200 条**明说截断**（静默截断会让模型以为目录里就这么多东西）。
 ///
 /// ⚠ 一处**有意**与 Kotlin 不同：条目按名字排序。Java 的 `Files.walk` 走的是
@@ -1516,7 +1516,7 @@ fn write_file(
     ))
 }
 
-/// `register_skill`：把一个新 Skill 写进用户根（磁盘是真源，写完立刻生效）。
+/// `register_skill`：把一个新 Skill 写入自定义根目录（磁盘是真源，写完立即生效）。
 fn register_skill(state: &AppState, arguments: &Value) -> Result<ToolOutcome, ToolFailure> {
     let name = string_arg(arguments, "name")?;
     let description = string_arg(arguments, "description")?;
@@ -1537,7 +1537,7 @@ fn register_skill(state: &AppState, arguments: &Value) -> Result<ToolOutcome, To
     ))
 }
 
-/// `delete_skill`：只允许删**用户来源**的（内置受保护，AIH-037）。
+/// `delete_skill`：只允许删除**自定义来源**的（内置项受保护，AIH-037）。
 fn delete_skill(state: &AppState, arguments: &Value) -> Result<ToolOutcome, ToolFailure> {
     let name = string_arg(arguments, "name")?;
     let deleted = crate::ai::skills::delete(state, &name).map_err(skill_failure)?;
@@ -1760,7 +1760,7 @@ fn search_prompts(state: &AppState, arguments: &Value) -> Result<ToolOutcome, To
 
 /// 与 `GET /api/capture/workflows` **同一个实现**（[`crate::comfy::comfy_dirs::workflows_json`]）——
 /// 三份目录来源、`file:<sha256>` 那把幂等钥匙、`inLibrary` 判定全都不另写一份。
-/// 各写一份的后果是"界面里列得出来、AI 却说没有"（用户 bug ⑤ 的复发形态）。
+/// 各写一份的后果是"界面可列出、AI 报告不存在"。
 fn comfy_list_workflows(state: &AppState, arguments: &Value) -> Result<ToolOutcome, ToolFailure> {
     let query = arguments
         .get("query")
@@ -1898,7 +1898,7 @@ fn comfy_recent_successes(
     // T6（2026-11-09）：把**当前实例**的地址带出去。
     //
     // 为什么要它：`capture_runs` 里没记"那次成功是在哪个实例上跑通的"，所以同一个
-    // ComfyUI 根（模型目录）换了实例、或用户来回切了两台机器时，这条"上次成功"
+    // ComfyUI 根（模型目录）更换实例、或切换了两台机器时，这条"上次成功"
     // **不一定**还是同一个实例能跑的 —— 让人（和模型）自己看一眼地址再决定，
     // 比现在猜"应该一样"要诚实。结构性字段（每行记实例）留到以后。
     let instance_url = crate::comfy::capture::capture_config(state)
@@ -1969,8 +1969,8 @@ fn comfy_recent_successes(
 
 /// `comfy_list_templates`：列 **ComfyUI 自带的官方模板**（只读）。
 ///
-/// 为什么不是"再写一份 `comfy_list_workflows`"：那是**用户自己存过的**工作流
-/// （`user\<用户>\workflows`），新模型第一次用时那里必然是空的；模板是安装包自带的、
+/// 不是"再写一份 `comfy_list_workflows`"的原因：那是**自行保存的**工作流
+/// （`user\<账号>\workflows`），新模型首次使用时为空；模板由安装包自带、
 /// 跟着 ComfyUI 版本维护的那一套，正是"这个新模型怎么跑"的官方答案。
 fn comfy_list_templates(state: &AppState, arguments: &Value) -> Result<ToolOutcome, ToolFailure> {
     let query = arguments
@@ -2036,7 +2036,7 @@ async fn comfy_get_status(state: &AppState, arguments: &Value) -> Result<ToolOut
     }
     // **抠图模型在不在**（2026-09-27）：`easy imageRemBg` 只读 `<ComfyUI 根>\models\rembg`，
     // 而文件不在时它会自己去 HuggingFace 静默下载（表现是"点了按钮没反应"）。
-    // 这里一次报清，让模型"先查再跑、缺了就指引用户下"—— 免得它去猜路径或者干脆默默降级。
+    // 这里一次报清，使模型"先查再跑、缺失时提示下载"—— 避免推测路径或静默降级。
     // ⚠ 这是**加在工具返回里**（不是加在 `/api/capture/status` 那个端点里）：那个端点的键集合
     //   是界面契约（有用例钉着精确键集合），加一个键就会红。
     if let Ok(config) = crate::comfy::capture::capture_config(state) {
@@ -2075,7 +2075,7 @@ async fn comfy_get_status(state: &AppState, arguments: &Value) -> Result<ToolOut
 ///
 /// 与 `POST /api/capture/poll` **同一个实现**（[`crate::comfy::capture_ingest::poll_once`]）——
 /// 两处各写一份的后果是"界面上收不到的、AI 说收到了"（或反过来）。
-/// 它是 `mutating = true` + 出厂档 `ASK`：动手前必须用户点一次批准（R8 的闸门在调用方）。
+/// 它是 `mutating = true` + 出厂档 `ASK`：执行前必须确认（R8 的闸门在调用方）。
 async fn comfy_sync_history(state: &AppState) -> Result<ToolOutcome, ToolFailure> {
     let config = crate::comfy::capture::capture_config(state).map_err(capture_failure)?;
     let result = crate::comfy::capture_ingest::poll_once(state, &config).await;
@@ -2083,10 +2083,10 @@ async fn comfy_sync_history(state: &AppState) -> Result<ToolOutcome, ToolFailure
     Ok(ToolOutcome::new(text, result))
 }
 
-/// `comfy_load_workflow`：把一份**本机工作流文件**读进库，换成能提交的 `promptId`（用户 bug ③）。
+/// `comfy_load_workflow`：把一份**本机工作流文件**读进库，转换为可提交的 `promptId`。
 ///
 /// 路径走**读白名单**（[`crate::tools::policy::ToolPolicy::resolve_read`]）：本机 ComfyUI 的目录
-/// 已经被自动放行（用户 bug ④），用户的工作流一般就躺在它下面的 `user\<用户>\workflows` 里。
+/// 已被自动放行，工作流文件通常位于其下的 `user\<账号>\workflows` 中。
 ///
 /// ⚠ `emulateFrontend`（默认 true）**真的改变结果**：开着时纯前端节点会被照 ComfyUI 前端
 /// 排队前的行为等价改写（广播填空 / 丢显示节点 / 补 `SaveImage`，见 [`crate::workflow::workflow_frontend`]），
@@ -2199,7 +2199,7 @@ fn image_url_of_spec(
 
     /// 有 `region` 这个键就必须解析得出来。
     ///
-    /// 解析失败时**不许退回整张图**：用户看到的裁图与问题部位对不上，比直接报错更难查。
+    /// 解析失败时**不得退回整张图**：显示的裁剪区域与问题部位不一致，比直接报错更难排查。
     fn region_or_error(
         obj: &serde_json::Map<String, Value>,
         label: &str,
@@ -2438,7 +2438,7 @@ async fn wait_for_answers(
 ) -> Vec<Option<crate::ai::questions::Answer>> {
     use crate::ai::questions::QuestionState;
     let mut out: Vec<Option<crate::ai::questions::Answer>> = vec![None; ids.len()];
-    // `done[i]` = 这一题**有结论了**（答了，或者用户跳过 / 那行已失效 = 按"没回答"处理）。
+    // `done[i]` = 该题**已有结论**（已作答，或跳过 / 该行失效 = 按"未回答"处理）。
     // ⚠ 与 Kotlin 的一处**有意不同**：Kotlin 的 `AskGate.discard`（跳过走它）不会唤醒
     // `awaitAll`，所以"整张卡全跳过"在那里要等到 30 分钟超时；这里把"跳过 / 失效"
     // 直接当作结论 —— 那正是 skip 端点的文档语义（"当作没回答放行，别把 Run 挂死"）。
@@ -2461,7 +2461,7 @@ async fn wait_for_answers(
                     done[i] = true;
                     any_resolved = true;
                 }
-                // 跳过 / 已失效 / 行没了：按"用户没回答"收口（见上面那条说明）
+                // 跳过 / 已失效 / 行缺失：按"未回答"处理（见上方说明）
                 Ok(QuestionState::Gone) => {
                     done[i] = true;
                     any_resolved = true;
@@ -2497,10 +2497,10 @@ async fn wait_for_answers(
     }
 }
 
-/// `ask_user_question`：**向用户提问，并在原地等他回答**（不结束这一轮）。
+/// `ask_user_question`：**提交提问并原地等待作答**（不结束这一轮）。
 ///
 /// 与审批闸门（`ToolAccess::ASK`）是两件事：审批是"允不允许"，提问是"缺的那条信息是什么"。
-/// 用户**跳过**或没答时按"他没回答"处理 —— 基于已有信息做能做的、并说明缺什么，
+/// **跳过**或未作答时按"未回答"处理 —— 基于已有信息执行、并说明缺失项，
 /// **不许假装他答了，也不许原样再问一遍**（这几句会原样喂回模型）。
 async fn ask_user_question(
     state: &AppState,
@@ -2509,7 +2509,7 @@ async fn ask_user_question(
     arguments: &Value,
     session: &mut ToolSession,
 ) -> Result<ToolOutcome, ToolFailure> {
-    // 阈值制的硬预算（用户 2026-09-22）：一窗最多一张卡。只做预检，
+    // 阈值制的硬预算：一窗最多一张卡。只做预检，
     // 计数放到**真的开了卡之后** —— 参数写错、被下面挡掉的调用不该占额度。
     if session.ask_cards_in_window >= crate::ai::questions::MAX_ASK_CARDS_PER_WINDOW {
         return Err(ToolFailure::new(
@@ -2583,7 +2583,7 @@ async fn ask_user_question(
             ));
         };
         records.push(row);
-        // ⚠ 形状必须是**嵌套**的 `question` 对象（用户 bug 2026-09-21 的现场根因之一）：
+        // ⚠ 形状必须是**嵌套**的 `question` 对象（历史问题根因之一）：
         // 客户端读的是 `event.data['question']`；平铺的话那个键是**问题文字**（字符串），
         // 界面解不出提问 → 输入区不接管、工具卡一直"运行中"。
         // 一题一条事件，界面按 `groupId` 归组成同一张卡的那几页。
@@ -2601,7 +2601,7 @@ async fn ask_user_question(
     state.bus.flush(state, run_id).map_err(failure_of)?;
     session.ask_cards_in_window += 1;
 
-    // 挂在这里等：Run **不结束**（用户建议 ⑥ 的原话）
+    // 在此等待：Run **不结束**
     let ids: Vec<String> = records.iter().map(|r| r.question_id.clone()).collect();
     let answers = wait_for_answers(state, run_id, &ids).await;
     // 等待结束，没答的把库里那行按"失效"收尾（答过的已在 answer 端点写终值，
@@ -2610,7 +2610,7 @@ async fn ask_user_question(
         let _ = crate::ai::questions::finalize_if_pending(state, id, "expired");
     }
 
-    // **用户答完 = 重置这一窗的工具预算**（用户建议 ③）。只有"真的答了"才算选择：
+    // **完成作答 = 重置这一窗的工具预算**。只有"实际作答"才算选择：
     // 全跳过 / 超时不重置，否则等于白送额度。
     let any_answered = answers.iter().any(Option::is_some);
     let budget_reset = any_answered && session.reset_budget();
@@ -2655,7 +2655,7 @@ async fn ask_user_question(
     payload.insert("callsUsedInWindow".into(), json!(session.calls_in_window));
     payload.insert("budgetResetsUsed".into(), json!(session.budget_resets));
     payload.insert("budgetReset".into(), json!(budget_reset));
-    // 提问卡本身也要落块（用户建议 ⑥）：重开 App 之后那张卡要能照原样显示。
+    // 提问卡本身也需落块：重开 App 后该卡需原样显示。
     // `asked` 是**第一条**（旧界面按单问的形状读它），多问的整组在 `askedAll`。
     payload.insert(
         "asked".into(),
