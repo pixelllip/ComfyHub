@@ -815,7 +815,7 @@ function Install-McpRuntime {
             SayI ("  借机器上已有的 Python {0}（它已经装了 comfy-mcp {1} / comfy-cli {2}，不装任何东西）" -f
                 $sys.Version, $sys.ComfyMcpVersion, $sys.ComfyCliVersion) 'Green'
         } else {
-            # ---- 第 3 档：机器上有 Python，借它建 venv（不污染用户的全局环境）----
+            # ---- 第 3 档：机器上存在 Python，使用它创建 venv（不修改全局环境）----
             $sys = Find-SystemPython -Quiet:$Quiet
             if ($sys) {
                 SayI ("  机器上已有 Python {0}，借它建 venv（不下便携版）" -f $sys.Version) 'DarkGray'
@@ -871,7 +871,7 @@ function Install-McpRuntime {
     SayI ("  装配状态写入: {0}" -f $stateFile) 'DarkGray'
 
     # 换档之后旧的便携版可能还留在盘上（约 290MB）且已经不再被使用。
-    # **不自动删**（那可能是唯一一份能跑的环境，删了就没退路），只如实说一句、告诉用户位置。
+    # **不自动删除**（可能是唯一可用的环境），只输出提示与位置。
     $stalePortable = Join-Path $dir 'python'
     if ($pythonSource -ne 'portable' -and (Test-Path -LiteralPath $stalePortable)) {
         SayI ("  注意: 包内还留着旧的便携版 Python（{0}），现在用的不是它；确认没用可以手动删。" -f $stalePortable) 'Yellow'
@@ -934,8 +934,8 @@ function Show-McpRuntimeReport {
     $color = if ($st.Ok) { 'Green' } else { 'Yellow' }
     Write-Host ("  {0,-28} {1}  {2}" -f 'MCP 运行时 (comfy-mcp)', $mark, $st.Dir) -ForegroundColor $color
     if ($st.PythonExe) {
-        # 把"这份 Python 是哪来的"写出来（用户 2026-09-21 要求检测优先、别乱装东西：
-        # 看到 portable 就说明这台机器上没找到 Python，脚本才自己下了一份）
+        # 输出 Python 来源（检测优先，不随意安装：
+        # 显示 portable 表示机器上未找到 Python，脚本自行下载）
         $srcText = switch ([string]$st.PythonSource) {
             'system' { '（借机器上已有的，没装任何东西）' }
             'venv' { '（包内 venv，借机器上已有的 Python 建的）' }

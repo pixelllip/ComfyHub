@@ -1,4 +1,4 @@
-# ComfyUI 安装位置解析（用户"其他建议"第 3 条：发行版怎么自动找到 comfy 在哪）
+# ComfyUI 安装位置解析（发行版自动查找 ComfyUI 位置）
 #
 # 与后端 `ComfyLocator.kt` 是**同一套判据**（顺序也一致）：脚本与 App 各自要能用，
 # 但两边必须给出一致答案，否则会出现"App 说找到了、脚本说找不到"这种最难查的问题。
@@ -9,7 +9,7 @@
 #   $out   = Resolve-ComfyOutputDir       # 找不到返回 $null
 #
 # 判据刻意严：**只有特征文件齐全才算**。认错目录的代价是"捕获一条也收不到"，
-# 而用户完全不知道为什么，所以宁可返回 $null 让他手填。
+# 因此返回 $null，由调用方手动填写。
 
 function Test-ComfyHome([string]$Path) {
     if ([string]::IsNullOrWhiteSpace($Path)) { return $false }
@@ -55,7 +55,7 @@ function Resolve-ComfyHome {
         if (Test-ComfyHome $local) { return (Resolve-Path -LiteralPath $local).Path }
     }
 
-    # 3) 常见安装位置（**每个固定盘**的盘根 + 用户目录，最后才在几个顶层目录里翻一层）
+    # 3) 常见安装位置（**每个固定盘**的盘根 + 主目录，最后在几个顶层目录中查找一层）
     $fixed = @()
     foreach ($drive in (Get-FixedDriveRoots)) {
         $fixed += (Join-Path $drive 'ComfyUI')
@@ -74,7 +74,7 @@ function Resolve-ComfyHome {
 
     # 4) ComfyUI **Desktop** 的嵌套布局（2026-09-21 实测踩到）
     #    Desktop 把源码检出放在 <应用目录>\ComfyUI-Installs\<实例>\ComfyUI 下，
-    #    只在顶层翻一层永远找不到它 —— 而用户的 ComfyUI 恰恰就是这么装的。
+    #    仅查找顶层时无法找到该布局。
     $desktopRoots = @(
         (Join-Path $env:USERPROFILE 'AppData\Local\Programs\@comfyorgcomfyui-electron'),
         (Join-Path $env:USERPROFILE 'Documents\comfy'),

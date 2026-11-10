@@ -68,11 +68,11 @@ param(
     [double]$Denoise = 1.0,
     # **贴人物档**：人物图（画廊里的产物 id）。给了就多一轮 `comfy_use_media` 把人物图投进去，
     # `mode="subject"` 只回 `personFilename`（抠图交给工作流），并把它写进 `20.image`、
-    # 用 -PersonDenoise（默认 0.5）只融接缝 —— 用户原话里
-    # "保持背景不变，更换有具体动作的人物并保持画风"的那条路。
+    # 使用 -PersonDenoise（默认 0.5）仅融合接缝 ——
+    # 对应"保持背景不变，更换有具体动作的人物并保持画风"的路径。
     [int]$PersonMediaId = 0,
     # **贴人物档**：先生成人物（t2i），再进第二阶段把它贴进底图。
-    # 用户原话："这时候就应该先生成人物，然后再用图像编辑把人换上去吧？"
+    # 先生成人物，再用图像编辑将其贴入底图。
     [switch]$TwoStage,
     # 阶段一用哪份 t2i 工作流（默认项目自带的 Krea2 turbo t2i，白底出图好贴）
     [string]$PersonWorkflow = '',
@@ -112,7 +112,7 @@ param(
 
 $ErrorActionPreference = 'Continue'
 $ProjectRoot = Split-Path -Parent $PSScriptRoot
-# 数据目录可能被用户搬到别的盘（`<根>\data-dir.json`，与 lib\core\backend_paths.dart 同一约定）
+# 数据目录可能被移动到其他磁盘（`<根>\data-dir.json`，与 lib\core\backend_paths.dart 同一约定）
 $DataDir = $ProjectRoot
 $DataDirFile = Join-Path $ProjectRoot 'data-dir.json'
 if (Test-Path $DataDirFile) {
@@ -335,7 +335,7 @@ try {
     $script:InputDir = $instanceInput
     Say "  实例的 input 目录：$instanceInput" 'DarkGray'
 
-    # --- 3. 把底图作为**附件**上传（用户随消息发来的图就是这条路）---------
+    # --- 3. 把底图作为**附件**上传（随消息发送的图片走这条路）---------
     $upload = Invoke-RestMethod -Method Post -Uri "$ApiBase/api/ai/attachments" -Form @{ files = Get-Item $bgPath } -TimeoutSec 120
     $attachment = @($upload.items) | Select-Object -First 1
     Check '参考照片作为附件上传成功' ($null -ne $attachment -and $attachment.id) ($upload | ConvertTo-Json -Compress)
@@ -834,7 +834,7 @@ try {
         if ($script:AttachmentId) {
             try { Invoke-Api 'DELETE' "/api/ai/attachments/$($script:AttachmentId)" $null | Out-Null } catch { }
         }
-        # input 目录里那几个临时文件（投放的底图 / 遮罩 / 画廊产物）也清掉，别在用户的 ComfyUI 里攒垃圾。
+        # input 目录里那几个临时文件（投放的底图 / 遮罩 / 画廊产物）也清掉，避免在 ComfyUI 目录中堆积。
         # ⚠ 用通配：投放的文件名是 **`<我们想要的名字>-<来源 id 前 8 位>.png`**（防重名那一段后缀），
         #   所以 `edit-bg.png` / `edit-stage1.png` 落盘之后叫 `edit-bg-00000000.png` /
         #   `edit-stage1-m235.png` —— 只按"想要的名字"删会一个都删不掉（实测留了一地）。

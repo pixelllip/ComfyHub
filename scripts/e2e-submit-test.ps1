@@ -58,8 +58,8 @@ $E2eDir      = Join-Path $PSScriptRoot 'e2e'
 $WorkDir     = Join-Path $ProjectRoot '.run\e2e-submit'
 $OutDir      = Join-Path $WorkDir 'output'
 # 工作流文件故意放在**项目之外**的临时目录：项目内的 `.run` / `.git` / `node_modules`
-# 是工具权限里"永远不许碰"的段（见 ToolPolicy.FORBIDDEN_SEGMENTS），拿它当"用户机器上的
-# 工作流文件"来测并不真实 —— 真实的 ComfyUI 工作流目录本来就在项目外面。
+# 是工具权限中"始终不可访问"的段（见 ToolPolicy.FORBIDDEN_SEGMENTS），不足以代表
+# 实际的工作流文件位置 —— ComfyUI 工作流目录通常位于项目外部。
 $WfDir       = Join-Path ([System.IO.Path]::GetTempPath()) "comfyhub-e2e-submit-wf-$PID"
 $ProviderId  = 'e2e-submit-gw'
 
@@ -111,7 +111,7 @@ function Find-MysqlExe {
 #  后端写的是 **SQLite 单文件** `<项目根>\.db\comfyhub.db`。
 #  用 python 的 sqlite3（本脚本本来就把 python 当前置条件），读 + 删都走它。
 # ---------------------------------------------------------------------------
-# 数据目录可能被用户搬到别的盘（`<根>\data-dir.json`，与 lib\core\backend_paths.dart 同一约定）
+# 数据目录可能被移动到其他磁盘（`<根>\data-dir.json`，与 lib\core\backend_paths.dart 同一约定）
 $DataDir = $ProjectRoot
 $DataDirFile = Join-Path $ProjectRoot 'data-dir.json'
 if (Test-Path $DataDirFile) {
@@ -169,7 +169,7 @@ function Clear-SubmitTestCaptures {
 }
 
 # 测试自己开的**会话**也要收掉：AI 工作台的左侧列表就是库里这些会话，
-# 不清的话用户会在自己的历史里看到一串「补线 C:\...\e2e_ui_gap_workflow.json」。
+# 不清除时会在历史中留下一串「补线 C:\...\e2e_ui_gap_workflow.json」。
 #
 # 认法是**会话绑的 Provider**：本脚本的会话全都挂在临时 Provider `e2e-submit-gw` 上
 # （跑完会把它删掉），比"在正文里找关键词"准得多 —— 第一幕那种"提交 126 3.steps=13"
@@ -280,7 +280,7 @@ try {
     # 库里进了几条真实捕获（UNET/CLIP/VAE Loader + 真模型名）之后 ②③ 必红 ——
     # 表现是第 2 幕报 MODEL_NOT_LOADABLE，而脚本根本没打算验审核。
     # 改成**自己造目标**：节点类与模型名全部来自 fake_comfy.py 自己的 /object_info，
-    # 审核 / 预检 / 真提交 / 入库全链路都跑在这条合成工作流上，与用户库无关。
+    # 审核 / 预检 / 真提交 / 入库全链路都跑在这条合成工作流上，与实际库无关。
     $graph = @{
         '4' = @{ class_type = 'CheckpointLoaderSimple'; inputs = @{ ckpt_name = $fakeCkpt } }
         '6' = @{ class_type = 'CLIPTextEncode'; inputs = @{ text = 'e2e submit 合成工作流'; clip = @('4', 0) } }
@@ -343,7 +343,7 @@ try {
     Say ("  将覆盖参数 {0} = {1}" -f $overridePath, $overrideValue) 'DarkGray'
 
     # 权限档先存一份并**临时钉成 ask**：第 1 幕验的就是"没人批准就不提交"，
-    # 而用户平时可能把档位切成了「自动允许（无需批准）」—— 那时 comfy_submit 会立刻执行，
+    # 而档位可能已被切换为「自动允许（无需批准）」—— 此时 comfy_submit 会立即执行，
     # 这一幕必然红。脚本必须自己保证前置条件，不能靠机器上的当前设置（实测踩过：
     # 库里 permissionMode=full 时本脚本会报"没人批准时不会提交给 ComfyUI -> 已提交 1 次"）。
     $script:PermissionModeBefore = (Invoke-Api 'GET' '/api/ai/tools/policy' $null).permissionMode
@@ -433,9 +433,9 @@ try {
         Check "参数覆盖生效（$overridePath）" ("$sent" -eq "$overrideValue") "实际发出的是 $sent"
     }
 
-    # --- 6. 工作流文件可以直接提交（用户 bug ③） ---------------------------
+    # --- 6. 工作流文件可以直接提交 ---------------------------
     #
-    # 现场：用户甩给 AI 一个工作流 .json 路径，AI 只能回"comfy_submit 只认库里的 promptId，
+    # 现象：提供工作流 .json 路径后，AI 只回复"comfy_submit 只认库里的 promptId，
     # 我不能凭一个文件路径提交"。这一幕验的就是那条路真的通了：
     #   ① read_file / comfy_load_workflow 能读到那个文件（读白名单要放行它的目录）；
     #   ② 界面格式（nodes/links）被按 ComfyUI 的 /object_info 转成 API 节点图；
@@ -553,7 +553,7 @@ try {
         if ($loaded) { $script:LoadedPromptId = $loaded.promptId }
     }
 
-    # --- 7. 前端节点转不出来时：模型拿缺口清单 → 补线 → 提交（用户建议 ②）----
+    # --- 7. 前端节点无法转换时：模型获取缺口清单 → 补线 → 提交 ----
     #
     # 现场：界面格式工作流里带着**说不清类型**的广播节点（`Anything Everywhere` 的插口
     # 类型是 `*`，`properties` 里也没有 `Input Type`），服务端**不敢猜着改写**，
@@ -671,19 +671,19 @@ try {
         Check '被摘掉的前端节点没有混进提交的图' `
             ($null -eq $g5.PSObject.Properties['2']) (@($g5.PSObject.Properties.Name) -join ',')
     }
-    # --- 8. 本机 ComfyUI 已保存的工作流文件（用户 bug ⑤）--------------------
+    # --- 8. 本机 ComfyUI 已保存的工作流文件 --------------------
     #
-    # 现场：用户说"基于 krea2SFWNSFWUncensoredImageTo_v10 生成"，AI 回"库里搜不到这条工作流，
+    # 现象：请求"基于 krea2SFWNSFWUncensoredImageTo_v10 生成"，AI 回复"库里搜不到这条工作流，
     # 要么把 .json 路径发我，要么你在 ComfyUI 里点一次 Queue 让它被自动捕获"。
-    # 根因：库只收"捕获过的运行 + 手动读进来的文件"，所以**首次使用时库里必然是空的** ——
-    # 而那份文件一直躺在 `user\<用户>\workflows` 里。这一幕验三件事：
+    # 库只收"捕获过的运行 + 手动读进来的文件"，因此**首次使用时库为空** ——
+    # 而该文件位于 `user\<账号>\workflows`。这一幕检查三件事：
     #   ① 只读接口能把它们列出来（带路径 / 格式 / 是否已入库）；
-    #   ② AI 的 `comfy_list_workflows` 也看得见（第一次就不必让用户报路径）；
+    #   ② AI 的 `comfy_list_workflows` 也可见（无需提供路径）；
     #   ③ 一键导入真的入库，而且重复点是幂等的。
     Say ''
     Say '  [6/6] 本机工作流文件：列出来 + 一键入库（用户 bug ⑤）' 'Cyan'
 
-    # 本机工作流目录 = **配置的输出目录的父目录**下的 user\<用户>\workflows
+    # 本机工作流目录 = **配置的输出目录的父目录**下的 user\<账号>\workflows
     # （ComfyWorkflowFiles 认的第一条来源；ComfyUI 真实的形状就是 output 与 user 并列）
     $localWfDir = Join-Path $WorkDir 'user/default/workflows'
     New-Item -ItemType Directory -Path $localWfDir -Force | Out-Null

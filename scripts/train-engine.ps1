@@ -135,7 +135,7 @@ function Start-Engine {
         Say '起守护进程（pythonw，无窗口）'
         # §2：Start-Process 给的不是管道，所以**不能**带 --watch-stdin；
         # 谁起的谁关：pid 记进 state，stop 负责收（守护进程自己也写 pidfile）
-        # §13：引擎还会写一份用户级镜像（~/.anima/daemon.json）——用环境变量把它
+        # §13：引擎还会写一份账号级镜像（~/.anima/daemon.json）——通过环境变量将其
         # 钉进项目内，和 Rust `train::start` 完全同一口径。
         $env:ANIMA_DAEMON_PIDFILE = Join-Path $Root '.run\anima-daemon.json'
         Start-Process -FilePath $EnginePyW -ArgumentList '-m', 'anima_daemon' -WorkingDirectory $Dir -WindowStyle Hidden

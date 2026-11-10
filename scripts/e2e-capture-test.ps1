@@ -90,7 +90,7 @@ function Find-Python {
 #  P2（2026-09-23）起后端写的是 **SQLite 单文件** `<项目根>\.db\comfyhub.db`；
 #  用 python 的 sqlite3（本脚本本来就把 python 当前置条件），读 + 删都走它。
 # ---------------------------------------------------------------------------
-# 数据目录可能被用户搬到别的盘（`<根>\data-dir.json`，与 lib\core\backend_paths.dart 同一约定）
+# 数据目录可能被移动到其他磁盘（`<根>\data-dir.json`，与 lib\core\backend_paths.dart 同一约定）
 $DataDir = $ProjectRoot
 $DataDirFile = Join-Path $ProjectRoot 'data-dir.json'
 if (Test-Path $DataDirFile) {

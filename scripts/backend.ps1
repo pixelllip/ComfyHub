@@ -170,9 +170,9 @@ function Resolve-DataDir {
         return $chosen
     }
     # ② 没有记录时**就用指针这一级**（或运行根目录）。
-    #    ⚠ 别在这里按大小 / 修改时间猜"哪份是用户的库"：那是拿某台机器的情况当通用
-    #    规则（2026-11-10 复查）。同一棵树里还发现别的库时，App 会把它们列出来让用户
-    #    自己选；脚本这边只认指针 + 记录，猜不到就不猜。
+    #    ⚠ 不在此处按大小 / 修改时间推测"哪份是目标库"：该规则只适用于单台机器。
+    #    同一棵树中发现其他库时，App 会列出并由界面选择；脚本只认指针 + 记录，
+    #    无法判断时不推测。
     return $chosen
 }
 
@@ -439,7 +439,7 @@ function Do-Start {
 
     Write-Host "==> 启动后端（$BindHost，端口自动）exe=$exe" -ForegroundColor Cyan
     # -WindowStyle Hidden：控制台程序不给窗口（App 那条路靠 Dart 的 CREATE_NO_WINDOW，
-    # 这里靠 .NET 的 SW_HIDE —— 两边的判据都是"用户看不见黑框"）
+    # 这里使用 .NET 的 SW_HIDE —— 两条路径均不显示控制台窗口）
     $proc = Start-Process -FilePath $exe -ArgumentList $argLine -WorkingDirectory $ProjectRoot `
         -WindowStyle Hidden -PassThru
     Write-Host "    pid $($proc.Id)" -ForegroundColor DarkGray

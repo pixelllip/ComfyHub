@@ -163,7 +163,7 @@ try {
     New-Item -ItemType Directory -Path (Join-Path $storage 'ai') -Force | Out-Null
 
     # 真库的**临时副本**（连同 WAL：只拷主文件会丢掉最后一批事务）
-    # 数据目录可能被用户搬到别的盘（`<根>\data-dir.json`，与 backend_paths.dart 同一约定）
+    # 数据目录可能被移动到其他磁盘（`<根>\data-dir.json`，与 backend_paths.dart 同一约定）
     $DataDir = $ProjectRoot
     $DataDirFile = Join-Path $ProjectRoot 'data-dir.json'
     if (Test-Path $DataDirFile) {

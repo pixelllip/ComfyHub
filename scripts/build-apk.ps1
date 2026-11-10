@@ -66,7 +66,7 @@ $env:PUB_HOSTED_URL = 'https://pub.dev'
 
 $buildArgs = @('build', 'apk')
 $buildArgs += if ($DebugBuild) { '--debug' } else { '--release' }
-# ★ 只出 arm64-v8a（2026-10-31 用户要求）：真机基本都是 arm64；x86_64 只给模拟器，
+# ★ 只构建 arm64-v8a：真机以 arm64 为主；x86_64 仅用于模拟器，
 #   armeabi-v7a 是 32 位老机。`--target-platform` 与 `--split-per-abi` 一起用，产物名
 #   固定带架构（`app-arm64-v8a-{debug,release}.apk`），不会被误当成全量包。
 $buildArgs += '--target-platform'
@@ -77,7 +77,7 @@ $buildArgs += '--split-per-abi'
 # 不加这个的后果是**永久性**的：分架构包会拿到 1001 / 2001 / 4001，而
 # `flutter run` 装的 debug 包是 1 —— 于是"装过一次分架构包"的手机，之后
 # **`flutter run` 永远装不上去**（INSTALL_FAILED_VERSION_DOWNGRADE，`-r` 救不了，
-# 只能先卸载）。这正是用户报"真手机无法安装"的第三个原因，实测复现过。
+# 只能先卸载）。这会导致真机无法安装，已复现。
 #
 # 加了它，本脚本的 debug / release **共用同一个 versionCode**（与 `flutter run` 装的
 # debug 包一致），互相覆盖都是普通的"同版本替换"，`adb install -r` 与 `flutter run` 都能过。
@@ -120,7 +120,7 @@ $outDir = Join-Path $ProjectRoot 'build\app\outputs\flutter-apk'
 # 为什么不能 `Get-ChildItem *.apk`：Flutter 不清理输出目录，所以编完 release 之后，
 # 目录里还躺着上次的 debug / 全量 / 分架构包（实测：一次 `--release` 之后目录里有 8 个包，
 # 其中三个还是 0.2.0 的旧构建）。那样做有三个后果，全是"看着成功、其实拿错包"：
-#   ① 「拿去装机」把旧包和旧 sha256 一起打出来，用户照着拷错；
+#   ① 「拿去装机」输出旧包与旧 sha256，导致复制错误的包；
 #   ② `-Install` 会把旧包也装一遍（`-DebugBuild -Install` 最后装上的反而是旧 release）；
 #   ③ 体检报的是旧包的 minSdk / 签名。
 # 产物名由 Flutter 固定：本脚本只出 app-arm64-v8a-{debug,release}.apk。
@@ -270,7 +270,7 @@ if ($Install) {
             Say ''
             Say '（链路没通，跳过 -Install。上面那几条做完再跑一次。）' 'Yellow'
         } else {
-            # 有多个设备时让用户选，别乱装
+            # 存在多个设备时需要选择，不默认安装
             $serial = ($online[0] -split '\s+')[0]
             $installTried = $true
             if ($online.Count -gt 1) {

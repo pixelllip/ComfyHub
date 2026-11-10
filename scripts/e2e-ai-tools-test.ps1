@@ -51,7 +51,7 @@ param(
 
 $ErrorActionPreference = 'Continue'
 $ProjectRoot = Split-Path -Parent $PSScriptRoot
-# 数据目录可能被用户搬到别的盘（`<根>\data-dir.json`，与 lib\core\backend_paths.dart 同一约定）
+# 数据目录可能被移动到其他磁盘（`<根>\data-dir.json`，与 lib\core\backend_paths.dart 同一约定）
 $DataDir = $ProjectRoot
 $DataDirFile = Join-Path $ProjectRoot 'data-dir.json'
 if (Test-Path $DataDirFile) {
@@ -112,7 +112,7 @@ $script:MemoryBefore = $null
 # 工具轮数上限的原值：第 12 幕要临时钉成 1（跑到"轮数用尽"那一轮），结束时原样放回
 $script:MaxStepsBefore = $null
 
-# 权限档的原值：审批那一幕要求 `comfy_sync_history` 是 pending，而用户在界面上把档位切到
+# 权限档的原值：审批那一幕要求 `comfy_sync_history` 是 pending，而在界面上把档位切换到
 # 「自动允许（无需批准）」时它会是 `not_required`（第 5 幕会红）。所以脚本先临时钉成 ask、结束时原样放回。
 $script:PermissionModeBefore = $null
 
@@ -346,7 +346,7 @@ try {
     Remove-Item $SkillFile -Force -ErrorAction SilentlyContinue
     Remove-Item $HackFile -Force -ErrorAction SilentlyContinue
     Remove-Item $OkFile -Force -ErrorAction SilentlyContinue
-    # 长期记忆先存一份：后面会往里面写测试数据，结束时原样放回（不能污染用户真实的记忆）
+    # 长期记忆先存一份：后面会往里面写测试数据，结束时原样放回（不能改动实际记忆内容）
     $script:MemoryBefore = (Invoke-Api 'GET' '/api/ai/memory' $null).content
     # 权限档也存一份并临时钉成 ask：审批那一幕只有在"需要批准"的档位下才有意义
     $script:PermissionModeBefore = (Invoke-Api 'GET' '/api/ai/tools/policy' $null).permissionMode
@@ -471,14 +471,14 @@ try {
 
     $policy = Invoke-Api 'GET' '/api/ai/tools/policy' $null
     $roots = @($policy.writeRoots)
-    # ⚠ 这条钉的是"**代码**不许自己往写白名单里塞目录"（用户 bug ④ 那条纪律：本机 ComfyUI
-    # 的目录只放宽**读**）。而白名单是**用户设置**：用户为了给 ComfyUI 的 input 目录写文件，
-    # 自己在设置页把 `D:\Comfy-Desktop` 加进来过（2026-09-28 的 bug 单里就是这么写的）——
-    # 那种情况下"恰好只有 comfyui"必然不成立，硬要求相等只会让这条 e2e 永远红着、
-    # 让人分不清是新的回归还是用户的设置。所以：
-    #   · 只有一项时 → 仍然**严格相等**（干净机器上照旧是硬闸门）；
-    #   · 多于一项时 → 只要求"项目 comfyui 一定在里面"，并把多出来的目录**打出来**（不假装没看见）。
-    # 真正的"代码不许自己加目录"由 `api_test.rs` 的默认值断言兜着（那边不读用户设置）。
+    # ⚠ 该项检查"**代码**不得自行向写白名单添加目录"（本机 ComfyUI
+    # 目录只放宽**读**）。而白名单属于**配置**：为向 ComfyUI 的 input 目录写文件，
+    # 可能在设置页添加过 `D:\Comfy-Desktop`——
+    # 此时"恰好只有 comfyui"不成立，要求严格相等会使该 e2e 持续失败，
+    # 无法区分新增回归与配置差异。因此：
+    #   · 只有一项时 → 仍然**严格相等**（干净环境下作为硬性检查）；
+    #   · 多于一项时 → 只要求"项目 comfyui 在列表中"，并**输出**多出的目录。
+    # "代码不自行添加目录"由 `api_test.rs` 的默认值断言保证（该用例不读取配置）。
     if ($roots.Count -eq 1) {
         Check "writeRoots 恰好是 $ExpectedWriteRoot" `
             ($roots[0].TrimEnd('\') -ieq $ExpectedWriteRoot.TrimEnd('\')) `
@@ -656,7 +656,7 @@ try {
          $thumb.RawContentLength -gt 0) `
         ("$($thumb.StatusCode) $($thumb.Headers['Content-Type']) $($thumb.RawContentLength) bytes")
 
-    # WebP（2026-09 用户要求"附件要支持 webp"）：这是**真的能解码**的回归防线 ——
+    # WebP：这是**实际解码**的回归防线 ——
     # 后端靠 ImageIO 插件读 webp，插件一旦被删 / 版本回退 / 打 fatJar 时服务文件合并丢了，
     # 编译与上传检查**全都照样通过**，只有"缩略图不是 JPEG"这一条会红。
     # 这张 64×64 有损（VP8）webp 是 Pillow 生成的，字节写死在下面。
@@ -710,7 +710,7 @@ try {
         Check '带图那一轮的 content 是"文本 + 图片"的有序块数组' ($withImage[0].userContentIsBlocks -eq $true)
     }
 
-    # 用户消息落库时要带 attachment 有序块：重开 App 才画得出缩略图
+    # 请求消息落库时需带 attachment 有序块：重开 App 后才能显示缩略图
     # （注意只挑 role=user：假网关会把提问原样回显在助手正文里，按文本找会挑错人）
     $msgs9 = @(Invoke-Api 'GET' "/api/ai/conversations/$($conv.id)/messages" $null)
     $user9 = @($msgs9 | Where-Object { $_.role -eq 'user' -and $_.text -like '*这张图里画的是什么*' }) |
@@ -737,11 +737,11 @@ try {
         ($blockedBody -like '*UNSUPPORTED_CONTENT*') $blockedBody
     Check '这一路**零上游请求**（before=$beforeLog4 after=$afterLog4）' ($afterLog4 -eq $beforeLog4)
 
-    # --- 12. 场景 10：重试**不重复提问**（AIH-024 / 用户 2026-09-19 报的"同一条语句出现两次"）
+    # --- 12. 场景 10：重试**不重复提问**（AIH-024："同一条语句出现两次"）
     #
     # 现场：会话里点一次「重试」，就多出一条一模一样的提问（库里同时留着新提问 + 旧的失败气泡）。
-    # 根因是 `POST /conversations/{id}/runs` 不看 `retryOfRunId`，照旧 append 了一条新用户消息。
-    # 这一幕钉三件事：重试复用**同一条**用户消息、复用**同一条**助手占位、消息总数不变。
+    # 原因是 `POST /conversations/{id}/runs` 不读取 `retryOfRunId`，照旧 append 了一条新消息。
+    # 这一幕检查三件事：重试复用**同一条**请求消息、复用**同一条**助手占位、消息总数不变。
     Say ''
     Say '  [10/13] 重试：复用原来那条提问与失败气泡，绝不新增' 'Cyan'
 
@@ -820,7 +820,7 @@ try {
     $assistantRows = @($msgsAfter | Where-Object { $_.role -eq 'assistant' })
     Check '助手气泡只有 1 条' ($assistantRows.Count -eq 1) ("找到 $($assistantRows.Count) 条")
 
-    # --- 13. 场景 11：输出被长度上限截断时**接着写**，不强行截断（用户建议 ②）------
+    # --- 13. 场景 11：输出被长度上限截断时**接着写**，不强行截断 ------
     #
     # 现场：长回复被上游的 max_tokens 切断（这里用假网关的 finish_reason=length 复现），
     # 后端必须**再要一轮**把话说完，而不是把半句话当成结尾。
@@ -857,7 +857,7 @@ try {
          $answer11.text.Split($HeadText).Count -eq 2) `
         ($answer11.text)
 
-    # --- 14. 场景 12：回答首尾不再"被截断"（用户 bug⑤）--------------------------
+    # --- 14. 场景 12：回答首尾不再"被截断"--------------------------
     #
     # 现场（会话 ab487605，2026-09-19）：
     #   ① 10:08 那条回复里漏出一行 `[标题] Krea2 初音画风迁移出图[/标题]`（"首"）；
@@ -922,16 +922,16 @@ try {
     Check '如实说明"工具轮数到上限、这次没执行"' `
         ($null -ne $answer13 -and $answer13.text -match '工具轮数上限') ($answer13.text)
 
-    # --- 15. 场景 13：被 429 打断时，已经回复完的内容一个字都不能丢（用户 bug）-------
+    # --- 15. 场景 13：被 429 打断时，已回复的内容不得丢失 -------
     #
     # 现场（会话 9b6d01af 的 seq12，**查库实据**）：那次 Run 跑了 4 分钟、成功调了 3 次
-    # `comfy_submit`，最后一轮撞上 HTTP 429（`error_code=RATE_LIMIT`）。用户接着点了「重试」，
+    # `comfy_submit`，最后一轮返回 HTTP 429（`error_code=RATE_LIMIT`）。随后点「重试」，
     # 结果**整条回复连同工具卡一起消失** —— 库里那条消息 `text=''`、一个 part 都没有：
     # `resetAssistantForRetry` 把"有内容的失败回复"就地清零了（现在只在**空壳**上才这么做）。
     # 这一幕钉五件事：
     #   ① 失败时正文与 parts（正文 + 工具调用 + 工具结果）都还在；
     #   ② 重试**另起一条**助手气泡（原来那条原样保留，含工具卡）；
-    #   ③ 提问仍然只有 1 条（重试复用那条用户消息，不重复提问）；
+    #   ③ 提问仍然只有 1 条（重试复用那条请求消息，不重复提问）；
     #   ④ 重试能正常收尾，新气泡是完整回复；
     #   ⑤ 假网关确实按"先内容、再 429、重试成功"三步走的（防止断言失真）。
     Say ''
@@ -1068,7 +1068,7 @@ try {
         if ($script:ConversationId) {
             try { Invoke-Api 'DELETE' "/api/ai/conversations/$($script:ConversationId)" $null | Out-Null } catch { }
         }
-        # 第 10 幕的会话与那个"死端口 Provider"也要收干净（否则用户会在工作台里看到它）
+        # 第 10 幕的会话与那个"死端口 Provider"也要清理干净（否则会在工作台中显示）
         if ($script:RetryConversationId) {
             try { Invoke-Api 'DELETE' "/api/ai/conversations/$($script:RetryConversationId)" $null | Out-Null } catch { }
         }

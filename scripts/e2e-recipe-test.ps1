@@ -33,7 +33,7 @@
 param(
     # 监听端口；0 = 自动挑一个空闲的
     [int]$Port = 0,
-    # 用户真实那份**界面格式**工作流（默认去 ComfyUI 的 workflows 目录找 krea2 编辑那两份）；
+    # 实际使用的**界面格式**工作流（默认去 ComfyUI 的 workflows 目录找 krea2 编辑那两份）；
     # 找不到 / ComfyUI 不在跑就跳过第 4 幕（不判失败）
     [string]$UiWorkflow = '',
     # 第 1 幕要学的那份 **API 格式**工作流。仓库不再随包带模板（2026-10-28 删除），
@@ -122,8 +122,8 @@ $base = "http://127.0.0.1:$Port"
 
 # --- 临时现场：真库副本 + 空 storage ------------------------------------
 # ⚠ 先清掉**上一次跑剩下的**后端（跑挂了就会有残留，它会占着库副本的 WAL/shm，
-#    下一次 `Copy-Item` 就会报"请求的操作无法在使用用户映射区域打开的文件上执行"——踩过）。
-#    只认**命令行里带这个 WorkDir 的**那些，绝不误杀用户在用的后端。
+#    下一次 `Copy-Item` 会报文件被占用的错误——已复现）。
+#    只认**命令行里带这个 WorkDir 的**那些，不终止正在运行的后端。
 function Stop-Tree {
     param([int]$ProcessId)
     if ($ProcessId -le 0) { return }
@@ -135,7 +135,7 @@ Get-CimInstance Win32_Process -Filter "Name='comfyhub-server-rs.exe'" -ErrorActi
 
 if (Test-Path $WorkDir) { Remove-Item $WorkDir -Recurse -Force -ErrorAction SilentlyContinue }
 New-Item -ItemType Directory -Force -Path $WorkDir | Out-Null
-# 数据目录可能被用户搬到别的盘（`<根>\data-dir.json`，与 lib\core\backend_paths.dart 同一约定）
+# 数据目录可能被移动到其他磁盘（`<根>\data-dir.json`，与 lib\core\backend_paths.dart 同一约定）
 $DataDir = $ProjectRoot
 $DataDirFile = Join-Path $ProjectRoot 'data-dir.json'
 if (Test-Path $DataDirFile) {
@@ -160,7 +160,7 @@ try {
     # --- 起后端（Rust；命令行指向库副本，环境变量指向项目根） -------------
     # Rust 用**命令行参数**（`--db` / `--storage` / `--port`），不再是 Kotlin 那套环境变量。
     $env:COMFYHUB_PROJECT_ROOT = $ProjectRoot
-    # ⚠ 绝不让它写 `<根>\.run\api.json`：那份记录属于用户真正在用的后端，
+    # ⚠ 绝不让它写 `<根>\.run\api.json`：该文件属于正在运行的后端，
     #   被这个临时后端覆盖掉的话，App 下次会去连一个已经关掉的端口（pitfalls 记过现场）。
     $env:COMFYHUB_NO_PORT_FILE = '1'
     $storageDir = Join-Path $WorkDir 'storage'

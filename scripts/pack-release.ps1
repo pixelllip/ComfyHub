@@ -259,7 +259,7 @@ Say "  输出: $OutDir" 'DarkGray'
 # -Clean 只清掉"我们自己装进去的东西"。
 # 默认输出目录就是 flutter 的产物目录，整个 Remove-Item 会把 viewer.exe /
 # flutter_windows.dll 一起删掉 —— 那不叫清理，那叫把 App 弄没了。
-# 运行期数据（.db 库、storage 产物、.run 日志）**不动**：那是用户的数据，不是装配产物。
+# 运行期数据（.db 库、storage 产物、.run 日志）**不修改**：它们属于运行数据，不是装配产物。
 if ($Clean) {
     Say '  清理上次装进去的东西（Flutter 自己的产物保留不动）…' 'DarkGray'
     $owned = New-Object System.Collections.ArrayList
@@ -309,10 +309,10 @@ foreach ($c in $manifest.components) {
                 $srcFull = [System.IO.Path]::GetFullPath($src).TrimEnd('\')
                 $dstFull = [System.IO.Path]::GetFullPath($target).TrimEnd('\')
                 # 发布包里只装程序：上一份构建残留的运行期数据（`.db` / `storage` /
-                # `.run` / `app-support`）**不许跟着进包** —— 2026-11-10 用户报的
-                # "复制出去的构建对话不见了、角色卡是旧版"就是它们引起的（那个目录一带
-                # 出去，它自己就成了运行时根，App 照着里面那份旧库开）。
-                # ⚠ 只是**不拷**：源目录里一个字节都不删（那份数据可能是用户唯一的旧库，
+                # `.run` / `app-support`）**不得进入发布包** —— 否则复制出的构建会
+                # 出现"对话不见了、角色卡是旧版"（该目录被复制后成为运行时根，
+                # App 使用其中的旧库启动）。
+                # ⚠ 仅**不复制**：源目录中的文件不删除（该数据可能是唯一一份旧库，
                 # 见 bundle_backend.cmake ④ 的实测）。
                 $runtimeJunk = @('.db/**', 'storage/**', '.run/**', 'app-support/**', '_leftover-data/**')
                 if ($srcFull -eq $dstFull) {
