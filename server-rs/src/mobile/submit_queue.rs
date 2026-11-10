@@ -19,7 +19,7 @@
 //! | 想法 | 为什么不行 |
 //! | --- | --- |
 //! | 批准行直接写 `ai_tool_calls`（最"像"复用） | `ai_tool_calls.run_id` 有外键 `→ ai_runs(id)`，而 `PRAGMA foreign_keys=ON`（R1，`db::assert_ready` 盯着）。手机那条 Run 是**手机自己跑的**，`payload.runId` 在桌面**可能还没有对应行**（契约没保证 `ai_run` 与 `submit_job` 的先后）；插不进去 = 审批卡根本不存在 = 人永远批不了。 |
-//! | 那就补一个 `ai_runs` 行凑外键 | 那是**为了骗过闸门而捏造一个桌面 Run** —— 用户明确禁止。 |
+//! | 那就补一个 `ai_runs` 行凑外键 | 那是**为通过校验而伪造一个桌面 Run** —— 已明确禁止。 |
 //! | 那就把 `list_pending_approvals` 的 `r.status='running'` 松掉、允许孤儿行 | 治标：外键那一关就过不去（上一条），而且会把"Run 已经收尾的残留审批"一起放出来（那正是那条 JOIN 在防的东西）。 |
 //! | **本模块：`submit_jobs` 自己记审批，`pending.rs` 把它并进 `approvals[]`，`runs::resolve_approval` 认它** | ✅ **通道没变**：还是 `GET /api/ai/pending` 那一个列表、还是 `POST /api/ai/tool-calls/{id}/approve\|deny` 那两个端点、还是同一个 `resolve_approval` 函数（它内部多认一类 callId）。变的只是**这一行的落点**：它本来就不是"某个桌面 Run 的工具调用"，硬塞进那张表反而是在撒谎。 |
 //!
@@ -65,7 +65,7 @@
 //!
 //! ⚠ **一处如实记下的不确定**：进程在 `state='submitting'` 期间死掉时，我们**不知道**
 //! 那次提交到底送进 ComfyUI 没有（`POST /prompt` 之后、写终态之前被杀就是这个窗口）。
-//! 处置是**不重投**（重投就是替用户多烧一轮显卡），而是回一条说清"结果不确定、
+//! 处置是**不重投**（重投会额外消耗一次生成资源），而是回一条说明"结果不确定、
 //! 去画廊/队列核对"的消息（`SUBMIT_INTERRUPTED`）；真跑完了的话，后台捕获轮询器
 //! （`capture_poller`，O5/O6）会把产物收进画廊 —— 那是既有纪律里就有的兜底。
 
@@ -94,7 +94,7 @@ pub const STATE_FAILED: &str = "failed";
 pub const STATE_DENIED: &str = "denied";
 
 /// 审批等待的上限 —— 与 [`crate::ai::executor::APPROVAL_TIMEOUT_SECONDS`] **同值**：
-/// 用户在桌面上等一张卡的时间不该因为"这次是手机排的队"而变短或变长。
+/// 在桌面上等待一张卡的时间不应因"本次由手机排队"而变长或变短。
 pub const APPROVAL_TIMEOUT_SECONDS: u64 = crate::ai::executor::APPROVAL_TIMEOUT_SECONDS;
 
 /// 审批状态的轮询间隔（毫秒）—— 与工具的审批闸门同一个数（读的也是同一张库）。
@@ -181,12 +181,12 @@ pub struct Job {
 /// "手机只说族"那一路的参数（`docs/workflow-auto-select-plan.md` §1.2）。
 ///
 /// ⚠ 它**代替不了** `promptId` 的精确性：这是一条**经验**路径（同任务同族的最近成功 /
-/// 已验证的配方），选中的工作流会写进回执 —— 选错了让用户一眼看得出来。
+/// 已验证的配方），选中的工作流会写入回执 —— 选择错误可直接看出。
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct AutoPick {
     /// 任务类型（t2i / i2i / edit / inpaint / upscale / video / audio）
     pub task: Option<String>,
-    /// 模型族（用户口语：anima / krea2 / moss image …）
+    /// 模型族（常用称呼：anima / krea2 / moss image …）
     pub family: Option<String>,
     /// 手机侧 AI 写好的最终提示词（桌面负责写进工作流）
     pub positive_prompt: Option<String>,
@@ -383,7 +383,7 @@ pub fn call_id_for(queue_id: &str) -> String {
 ///
 /// 为什么不在受理时顺手查"有没有 API 图 / 审核过不过"：那些是**提交链路**自己的判断
 /// （R10 的审计 + 预检），提前在这里判一遍等于**两份判断**，迟早漂移；而且真的拒了，
-/// 用户看到的是"手机上说排队失败"，不如"桌面上批了、然后如实回一条失败原因"清楚。
+/// 相比显示"手机上说排队失败"，"桌面上批准后如实返回失败原因"更清楚。
 /// 形状错不一样：它**永远**不可能成功，重推只会让手机永远卡在队首。
 fn parse_payload(item: &PushItem) -> Result<ParsedPayload, Reject> {
     let bad = |code: &str, message: String| Reject {
@@ -424,7 +424,7 @@ fn parse_payload(item: &PushItem) -> Result<ParsedPayload, Reject> {
         ));
     }
 
-    // `conversationId`：回执要追加到哪条会话。**不许缺** —— 缺了就没法把结果告诉用户，
+    // `conversationId`：回执追加到哪条会话。**不得缺失** —— 缺失则无法返回结果，
     // 而"手机那条『已排队』永远停在排队中"是最坏的表现（契约 §4.1 最后一条）。
     let Some(conversation_id) = text_of("conversationId") else {
         return Err(bad(
@@ -881,7 +881,7 @@ async fn execute(state: &AppState, job: &Job) -> Terminal {
     };
 
     let mut terminal = classify(&outcome.payload, elapsed_start.elapsed().as_millis() as i64);
-    // 回执里如实写清"这次用了哪份工作流" —— 经验路径选错了要让用户一眼看得出来
+    // 回执中如实写明"本次使用了哪份工作流" —— 经验路径选择错误可直接看出
     if let Some(note) = picked_note {
         terminal.message = format!("{}\n{note}", terminal.message);
     }
@@ -1182,7 +1182,7 @@ fn submit_arguments_json(job: &Job) -> String {
     Value::Object(arguments).to_string()
 }
 
-/// `elapsedMs`：受理到终态那段的真实读数（回执里给用户看的就是它）。
+/// `elapsedMs`：受理到终态的实际耗时（回执中显示该值）。
 fn job_elapsed_ms(job: &Job) -> i64 {
     job.elapsed_ms
 }
@@ -1442,7 +1442,7 @@ pub fn pending_approvals(conn: &Connection) -> rusqlite::Result<Vec<Value>> {
     Ok(rows)
 }
 
-/// 用户点了「批准 / 拒绝」（由 [`crate::ai::runs::resolve_approval`] 调，**不再另开端点**）。
+/// 已选择「批准 / 拒绝」（由 [`crate::ai::runs::resolve_approval`] 调用，**不再另开端点**）。
 ///
 /// 与工具审批**同一条语义**：`WHERE approval='pending'` 那一句是"决定只能下一次" ——
 /// 重复点返回 0，而且**没人能把已经批过的提交改成拒绝**（否则那种"我点错了、快撤"
@@ -1472,7 +1472,7 @@ pub fn resolve_approval_on(
 /// | --- | --- | --- |
 /// | `awaiting_approval` + `approval='pending'` | 按**拒绝**收尾（`APPROVAL_INTERRUPTED`）+ 回执 | 与 `expire_stale_pending_tool_calls` **同一语义**：后端重启，内存里的等待随进程消失，"永远不会有人点"。留着一张点了没用的卡才是最坏的表现 |
 /// | `awaiting_approval` + `approval IN ('approved','auto')` | **复起 worker**（人已经批了 / 设备放权过，只是进程在中间没了） | 认领是原子的，复起不会重复提交 |
-/// | `submitting` | 按 `SUBMIT_INTERRUPTED` **如实**收尾，**不重投** | 送进 ComfyUI 没有、送进去跑到哪一步，都已经不知道了。重投 = 替用户多烧一轮显卡；真跑完了的话后台捕获会收进画廊 |
+/// | `submitting` | 按 `SUBMIT_INTERRUPTED` **如实**收尾，**不重投** | 是否已送入 ComfyUI、执行到哪一步均未知。重投会额外消耗一次生成资源；若已完成，后台捕获会写入画廊 |
 pub fn resume_in_flight(state: &AppState) -> usize {
     let interrupted = state
         .write(|tx| {

@@ -1,13 +1,13 @@
 //! 产物导出（2026-10-27）：把画廊里的**原件**连同它绑定的工作流 / 提示词信息
-//! 一次性落到用户指定的文件夹里。
+//! 一次性写入指定文件夹。
 //!
 //! # 为什么要有这一条
 //!
 //! 库里的产物本来就是**真文件**（`<storage>/media/<stored_name>`），但此前没有任何
-//! "带出去"的入口：用户只能一张一张复制，工作流 / 提示词 / 集合归属全留在库里。
+//! "导出"入口：此前只能逐张复制，工作流 / 提示词 / 集合归属均留在库中。
 //! 换一台机器、交给别人、或者归档时，拿到的是没有上下文的散图。
 //!
-//! # 落盘布局（用户 2026-10-27 拍板）
+//! # 落盘布局
 //!
 //! ```text
 //! <目标目录>/
@@ -30,7 +30,7 @@
 //! 三条纪律：
 //!
 //! 1. **只读库、写目标目录**：不搬、不删、不改库里的任何一行；
-//! 2. **文件名一律先净化再落盘**：`original_name` 来自用户 / 系统，带 `..`、`/`、
+//! 2. **文件名一律先净化再落盘**：`original_name` 来自外部 / 系统，可能包含 `..`、`/`、
 //!    `:` 的一律换掉（Windows 上还会撞 `CON` 这类保留名），任何一条都不许写到
 //!    目标目录之外；
 //! 3. **失败如实报**：某一条的文件不在盘上 / 复制失败，其余照常导出，并在
@@ -57,7 +57,7 @@ use crate::web::routes::{ApiError, AppState};
 /// 导出格式版本：布局或 JSON 形状变了就 bump（清单里带着它，读的人能判断）。
 pub const EXPORT_SCHEMA_VERSION: i64 = 1;
 
-/// 目标目录里的分类目录（用户原话："按文件类型（图片、视频、音频等）分类"）。
+/// 目标目录中的分类目录（"按文件类型（图片、视频、音频等）分类"）。
 const KIND_DIR_IMAGE: &str = "图片";
 const KIND_DIR_VIDEO: &str = "视频";
 const KIND_DIR_AUDIO: &str = "音频";
@@ -102,7 +102,7 @@ fn default_true() -> bool {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExportReport {
-    /// 实际写入的根目录（用户给的那条路径，不是 canonical 形式）。
+    /// 实际写入的根目录（即指定的路径，不是 canonical 形式）。
     pub dir: String,
     /// 清单文件的绝对路径。
     pub manifest: String,
@@ -237,7 +237,7 @@ fn load_rows(state: &AppState, req: &ExportRequest) -> Result<Vec<ExportRow>, Ap
         let mut values: Vec<SqlValue> = Vec::new();
 
         // 优先级：明确选了 id > 集合 > 仅收藏 > 全部。
-        // `Some([])` 是"用户确实选了 0 条"，不能退化成"全部"。
+        // `Some([])` 表示"确实选择了 0 条"，不能退化为"全部"。
         if let Some(ids) = req.media_ids.as_ref() {
             if ids.is_empty() {
                 sql.push_str(" WHERE 1 = 0");
@@ -624,7 +624,7 @@ pub fn export(state: &AppState, req: ExportRequest) -> Result<ExportReport, ApiE
             Some(collection) => {
                 let folder = collections.entry(collection.id).or_insert_with(|| {
                     // 手动集合没起名时叫「集合-N」；算法分出来的叫「算法分组-N」
-                    // （与画廊里的显示口径一致，别让用户对着「集合-7」猜这是什么）。
+                    // （与画廊显示口径一致，避免「集合-7」无法判断含义）。
                     let fallback = if collection.origin == "manual" {
                         format!("集合-{}", collection.id)
                     } else {
@@ -787,7 +787,7 @@ pub fn export(state: &AppState, req: ExportRequest) -> Result<ExportReport, ApiE
         }
 
         // 只有**原件 + 侧车都落盘**才算这一条成功 —— 否则 `exported`、`totalBytes`
-        // 与 `byKind` 会和实际文件对不上（用户看到的数字就成了假的）。
+        // 否则 `byKind` 会与实际文件不一致（显示的数值失真）。
         total_bytes += copied_size;
         *by_kind.entry(kind_key(&row.kind)).or_insert(0) += 1;
 
@@ -883,7 +883,7 @@ pub fn export(state: &AppState, req: ExportRequest) -> Result<ExportReport, ApiE
 
     Ok(ExportReport {
         dir: req.dir.trim().to_string(),
-        // 回执里用**用户给的那条路径**拼清单名，不用 canonical 形式：
+        // 回执中使用**指定的路径**拼清单名，不使用 canonical 形式：
         // Windows 的 canonical 带 `\\?\` 前缀，界面照着打开会显得像坏路径。
         manifest: PathBuf::from(req.dir.trim())
             .join(MANIFEST_NAME)
