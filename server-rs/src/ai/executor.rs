@@ -6,7 +6,7 @@
 //! # 主循环要守的三条纪律（R6）
 //!
 //! 1. **正文必须落块**：`ai_messages.text` 里有的内容，`ai_message_parts` 里也必须有
-//!    —— 前端在 parts 非空时**只渲染 parts**，只写正文不落块 = 用户看不见。
+//!    —— 前端在 parts 非空时**只渲染 parts**，只写正文不落块 = 界面不显示。
 //! 2. **失败 / 取消时把已经说出去的话落下来**：流式期间正文是攒在内存里的，
 //!    收尾那一刻（正常 / 失败 / 取消**三条路**）必须写进库，否则一次 429 就把它吞掉。
 //! 3. **收尾只有一条路**：[`finish_run`]（落终态 + flush 事件 + 发终态事件 + 关流）。
@@ -300,7 +300,7 @@ async fn run_once(
         nsfw,
     );
 
-    // 用户在消息里用 `/名字` 显式选中的技能：正文在**这一轮**的系统提示里预加载。
+    // 消息中用 `/名字` 显式选中的技能：正文在**这一轮**的系统提示里预加载。
     // 追加在最后而不是插在前面 —— 前面几段是跨 Run 稳定的前缀，动它们会打断前缀缓存。
     let explicit_skills = explicit_skills_of(&history, run.user_message_id.as_deref());
     if !explicit_skills.is_empty() {
@@ -328,7 +328,7 @@ async fn run_once(
     //
     // ⚠ **"还在起标题"这个条件是逐轮重算的**（不是开头算一次）：第一轮摘到标题之后，
     // 后面的工具轮就不该再提醒模型吐标记 —— 那正是"标记漏进正文"的来源。
-    // Kotlin 的 `shouldSummarizeTitle`：会话标题还是空的 / 「新对话」，且用户消息 ≤ 1 条。
+    // Kotlin 的 `shouldSummarizeTitle`：会话标题还是空的 / 「新对话」，且请求消息 ≤ 1 条。
     let user_count = history.iter().filter(|m| m.role == "user").count();
     let title_wanted = user_count <= 1 && conversation_needs_title(state, &conversation_id);
     // 摘标记的状态机：只有真要起标题时才开（关掉时原样透传）。
@@ -337,7 +337,7 @@ async fn run_once(
         title_wanted,
     )));
     // 关键步骤（环节）标记：`[步骤]正在查资料[/步骤]` → 落一个 `step` 块 + 一条 `step.started` 事件
-    // （用户建议 2026-09-28：「关键步骤之间 AI 的操作再折叠」）。**永远开着** ——
+    // （「关键步骤之间 AI 的操作再折叠」）。**始终开启** ——
     // 它不吃请求、不占预算，模型不写标记时它一个字都不动（见 `step_mark.rs` 的三条纪律）。
     let steps = Arc::new(Mutex::new(crate::ai::step_mark::StepStripper::new()));
     let mut title_applied = false;
@@ -402,13 +402,13 @@ async fn run_once(
     // 两条预算与 Kotlin 逐条对齐（`ToolPolicyConfig`）：
     //  * **轮数** `maxToolSteps`（出厂 25）—— 到顶那一轮**不执行**工具，
     //    而是把"已达轮数上限、再发一条就能接着做"如实补进正文（**不是**把 Run 判失败：
-    //    用户已经看到的那段回答不该挂红叉，那件事本来只是"这轮到此为止"）；
+    //    已显示的那段回答不应标记失败，该情形只表示"这轮到此为止"）；
     //  * **次数** `maxCallsPerRun`（出厂 48，硬天花板 [`crate::tools::tools::ABSOLUTE_CALL_CAP`]）——
     //    用尽之后这一轮只收口，再要工具就回 `TOOL_BUDGET_EXCEEDED`。
     let max_steps = policy.config.max_tool_steps.max(1) as usize;
     let max_calls = policy.config.max_calls_per_run.max(1);
     let mut session = crate::tools::tools::ToolSession::default();
-    // 用户刚发了图：`comfy_check_inputs` 要能区分"投放一下就能解决"与"必须问用户要一张"
+    // 刚发送图片时：`comfy_check_inputs` 要能区分"投放即可解决"与"必须请求提供一张"
     // （Kotlin `ToolContext.hasImageAttachment`，与上面喂给系统提示的是**同一个值**）
     session.has_image_attachment = has_inlined_attachments;
     // 显式调用的技能已经在系统提示里预加载：标记成"已加载"，模型再调 load_skill
@@ -440,7 +440,7 @@ async fn run_once(
                 sink.push_text(&pending);
             }
             sink_now(state, &assistant_id, &sink)?;
-            // 取消也要把**已经烧掉的 token** 记上（用户 bug「未完成的对话不统计 token 用量」）：
+            // 取消也要把**已经消耗的 token** 记录上（「未完成的对话不统计 token 用量」问题）：
             // 前几轮的 usage 是真金白银，取消只代表"不再继续"，不代表"没花过"。
             crate::ai::runs::update_message(
                 state,
@@ -579,7 +579,7 @@ async fn run_once(
             Ok(idle) => idle,
             Err(e) => {
                 // **失败也要把已经说出去的话落下来**（R6 第 2 条）——
-                // 一次 429 不该让用户已经看到的那段话凭空消失。
+                // 一次 429 不应使已显示的回复内容消失。
                 // 摘标题 / 环节的两个缓冲里可能还压着东西（还没确认是不是标记），失败时也要放出来。
                 let (pending, phases) = drain_strippers(&stripper, &steps);
                 let mut sink = sink.lock().unwrap_or_else(|e| e.into_inner());
@@ -590,7 +590,7 @@ async fn run_once(
                     sink.push_text(&pending);
                 }
                 sink_now(state, &assistant_id, &sink)?;
-                // 已跑完的那几轮的 usage 同样要记上（用户 bug「未完成的对话不统计 token 用量」）：
+                // 已跑完的那几轮的 usage 同样要记录（「未完成的对话不统计 token 用量」问题）：
                 // 失败只说明这一轮没跑完，前面几轮烧掉的 token 是真实发生的。
                 crate::ai::runs::update_message(
                     state,
@@ -611,7 +611,7 @@ async fn run_once(
             eprintln!("[run {run_id}] 思维链回传被拒：改为逐轮补空 reasoning 项，思考强度保持不变");
         }
         // ② 连补了条目都还被拒：只能降档，并且**在正文里说一句**（看不到的现象，
-        //    用户与模型都只能靠猜）。⚠ 措辞别写成"本轮没思考"：真正缺条目的是**某一轮**
+        //    模型无法判断）。⚠ 措辞不得写成"本轮没思考"：真正缺条目的是**某一轮**
         //    只调了工具、没产生思考（`reasoning.delta` 一条没有），未必是刚刚这两轮。
         if idle.thinking_forced_off && !thinking_forced_off {
             thinking_forced_off = true;
@@ -660,13 +660,13 @@ async fn run_once(
         if calls.is_empty() {
             // **被输出长度上限截断**：再要一轮把话补完，而不是把半句当结尾（Kotlin `MAX_CONTINUATIONS`）。
             // 上限 3 次是个折中：常见模型一轮 4096 tokens（≈3000 汉字），3 次够写完一篇长回答；
-            // 再多就是"模型陷在长回复里出不来"，用户等到的是账单和一直转圈的页面。
+            // 再多就是"模型陷在长回复里出不来"，表现为持续等待与费用增加。
             if is_truncated_by_output_limit(finish_reason.as_deref())
                 && continuations < MAX_CONTINUATIONS
             {
                 continuations += 1;
                 // ⚠ 续写请求里要带上**已经说过的那半段**（作为最后一条 assistant 轮）：
-                // 少了它，模型看到的上下文是"用户突然说'接着写'"，它会从头再讲一遍
+                // 少了它，模型看到的上下文是"突然要求继续写"，它会从头再讲一遍
                 // （Kotlin 那边同样把这一轮的正文留在 turns 里）。
                 // 思考也一并取走：这一段思考属于**刚刚这一轮**，留到下一轮会被重复回传
                 // （续写的下一轮同样会带上这条 assistant 轮）。
@@ -692,7 +692,7 @@ async fn run_once(
             break;
         }
 
-        // 额度用尽（用户建议 ③）：**下一轮只让模型收口**，不再执行工具。
+        // 额度用尽：**下一轮只让模型收口**，不再执行工具。
         // 如实把"为什么没继续"补进正文 —— 悄悄丢掉那批工具调用等于假装它答完了。
         if budget_exhausted {
             let note = format!(
@@ -740,7 +740,7 @@ async fn run_once(
             reasoning: Some(round_reasoning).filter(|r| !r.trim().is_empty()),
         });
 
-        // 一个一个执行（**串行**：多个调用里只要有一个要用户点头，就得按顺序来）
+        // 一个一个执行（**串行**：多个调用里只要有一个需要确认，就得按顺序来）
         //
         // 参考图先攒着、**这一轮所有工具结果都推完之后**再挂成一条 user 轮：
         // 一次回复里并行调好几个工具时，中间插一条 user 消息会打断
@@ -762,8 +762,8 @@ async fn run_once(
             )
             .await?;
             // ⚠ **只有真的跑成功才消耗额度**（Kotlin `spendCall` 只在 handler 返回之后调）：
-            // 越界被拒、参数不对、用户点拒绝、工具自己报错 —— 那些调用"连世界都没碰到"，
-            // 让它们占额度就是用户抱怨过的那种"什么都没干就说预算不足"。
+            // 越界被拒、参数错误、批准被拒、工具自身报错 —— 那些调用未产生实际动作，
+            // 让它们占额度会表现为"什么都没干就说预算不足"。
             if outcome.ok {
                 // **只有真的跑成功才消耗额度**（Kotlin spendCall 的时点）；
                 // 联网那一档另有一份计数（`MAX_WEB_QUERIES_PER_RUN`，见下面的预检）。
@@ -782,7 +782,7 @@ async fn run_once(
             // 都不接受 tool 消息里的图片）。只有真的跑成功了才挂：失败结果里没有可用的路径。
             //
             // ⚠ 只认**我们自己这两条**工具：MCP / 其它工具的结果是不可信数据，不能让一个
-            // 外来的 `referenceImages` 决定"读用户机器上的哪个文件并发给上游"。
+            // 外来的 `referenceImages` 决定"读取本机哪个文件并发给上游"。
             if outcome.ok
                 && (call.name == "comfy_load_workflow" || call.name == "comfy_view_outputs")
             {
@@ -826,7 +826,7 @@ async fn run_once(
         }
 
         step += 1;
-        // 每一轮之后重新算：用户刚答完提问的话额度已经被重置（Kotlin 同）
+        // 每一轮之后重新算：刚完成作答时额度已被重置（Kotlin 同）
         budget_exhausted = !session.has_calls_left(max_calls);
     }
 
@@ -884,9 +884,9 @@ async fn run_once(
         }),
     )?;
 
-    // 模型这一轮没起标题（没写 `[标题]` / 写坏了）→ 用**首条用户消息**兜底。
-    // 用户 2026-10-25：两轮新对话都叫「新对话」，列表里根本分不清谁是谁。
-    // 只在标题还是默认值时才写：用户自己改过 / 模型已经起过，一个字都不动。
+    // 模型这一轮没起标题（没写 `[标题]` / 写坏了）→ 用**首条请求消息**兜底。
+    // 现象：两轮新对话都叫「新对话」，列表中无法区分。
+    // 只在标题还是默认值时才写：已手动修改 / 模型已生成时不做改动。
     if !title_applied && conversation_needs_title(state, &conversation_id) {
         if let Some(text) = first_user_message_text(state, &conversation_id) {
             if let Some(title) = title_from_user_message(&text) {
@@ -922,7 +922,7 @@ pub fn is_truncated_by_output_limit(finish_reason: Option<&str>) -> bool {
     )
 }
 
-/// 首条用户消息的正文（没有就 `None`）。
+/// 首条请求消息的正文（没有则 `None`）。
 fn first_user_message_text(state: &AppState, conversation_id: &str) -> Option<String> {
     state
         .with(|conn| {
@@ -941,7 +941,7 @@ fn first_user_message_text(state: &AppState, conversation_id: &str) -> Option<St
         .flatten()
 }
 
-/// 首条用户消息 → 标题兜底：**去掉卡片槽位标记，取第一行前 20 字**。
+/// 首条请求消息 → 标题兜底：**去掉卡片槽位标记，取第一行前 20 字**。
 ///
 /// 典型输入（工作台把 `@` 选的卡原样拼在正文前面）：
 ///
@@ -970,11 +970,11 @@ fn title_from_user_message(text: &str) -> Option<String> {
 
 /// 这个会话还该不该让模型**起标题**（Kotlin `shouldSummarizeTitle`）。
 ///
-/// 标题不是空的、也不是「新对话」→ 说明用户自己改过（或已经起过）→ **尊重用户，不再覆盖**。
+/// 标题不是空的、也不是「新对话」→ 说明已手动修改（或已生成）→ **保留原值，不再覆盖**。
 ///
 /// 2026-10-25 起补了一条**兜底**（见 [`title_from_user_message`]）：模型没起标题时，
-/// 用首条用户消息的前 20 字当标题 —— 否则两轮对话在列表里都叫「新对话」。
-/// 兜底只在**这次 Run 收尾、标题仍是默认值**时触发，模型起的标题 / 用户改的名字优先。
+/// 用首条请求消息的前 20 字作为标题 —— 否则两轮对话在列表中同名「新对话」。
+/// 兜底只在**这次 Run 收尾、标题仍是默认值**时触发，模型生成的标题 / 手动修改的名称优先。
 fn conversation_needs_title(state: &AppState, conversation_id: &str) -> bool {
     let title = state
         .with(|conn| {
@@ -1104,15 +1104,15 @@ fn take_reason(arguments: &mut String) -> Option<String> {
 /// # 顺序不能倒（R8）
 ///
 /// ① 需要审批时先 `insert_pending_tool_call`（**落库**）→ ② 再发 `tool.requested` →
-/// ③ 等用户在**任何一台设备**上点批准（读库）→ ④ `tool.started` → ⑤ 执行 →
+/// ③ 等待在**任意设备**上批准（读库）→ ④ `tool.started` → ⑤ 执行 →
 /// ⑥ `record_tool_call` + `tool.completed` / `tool.failed`。
 ///
-/// ② 排在 ① 后面是因为：用户手快先点了按钮时，闸门必须已经有一行可改
+/// ② 排在 ① 后面是因为：提前点击按钮时，闸门必须已经有一行可改
 /// （否则那一次点击落空，只能等超时）。而这里读库而不是读内存，顺带买到
 /// "另一台设备（手机 / 第二个窗口）也能批"。
 ///
 /// ⚠ `tool.requested` **每一个调用都要发**（只读工具带 `approval:"not_required"`）——
-/// 与 Kotlin `HarnessRunner:723` 一致。界面靠它给工具卡**排位置**（用户 bug⑥：流式期间
+/// 与 Kotlin `HarnessRunner:723` 一致。界面靠它给工具卡**排位置**（流式期间
 /// "思考 → 工具 → 正文"的真实交错就是这个事件画出来的）；只给需要审批的调用发，
 /// 只读工具的卡在流式期间就没有槽位，一直等到收尾才冒出来。
 #[allow(clippy::too_many_arguments)]
@@ -1128,7 +1128,7 @@ async fn handle_call(
     conversation_id: &str,
     max_calls: i64,
 ) -> Result<CallOutcome, ApiError> {
-    // `reason` 是**给用户看的**（工具卡标题），不是工具参数：
+    // `reason` 是**界面显示用**（工具卡标题），不是工具参数：
     // 先摘掉再解析，后面缓存键、落库、执行、回填历史用的都是摘过的那一份。
     // 只有这一处摘 —— 工具 handler 永远看不到它（见 `tools::spec_of_view` 的注释）。
     let mut call = call.clone();
@@ -1145,7 +1145,7 @@ async fn handle_call(
     //      没有产生任何真实请求，凭什么占那份额度）；
     //   ② ⑥ 那一步要不要真跑。
     // ⚠ **它排在审批之前只是为了"额度判定"**，真正的取用（`into_wire`）在审批之后 ——
-    //    不然"用户没批准"就会被一份缓存悄悄顶掉（见 `tool_cache` 模块头纪律 3）。
+    //    否则"未批准"会被缓存命中覆盖（见 `tool_cache` 模块头纪律 3）。
     let cached = crate::tools::tool_cache::lookup(policy, &call.name, &arguments);
     // 出厂权限档：静态清单里没有的名字，可能是运行时拉到的 MCP 工具（第 45 步）——
     // 那一批的档位由 `McpToolPolicy` 决定（`run_workflow` = ASK、`update_comfyui` = DENY…）。
@@ -1163,7 +1163,7 @@ async fn handle_call(
         sink.push_tool_call(call_id, &call.name, &call.arguments, reason.as_deref());
     }
 
-    // ① 落库（R8：闸门开的同一刻就落，用户手快也点得到）
+    // ① 落库（R8：闸门开启的同一刻落库，提前点击也生效）
     if needs_approval {
         crate::ai::runs::insert_pending_tool_call(
             state,
@@ -1195,7 +1195,7 @@ async fn handle_call(
         }),
     )?;
     state.bus.flush(state, run_id)?;
-    // ③ 只读工具：马上就是"开始执行"（需要审批的要等用户点头之后才发，见下）
+    // ③ 只读工具：马上就是"开始执行"（需要审批的在确认之后才发，见下）
     if !needs_approval {
         emit_started(state, run_id, call_id, &call.name)?;
     }
@@ -1272,7 +1272,7 @@ async fn handle_call(
         )
         .await;
     }
-    // **ComfyUI 那一档也有一条独立预算**（用户 AIH-036："不许把 ComfyUI 当轮询器"；
+    // **ComfyUI 那一档也有一条独立预算**（AIH-036："不许把 ComfyUI 当轮询器"；
     // Kotlin `ToolRegistry.invoke` 里 `ToolCategory.COMFY` 那一段）。系统提示里写着
     // "一次回复最多查 ComfyUI N 次" —— **写了就必须真拦**，否则那句话是空的
     // （这正是 2026-09-25 那次审查记下的"提示词里写了、代码里没有"）。
@@ -1322,7 +1322,7 @@ async fn handle_call(
         .await;
     }
 
-    // ⑤ 审批：等用户在**任何一台设备**上点（读库：跨端可见）
+    // ⑤ 审批：等待**任意设备**上的确认（读库：跨端可见）
     let mut approval = if needs_approval {
         "pending"
     } else {
@@ -1471,7 +1471,7 @@ async fn handle_call(
 }
 
 impl CallOutcome {
-    /// 失败时给用户/模型看的人话（去掉 `[工具失败:CODE] ` 那个前缀）。
+    /// 失败时向界面 / 模型展示的说明（去掉 `[工具失败:CODE] ` 那个前缀）。
     fn error_text(&self) -> String {
         match &self.code {
             Some(code) => self
@@ -1542,7 +1542,7 @@ async fn finish_failure(
 
 /// 把一句"如实说明"补进正文（轮数 / 额度用尽时）：**发 `text.delta` + 落块**。
 ///
-/// 为什么不能只写库：用户必须当场看见"为什么没继续"（否则界面停在半截、像是卡住了），
+/// 不能只写库的依据：必须当场看见"为什么没继续"（否则界面停在半截、像是卡住了），
 /// 而块是收尾时按 ordinal 一次写的，这里补的是**当前这一段的结尾**。
 fn push_note(
     state: &AppState,
@@ -1687,7 +1687,7 @@ impl Sink {
             if let Some(media_ids) = outcome.result.get("mediaIds") {
                 map.insert("mediaIds".into(), media_ids.clone());
             }
-            // 提问卡（用户建议 ⑥）：问了什么、用户答了什么，一起落库
+            // 提问卡：问题与作答内容一并落库
             if let Some(asked) = outcome.result.get("asked") {
                 map.insert("question".into(), asked.clone());
             }
@@ -1924,7 +1924,7 @@ fn attachment_plan_of(
 /// * **附件块**（R9 / AIH-030）：进得了 [`AttachmentPlan::inline`] 的变成真图片块
 ///   （适配器各自铺开），其余的**必须**在那一轮正文后面附一句"以下附件未随本次请求发送：…"
 ///   —— 既不能静默丢弃，也不能因为消息里带了附件就把请求打成 400。
-/// 本 Run 的用户消息里由 `/名字` 显式调用的技能（正文快照）。
+/// 本 Run 的请求消息中由 `/名字` 显式调用的技能（正文快照）。
 ///
 /// 快照在 `POST /runs` 落库时由后端现读磁盘写入，不是前端传来的正文 ——
 /// 前端只负责说"用了哪个名字"。
@@ -2010,8 +2010,8 @@ fn turns_of(message: &AiMessageDto, plan: &AttachmentPlan) -> Vec<ChatTurn> {
     let body = if message.parts.is_empty() {
         message.text.clone()
     } else {
-        // 用户消息的 parts 现在是"卡片/技能 mention + 用户正文"：
-        // mention 的 `modelText` 是**给模型看的那段原文**（卡正文），text 块是用户敲的字。
+        // 请求消息的 parts 现在是"卡片/技能 mention + 请求正文"：
+        // mention 的 `modelText` 是**给模型的原文**（卡正文），text 块是输入的正文。
         // 二者按 ordinal 顺序拼回去，才是模型这一轮该看到的那条消息。
         let mut out = String::new();
         for part in &message.parts {
@@ -2062,8 +2062,8 @@ fn turns_of(message: &AiMessageDto, plan: &AttachmentPlan) -> Vec<ChatTurn> {
         text.push('）');
         text
     };
-    // 附件 id 对照（用户 bug 2026-09-28「系统给不出可投放的附件 ID」）：工具描述让模型
-    // "见用户消息里的附件说明"，但从来没有人把**内联图片的 id**写进消息 —— 模型手里
+    // 附件 id 对照（「系统给不出可投放的附件 ID」）：工具描述让模型
+    // "见请求消息里的附件说明"，但**内联图片的 id** 从未写入消息 —— 模型手中
     // 没有 id，`comfy_use_attachment` 第一步就走不下去，ComfyUI 端也就读不到聊天里的图。
     // （没内联的那些 id 已经在上面"未随本次请求发送"那句里了，这里不重复。）
     let inlined_ids: Vec<String> = message
