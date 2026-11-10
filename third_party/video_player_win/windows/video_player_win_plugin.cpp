@@ -218,7 +218,7 @@ private:
       // 外部纹理的实际尺寸。Impeller（Windows 上现在默认的渲染后端）直接拿它去
       // impeller::ISize 建纹理，少了这两个字段就是一张 0x0 的纹理 —— 现象是
       // **只有声音、画面全黑**。Skia 后端因为「0 就退回用控件尺寸」而侥幸正常，
-      // 所以这个坑只在 Impeller 下暴露。详见 lib/widgets/win_video_view.dart 顶部说明。
+      // 因此该问题只在 Impeller 下暴露。详见 lib/widgets/win_video_view.dart 顶部说明。
       texture_buffer.visible_width = desc.Width;
       texture_buffer.visible_height = desc.Height;
       texture_buffer.format = kFlutterDesktopPixelFormatBGRA8888;  //kFlutterDesktopPixelFormatRGBA8888; //or kFlutterDesktopPixelFormatBGRA8888
