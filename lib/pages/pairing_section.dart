@@ -43,7 +43,7 @@ class PairingSection extends StatefulWidget {
     this.apiFactory,
   });
 
-  /// 当前后端地址（桌面 = `SettingsStore.baseUrl`；手机 = 用户手填的桌面地址）。
+  /// 当前后端地址（桌面 = `SettingsStore.baseUrl`；手机 = 手动填写的桌面地址）。
   final String baseUrl;
 
   /// 配对成功 / 忘记这台电脑之后叫一次：让 `AiWorkspaceStore` 重新读令牌、
@@ -98,11 +98,11 @@ class _PairingSectionState extends State<PairingSection> {
   /// 每秒重画（跳秒）+ 每两秒问一次"手机举手了吗"。
   ///
   /// 跑的条件是"有活会话"：区展开了，**或者**桌面上正摆着一个二维码等着人扫
-  /// —— 二维码过期那一刻也由它负责撤掉（别让用户对着一个失效的码扫半天）。
+  /// —— 二维码过期时也由它撤掉（避免扫描失效码）。
   Timer? _sessionTimer;
   int _sessionTick = 0;
 
-  /// 本机局域网 IPv4（拼给用户照着往手机上敲）。
+  /// 本机局域网 IPv4（供手动输入到手机）。
   List<String> _localIps = const [];
 
   // --- 扫码配对（通道 A：桌面出二维码、手机扫；§9 拍板）---
@@ -154,7 +154,7 @@ class _PairingSectionState extends State<PairingSection> {
   void didUpdateWidget(covariant PairingSection oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (widget.baseUrl == oldWidget.baseUrl) return;
-    // 地址变了（手机上用户改了、桌面上后端重启换了端口）：整个客户端换一个
+    // 地址变化（手机上修改、桌面后端重启换端口）：整个客户端更换一个
     _api?.dispose();
     _api = null;
     if (_isAndroid) {
@@ -281,7 +281,7 @@ class _PairingSectionState extends State<PairingSection> {
         _devices = s.devices;
         _pending = s.pending;
         // 已经有人在等配对：直接展开 —— 否则 6 位码藏在收起的折叠里，
-        // 用户手机上明明看到了提示，却在桌面上找不到码。
+        // 手机上已显示提示，但桌面上没有二维码。
         if (s.pending.isNotEmpty) _pendingExpanded = true;
       });
       _syncSessionTimer();
@@ -315,13 +315,13 @@ class _PairingSectionState extends State<PairingSection> {
         _pendingError = null;
       });
       // 待配对少了一条 = 手机刚点完「配对」。设备列表要立刻跟上，
-      // 否则桌面上「已配对设备」要等用户手动重进这一页才出现
+      // 否则桌面上「已配对设备」需要手动重进该页才出现
       // （2026-11-08 真机：手机已连上，桌面还只显示旧设备）。
       if (claimed) unawaited(_loadStatus());
     } catch (e) {
       if (!mounted) return;
       // 拉不到就不再每 2 秒撞一次（旧后端没有这个端点时尤其明显），
-      // 把原因写在界面上，用户点「重试」再开始轮询
+      // 在界面上显示原因，点「重试」后重新开始轮询
       setState(() => _pendingError = '读取待配对列表失败，$e');
       _syncSessionTimer();
     } finally {
@@ -343,7 +343,7 @@ class _PairingSectionState extends State<PairingSection> {
       setState(() {
         // ⚠ 画的是**后端说的那个状态**，不是"我请求的那个状态"：
         // 后端没接受（响应里 enabled 还是 false）时必须如实显示，
-        // 否则用户以为打开了、手机却连不上，而界面上一点线索都没有。
+        // 否则会显示为已打开，但手机无法连接，且界面上没有提示。
         _enabled = next.enabled;
         _hasToken = next.hasToken;
         _devices = next.devices;
@@ -396,7 +396,7 @@ class _PairingSectionState extends State<PairingSection> {
   ///
   /// 只改一个时另一个**原样传当前值**（后端按"传了就改"处理）；本地重建设备行时
   /// 必须把**两个**开关都带上 —— 漏掉一个就是"点下行、上行被悄悄关掉"，
-  /// 而用户下一次点「推给桌面」会拿到 403，还以为是手机坏了。
+  /// 下一次点「推给桌面」会返回 403。
   Future<void> _setDeviceCredentials(
     PairedDevice d, {
     bool? allow,
@@ -582,7 +582,7 @@ class _PairingSectionState extends State<PairingSection> {
   ///
   /// 两件事各管一段：扫码解决"去哪、传什么"（把 ticket 和地址带回来），
   /// 敲 6 位码解决"你是不是就站在旁边"。所以扫完**不要求再点一次按钮**
-  /// （2026-09-30 合并：原来扫完只是回到表单、还要用户自己再点「配对新电脑」）。
+  /// （扫码完成后直接继续配对，不需要再点「配对新电脑」）。
   ///
   /// ⚠ 顺手修掉一个真 bug：老代码把扫到的地址只写进一句提示（"地址已填好"），
   /// **从来没填进输入框** —— 于是"二维码省掉手抄地址"这件事根本没发生，
@@ -622,7 +622,7 @@ class _PairingSectionState extends State<PairingSection> {
         );
         return;
       }
-      // 用户手填的地址可用：沿用它继续配对。
+      // 手动填写的地址可用：沿用它继续配对。
     }
     await _pair(scanned: payload);
   }
@@ -633,7 +633,7 @@ class _PairingSectionState extends State<PairingSection> {
   Future<void> _pair({PairingPayload? scanned}) async {
     if (_pairing) return;
     // 输入框里的地址就是"我要连的那台桌面"。不先把它存下来直接配对的话，
-    // 用户改完地址点配对会**拿旧地址去问**、界面上却显示着新地址 —— 最难查的那类不一致。
+    // 修改地址后点配对会**使用旧地址请求**，而界面显示新地址 —— 位置不一致。
     final typed = _baseUrlController.text.trim();
     final base = typed.isEmpty ? widget.baseUrl : typed;
     setState(() {
@@ -705,7 +705,7 @@ class _PairingSectionState extends State<PairingSection> {
     }
   }
 
-  /// 弹出"敲 6 位码"的对话框（用户取消返回 null）。
+  /// 弹出输入 6 位码的对话框（取消时返回 null）。
   Future<String?> _askCode() {
     return showDialog<String>(
       context: context,
@@ -1063,10 +1063,10 @@ class _PairingSectionState extends State<PairingSection> {
 
   /// 一条等待中的配对会话（桌面这侧）。
   ///
-  /// ⚠ **只有一种卡片**（2026-09-30 合并）：手机举手来的（`pending`）和桌面出二维码的（`qr`）
-  /// 在界面上是同一件事 —— 都是"桌上摆着一组 6 位码等人敲"，区别只是二维码那条还带了
-  /// ticket + 地址（手机扫它就不用抄地址）。原来这里有两套渲染 + 两套计时器，
-  /// 用户要分别理解"配对新手机"和"扫码配对"两个概念。
+  /// ⚠ **只有一种卡片**：手机发起的（`pending`）与桌面生成二维码的（`qr`）
+  /// 在界面上是同一种交互 —— 显示一组 6 位码等待输入，区别仅为二维码条目还包含
+  /// ticket + 地址（扫码后无需手动输入地址）。此前有两套渲染与两套计时器，
+  /// 需要分别理解"配对新手机"与"扫码配对"两个概念。
   Widget _sessionCard(
     ThemeData theme, {
     PairStart? qr,
@@ -1290,9 +1290,9 @@ class _PairingSectionState extends State<PairingSection> {
             ),
           ),
           // ★ 第二个开关：**改**桌面上的密钥（上行，§14.1）。
-          //   与上面那个刻意分开：读和写不是同一种权力 —— 合成一个的后果是
-          //   用户为了图方便把读打开、顺手也把写打开了，而写能让下一次桌面自己
-          //   发请求用上别人塞进来的 key。
+          //   与上一个开关分开：读和写属于不同权限 —— 合并后容易
+          //   在开启读权限时同时开启写权限，而写权限会使桌面后续请求
+          //   使用外部写入的 key。
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 8),
             child: _switchRow(

@@ -94,9 +94,8 @@ class _AiProviderSettingsPageState extends State<AiProviderSettingsPage> {
 
   /// 模型能力目录的在线状态（models.dev，2026-09-23）。
   ///
-  /// ⚠ **全局一份，但只显示在选中的那条 Provider 详情里**（用户 2026-10：
-  /// 「模型能力目录区域占用窗口区域太大，改成嵌在具体 provider 信息里」）。
-  /// 以前它是页顶两张常驻卡片之一，与"这条 Provider 是什么"毫无关系，却占掉半屏。
+  /// ⚠ **全局一份，但只显示在选中的 Provider 详情里**。
+  /// 此前它是页顶两张常驻卡片之一，与当前 Provider 无关，却占用半屏。
   AiCapabilityStatus? _cap;
   bool _capBusy = false;
   bool _probeBusy = false;
@@ -308,8 +307,8 @@ class _AiProviderSettingsPageState extends State<AiProviderSettingsPage> {
   }
 
   Future<void> _select(AiProvider? p) async {
-    // ⚠ **用清单里那一份，不要用调用方手里那个对象**（用户 2026-10 报的 bug：
-    // 「初始化填写完密钥之后，provider 会显示未填写密钥，但是实际已经填入」）。
+    // ⚠ **使用清单中的数据，不使用调用方持有的对象**：
+    // 新建时填写密钥后，provider 会显示"未填写密钥"，而实际已填入。
     //
     // 新建 / 编辑的返回值里，`credential` 是后端**回读那一刻**算出来的 ——
     // 那时密钥还没存（`insert_provider` / `update_provider` 都在 `PUT credentials` 之前
@@ -339,7 +338,7 @@ class _AiProviderSettingsPageState extends State<AiProviderSettingsPage> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final wide = MediaQuery.sizeOf(context).width >= 900;
-    // 手机上**不做上下分屏**（用户反馈原话："上下分屏难受，而且有些东西在手机上应该表现为子界面"）
+    // 手机上**不做上下分屏**（上下分屏在手机上体验不佳，部分内容应作为子界面）
     if (!wide) return _buildNarrow(theme);
 
     final list = AiProviderListPanel(
@@ -379,7 +378,7 @@ class _AiProviderSettingsPageState extends State<AiProviderSettingsPage> {
             models: _models,
             info: _info,
             error: _error,
-            // 「模型能力目录」**嵌在这一条 Provider 的详情里**（2026-10 用户要求）：
+            // 「模型能力目录」**嵌在该 Provider 的详情里**：
             // 它以前是与 Provider 无关的两张常驻卡，页顶就吃掉半屏。
             capability: _cap,
             capabilityBusy: _capBusy,
@@ -395,8 +394,8 @@ class _AiProviderSettingsPageState extends State<AiProviderSettingsPage> {
             },
           );
 
-    // ⚠ 「AI 工具权限」的入口**不在这里**（2026-11-05 用户：它和模型/凭据
-    // 不构成附属关系，层级提高一级）—— 入口在设置首页，和「AI 模型与凭据」并列。
+    // ⚠ 「AI 工具权限」的入口**不在这里**：它与模型 / 凭据不构成附属关系，
+    // 入口位于设置首页，与「AI 模型与凭据」并列。
     //
     // 顶栏 / 返回键 / 大标题联动**和其它设置子页完全一样**（[SettingsPageScaffold]
     // 与 [SettingsScaffold] 共用 [SettingsAppBar]）：以前这一页没有 AppBar，
@@ -453,7 +452,7 @@ class _AiProviderSettingsPageState extends State<AiProviderSettingsPage> {
 
   /// **手机上的这一页**：两块内容各自**整屏**，带返回箭头，一次只显示一块。
   ///
-  /// 用户反馈原话："上下分屏难受，而且有些东西在手机上应该表现为子界面。"
+  /// 上下分屏在手机上体验不佳，部分内容应作为子界面。
   /// 所以：
   ///
   /// | 面板 | 里面是什么 | 怎么进出 |
@@ -470,7 +469,7 @@ class _AiProviderSettingsPageState extends State<AiProviderSettingsPage> {
     final pane = (_selected == null && _pane == _NarrowPane.detail)
         ? _NarrowPane.list
         : _pane;
-    // 子面板上**接管系统返回**（用户实测报的 bug：划一下返回手势，整页直接退回设置首页了）。
+    // 子面板上**接管系统返回**（否则返回手势会使整页退回设置首页）。
     // 面板是同一个 State 里换 enum，不是路由 —— 所以系统返回默认弹的是"整个页面"。
     // `canPop: false` 把这一层拦住，由我们退回列表；在列表上时照旧放行（返回 = 退出这一页）。
     final interceptBack = pane != _NarrowPane.list;
@@ -570,10 +569,10 @@ class _AiProviderSettingsPageState extends State<AiProviderSettingsPage> {
     }
   }
 
-  /// 统一的用户可见反馈：**任何失败都要弹出来**。
+  /// 统一的界面反馈：**任何失败都要提示**。
   ///
   /// 之前的坑：错误只渲染在右侧详情面板里，而详情面板要先选中一个 Provider 才显示 ——
-  /// 于是"新建 Provider 失败"在界面上完全没有反应，用户看到的就是"点了没加上"。
+  /// 否则"新建 Provider 失败"在界面上无任何反馈，表现为"点击后未添加"。
   void _notify(String message, {bool error = false}) {
     if (!mounted) return;
     ScaffoldMessenger.of(context)
@@ -582,7 +581,7 @@ class _AiProviderSettingsPageState extends State<AiProviderSettingsPage> {
         SnackBar(
           // 长错误（比如"更新能力目录失败，接口不存在: /api/ai/capabilities/refresh"）
           // 在手机上会超出浮层允许的高度，画成 `BOTTOM OVERFLOWED BY 14 PIXELS`
-          // （2026-09-24 真机验收用户报的就是它）。套一层滚动容器：
+          // 。套一层滚动容器：
           // 高度不够就**滚动**，而不是把内容画到框外面去。消息一个字都不改。
           content: SingleChildScrollView(child: Text(message)),
           behavior: SnackBarBehavior.floating,
@@ -606,7 +605,7 @@ class _AiProviderSettingsPageState extends State<AiProviderSettingsPage> {
         'displayName': draft.displayName,
         'api': draft.api.wire,
         'baseURL': draft.baseURL,
-        // 凭据引用名**由程序决定**（用户看不见它，所以不该问他）：Provider ID 全大写 + `_API_KEY`。
+        // 凭据引用名**由程序决定**（不在界面上显示）：Provider ID 全大写 + `_API_KEY`。
         'credentialRef': defaultCredentialRef(draft.id),
         // ⚠ **不发端点信任级别**：它由软件按地址自己判（桌面后端 `EndpointTrust.infer`；
         //    手机侧存默认值，且手机侧根本不读这个字段 —— 见 `ProviderJson` 的注释）。
@@ -616,7 +615,7 @@ class _AiProviderSettingsPageState extends State<AiProviderSettingsPage> {
       final saved = await _saveDialogKey(created, draft.apiKey);
       await _reload();
       await _select(created);
-      // 手机上建完直接进它的详情（不然用户还得在列表里再找一遍刚建的那条）
+      // 手机上创建后直接进入详情（否则需要在列表中再次查找新建条目）
       if (mounted && MediaQuery.sizeOf(context).width < 900) {
         setState(() => _pane = _NarrowPane.detail);
       }
@@ -634,7 +633,7 @@ class _AiProviderSettingsPageState extends State<AiProviderSettingsPage> {
   /// 对话框里那一栏密钥：填了就存，留空返回 `false`（不是错误）。
   ///
   /// 存密钥失败**只提示、不撤销 provider** —— provider 本身已经建好了，
-  /// 把用户刚填的一整份配置连同 provider 一起丢掉，比"密钥没存上"糟得多。
+  /// 丢弃刚填写的整份配置与 provider，后果比"密钥未保存"更严重。
   Future<bool> _saveDialogKey(AiProvider provider, String key) async {
     if (key.trim().isEmpty) return false;
     try {
@@ -646,7 +645,7 @@ class _AiProviderSettingsPageState extends State<AiProviderSettingsPage> {
     }
   }
 
-  /// **编辑一条已有的**（用户要的"改个 baseURL"）。
+  /// **编辑一条已有的**（例如修改 baseURL）。
   ///
   /// 四条与桌面 POST/PUT 对齐的纪律：
   ///  1. **ID 不给改**（对话框里锁住）：桌面 `PUT` 的判据是"body 里的 id 不许与路径不同"，
@@ -655,7 +654,7 @@ class _AiProviderSettingsPageState extends State<AiProviderSettingsPage> {
   ///     桌面那份清单可能同时被别的窗口改过，而两端看到的错误要是同一句话；
   ///  3. 提交走 [_store]（手机 = 本机库，**不出网**）；
   ///  4. **凭据引用名沿用原值**（老行可能是别的名字）：它跟着 ID 重推等于换了一把钥匙的
-  ///     槽位 —— 用户已经存好的密钥会**当场失效**，而界面上只会看到"未配置"。
+  ///     槽位 —— 已保存的密钥会**立即失效**，界面上只显示"未配置"。
   Future<void> _editProvider(AiProvider p) async {
     final draft = await showDialog<AiProviderDraft>(
       context: context,
@@ -674,9 +673,9 @@ class _AiProviderSettingsPageState extends State<AiProviderSettingsPage> {
           credentialRef: existingRef.isEmpty
               ? defaultCredentialRef(p.id)
               : existingRef,
-          // 端点信任级别**不再由用户选**：桌面那份由后端按**新地址**重新推断
-          // （`RemoteProviderStore.updateProvider` 刻意不带这个键 —— 改地址后旧档位可能
-          //  已经不允许新地址了，"沿用旧档"会让用户撞上一个界面上再也改不动的错误）；
+          // 端点信任级别**不由手动选择**：桌面端由后端按**新地址**重新推断
+          // （`RemoteProviderStore.updateProvider` 不包含该键 —— 修改地址后旧档位可能
+          //  已不适用于新地址，沿用旧档会导致界面无法修改的错误）；
           // 手机侧不读它，沿用原值。
           endpointTrust: p.endpointTrust,
           enabled: p.enabled,
@@ -746,7 +745,7 @@ class _AiProviderSettingsPageState extends State<AiProviderSettingsPage> {
   ///  ① **覆盖要先问一次**（同 id 会被桌面那份改掉，不打招呼就改配置是最糟的一种"顺手"）；
   ///  ② 结束时**如实报账**（建了几个 / 覆盖了几个 / 本机独有几个保留 / 哪几条没成）；
   ///  ③ 完成后**让聊天页那份清单也跟上**（[AiWorkspaceStore.refreshProviders]）——
-  ///     不然用户切回去看到"同步来了却没得选"，只能切走再切回来。
+  ///     否则切回后显示"同步完成但无选项"，需要再次切换页面。
   Future<void> _syncProvidersFromDesktop() async {
     if (!_store.isLocal || _syncingProviders) return;
     final confirmed = await showDialog<bool>(

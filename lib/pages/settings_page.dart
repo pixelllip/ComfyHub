@@ -27,8 +27,7 @@ import 'settings_pairing_page.dart';
 
 /// 设置首页。
 ///
-/// 2026-11-05 用户："如果某个卡片有三项或以上的选项，应当把他们做进子界面，
-/// 像 AI 模型与凭据那样。"
+/// 卡片中有三项及以上选项时收进子界面（例如 AI 模型与凭据）。
 ///
 /// 于是首页只剩三类东西：
 ///   1. **入口行**（本地服务 / 配对 / 模型 / 工具权限 / 自动捕获 / 界面）；
@@ -111,7 +110,7 @@ class _SettingsPageState extends State<SettingsPage> {
     // 判据只有一份：`isWindowsDesktopHost`（带单测用的平台 override）。
     final isWindowsDesktop = isWindowsDesktopHost;
     // 宽窄与导航形态用**同一个数字**：< 900 就是手机形态，电脑端窄屏也一样。
-    // 用户 2026-11-09："电脑端窄屏应该恢复成手机那种排版"。
+    // 电脑端窄屏恢复为手机端排版。
     final wide = MediaQuery.sizeOf(context).width >= kWideLayoutMinWidth;
 
     return SettingsScaffold(
@@ -136,13 +135,11 @@ class _SettingsPageState extends State<SettingsPage> {
     bool isWindowsDesktop,
   ) {
     final entries = <Widget>[
-      // 「本地服务（后端 + 数据库）」只在 Windows 桌面端有意义：
-      // 手机连的是桌面后端，本机没有可拉起的 Rust exe，也没有
-      // 盘符 / 资源管理器（用户 2026-11-08 报的就是这一项又冒出来了）。
+      // 「本地服务（后端 + 数据库）」仅在 Windows 桌面端适用：
+      // 手机连接的是桌面后端，本机没有可启动的 Rust exe，也没有
+      // 盘符 / 资源管理器。
       //
-      // 手机端换成它真正拥有的那一套（用户 2026-11-08："把那些电脑才
-      // 能用的功能，在手机端替换成手机端专用的功能"）：本机库 + 上行
-      // 队列 + 桌面连接 + 立即同步/拉取。
+      // 手机端使用对应功能：本机库 + 上行队列 + 桌面连接 + 立即同步/拉取。
       if (isWindowsDesktop)
         SettingsTile(
           icon: Icons.dns_outlined,
@@ -169,8 +166,8 @@ class _SettingsPageState extends State<SettingsPage> {
         subtitle: 'Provider、模型能力与 API Key',
         onTap: () => _push(context, const AiProviderSettingsPage()),
       ),
-      // 2026-11-05 用户：工具权限与"模型与凭据"**不构成附属关系**，
-      // 层级提高一级 —— 入口放在设置首页，而不是塞进模型页的顶栏。
+      // 工具权限与"模型与凭据"**不构成附属关系**，
+      // 入口位于设置首页，不放入模型页顶栏。
       SettingsTile(
         icon: Icons.shield_outlined,
         title: 'AI 工具权限',
@@ -189,12 +186,11 @@ class _SettingsPageState extends State<SettingsPage> {
         subtitle: '明暗模式、取色档位、每页数量',
         onTap: () => _push(context, const InterfaceSettingsPage()),
       ),
-      // 「数据目录」是**主设置菜单**里的一项（用户 2026-11-05：不该藏在
-      // 「界面」子页里）。2026-11-06 起它变成子页入口：那里能看当前位置、
-      // 打开目录、换位置（带迁移）—— 不再是一个"点开就跳走"的单动作。
+      // 「数据目录」是**主设置菜单**中的一项，不放在「界面」子页内。
+      // 该页可查看当前位置、打开目录、更换位置（含迁移）。
       //
       // 副标题写 `<数据目录>\storage`（产物 / 附件 / AI 文件），不是运行根目录：
-      // 根目录是开发概念，源码树里跑它就是仓库根（用户 2026-11-06）。
+      // 根目录是开发概念，源码树中运行时即仓库根。
       if (isWindowsDesktop)
         SettingsTile(
           icon: Icons.folder_open_outlined,
@@ -213,7 +209,7 @@ class _SettingsPageState extends State<SettingsPage> {
         ),
     ];
 
-    // 状态区：用户 2026-11-09 定的响应式规则（判据是**可用内容宽度**）：
+    // 状态区：响应式规则（判据是**可用内容宽度**）：
     //   · 宽屏（≥1200）：NSFW 40% + 库统计 60%；
     //   · 中等（≥820）：两个等宽面板；
     //   · 窄：上下堆叠。
@@ -248,8 +244,8 @@ class _SettingsPageState extends State<SettingsPage> {
     ];
   }
 
-  /// 窄屏 / 手机首页：**保持 2026-11-05 那套分组入口行**（用户 2026-11-09：
-  /// "手机端的排版是对的"、"电脑端窄屏应该恢复成手机那种排版"）。
+  /// 窄屏 / 手机首页：**保持分组入口行**（手机端排版保持不变，
+  /// 电脑端窄屏恢复为手机端排版）。
   ///
   /// ⚠ 这一支别再换成磁贴：磁贴是宽屏用来"利用横向空间"的；窄屏上它只会
   /// 把三四个分组压成一长条，分类反而丢了。
@@ -304,8 +300,8 @@ class _SettingsPageState extends State<SettingsPage> {
               onTap: () => _push(context, const AiProviderSettingsPage()),
             ),
             const SizedBox(height: 8),
-            // 2026-11-05 用户：工具权限与"模型与凭据"**不构成附属关系**，
-            // 层级提高一级 —— 入口放在设置首页，而不是塞进模型页的顶栏。
+            // 工具权限与"模型与凭据"**不构成附属关系**，
+            // 入口位于设置首页，不放入模型页顶栏。
             SettingsEntryTile(
               icon: Icons.shield_outlined,
               title: 'AI 工具权限',
@@ -315,7 +311,7 @@ class _SettingsPageState extends State<SettingsPage> {
           ],
         ),
       ),
-      // 「采集」与「界面」是两件不相干的事（用户 2026-11-05：不该合成一组）。
+      // 「采集」与「界面」属于不同类别（不应合并为一组）。
       SettingsSection(
         title: '采集',
         estimatedHeight: 140,
@@ -350,12 +346,11 @@ class _SettingsPageState extends State<SettingsPage> {
           ),
         ),
       SettingsSection(title: '库统计', child: _statsRows(theme, store)),
-      // 「数据目录」是**主设置菜单**里的一项（用户 2026-11-05：不该藏在
-      // 「界面」子页里）。2026-11-06 起它变成子页入口：那里能看当前位置、
-      // 打开目录、换位置（带迁移）—— 不再是一个"点开就跳走"的单动作。
+      // 「数据目录」是**主设置菜单**中的一项，不放在「界面」子页内。
+      // 该页可查看当前位置、打开目录、更换位置（含迁移）。
       //
       // 副标题写 `<数据目录>\storage`（产物 / 附件 / AI 文件），不是运行根目录：
-      // 根目录是开发概念，源码树里跑它就是仓库根（用户 2026-11-06）。
+      // 根目录是开发概念，源码树中运行时即仓库根。
       if (isWindowsDesktop)
         SettingsSection(
           title: '目录',
@@ -394,7 +389,7 @@ class _SettingsPageState extends State<SettingsPage> {
     ];
   }
 
-  /// 宽屏库统计：**2×2 的数字格**（用户 2026-11-09 草图：状态区右侧那一栏）。
+  /// 宽屏库统计：**2×2 的数字格**（状态区右侧那一栏）。
   ///
   /// 数字短、彼此独立，排成 2×2 既省高度也用上了宽度；四项都在**同一张卡**里，
   /// 不存在"两列高低不一"的问题。窄屏 / 手机仍用 [_statsRows]。
@@ -553,9 +548,9 @@ class _SettingsPageState extends State<SettingsPage> {
   }
 
   // -------------------------------------------------------------------------
-  //  NSFW 内容（2026-09-20 用户要求）
+  //  NSFW 内容
   //
-  //  两个选项**放一起**（用户原话）。真源在后端的 `ai.nsfw`，这里只是读写通道：
+  //  两个选项**放在一起**。真源在后端的 `ai.nsfw`，这里只是读写通道：
   //  ① 开关：开 = 系统提示词里注入那段"越狱"提示词，关 = 注入一句"本机没开"；
   //  ② 模糊：开 = 预览图打码（点一下解开这一张），且**只有 ① 也开着才生效**。
   // -------------------------------------------------------------------------
@@ -616,8 +611,8 @@ class _SettingsPageState extends State<SettingsPage> {
               // 开关没开时这一项置灰：两个选项的从属关系要一眼看得出来
               onChanged: (busy || !enabled) ? null : (v) => apply(nextBlur: v),
             ),
-            // 版本号（`注入正文版本 vNN`）2026-11-09 按用户要求去掉：
-            // 它只是实现细节，用户改完开关不关心提示词版本。
+            // 版本号（`注入正文版本 vNN`）已去掉：
+            // 它属于实现细节，与开关状态无关。
             if (nsfw.error != null)
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 6, 16, 0),
@@ -637,7 +632,7 @@ class _SettingsPageState extends State<SettingsPage> {
 
 /// 设置首页的"状态区"：NSFW 开关 + 库统计。
 ///
-/// 2026-11-09 用户定的响应式规则，判据是**可用内容宽度**（不是窗口宽度 ——
+/// 响应式规则，判据是**可用内容宽度**（不是窗口宽度 ——
 /// 正文本身还有 1680 的上限）：
 ///   · ≥1200：NSFW 40% + 库统计 60%；
 ///   · ≥820：两个等宽面板；

@@ -17,7 +17,7 @@ import 'preset_run.dart';
 import 'prompt_detail_page.dart';
 import 'prompt_edit_page.dart';
 
-/// 预设库顶部的三个**同级页签**（用户 2026-10-24 定的）。
+/// 预设库顶部的三个**同级页签**。
 ///
 /// 常规预设 / 角色卡 / 画风卡以前是"一个主页面 + 一个卡片库子页"，现在并排；
 /// 角色卡与画风卡只是 [CardsView] 的一种 kind，字段 / 编辑器 / 示例管理完全共用。
@@ -41,11 +41,11 @@ enum PresetSection {
 
 /// **预设页**（2026-10-11 由「提示词」页改组而来）。
 ///
-/// 用户定的定位：预设 = **可复用的一段提示词 + 用途**。这一页只保留三件事：
+/// 定位：预设 = **可复用的一段提示词 + 用途**。这一页只保留三件事：
 /// **查看 / 修改提示词 / 用途（生图·生视频·生音频）**，外加把预设送进工作台执行。
 ///
 /// 刻意**不再**在这页做的东西：
-///  * 产物反查 —— 从画廊详情点进去看提示词更自然（用户原话："根据画廊页详情查找产物提示词已经足够"）。
+///  * 产物反查 —— 从画廊详情进入查看提示词。
 ///
 /// 2026-10-24 起角色卡 / 画风卡**不再是子页**：顶部一条导航把它们和常规预设并排
 /// 显示（[PresetSection]），三者的列表区互不干扰、各自保留搜索与滚动位置。
@@ -143,7 +143,7 @@ class _PromptsPageState extends State<PromptsPage>
     final store = context.watch<LibraryStore>();
     final section = _section;
     final fab = _buildFab();
-    // 电脑端标题始终在 AppBar；手机端保留滚动联动（用户 2026-11-05）。
+    // 电脑端标题始终在 AppBar；手机端保留滚动联动。
     final phone = useCollapsingPageTitle;
 
     return Scaffold(
@@ -326,7 +326,7 @@ class _PromptsPageState extends State<PromptsPage>
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // 搜索栏 + **折叠按钮**（与画廊同一套交互，用户 2026-10-11 定的位置）
+          // 搜索栏 + **折叠按钮**（与画廊同一套交互，按钮位于搜索栏右侧）
           Row(
             children: [
               Expanded(
@@ -361,7 +361,7 @@ class _PromptsPageState extends State<PromptsPage>
               ),
             ],
           ),
-          // 收起时露出生效筛选摘要（与画廊同一条理由：否则用户以为"预设怎么少了"）
+          // 收起时显示生效筛选摘要（与画廊一致：否则会误认为"预设数量减少"）
           if (collapsed)
             Padding(
               padding: const EdgeInsets.only(top: 6),
@@ -395,7 +395,7 @@ class _PromptsPageState extends State<PromptsPage>
     return parts.join(' · ');
   }
 
-  /// 筛选选项**按功能分区**，但**不"一种一行"**（用户 2026-10-11）：
+  /// 筛选选项**按功能分区**，但**不"一种一行"**：
   /// 组内联排、组与组之间一条竖线，宽窗口一行塞得下两三组，窄窗口整组换行。
   Widget _filterSections(LibraryStore store, ThemeData theme) {
     return FilterGroupRow(
@@ -415,7 +415,7 @@ class _PromptsPageState extends State<PromptsPage>
               onSelected: (v) => store.setOnlyFavorite(v),
             ),
             // 「未关联产物」：产物被删掉之后提示词会变成未关联，
-            // 这里筛出来，配合「一键清除未关联」一起用（用户要求）
+            // 在此筛出，配合「一键清除未关联」使用
             FilterChip(
               label: const Text('未关联产物'),
               avatar: Icon(
@@ -527,7 +527,7 @@ class _PromptsPageState extends State<PromptsPage>
   /// 提示词类型筛选（"全部 / 生图 / 生视频 / 生音频 / 混合"）。
   ///
   /// 返回**列表**而不是 `Row`：外层的筛选行是 `FilterChipRow`（`Wrap`），
-  /// 这几个 chip 要作为独立项参与折行（用户要求：放不下就换行）。
+  /// 这些 chip 作为独立项参与折行（放不下时换行）。
   List<Widget> _kindFilter(LibraryStore store) {
     const kinds = <(String?, String)>[
       (null, '全部'),
@@ -579,7 +579,7 @@ class _PromptsPageState extends State<PromptsPage>
       );
     }
 
-    // 页码请求走后端分页：`promptPage` 是"用户要看第几页"。
+    // 页码请求走后端分页：`promptPage` 表示目标页码。
     // 相邻页由 store 预取（`ensurePromptPage`），拖动时两页要同时在树里。
     final pageBusy = store.promptPage != store.prompts.page;
     return Column(
@@ -648,14 +648,14 @@ class _PromptsPageState extends State<PromptsPage>
 
   /// 「▶️运行」：弹窗确认目标产物类型 → 把提示词送进工作台并跳过去。
   ///
-  /// **不自动发送**（用户 2026-10-11 定的）：只填进输入框，用户自己按发送 ——
+  /// **不自动发送**：只填入输入框，由使用方按发送 ——
   /// 这样不产生"无人值守的提交"，`comfy_submit` 那道审批闸门一个字都不改。
   Future<void> _runPreset(Prompt prompt) async {
     final send = widget.onSendToWorkspace;
     if (send == null) return;
     final kind = await showPresetRunDialog(context, prompt);
     if (kind == null || !mounted) return;
-    // 类型以"预设自己的用途"为准；用户临时改了就按他改的走（写在指令里让模型照办）
+    // 类型以"预设自身的用途"为准；临时修改时按修改后的执行（写入指令交给模型）
     send(buildPresetRunText(prompt, kind));
   }
 
@@ -701,7 +701,7 @@ class _PromptsPageState extends State<PromptsPage>
   /// 一键清除"未关联产物"的提示词。
   ///
   /// 直接删库，不做"解除关联"——它们本来就没有关联任何东西可解除。
-  /// 删之前先把**条数和几条标题**摆出来，避免用户以为只是筛一下。
+  /// 删除前显示**条数与若干标题**，避免被理解为筛选操作。
   Future<void> _clearUnlinked() async {
     final store = context.read<LibraryStore>();
     final total = await store.countUnlinkedPrompts();
@@ -1002,7 +1002,7 @@ class PromptCard extends StatelessWidget {
                       ),
                     )
                   // 产物被删掉（或还没关联上）时给出**一眼能看到**的标记：
-                  // 提示词本身还在，但它已经不对应任何产物了（用户要求）
+                  // 提示词仍然存在，但已不对应任何产物
                   else
                     Padding(
                       padding: const EdgeInsets.only(right: 4),

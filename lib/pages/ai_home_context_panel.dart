@@ -13,7 +13,7 @@ class _ContextPanelState extends State<_ContextPanel> {
   bool _loading = false;
   String? _error;
 
-  /// Skills 列表默认**折叠**（用户"其他建议"第 2 条）：装了几十个之后右侧栏放不下，
+  /// Skills 列表默认**折叠**：数量较多时右侧栏无法容纳，
   /// 展开后给搜索框，找 skill 靠搜索而不是往下翻。
   bool _skillsOpen = false;
   final _skillSearch = TextEditingController();
@@ -43,8 +43,8 @@ class _ContextPanelState extends State<_ContextPanel> {
       await widget.store.waitForBackend();
       if (!mounted) return;
       _refresh();
-      // 实时进度（用户"其他建议"第 1 条）：右侧栏一显示就开始轮询，
-      // 这样"AI 刚提交的任务 / 用户自己在 ComfyUI 里点的任务"都能看到进度。
+      // 实时进度：右侧栏显示时开始轮询，
+      // "AI 提交的任务 / 在 ComfyUI 中手动提交的任务"均可查看进度。
       widget.store.startWatchingComfy();
       // 跨端待审批（M5）：手机排上来的提交在桌面上要看得见、点得动。
       // 与实时进度**同一条纪律**（只在这一栏显示时轮询，dispose 里停），
@@ -85,14 +85,13 @@ class _ContextPanelState extends State<_ContextPanel> {
     final model = store.selectedModel;
     final visibleSkills = _filteredSkills(store);
 
-    // 右侧栏每一块**各自一个卡片容器**（用户建议 2026-09-20：「给右边栏除了实时进度
-    // 以外的内容也拿类似容器分别包裹起来」）。以前只有"实时进度"是 Card，其余几块是
-    // 直接摊在背景上的文字与列表，一眼看不出哪几行属于同一块、到哪里算下一块。
+    // 右侧栏每一块**各自一个卡片容器**。此前只有"实时进度"是 Card，其余几块为
+    // 直接铺在背景上的文字与列表，无法区分各块归属与边界。
     //
-    // 为什么不用 `Card`+`Column` 一把包住：skills 可能有几十个，**必须懒构建**
-    // （`ListView(children: [...])` 会一次全建）。所以 Skills 那张卡走
-    // `DecoratedSliver` + `SliverMainAxisGroup`：卡片背景罩住"标题 + 懒构建的条目"，
-    // 行数再多也只建看得见的那几条。外观与 [_PanelCard] 共用 [panelCardDecoration]。
+    // 不使用 `Card`+`Column` 整体包裹：skills 数量可达数十个，**必须懒构建**
+    // （`ListView(children: [...])` 会一次性全部构建）。因此 Skills 卡使用
+    // `DecoratedSliver` + `SliverMainAxisGroup`：卡片背景覆盖"标题 + 懒构建条目"，
+    // 行数再多也只构建可见部分。外观与 [_PanelCard] 共用 [panelCardDecoration]。
     return CustomScrollView(
       slivers: [
         SliverPadding(
@@ -104,8 +103,8 @@ class _ContextPanelState extends State<_ContextPanel> {
               // 给一个点了没用的按钮不如不给。
               // 它自己负责"没有待办时整块不占位"（含下面那道间距），所以这里不另加 SizedBox。
               if (!store.isLocal) _PendingApprovals(store: store),
-              // 实时进度（用户"其他建议"第 1 条）：AI 提交的任务 / ComfyUI 队列，
-              // 用户在对话里说"帮我跑一张"之后，不用切到 ComfyUI 就能看到它跑到哪了。
+              // 实时进度：AI 提交的任务 / ComfyUI 队列，
+              // 提交后无需切换到 ComfyUI 即可查看运行进度。
               _ComfyProgress(store: store),
               const SizedBox(height: 10),
               _PanelCard(
@@ -143,7 +142,7 @@ class _ContextPanelState extends State<_ContextPanel> {
               ),
               const SizedBox(height: 10),
               // 「ComfyUI」右边就是刷新按钮：它刷新的是 ComfyUI 状态，
-              // 以前挂在"上下文"标题右边，看着像是刷新整个面板（用户建议第 5 条）。
+              // 此前位于"上下文"标题右侧，显示为刷新整个面板。
               _PanelCard(
                 key: const Key('ai-panel-card-comfy'),
                 title: 'ComfyUI',
@@ -188,9 +187,9 @@ class _ContextPanelState extends State<_ContextPanel> {
         // Skills：名字就是真源，这里只是后端的只读视图（M5）。
         // **投放口**才是"装 skill"的方式：把文件夹（或 .md）拷进下面这个目录，
         // 应用启动时会自动登记（拷进来的文件没写 frontmatter 也会被补上）。
-        // 这里不再有「从 DSH 导入」按钮（用户明确要求去掉）。
+        // 此处不提供「从 DSH 导入」按钮。
         //
-        // 用户"其他建议"第 2 条：**列表默认折叠**（装了十几个 skill 之后，
+        // **列表默认折叠**（skill 数量较多时，
         // 右侧栏会被它们占满），展开后才给搜索框 —— 找某个 skill 靠搜索，不靠翻。
         SliverPadding(
           padding: const EdgeInsets.fromLTRB(12, 0, 12, 10),
@@ -283,7 +282,7 @@ class _ContextPanelState extends State<_ContextPanel> {
                             style: theme.textTheme.bodySmall,
                           ),
                         // 回落取证：下面列的是**手机本机**那几份，不是桌面上的全集。
-                        // 不说这一句，用户会以为电脑上的 skill 被删了。
+                        // 缺少该说明会被理解为电脑上的 skill 已删除。
                         if (store.skillsLocalOnly)
                           Text(
                             '桌面连不上，这里只列了手机本机的 skill。',
@@ -294,7 +293,7 @@ class _ContextPanelState extends State<_ContextPanel> {
                   ),
                 ),
                 if (!_skillsOpen)
-                  // 折叠时不列条目，只留一句提示（用户想找 skill 就展开）
+                  // 折叠时不列条目，仅保留一行提示（展开后可见）
                   SliverPadding(
                     padding: const EdgeInsets.fromLTRB(10, 6, 10, 10),
                     sliver: SliverToBoxAdapter(
@@ -373,7 +372,7 @@ class _ContextPanelState extends State<_ContextPanel> {
     }
   }
 
-  /// 在资源管理器里打开投放口（打不开就退回"把路径给用户"）。
+  /// 在资源管理器里打开投放口（失败时返回路径）。
   Future<void> _openSkillsFolder() async {
     final path = widget.store.skillRoots?.userRoot ?? '';
     if (path.isEmpty) {
@@ -447,7 +446,7 @@ class _ContextPanelState extends State<_ContextPanel> {
   }
 }
 
-/// 右侧栏里的一行 Skill：名字 + 一行描述 + 来源徽标 + 警告 + 删除（仅用户来源）。
+/// 右侧栏里的一行 Skill：名称 + 一行描述 + 来源徽标 + 警告 + 删除（仅自定义来源）。
 class _SkillRow extends StatelessWidget {
   final AiSkill skill;
   final VoidCallback onDelete;
@@ -624,7 +623,7 @@ class _CapabilityChip extends StatelessWidget {
 
 /// 显示 skills 投放口的绝对路径，并提供「打开文件夹 / 复制路径」。
 ///
-/// 用户在建议里要的就是这个：**不要「从 DSH 导入」按钮**，改成一个能拷东西进去的目录。
+/// **不提供「从 DSH 导入」按钮**，改为一个可复制内容进去的目录。
 /// 路径由后端算（两种运行布局都对），界面只负责显示 —— 别在前端拼路径。
 class _SkillDropIn extends StatelessWidget {
   final AiWorkspaceStore store;
@@ -690,9 +689,8 @@ class _SkillDropIn extends StatelessWidget {
 
 /// 右侧栏的「长期记忆」：条数 + 说明 + 编辑入口。
 ///
-/// **刻意不在这里印记忆正文**（用户建议 2026-09-20：「右边栏长期记忆，
-/// 不显示记忆内容的预览」）：记忆里存的多半是私下的偏好与上下文，而右侧栏是
-/// **一直摊在屏幕上**的一面墙 —— 把正文印上去，任何路过屏幕的人都看得到。
+/// **不在此处显示记忆正文**：记忆内容属于偏好与上下文，而右侧栏
+/// **常驻屏幕** —— 显示正文会使内容对屏幕前的所有人可见。
 /// 要看内容就点右边的编辑按钮进弹窗（`_MemoryEditorDialog`）。
 class _MemoryPanel extends StatelessWidget {
   final AiWorkspaceStore store;
@@ -753,8 +751,8 @@ class _MemoryPanel extends StatelessWidget {
 
 /// 长期记忆编辑器：**搜索 + 单条 / 批量删除** + 加一条 + 整篇编辑。
 ///
-/// 真源仍然是 `memory.md`（用户直接改那个文件也认），所以这里没有另造一套存储 ——
-/// 列表视图只是"一行一条"的一个方便入口。加搜索与删除是用户的明确要求：
+/// 真源仍然是 `memory.md`（直接修改该文件同样生效），因此没有另外实现存储 ——
+/// 列表视图只是"一行一条"的入口。搜索与删除为必需功能：
 /// 他的顾虑不是存不下，而是"条数太多，想查找、改动、删除会比较困难"。
 ///
 /// 下标语义：列表按 `memory.entries` 的顺序（0 起）编号，与后端的行序**同源** ——
@@ -798,8 +796,8 @@ class _MemoryEditorDialogState extends State<_MemoryEditorDialog> {
     for (var i = 0; i < all.length; i++) {
       if (q.isEmpty || all[i].toLowerCase().contains(q)) out.add((i, all[i]));
     }
-    // 搜索时把已有的勾选收拢到"还看得见的那几条"：否则"删除选中"会删掉用户
-    // 当前看不到的东西 —— 那是很坏的一种惊喜。
+    // 搜索时将已有勾选收拢到"仍可见的条目"：否则"删除选中"会删除
+    // 当前不可见的条目。
     return out;
   }
 
@@ -940,7 +938,7 @@ class _MemoryEditorDialogState extends State<_MemoryEditorDialog> {
                       ),
                     ),
                   ),
-                  // 条数占用（用户要求：条数要可控，界面上得看得见还剩多少）
+                  // 条数占用（界面上需显示剩余条数）
                   Text(
                     '${memory.entryCount} / ${memory.maxEntries} 条',
                     style: theme.textTheme.labelSmall?.copyWith(
@@ -1128,7 +1126,7 @@ class _MemoryEntryList extends StatelessWidget {
 /// 在系统文件管理器里打开一个目录。
 ///
 /// 走 `url_launcher` 的 `file:` 协议（Windows 上落到 ShellExecute）；**打不开就返回 false**,
-/// 由调用方把路径显示给用户 —— 不能假装打开了。
+/// 由调用方显示路径 —— 不得显示为已打开。
 Future<bool> _openFolder(String path) async {
   final base = Uri.file(path, windows: true);
   for (final uri in [base, Uri.parse('${base.toString()}/')]) {
