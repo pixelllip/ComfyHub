@@ -227,7 +227,7 @@ async fn run_kit_rejects_bad_provider_or_model_overrides() {
         .unwrap()
         .contains("模型不存在或未启用: p-run/nope"));
 
-    // 被用户关掉的模型同样不许指定（"指定了就按它跑"，不许悄悄换一个）
+    // 已关闭的模型同样不允许指定（"指定了就按它跑"，不得静默替换）
     let (status, _) = get_json(
         router_for(state.clone()),
         "/api/ai/run-kit?providerId=p-run&modelId=m-off",
@@ -301,7 +301,7 @@ async fn run_kit_status_is_idempotent_and_bumps_only_when_rules_change() {
 
 /// NSFW 开关决定注不注入 `[MODE: UNRESTRICTED SANDBOX — STABLE]` 那一整段。
 ///
-/// **那段文字是用户有意注入的**（AGENTS §10）：关掉只是不注入，正文一个字都不许改；
+/// **那段文字是有意注入的**（AGENTS §10）：关闭只是不注入，正文不得改动；
 /// 而且关掉时必须如实说明（模型不能"自己觉得可以"）。
 #[tokio::test]
 async fn run_kit_nsfw_switch_decides_whether_the_block_is_injected() {
@@ -339,7 +339,7 @@ async fn run_kit_nsfw_switch_decides_whether_the_block_is_injected() {
 ///
 /// 这一条盯四件事：① `GET /api/ai/tools/policy` 的键集合就是 Kotlin 那 11 个；
 /// ② `PUT` **只改传了的字段**、并把权限档真的写进库（下一轮 Run 读的就是它）；
-/// ③ 非法权限档 **400**（不静默回落 —— 那会把用户的意图改成另一种行为）；
+/// ③ 非法权限档 **400**（不静默回落 —— 否则会把配置意图改为另一种行为）；
 /// ④ NSFW 的 `effectiveBlur` 是"两个都开"的结论，**不是**前端再算一遍。
 #[tokio::test]
 async fn tool_policy_and_nsfw_endpoints() {
@@ -432,7 +432,7 @@ async fn tool_policy_and_nsfw_endpoints() {
     let tools = tools.as_array().unwrap();
     let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
     // ⚠ 第 40 步起桌面文件工具五件也在这份清单里（在此之前只看手机清单，
-    // 实现了界面也看不见 —— 用户会以为"这台后端不能改文件"）
+    // 实现了界面也不显示 —— 会被理解为"该后端不能改文件"）
     assert_eq!(
         names,
         vec![
@@ -446,14 +446,14 @@ async fn tool_policy_and_nsfw_endpoints() {
             // 学与绑都与 `POST /api/ai/workflow-recipes*` 共用一份实现 —— 按 name 升序排在这里
             "comfy_bind_recipe",
             // 体检两件（P4 第 62 步）：列"还等着外部给输入的位置" / 跟本机模型清单对账，
-            // 都**只报不改**（用户建议 ①/⑤）—— 按 name 升序排在这里
+            // 都**只报不改** —— 按 name 升序排列
             "comfy_check_inputs",
-            // 接线体检（2026-10-17 用户"对于错误接线要能向用户指出"）：只读、出厂 allow ——
+            // 接线体检（错误接线需在界面指出）：只读、出厂 allow ——
             // 与 `comfy_audit_workflow` 分工不同（那条只审 API 图、看"跑起来会不会崩"）
             "comfy_diagnose_workflow",
             // 本机模型清单对账（O3）：只读，**不属于 COMFY 那一类**（不吃查询预算）
             "comfy_env_report",
-            // 两段式找工作流（用户 bug ⑤）：库里搜不到就回头看本机的工作流文件
+            // 两段式查找工作流：库中搜不到时再查本机工作流文件
             "comfy_find_workflow",
             "comfy_fit_workflow",
             "comfy_get_run",
@@ -466,11 +466,11 @@ async fn tool_policy_and_nsfw_endpoints() {
             "comfy_load_workflow",
             // 图像编辑三件（投放 + 遮罩）：两阶段编辑的地基，出厂档都是 ask
             "comfy_make_mask",
-            // 摘节点 / 拼节点（P4 第 63 步，用户建议 ②）：改好的图是**内联**返回的
+            // 摘节点 / 拼节点（P4 第 63 步）：修改后的图以**内联**方式返回
             "comfy_prune_workflow",
             // 按任务 / 模型族查"上次成功"（自动选工作流 T1，2026-11-08）：只读、出厂 allow
             "comfy_recent_successes",
-            // 起 / 停实例（2026-09-28 用户 bug「通过 CLI 启动 comfyui 总是失败」）：
+            // 起 / 停实例（「通过 CLI 启动 ComfyUI 总是失败」）：
             // ComfyHub 自己用工作区的 `.venv\python.exe` 起 —— comfy-cli 那条路要写
             // `%LOCALAPPDATA%\comfy-cli\config.ini` 与 `<ComfyUI>\user\comfyui_8188.log`，
             // 受限环境里必然 Errno 13。两件出厂档都是 ask（起/杀一个占显存的进程）
@@ -703,7 +703,7 @@ async fn skills_crud_round_trip_with_stable_error_codes() {
     assert_eq!(body.as_array().unwrap().len(), 1);
     assert_eq!(body[0]["name"], "demo-skill");
 
-    // 停用 / 启用（内置与用户都允许；只影响对话，文件不动）
+    // 停用 / 启用（内置与自定义均可；只影响对话，文件不改动）
     let (status, body) = send_json(
         router_for(state.clone()),
         "PUT",
@@ -813,9 +813,9 @@ async fn skills_crud_round_trip_with_stable_error_codes() {
     );
 }
 
-/// 内置 skill：**只能停用不能删除**；同名时用户版胜出并带上 `conflict`（AIH-037）。
+/// 内置 skill：**只能停用不能删除**；同名时自定义版优先并带上 `conflict`（AIH-037）。
 ///
-/// 这两条合起来才是"用户能覆盖内置的、但删不掉项目自带的那份"。
+/// 两条共同构成"可覆盖内置版本、但无法删除项目自带的那份"。
 #[tokio::test]
 async fn skills_builtin_is_readonly_and_user_override_wins_with_a_conflict_hint() {
     let state = state();
@@ -843,7 +843,7 @@ async fn skills_builtin_is_readonly_and_user_override_wins_with_a_conflict_hint(
     assert_eq!(body["detail"], "「native」是内置 skill，只能停用不能删除");
     assert!(builtin.join("native").join("SKILL.md").exists());
 
-    // 用户在投放口放同名 → 用户版胜出，带 conflict 提示，且 source = user
+    // 在投放口放置同名项 → 自定义版优先，带 conflict 提示，且 source = user
     std::fs::create_dir_all(user_root.join("native")).unwrap();
     std::fs::write(
         user_root.join("native").join("SKILL.md"),
@@ -856,7 +856,7 @@ async fn skills_builtin_is_readonly_and_user_override_wins_with_a_conflict_hint(
     assert_eq!(body[0]["description"], "用户版");
     assert_eq!(body[0]["conflict"], "覆盖了同名内置 skill");
 
-    // 详情读到的也是用户那份正文
+    // 详情读取的也是自定义版正文
     let (_, body) = get_json(router_for(state.clone()), "/api/ai/skills/native").await;
     assert_eq!(body["content"], "用户正文");
 
@@ -889,7 +889,7 @@ async fn skills_builtin_is_readonly_and_user_override_wins_with_a_conflict_hint(
 }
 
 /// 投放口自动登记（`POST /skills/rescan`）：**只补没有 frontmatter 的文件**，
-/// 已经有 frontmatter 的一个字节都不许改（那是用户自己写的内容）。
+/// 已有 frontmatter 的不得改动（属于手动编写的内容）。
 #[tokio::test]
 async fn skills_rescan_registers_plain_files_and_never_touches_frontmatter() {
     let state = state();
@@ -980,7 +980,7 @@ async fn skills_rescan_registers_plain_files_and_never_touches_frontmatter() {
 
 /// 读 / 整篇替换 / 加一条 / 删几条 / 清空的完整一轮。
 ///
-/// 三条纪律各有一条断言：**超限报错（不静默截断）/ 用户手敲的不加日期前缀 /
+/// 三条约束各有一条断言：**超限报错（不静默截断）/ 手动输入的不加日期前缀 /
 /// 越界下标忽略掉（不整批失败）**。
 #[tokio::test]
 async fn memory_endpoints_round_trip_and_report_stable_codes() {
@@ -1026,7 +1026,7 @@ async fn memory_endpoints_round_trip_and_report_stable_codes() {
         "- 甲\n- 乙\n"
     );
 
-    // 加一条：**用户手敲的不带日期前缀**（日期前缀只有 AI 的 remember 加）
+    // 新增一条：**手动输入的不带日期前缀**（日期前缀仅由 AI 的 remember 添加）
     let (status, body) = send_json(
         router_for(state.clone()),
         "POST",
@@ -1072,7 +1072,7 @@ async fn memory_endpoints_round_trip_and_report_stable_codes() {
     .await;
     assert_eq!(body["content"], "- 甲\n- 丙");
 
-    // 超限：**报错而不是静默截断**（悄悄截断 = 悄悄丢用户的话）
+    // 超限：**报错而不是静默截断**（静默截断等于丢失内容）
     let too_long = "字".repeat(8001);
     let (status, body) = send_json(
         router_for(state.clone()),
@@ -1124,7 +1124,7 @@ async fn memory_endpoints_round_trip_and_report_stable_codes() {
 
 /// 长期记忆**也进系统提示与 run-kit**：写完立刻在 `run-kit` 里读得到（不做缓存）。
 ///
-/// 这条把"界面写的"与"模型看到的"接上 —— 少这一环，用户会以为"我写了它却记不住"。
+/// 这条连接"界面写入"与"模型可见" —— 缺少该环节会表现为"已写入但未记住"。
 #[tokio::test]
 async fn memory_written_from_the_ui_shows_up_in_the_run_kit_prompt() {
     let state = state();
