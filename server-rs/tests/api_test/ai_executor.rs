@@ -248,7 +248,7 @@ async fn executor_runs_a_tool_round_trip_and_orders_the_parts() {
     assert_eq!(result_payload["name"], "list_skills");
 
     // 事件：`tool.requested` **每一个调用都发**（只读工具带 `approval:not_required`）——
-    // 界面靠它给工具卡排位置（用户 bug⑥：流式期间"思考 → 工具 → 正文"的交错）
+    // 界面靠它给工具卡排位置（流式期间"思考 → 工具 → 正文"的交错）
     let types = event_types(&state, &run_id);
     assert!(types.contains(&"tool.started".to_string()), "{types:?}");
     assert!(types.contains(&"tool.completed".to_string()), "{types:?}");
@@ -389,7 +389,7 @@ async fn responses_run_echoes_each_round_reasoning_or_the_upstream_400s() {
 }
 
 /// **R8 的顺序**：需要审批的工具 —— **先落 pending 行**，再发 `tool.requested`，
-/// 然后用户在**任何一条路径**上都能点批准（跨端）。
+/// 之后在**任意一条路径**上都能批准（跨端）。
 #[tokio::test]
 async fn approval_gate_opens_before_the_user_can_click() {
     // 用 `remember`（只写本机那份长期记忆文件、**不出网**）：它出厂是 ALLOW，
@@ -416,7 +416,7 @@ async fn approval_gate_opens_before_the_user_can_click() {
 
     // ★ R8 的防线：**点批准的那一刻，库里必须已经有那一行 pending**
     //
-    // 这里刻意**不等事件**：用户在界面上手有多快我们不知道，而"点下去落空、
+    // 这里刻意**不等事件**：界面点击的速度不可预知，而"点下去落空、
     // 只能干等超时"正是这条红线要防的事。所以判据是"立刻点也能被接受"。
     let mut accepted = false;
     for _ in 0..80 {
@@ -425,7 +425,7 @@ async fn approval_gate_opens_before_the_user_can_click() {
             tokio::time::sleep(std::time::Duration::from_millis(25)).await;
             continue;
         }
-        // 库里有 pending 了 → **马上**点批准（这就是用户手快那条路径）
+        // 库里有 pending 了 → **立即**批准（即"提前点击"那条路径）
         let (status, result) = send_json(
             router_for(state.clone()),
             "POST",
@@ -460,7 +460,7 @@ async fn approval_gate_opens_before_the_user_can_click() {
     let run = wait_for_run(&state, &run_id).await;
     assert_eq!(run["status"], "completed", "{run}");
 
-    // 落库的行：`approval` 记用户的决定、`status` 记执行结果，**而且只有一行** ——
+    // 落库的行：`approval` 记录决定、`status` 记录执行结果，**且只有一行** ——
     // 顺手把 `status` 也写成 `approved`（或让两列互相顶替）会让原地更新匹配不上，
     // 同一次调用在库里变成两行，而 `/api/ai/pending` 又会把它当成"还在等人批"。
     let calls = comfyhub_server_rs::ai::runs::list_tool_calls(&state, &run_id).unwrap();
@@ -567,7 +567,7 @@ async fn a_denied_call_is_recorded_and_never_runs() {
 
     let calls = comfyhub_server_rs::ai::runs::list_tool_calls(&state, &run_id).unwrap();
     assert_eq!(calls.len(), 1, "{calls:?}");
-    // 两列的分工（与 Kotlin `ToolRegistry.failure` 逐字一致）：`approval` 记用户的决定，
+    // 两列的分工（与 Kotlin `ToolRegistry.failure` 逐字一致）：`approval` 记录决定，
     // `status` 记执行结果 —— 被拒绝的那次**没有执行**，所以状态是 `failed` 而不是 `ok`；
     // 界面靠 `approval == "denied"` 把它画成「已拒绝」而不是「出错」。
     assert_eq!(calls[0]["approval"], "denied");
@@ -624,7 +624,7 @@ async fn a_denied_call_is_recorded_and_never_runs() {
 ///
 /// 判据来自 Kotlin `HarnessRunner:657`：`outOfSteps` 时那句
 /// 「已达到本次回复的工具轮数上限 N，这次要调用的工具没有执行；再发一条消息它就能接着做。」
-/// 写成"整轮失败"的后果是用户已经看到的那段回答挂上一个红叉，而那件事本来只是"这轮到此为止"。
+/// 写成"整轮失败"的后果是已显示的那段回答被标记失败，而该情形只是"这轮到此为止"。
 #[tokio::test]
 async fn tool_round_limit_wraps_up_instead_of_failing_the_run() {
     // 模型**每一轮都要工具**（第二轮也会要到）→ 正好撞上限
@@ -722,7 +722,7 @@ async fn tool_budget_exceeded_is_reported_per_call() {
 /// **失败的调用不消耗额度**（Kotlin `spendCall` 只在 handler 返回之后调）：
 /// 额度只有 1 次时，先撞一个"工具不存在"的失败，后面那次**仍然跑得动**。
 ///
-/// 反过来的表现是用户抱怨过的那句原话：**"什么都没干就说预算不足"**。
+/// 反过来的表现是：**"什么都没干就说预算不足"**。
 #[tokio::test]
 async fn failed_calls_do_not_spend_the_budget() {
     let (base_url, gateway) = scripted_tool_gateway(vec![
@@ -789,8 +789,8 @@ async fn unknown_tool_is_reported_as_tool_not_found() {
     gateway.abort();
 }
 
-/// **提问闸门**（P4 第 32 步，用户建议 ⑥）：模型当场问两张卡里的一整张（2 题），
-/// 用户答完，**同一个 Run 接着往下做** —— 不结束、不重开。
+/// **提问闸门**（P4 第 32 步）：模型当场问两张卡里的一整张（2 题），
+/// 完成作答后，**同一个 Run 接着往下做** —— 不结束、不重开。
 ///
 /// 这一条盯四件事：① `user.question` 的形状是**嵌套**的 `question` 对象
 /// （平铺过一次，界面就解不出提问）；② `GET /api/ai/runs/{id}/question` 能把整张卡补回来；
@@ -968,8 +968,8 @@ async fn ask_user_question_waits_then_continues_the_same_run() {
     gateway.abort();
 }
 
-/// 用户**跳过**整张卡：模型拿到的是"用户没回答"（不是卡死），Run 照样收口 ——
-/// 而且不许假装用户答了。
+/// **跳过**整张卡：模型收到的是"未回答"（不是阻塞），Run 照样收口 ——
+/// 且不得伪装为已作答。
 #[tokio::test]
 async fn skipped_questions_are_reported_as_unanswered() {
     let arguments =
@@ -1078,7 +1078,7 @@ async fn executor_reports_the_stable_code_for_an_upstream_rejection() {
     gateway.abort();
 }
 
-/// 未完成的对话也要统计 token（用户 bug 2026-09-28「未完成的对话不统计token用量」）：
+/// 未完成的对话也要统计 token（「未完成的对话不统计 token 用量」）：
 /// 第一轮**跑完**（usage 已经烧掉）、"接着写"的第二轮撞 429 —— 失败的助手消息
 /// 必须带着第一轮的 usage 落库，会话统计（AiUsageSummary 读消息行）才不会少算。
 #[tokio::test]
@@ -1198,7 +1198,7 @@ async fn start_run_validates_then_creates_messages_and_run() {
     assert!(!run_id.is_empty() && !assistant_id.is_empty() && !user_id.is_empty());
     assert_eq!(body.as_object().unwrap().len(), 3, "响应只有这三个键");
 
-    // 用户消息 + 助手占位都落了库，且**用户在前**（顺序是界面的依据）
+    // 请求消息 + 助手占位都落了库，且**请求在前**（顺序是界面的依据）
     let (_, messages) = get_json(
         router_for(state.clone()),
         "/api/ai/conversations/conv-0/messages",
@@ -1290,7 +1290,7 @@ async fn start_run_validates_then_creates_messages_and_run() {
     assert_eq!(body["detail"], "Run 不存在: nope");
 }
 
-/// 重试：**复用原来那条用户消息**、空壳就地复用、有内容另起一条（AIH-024 / R6）。
+/// 重试：**复用原来那条请求消息**、空壳就地复用、有内容另起一条（AIH-024 / R6）。
 #[tokio::test]
 async fn retry_reuses_the_user_message_and_never_wipes_a_reply_with_content() {
     let state = state();
@@ -1347,7 +1347,7 @@ async fn retry_reuses_the_user_message_and_never_wipes_a_reply_with_content() {
     let second_run = retry["runId"].as_str().unwrap().to_string();
     wait_for_run(&state, &second_run).await;
 
-    // ② 有内容的失败回复 → 原样留着，重试**另起一条**（不许把用户看到过的东西抹掉）
+    // ② 有内容的失败回复 → 原样保留，重试**另起一条**（不得抹除已显示的内容）
     state
         .write(|tx| {
             tx.execute(
@@ -1697,7 +1697,7 @@ async fn view_outputs_auto_attaches_the_gallery_image_to_the_next_round() {
     gateway.abort();
 }
 
-/// `@` 卡片与 `/技能`：用户消息落 mention 块，技能正文由后端现读磁盘。
+/// `@` 卡片与 `/技能`：请求消息落 mention 块，技能正文由后端现读磁盘。
 #[tokio::test]
 async fn run_mentions_persist_card_snapshots_and_load_skills_server_side() {
     let state = state();
@@ -1771,7 +1771,7 @@ async fn run_mentions_persist_card_snapshots_and_load_skills_server_side() {
         "Run 详情要带 skillSnapshot：{run}"
     );
 
-    // 停用后：显式调用也拒绝，且不留下半条用户消息
+    // 停用后：显式调用也拒绝，且不留下不完整的请求消息
     let (status, _) = send_json(
         router_for(state.clone()),
         "PUT",
