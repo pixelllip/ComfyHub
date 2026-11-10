@@ -53,7 +53,7 @@ class ComfyHubApp extends StatelessWidget {
         // ⚠ `backendReady` 是**冷启动闸门**（2026-10-12）：AI 工作台是落地页，
         // 它在第一帧就会拉 provider / 会话，而那一刻后端还没起、端口文件还没写出来
         // （`.run\api.json` 在上一次优雅退出时被删掉了），`baseUrl` 只能是 8080 兜底值
-        // —— 用户看到的就是一句 `ClientException … 127.0.0.1:8080/api/ai/providers`。
+        // —— 界面显示的就是一句 `ClientException … 127.0.0.1:8080/api/ai/providers`。
         ChangeNotifierProvider<AiWorkspaceStore>(
           create: (ctx) => AiWorkspaceStore(
             baseUrlProvider: () => ctx.read<SettingsStore>().baseUrl,
@@ -127,7 +127,7 @@ class ComfyHubApp extends StatelessWidget {
 
 /// 主框架：宽屏用 NavigationRail，窄屏用底部导航。
 ///
-/// ★ **它在 widget 树的最高级**（2026-10-11 用户："我让你只换右边的，左边侧边栏常驻，
+/// ★ **它位于 widget 树最高层**（"只替换右侧内容区，左侧侧边栏常驻，
 /// 你把侧边栏改成最高级，然后窗口宽度低于阈值的时候换掉不就得了？"）。
 ///
 /// 以前 `StartupGate` 把 `HomeShell` 包在里面，于是**后端一重启**（`isReady` 变假）
@@ -304,7 +304,7 @@ class _HomeShellState extends State<HomeShell> {
 
   /// **曾经就绪过**（一旦为真就再也不回落）。
   ///
-  /// 用户 2026-10-11："让后端能够静默重启，不显示那个加载中界面，导致整个前端热重启；
+  /// 约束："后端需静默重启，不显示加载中界面，避免整个前端热重启；
   /// 我要的桌面端侧边栏常驻呢？"
   ///
   /// 真因是以前 `StartupGate` 把 `HomeShell` 包在里面：后端**重启**
@@ -365,8 +365,8 @@ class _HomeShellState extends State<HomeShell> {
     //
     // 为什么必须重新发现（2026-09-22）：后端端口现在是**自动挑的**（默认 0），
     // 重启会换一个端口。App 冷启动时读到的可能还是上一轮那个（或者默认 8080），
-    // 不重新读一次就会一直连一个没人听的端口，用户看到的是"启动页说后端已就绪，
-    // 界面却什么都拉不出来"。用户手填过地址时这一步什么也不做（那是远程配置）。
+    // 不重新读取时会持续连接无人监听的端口，界面显示"启动页提示后端已就绪，
+    // 界面却无法获取数据"。手动填写过地址时该步骤不执行（属于远程配置）。
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       if (!mounted) return;
       final settings = context.read<SettingsStore>();
@@ -391,7 +391,7 @@ class _HomeShellState extends State<HomeShell> {
     }
     // 安卓（以及任何非 Windows 平台）**没有"本地服务"这回事**：手机连的是桌面端
     // 的后端（配对而来），桌面离线时聊天页自己会如实报错。把 Windows 那套
-    // "App 拉起后端"的启动页搬上来只会白挡一屏（用户 bug 2026-09-28：
+    // "App 启动后端"的启动页搬上来只会遮挡一屏（现象：
     // "安卓启动时会显示 Windows 的加载界面，但是没有用"）—— 直接跳过进主界面。
     if (kIsWeb || !Platform.isWindows) {
       launcher.skip();
@@ -406,7 +406,7 @@ class _HomeShellState extends State<HomeShell> {
   }
 
   /// 后端"受不受限"（写不写得进项目外）。**受限时横幅常驻** —— 受限是环境事实，
-  /// 界面上看不到就只剩工具文案与 doctor 会说，用户（和模型）只能靠猜（2026-09-29 用户 bug）。
+  /// 界面上不显示时仅工具文案与 doctor 会说明，模型只能推测。
   ConfinementInfo? _confinement;
 
   /// 局域网桌面发现（Android）。换 Wi-Fi / 桌面换 IP 时靠它自动改地址；
@@ -426,7 +426,7 @@ class _HomeShellState extends State<HomeShell> {
   /// ⚠ 为什么不能像以前那样"在 `build` 里现拼一个 `pages` 列表"：
   /// 那样每次 `setState` 都产生**新的 widget 实例**，Flutter 于是把旧页面
   /// **销毁重建**（`initState` 再跑一遍、滚动位置归零、正在输入的框被清空），
-  /// 而且整棵树（含左边的 `NavigationRail`）一起重建 —— 用户 2026-10-11 报的
+  /// 而且整棵树（含左侧 `NavigationRail`）一起重建 —— 此前报告的问题为
   /// "侧边栏没有置顶、换页时右边被整个换掉"就是这个。
   ///
   /// 每一项都套一个 [`_ContentNavigator`]（**内容区自己的路由栈**）——
@@ -480,16 +480,16 @@ class _HomeShellState extends State<HomeShell> {
   /// 「预设 ▶️运行」的落点：把文本交给工作台的输入框，然后**切到工作台那一页**。
   ///
   /// 三条纪律：
-  ///  1. **只交接、不自动发送** —— 用户还要自己按发送（这是 2026-10-11 定的：
+  ///  1. **只交接、不自动发送** —— 仍需手动按发送（约束：
   ///     不产生"无人值守的提交"，`comfy_submit` 那道审批闸门一个字都不改）；
-  ///  2. **当前会话不是空的就先新建一条对话**（用户 2026-10-11）——
+  ///  2. **当前会话非空时先新建一条对话** ——
   ///     否则"运行预设"会把新提示词接在上一段聊天后面，上下文串味。
   ///     当前会话本来就是空的（刚开的"新对话"）就直接用，**不白建一条**；
   ///  3. 交接走 [`AiWorkspaceStore.handoffToComposer`]（取走即清空），
   ///     页面自己不 push 第二个工作台实例。
   Future<void> _handoffToWorkspace(String text) async {
     final store = context.read<AiWorkspaceStore>();
-    // 先切页：用户点完"运行"立刻看到工作台，新建会话在后台跑完再填输入框
+    // 先切页：点击"运行"后立即显示工作台，新建会话在后台完成后填入输入框
     _goToPage(0);
     if (store.messages.isNotEmpty) {
       await store.newConversation();
@@ -498,13 +498,13 @@ class _HomeShellState extends State<HomeShell> {
     store.handoffToComposer(text);
   }
 
-  /// **自动挑一台能连的桌面**（2026-09-30 用户要求：跨端这件事不该让用户管）。
+  /// **自动选择一台可连接的桌面**（跨端处理应自动完成）。
   ///
   /// 只在手机上做：桌面的地址由 `.run\api.json` 自动决定（[SettingsStore.defaultBaseUrl]），
-  /// 而且**用户手填过地址就一个都不试**（[SettingsStore.baseUrlIsAuto] 为假 = 那是他的远程配置）。
+  /// 且**手动填写过地址时不进行任何尝试**（[SettingsStore.baseUrlIsAuto] 为假 = 远程配置）。
   ///
   /// 静默失败，一条都不通时保持现状、不弹任何东西 —— 真正要用到后端时，
-  /// 各页面本来就会如实报"连不上"（那条路比启动横幅更接近用户当时在做的事）。
+  /// 各页面本就会如实报告"连不上"（该路径更贴近当时的实际操作）。
   Future<void> _pickDesktopAutomatically() async {
     if (kIsWeb) return;
     try {
@@ -537,7 +537,7 @@ class _HomeShellState extends State<HomeShell> {
       (uri) async {
         if (!mounted || _discoveryBusy) return;
         final token = PairingTokenCache.value;
-        // 没配对 = 还没资格自动切地址；先让用户扫码 / 手填。
+        // 未配对 = 尚不具备自动切换地址的条件；需先扫码 / 手动填写。
         if (token == null || token.isEmpty) return;
         _discoveryBusy = true;
         try {
@@ -600,14 +600,14 @@ class _HomeShellState extends State<HomeShell> {
           notice: context.watch<BackendLauncher>().dataDirNotice,
           onOpenSettings: () => _goToPage(4),
         ),
-        // **页面常驻、只切可见性**（2026-10-11 用户要求："桌面端 UI 应该始终把主界面
+        // **页面常驻、仅切换可见性**（"桌面端 UI 应始终保留主界面
         // 侧边栏置顶，更换页面的时候把右边界面换掉即可"）。
         //
         // `IndexedStack` 把五页**全部保持挂载**，只显示 `_index` 那一页：
         //   · 换页**不重建**任何页面 —— 画廊的滚动位置、预设的搜索词、设置里填了一半的
-        //     表单都不会丢（这是用户抱怨的那件事的另一半）；
+        //     表单都不会丢失（这是同一问题的另一部分）；
         //   · 代价：五页的 `initState` 在启动时就都跑了（各自拉一次数据）。
-        //     这是可接受的 —— 反正用户点到哪页都要拉，而"换页丢状态"是明确的 bug。
+        //     这是可接受的 —— 切到任意页都需要拉取，而"换页丢状态"属于明确缺陷。
         Expanded(
           child: IndexedStack(
             index: _index,
@@ -700,7 +700,7 @@ class _HomeShellState extends State<HomeShell> {
 
 /// **内容区自己的路由栈**：让次级页面只替换右边，不许盖住侧边栏。
 ///
-/// 用户 2026-10-11 两条连着的反馈：
+/// 两条相关约束：
 ///   ① "桌面端 UI 应该始终把主界面侧边栏置顶，更换页面的时候把右边界面换掉即可"；
 ///   ② 看到产物详情页（`test_00350_.png` 那张）之后："侧边栏哪去了？次级菜单还是没有
 ///      只替换右边的内容？"
@@ -712,7 +712,7 @@ class _HomeShellState extends State<HomeShell> {
 /// `Navigator.of(context).push(...)` 于是落在**自己这一格**里：
 ///   · 侧边栏 / 底部导航完全不受影响（它们在 `Navigator` 外面）；
 ///   · 每页的路由栈互相独立 —— 画廊翻到详情、切去预设再切回来，
-///     画廊还停在详情页（这是对的：用户没按返回）；
+///     画廊仍停留在详情页（符合预期：未按返回）；
 ///   · 对话框（`showDialog` / `showModalBottomSheet`）默认走**根** navigator，
 ///     仍然铺满整个窗口 —— 那是对的，弹窗本来就该盖住一切。
 ///
@@ -725,7 +725,7 @@ class _ContentNavigator extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // ⚠ **窄屏（移动端形态）不套这一层 Navigator**（用户 2026-10-12）：
+    // ⚠ **窄屏（移动端形态）不套这一层 Navigator**：
     //
     //   "移动端 UI 中，底边栏不是像桌面端 UI 那样侧边栏常驻的，次级菜单应该覆盖全部界面。"
     //
@@ -745,7 +745,7 @@ class _ContentNavigator extends StatelessWidget {
 
 /// 把加载页盖在壳子**上面**（而不是替换壳子）。
 ///
-/// 用户 2026-10-11 的原话："你把侧边栏改成最高级，然后窗口宽度低于阈值的时候换掉
+/// 约束："侧边栏改为最高级，窗口宽度低于阈值时替换
 /// 不就得了？" —— 对。以前 `StartupGate` 用 `return HomeShell()` / `return _StartupView()`
 /// **二选一**，后端一重启就整棵树换掉。现在壳子始终是底，加载页只是上面一层。
 ///
