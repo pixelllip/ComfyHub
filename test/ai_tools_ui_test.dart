@@ -13,6 +13,7 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart' show LogicalKeyboardKey;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
@@ -1287,6 +1288,73 @@ void main() {
     );
     expect(bar.value, isNull);
     expect(find.textContaining('0%'), findsNothing);
+  });
+
+  // 现象（用户截图）：右侧栏「实时进度」里名字、当前步骤都只有一行，
+  // 「正在执行 自定义采样器（高级）（7/8…」被截掉，后面的百分比也看不到；
+  // 最近提交那行更是只剩「test · …」。
+  // 根因：名字与"状态 · 耗时 · 产物数"挤在同一个 `Row` 里，步骤只给了一行。
+  testWidgets('(e4c) 实时进度：名字与当前步骤可以折行，不截掉关键信息', (tester) async {
+    tester.view.physicalSize = const Size(1400, 1000);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    // 长到一行放不下（右侧栏只有三百来像素宽）。
+    const title =
+        '赛博朋克少女与雨夜霓虹 city_pop 4k 超清（第二阶段·细化）'
+        '· 参考图三张 · 高分辨率修复';
+    final rec = _Recorder();
+    await tester.pumpWidget(
+      await _homePage(
+        rec,
+        comfyJobs: {
+          'queueRunning': 1,
+          'comfyReachable': true,
+          'runningLabel': '雨夜霓虹',
+          'submissions': [
+            {
+              'promptId': 'p-1',
+              'title': title,
+              'status': 'running',
+              'elapsedMs': 66000,
+              'mediaIds': <Object>[],
+              'progress': {
+                'promptId': 'p-1',
+                'state': 'running',
+                'value': 7,
+                'max': 8,
+                'percent': 40,
+                'nodeId': '9',
+                'nodeName': '自定义采样器（高级）K采样',
+              },
+            },
+          ],
+        },
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    // 内容宽度 = 进度条宽度（它与上面几行同宽）。
+    final contentWidth = tester
+        .getSize(find.byType(LinearProgressIndicator).first)
+        .width;
+    // 名字独占整行：旧布局里它和右侧"生成中 · 1.1 分钟"挤一行，只剩约六成。
+    expect(
+      tester.getRect(find.text(title)).width,
+      greaterThan(contentWidth * 0.95),
+      reason: '名字要占满整行，不能为了给状态腾地方而截成半句',
+    );
+    // 步骤名 + 步数 + 百分比一整个 `Text`：两行内必须全部画出来。
+    final stepText = find.textContaining('正在执行 自定义采样器（高级）K采样');
+    expect(stepText, findsOneWidget);
+    expect(
+      tester.renderObject<RenderParagraph>(stepText).didExceedMaxLines,
+      isFalse,
+      reason: '步骤与百分比不许停在半句（旧布局只有一行，必然截断）',
+    );
+    expect(find.textContaining('40%'), findsOneWidget);
+    expect(find.textContaining('生成中'), findsOneWidget);
+    expect(find.textContaining('1.1 分钟'), findsOneWidget);
   });
 
   testWidgets(

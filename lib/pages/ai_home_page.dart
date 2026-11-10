@@ -5176,29 +5176,25 @@ class _SubmissionRow extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Row(
-          children: [
-            Expanded(
-              child: Text(
-                submission.label,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: theme.textTheme.labelSmall?.copyWith(color: color),
-              ),
-            ),
-            const SizedBox(width: 6),
-            Text(
-              [
-                submission.statusLabel,
-                if (submission.elapsedLabel.isNotEmpty) submission.elapsedLabel,
-                if (submission.mediaIds.isNotEmpty)
-                  '${submission.mediaIds.length} 个产物',
-              ].join(' · '),
-              style: theme.textTheme.labelSmall?.copyWith(
-                color: theme.colorScheme.outline,
-              ),
-            ),
-          ],
+        // 名字独占一行（最多两行）。右侧栏只有三百来像素宽，
+        // 名字与"状态 · 耗时 · 产物数"挤在同一行时，长名字只剩半截（`test · …`）。
+        Text(
+          submission.label,
+          maxLines: 2,
+          overflow: TextOverflow.ellipsis,
+          style: theme.textTheme.labelSmall?.copyWith(color: color),
+        ),
+        const SizedBox(height: 1),
+        Text(
+          [
+            submission.statusLabel,
+            if (submission.elapsedLabel.isNotEmpty) submission.elapsedLabel,
+            if (submission.mediaIds.isNotEmpty)
+              '${submission.mediaIds.length} 个产物',
+          ].join(' · '),
+          style: theme.textTheme.labelSmall?.copyWith(
+            color: theme.colorScheme.outline,
+          ),
         ),
         if (showProgress) ...[
           const SizedBox(height: 3),
@@ -5211,7 +5207,9 @@ class _SubmissionRow extends StatelessWidget {
           const SizedBox(height: 2),
           Text(
             [p.stepLabel, if (p.percent != null) '${p.percent}%'].join(' · '),
-            maxLines: 1,
+            // 步骤名本身不短（"正在执行 自定义采样器（高级）（7/8）"），
+            // 一行装不下就折到第二行，别把括号里的步数和百分比一起截掉。
+            maxLines: 2,
             overflow: TextOverflow.ellipsis,
             style: theme.textTheme.labelSmall?.copyWith(
               color: theme.colorScheme.outline,
