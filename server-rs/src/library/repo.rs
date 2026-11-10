@@ -412,7 +412,7 @@ pub fn duplicate_prompt(
             })
             .unwrap_or_default(),
         notes: source.prompt.notes.clone(),
-        // 复制一份时**带上发送模式**：用户特意为 turbo 设的"只发正面"不该在复制后丢掉
+        // 复制一份时**带上发送模式**：专为 turbo 设置的"只发正面"不应在复制后丢失
         negative_mode: Some(source.prompt.negative_mode.clone()),
         favorite: false,
         tags: source.tags.iter().map(|t| t.name.clone()).collect(),

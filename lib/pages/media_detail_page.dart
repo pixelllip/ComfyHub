@@ -38,7 +38,7 @@ class MediaDetailPage extends StatefulWidget {
   ///
   /// 传了它，左右切换就只在这一组里走，**不再按画廊里的 `collectionId` 取成员**
   /// —— 否则点开卡片上的示例，翻出来的是它原本待在画廊哪个集合里那一批，
-  /// 而不是用户刚刚看到的这几个示例（用户 2026-11-07 报的 bug）。
+  /// 而不是刚刚看到的这几个示例（已报告的问题）。
   ///
   /// `null` = 普通入口（画廊 / 标签 / 提示词关联产物…），仍按集合成员切换。
   final List<MediaAsset>? siblings;
@@ -52,7 +52,7 @@ class MediaDetailPage extends StatefulWidget {
 class _MediaDetailPageState extends State<MediaDetailPage> {
   /// **当前正在看的那一条**（可以和 `widget.mediaId` 不同 —— 见 [`_goTo`]）。
   ///
-  /// 用户 2026-10-11："重新路由的实际行为是关闭旧窗口、打开新窗口。太奇怪了。
+  /// 需求原文："重新路由的实际行为是关闭旧窗口、打开新窗口。太奇怪了。
   /// 能不能改成更加舒服的过渡方式：**页面不变，但是填充内容实时改变**？"
   ///
   /// 所以左右切换**不再走 `pushReplacement`**：路由始终是同一个，
@@ -69,23 +69,23 @@ class _MediaDetailPageState extends State<MediaDetailPage> {
 
   /// 这一条**没有**在打开时自动缓存（太大，见 [kAutoCacheMaxBytes]）。
   ///
-  /// 界面据此把菜单项改成「保存到手机相册（下载 xx MB）」—— 用户看到的不是
+  /// 界面据此把菜单项改成「保存到手机相册（下载 xx MB）」—— 显示的不是
   /// "怎么没下"，而是"点它才下、大概多大"。
   bool _autoCacheSkipped = false;
 
   /// 「保存到相册」成功、且原件很大时，记下"离开这一页时把缓存副本删掉"。
   ///
   /// 为什么**不立即删**：这一页可能正在用那个文件显示 / 播放（手机视频播放器
-  /// 握着句柄），当场删会让用户看到"保存成功 → 画面黑掉"。所以推迟到切换 / 返回时
+  /// 握着句柄），立即删除会显示"保存成功 → 画面变黑"。因此推迟到切换 / 返回时
   /// （见 [_flushPendingEvict]）—— 相册里已经有一份，缓存副本纯属重复占空间。
   int? _evictAfterSaveId;
 
   /// 当前这一条所属**集合**的成员 id（按时间升序）。
   ///
-  /// 用户 2026-10-11："产物对应的工作流参数大体相同、只有一点点微调，完全可以放进同一个页面…
+  /// 需求原文："产物对应的工作流参数大体相同、只有一点点微调，完全可以放进同一个页面…
   /// 点进详情里可以左右切换。" 判定在后端（`media/collection.rs`），这里只按 `collectionId` 列成员。
   ///
-  /// ⚠ 只有 `collectionId != null` 时才拉；**空列表 / 单成员 = 不显示箭头**（用户定的
+  /// ⚠ 只有 `collectionId != null` 时才拉；**空列表 / 单成员 = 不显示箭头**（已确定的
   /// "只有一份产物时禁用箭头"）。
   List<int> _siblings = const [];
 
@@ -135,9 +135,9 @@ class _MediaDetailPageState extends State<MediaDetailPage> {
     if (!mounted) return;
     final store = context.read<LibraryStore>();
     // 本次要取的那一条。切换时 `_currentId` 会先变，但**旧内容要一直留到新数据回来**；
-    // 如果这次请求回来时用户已经翻到别的图了，它的结果直接丢掉。
+    // 若这次请求返回时已翻到别的图，其结果直接丢弃。
     final id = _currentId;
-    // 打开详情 = 用户主动要看这一条（用户 2026-09-20：「打开详情之后就没必要模糊了」）：
+    // 打开详情 = 主动查看该条（「打开详情之后就没必要模糊了」）：
     // 详情页自己不打码，顺手把"这一条看过了"记下来 —— 回到列表时它的缩略图也不再糊。
     // 只记在内存里（`NsfwStore`），关掉 App 再打开照旧打码。
     //
@@ -162,8 +162,8 @@ class _MediaDetailPageState extends State<MediaDetailPage> {
       // 集合成员：拿到失败**不影响详情页**（没有箭头而已，不是错误）。
       //
       // ⚠ 从卡片示例进来时**只看那一组**（`widget.siblings`），不去问集合：
-      // 一张示例可能本来是画廊里某个集合的成员，按集合取会把用户带出卡片
-      // （用户 2026-11-07 报的 bug）。示例的顺序就是卡片里挂的顺序。
+      // 一张示例可能本来是画廊里某个集合的成员，按集合获取会带出卡片之外
+      // （已报告的问题）。示例的顺序即卡片中的挂载顺序。
       var siblings = const <int>[];
       var siblingMedia = <int, MediaAsset>{};
       final fixed = widget.siblings;
@@ -196,11 +196,11 @@ class _MediaDetailPageState extends State<MediaDetailPage> {
         _autoCacheSkipped = false;
         _loading = false;
       });
-      // 详情页打开 = 用户要看原件：默认把它缓存到手机，之后离线也能看 / 保存。
+      // 详情页打开 = 查看原件：默认缓存到手机，之后离线也能看 / 保存。
       // 失败不打扰界面，继续用网络图（见 MediaCache.ensure）。
       //
-      // ⚠ **大的视频 / 音频不在这里自动下**（2026-11-01 用户要求给缓存设上限）：
-      //    一条 300MB 的视频，用户只是划过去看一眼，没理由占掉 1/5 预算 ——
+      // ⚠ **大的视频 / 音频不在此处自动下载**（缓存需设上限）：
+      //    一条 300MB 的视频，仅滑动查看一次，不应占用 1/5 预算 ——
       //    要存到手机是显式动作（菜单「保存到手机相册」会自己 ensure）。
       final already = await MediaCache.instance.cached(media.id, thumb: false);
       if (mounted && _currentId == media.id && already != null) {
@@ -245,11 +245,11 @@ class _MediaDetailPageState extends State<MediaDetailPage> {
     return (i >= 0 && i + 1 < _siblings.length) ? _siblings[i + 1] : null;
   }
 
-  /// 切到集合里的另一条：**原地换内容，路由不动**（用户 2026-10-11）。
+  /// 切到集合里的另一条：**原地替换内容，路由不变**。
   ///
   /// 为什么不 `pushReplacement`：那在 Flutter 里等于"**旧页销毁 + 新页进场**"——
-  /// 用户看到的是"窗口关了一下又开"，而且页面骨架（AppBar / 布局 / 滚动位置）全重建。
-  /// 用户原话："太奇怪了。能不能改成更加舒服的过渡方式：页面不变，但是填充内容实时改变？"
+  /// 表现为"窗口关闭后又打开"，且页面骨架（AppBar / 布局 / 滚动位置）全重建。
+  /// 需求原文："太奇怪了。能不能改成更加舒服的过渡方式：页面不变，但是填充内容实时改变？"
   ///
   /// 所以这里只改 `_currentId` 再取一次数据：
   ///  * **路由始终是同一个**（后退一次就回画廊，不会翻十张要按十次）；
@@ -258,7 +258,7 @@ class _MediaDetailPageState extends State<MediaDetailPage> {
   ///    （`getMedia` 是本机后端，通常几十毫秒）。
   ///
   /// ⚠ **不许清 `_prompt`**：清掉会让"关联的提示词"那张卡**空一下**再填上，
-  /// 看起来就是整块在闪（用户 2026-10-11 报的"图片切换时整个界面闪烁"的一半）。
+  /// 表现为整块闪烁（"图片切换时整个界面闪烁"的一部分）。
   /// 留着旧值也不会串 —— `_media` 与 `_prompt` 是**同一次 setState** 一起换的，
   /// 所以"图换了词还是旧的"这个中间态根本不存在。
   void _goTo(int id) {
@@ -302,7 +302,7 @@ class _MediaDetailPageState extends State<MediaDetailPage> {
   /// 「保存到手机相册」：先确保原件已缓存，再交给原生 MediaStore。
   ///
   /// 缓存**默认在打开详情时就开始下载**（见 [_load]）；这里只是兜底：
-  /// 用户可能下载还没完成就点了保存，或者从别的入口直接进来。
+  /// 可能在下载未完成时就执行保存，或从其他入口直接进入。
   Future<void> _saveToGallery(
     LibraryStore store,
     MediaAsset media,
@@ -431,7 +431,7 @@ class _MediaDetailPageState extends State<MediaDetailPage> {
     final m = _media!;
     final fileUrl = store.api.absolute(m.fileUrl);
 
-    // ContextMenuScope：右键菜单的宿主（不铺 ModalBarrier，菜单开着也能滚，用户 bug ②）
+    // ContextMenuScope：右键菜单的宿主（不铺 ModalBarrier，菜单打开时也能滚动）
     // Builder 让下面的 context 落在 Scope **之内**，showAppContextMenu 才找得到宿主。
     return ContextMenuScope(
       child: Builder(
@@ -534,8 +534,8 @@ class _MediaDetailPageState extends State<MediaDetailPage> {
                       await _saveToGallery(store, m, messenger);
                       break;
                     case 'nsfw':
-                      // 手动标记 / 取消标记（用户 bug 2026-09-20）：AI 没声明过的内容
-                      // （自己导入的、或老数据）由用户自己说了算 —— 打码只作用于标记过的条目。
+                      // 手动标记 / 取消标记：AI 未声明的内容
+                      // （自己导入的、或老数据）由手动决定 —— 打码只作用于标记过的条目。
                       await store.api.updateMedia(m.id, nsfw: !m.nsfw);
                       await _load();
                       if (mounted) store.refreshAll();
@@ -582,7 +582,7 @@ class _MediaDetailPageState extends State<MediaDetailPage> {
                     label: '用系统播放器打开',
                   ),
                   // 归类纠错（2026-10-18）：只有真在某个集合里才给这一项。
-                  // 后端会同时记下"用户已移出"，所以拆出来之后回填不会再吸回去。
+                  // 后端会同时记录"已移出"，因此拆分后回填不会再归回。
                   if (m.isCollection)
                     MenuOption(
                       value: 'detach',
@@ -613,7 +613,7 @@ class _MediaDetailPageState extends State<MediaDetailPage> {
                     ),
                   // 手机端：把**这一条**存进系统相册（与桌面「导出产物」不是同一件事）。
                   // 大文件在打开详情时没有自动缓存（见 `_autoCacheSkipped`），所以这里
-                  // 把"点它才会下载、大概多大"直接写在菜单上 —— 别让用户以为已经下好了。
+                  // 把"点它才会下载、大概多大"直接写在菜单上 —— 避免被误认为已下载完成。
                   if (MediaSaver.supported)
                     MenuOption(
                       value: 'saveToGallery',
@@ -643,11 +643,11 @@ class _MediaDetailPageState extends State<MediaDetailPage> {
           ),
           body: RefreshIndicator(
             onRefresh: _load,
-            // 左右方向键切换同批产物（用户 2026-10-11 报的"方向键在切按钮选中状态"）。
+            // 左右方向键切换同批产物（已报告的问题："方向键在切换按钮选中状态"）。
             //
             // 为什么要 `CallbackShortcuts` + `Focus`（而不是靠按钮自带的焦点遍历）：
             // 方向键默认是 Flutter 的**焦点遍历**快捷键 —— 一按就在页面上的按钮之间跳，
-            // 用户按左键看到的是"某个按钮被选中了"，而不是"上一张图"。
+            // 按左键显示的是"某个按钮被选中"，而不是"上一张图"。
             // 这里用一个**自动获得焦点**的 `Focus` 把 ←/→ 接管掉：
             //   · 只在有上一条/下一条时响应（边界上按了什么都不做，不会误触发别的）；
             //   · 其他键（Tab / Enter / 空格）**原样放行**，不影响键盘操作按钮。
@@ -674,7 +674,7 @@ class _MediaDetailPageState extends State<MediaDetailPage> {
                       onSaveAsPreset: (p) => _saveAsPreset(context, p),
                       onEditTags: () => _editTags(m),
                     );
-                    // ⚠ **不要在这里包 `AnimatedSwitcher`**（2026-10-11 用户报的"切换时整个界面闪烁"）。
+                    // ⚠ **不要在这里包 `AnimatedSwitcher`**（已报告的问题："切换时整个界面闪烁"）。
                     //
                     // 曾经把整页（`Row` / `ListView`）包进一个 key 跟着 `_currentId` 变的
                     // `AnimatedSwitcher`：那样每切一张图，**整页骨架**都要重建一遍
@@ -809,7 +809,7 @@ class _MediaDetailPageState extends State<MediaDetailPage> {
           behavior: HitTestBehavior.translucent,
           onSecondaryTapDown: (d) =>
               _showPreviewMenu(menuContext, m, url, d.globalPosition),
-          // ⚠ **滚轮冲突**（2026-10-11 用户报的"窄屏下滚轮同时滚界面和缩放图片"）：
+          // ⚠ **滚轮冲突**（"窄屏下滚轮同时滚动界面与缩放图片"）：
           //
           // 窄屏时详情页是 `ListView`，而大图查看器的滚轮缩放（`InteractiveViewer` 自带）
           // 与列表滚动**同时响应同一个事件** —— 结果滚一下既翻页又缩放。
@@ -834,12 +834,12 @@ class _MediaDetailPageState extends State<MediaDetailPage> {
           ),
         );
 
-        // 同批产物：左右箭头 + "第几张 / 共几张"（用户 2026-10-11）。
+        // 同批产物：左右箭头 + "第几张 / 共几张"。
         //
         // **只给图片**：视频 / 音频的"上一个 / 下一个"在**播放控件那一行**
-        // （用户 2026-10-11 明确分开的），所以那两种 kind 直接就是 `preview`。
+        // （两者明确分开），因此那两种 kind 直接就是 `preview`。
         // 只有**多于一张**时才叠 —— 单张（或没进组）时连位置都不占
-        // （用户定的"只有一份产物时禁用箭头"）。
+        // （已确定的"只有一份产物时禁用箭头"）。
         final withNav = (m.kind == MediaKind.image && _siblings.length > 1)
             ? Stack(
                 fit: StackFit.expand,
@@ -1099,7 +1099,7 @@ class _Preview extends StatelessWidget {
 
 /// 同批产物之间切换的左右箭头。
 ///
-/// `onPressed == null` = **禁用**（不是隐藏）—— 用户 2026-10-11 明确要的是
+/// `onPressed == null` = **禁用**（不是隐藏）—— 要求的是
 /// "只有一份产物时禁用箭头"，所以边界上那个箭头仍在，只是按不动。
 class _NavArrow extends StatelessWidget {
   final IconData icon;
@@ -1236,7 +1236,7 @@ class _InfoPanel extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // ⚠ 用 `Wrap` 而不是 `Row`（2026-10-11 用户报的窄屏 pixel overflow）：
+                // ⚠ 用 `Wrap` 而不是 `Row`（窄屏 pixel overflow）：
                 // 这一行是"图标 + 固定宽标题 + 两个按钮"，窄屏（320/384dp）下
                 // 固定部分加起来就超过卡片宽度 → `RenderFlex overflowed`。
                 // `Wrap` 放不下就把按钮整组换到下一行，**一个控件都不会被裁**。
@@ -1308,7 +1308,7 @@ class _InfoPanel extends StatelessWidget {
                     ),
                   ),
                   const SizedBox(height: 8),
-                  // 「存为预设」（用户 2026-10-11）：把这条产物当初用的提示词
+                  // 「存为预设」：把这条产物当初用的提示词
                   // **复制**成一条新预设，而不是就地改这条自动捕获的提示词。
                   //
                   // 为什么是复制：自动捕获的提示词行是**运行记录**（`capture_runs.prompt_id`
@@ -1344,7 +1344,7 @@ class _InfoPanel extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   // 同上一处：`Wrap` 而不是 `Row` —— 窄屏下"生成参数"与右边那句说明
-                  // 加起来会超过卡片宽度（用户 2026-10-11 报的 overflow 之一）。
+                  // 相加会超过卡片宽度（已报告的 overflow 之一）。
                   Wrap(
                     spacing: 6,
                     runSpacing: 2,
