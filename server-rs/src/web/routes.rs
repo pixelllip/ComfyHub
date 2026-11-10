@@ -75,7 +75,7 @@ pub struct AppState {
     ///
     /// `/object_info` 是兆字节级响应，而蓝图、配方、接线体检、盘查全都要它 ——
     /// 以前每次重新拉一遍 + 重新解析一遍，于是"点开蓝图要等一两秒"
-    /// （用户 2026-10-18："和 comfy 不是一个量级"）。见 [`crate::workflow::object_info_cache`]。
+    /// （与 ComfyUI 不是一个量级）。见 [`crate::workflow::object_info_cache`]。
     pub object_info: Arc<crate::workflow::object_info_cache::ObjectInfoCache>,
     /// 后端**实际**监听的端口（`--port 0` 时是系统挑的那个）。
     ///
@@ -252,7 +252,7 @@ pub fn router(state: AppState) -> Router {
         // ⚠ 它和 `/api/media/{id}` 是**同段数**——静态段优先于参数段（matchit 的规矩），
         // 所以 `collections` 不会被当成 id 吃掉。
         .route("/api/media/collections", get(list_collections))
-        // 把产物**原件 + 绑定的工作流 / 提示词信息**一次性导到用户指定的文件夹
+        // 把产物**原件 + 绑定的工作流 / 提示词信息**一次性导出到指定文件夹
         // （2026-10-27）。⚠ 只允许回环调用：它会往任意绝对路径写文件，不能跟着
         // 配对令牌一起开放给局域网设备。
         .route("/api/media/export", axum::routing::post(export_media))
@@ -311,7 +311,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/ai/runs/{id}/cancel", axum::routing::post(cancel_run))
         // 工具审批（P4 第 31 步，R8）：界面上的「批准 / 拒绝」两个按钮。
         // ⚠ 顺序要紧：执行器**先落 pending 行再发 `tool.requested`**，
-        // 所以用户手快也点得到（否则那一次点击落空，只能等超时）。
+        // 因此提前点击也能生效（否则该次点击落空，只能等待超时）。
         .route(
             "/api/ai/tool-calls/{callId}/approve",
             axum::routing::post(approve_tool_call),
@@ -325,7 +325,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/ai/run-kit/status", get(ai_run_kit_status))
         // 跨端待办总览（P4 第 25 步，M1 定的契约）：另一台设备刚连上来时一次补齐所有"在等人"的卡片
         .route("/api/ai/pending", get(ai_pending))
-        // 提问（P4 第 32 步，用户建议 ⑥）—— 与审批是**两件事**：
+        // 提问（P4 第 32 步）—— 与审批是**两件事**：
         // 审批回"允不允许"，提问回的是一段**文字**，而且那股文字作为工具结果喂回模型、
         // 同一个 Run 接着往下做（所以这里没有"取消"以外的分支，也不改 Run 的状态）。
         .route("/api/ai/runs/{id}/question", get(run_question))
@@ -357,7 +357,7 @@ pub fn router(state: AppState) -> Router {
                 .put(put_provider_credential)
                 .delete(delete_provider_credential),
         )
-        // 联网搜索（Keenable）的可选密钥：出厂免密钥可用，这里只是给想提额的用户一个只写入口
+        // 联网搜索（Keenable）的可选密钥：默认免密钥可用，该入口用于提高额度（只写）
         .route(
             "/api/ai/web-search/credential",
             get(ai_web_search_credential)
@@ -365,7 +365,7 @@ pub fn router(state: AppState) -> Router {
                 .delete(delete_web_search_credential),
         )
         // 界面端点第三批（P4 第 35 步）：**Skills 六条**。磁盘是真源、刻意不缓存 ——
-        // "AI 注册完下一次回复就能用、用户删掉立刻消失"是需求（AGENTS §10）。
+        // "注册后下一次回复即可使用、删除后立即失效"是需求（AGENTS §10）。
         // ⚠ `/skills/roots` 与 `/skills/{name}` 由 matchit 的静态优先规则分开，不会互相吃。
         .route("/api/ai/skills", get(ai_skills).post(create_skill))
         .route("/api/ai/skills/roots", get(ai_skill_roots))
@@ -377,13 +377,13 @@ pub fn router(state: AppState) -> Router {
             "/api/ai/skills/{name}",
             get(ai_skill_detail).delete(delete_skill),
         )
-        // 停用 / 启用（内置与用户都允许；只影响对话，文件不动）
+        // 停用 / 启用（内置与自定义均可；只影响对话，文件不改动）
         .route(
             "/api/ai/skills/{name}/enabled",
             axum::routing::put(ai_skill_enabled),
         )
         // 界面端点第四批（P4 第 36 步）：**长期记忆五条**。真源是 `<storage>\ai\memory.md`
-        // （一行一条、用户能手改），界面上的保存 / 加一条 / 删几条 / 清空都打这里。
+        // （一行一条，可手动修改），界面上的保存 / 加一条 / 删几条 / 清空都走这里。
         .route(
             "/api/ai/memory",
             get(ai_memory).put(put_memory).delete(clear_memory),
@@ -399,7 +399,7 @@ pub fn router(state: AppState) -> Router {
             axum::routing::post(delete_memory_entries),
         )
         // 界面端点第五批（P4 第 38 步）：**内置模型目录**的状态与同步。
-        // 它是"出厂默认值"的唯一来源（冻结副本编译进二进制），用户改过的行**永不覆盖**。
+        // 它是"出厂默认值"的唯一来源（冻结副本编译进二进制），已修改的行**永不覆盖**。
         .route("/api/ai/builtin/status", get(ai_builtin_status))
         .route("/api/ai/builtin/sync", axum::routing::post(ai_builtin_sync))
         // 界面端点第六批（P4 第 39 步）：**能力目录的状态与实测校准开关**。
@@ -420,7 +420,7 @@ pub fn router(state: AppState) -> Router {
             "/api/ai/capabilities/probe",
             axum::routing::post(ai_capabilities_probe),
         )
-        // 本机 ComfyUI 已保存的工作流文件（只读，用户 bug ⑤）—— **不能少任何一条目录来源**
+        // 本机 ComfyUI 已保存的工作流文件（只读）—— **不能缺少任何一条目录来源**
         .route("/api/capture/workflows", get(capture_workflows))
         // 工作流原文（界面「选择现有工作流 → 看蓝图」按需拉）。**只读**，路径过读白名单。
         .route("/api/capture/workflow", get(capture_workflow_raw))
@@ -441,7 +441,7 @@ pub fn router(state: AppState) -> Router {
             "/api/capture/import",
             axum::routing::post(capture_import_folder),
         )
-        // 探测 ComfyUI 位置（只读）+ 用户点「使用这个目录」才写配置
+        // 探测 ComfyUI 位置（只读）+ 点「使用这个目录」后才写配置
         .route("/api/capture/locate", get(capture_locate))
         .route(
             "/api/capture/locate/apply",
@@ -517,7 +517,7 @@ async fn get_media(
 /// `POST /api/media/export` —— 产物导出（2026-10-27）。
 ///
 /// 三条纪律：
-/// 1. **只允许回环**：它会往用户给的任意绝对路径写文件，不能和配对令牌一起开放给局域网；
+/// 1. **只允许回环**：它会向任意指定的绝对路径写文件，不能与配对令牌一起开放给局域网；
 /// 2. 文件复制是**阻塞 IO**，放到 `spawn_blocking` 里，别占着事件循环；
 /// 3. 目标目录的校验（存在 / 可写 / 不许在 storage 里）在
 ///    [`crate::media::export::export`] 里，只有一份实现。
@@ -640,7 +640,7 @@ async fn prompt_media(
 ///
 /// 与 `/api/prompts/{id}/media`（只认 `prompt_id` 直连）的区别：
 /// 这里按**归一化后的提示词**匹配，所以"自动捕获那条"与"人存的预设"能对上 ——
-/// 用户要的正是这个（"如果有用这套预设同款提示词的产物，自动关联预设"）。
+/// 需求即此（"同一提示词的产物自动关联预设"）。
 async fn preset_media(
     State(state): State<AppState>,
     Id(id): Id,
@@ -678,8 +678,8 @@ async fn put_capture_config(
 
 /// `GET /api/capture/workflows?q=&limit=` —— 本机 ComfyUI 已保存的工作流文件（**只读**）。
 ///
-/// 用户 bug ⑤：`prompts` 库只收"捕获过的运行"与"手动读进来的文件"，所以首次使用时库里是空的，
-/// 而用户机器上早就存着工作流 —— 这个端点把它们摆出来（不写库、不动用户的文件）。
+/// `prompts` 库只收"捕获过的运行"与"手动读进来的文件"，因此首次使用时库为空，
+/// 而本机早已存有工作流 —— 该端点将其列出（不写库、不改动文件）。
 async fn capture_workflows(
     State(state): State<AppState>,
     Query(query): Query<crate::comfy::comfy_dirs::WorkflowQuery>,
@@ -1047,9 +1047,9 @@ async fn ai_pending(State(state): State<AppState>) -> Result<Json<serde_json::Va
     Ok(Json(crate::ai::pending::pending(&state)?))
 }
 
-/// `GET /api/capture/locate` —— 探测 ComfyUI 装在哪（用户"其他建议"第 3 条）。
+/// `GET /api/capture/locate` —— 探测 ComfyUI 安装位置。
 ///
-/// **只读**：探测结果不会自动生效，用户点「使用这个目录」才会写进配置（下一个端点）。
+/// **只读**：探测结果不会自动生效，点「使用这个目录」后才写入配置（下一个端点）。
 async fn capture_locate(
     State(state): State<AppState>,
 ) -> Result<Json<crate::comfy::comfy_dirs::ComfyLocation>, ApiError> {
@@ -1065,7 +1065,7 @@ struct LocateApplyRequest {
 /// `POST /api/capture/locate/apply` —— 把探测到的输出目录写进配置。
 ///
 /// 两条准入照抄 Kotlin：目录**不能为空**、**必须真的存在**（都要 400 说清楚），
-/// 不然会把一个打不开的路径写进配置，之后"捕获一条也收不到"而用户不知道为什么。
+/// 否则会把无法访问的路径写入配置，之后"捕获一条也收不到"且没有提示。
 async fn capture_locate_apply(
     State(state): State<AppState>,
     Json(body): Json<LocateApplyRequest>,
@@ -1319,7 +1319,7 @@ async fn append_message(
 /// `POST /api/ai/conversations/{id}/runs` → **202 Accepted** + `{runId, assistantMessageId, userMessageId?}`。
 ///
 /// 202 的语义是"收下了、真正在后台跑"（AIH-020）。界面拿到这一对消息主键之后，
-/// **立刻**按自己生成的 id 插好"用户气泡 + 空助手气泡"，再靠 SSE 里的 `messageId`
+/// **立刻**按自身生成的 id 插入"请求气泡 + 空助手气泡"，再靠 SSE 里的 `messageId`
 /// 找到那条气泡往上写字 —— 所以这三个键少一个都会让界面显示不出来。
 async fn start_run(
     State(state): State<AppState>,
@@ -1411,7 +1411,7 @@ async fn deny_tool_call(
 }
 
 // ---------------------------------------------------------------------------
-//  提问（P4 第 32 步，用户建议 ⑥）
+//  提问（P4 第 32 步）
 // ---------------------------------------------------------------------------
 
 /// `GET /api/ai/runs/{id}/question` 的响应（Kotlin `PendingQuestionResponse`）。
@@ -1427,11 +1427,11 @@ struct RunQuestionResponse {
     questions: Option<Vec<serde_json::Value>>,
 }
 
-/// 这个 Run 现在还在等用户回答的提问（没有就 `pending=false`）。
+/// 该 Run 当前等待作答的提问（没有则 `pending=false`）。
 ///
 /// 给"界面重开 / 断线重连"用：SSE 里那条 `user.question` 可能是在界面没挂着的时候发的。
 /// `questions` 是**整张卡**（一次 `ask_user_question` 最多 5 题）—— 只回第一条的话，
-/// 用户看到的是一张缺了几题的卡。
+/// 界面显示的卡片会缺少部分题目。
 async fn run_question(
     State(state): State<AppState>,
     axum::extract::Path(id): axum::extract::Path<String>,
@@ -1482,10 +1482,10 @@ struct QuestionAnswerResult {
     answer: String,
 }
 
-/// 用户回答了：`optionIndex` 给了就是"点了第几个按钮"，否则用 `answer` 的自由文本。
+/// 完成回答：给出 `optionIndex` 时表示"选择了第几个按钮"，否则使用 `answer` 的自由文本。
 ///
-/// ⚠ `accepted=false` 时界面**必须如实告诉用户**"这次回答没被采纳"（这条提问已经
-/// 超时 / Run 已停）—— 假装成功的话，用户以为他答了，而模型那边什么都没收到。
+/// ⚠ `accepted=false` 时界面**必须如实提示**"该回答未被采纳"（该提问已经
+/// 超时 / Run 已停止）—— 若显示成功，实际模型未收到任何内容。
 async fn answer_question(
     State(state): State<AppState>,
     axum::extract::Path(question_id): axum::extract::Path<String>,
@@ -1560,9 +1560,9 @@ async fn answer_question(
     }))
 }
 
-/// 用户跳过这条提问：**当作"没有回答"**放行。
+/// 跳过该提问：**按"未回答"**放行。
 ///
-/// 与"不回答就永远挂着"相比，模型拿到的是"用户没有回答"—— 它据此基于已有信息继续，
+/// 相比"不作答则一直挂起"，模型收到的是"未回答"，据此基于已有信息继续，
 /// 而不是卡死在这里。
 async fn skip_question(
     State(state): State<AppState>,
@@ -1574,7 +1574,7 @@ async fn skip_question(
             format!("提问不存在或已过期: {question_id}"),
         ));
     };
-    // 库里那条按"用户跳过"收尾（状态守卫保证：已经 answered 的不被覆盖）
+    // 库中该条按"跳过"收尾（状态守卫保证：已 answered 的不被覆盖）
     crate::ai::questions::finalize_if_pending(&state, &question_id, "skipped")?;
     state.bus.emit(
         &state,
@@ -1723,7 +1723,7 @@ async fn ai_web_search_credential(
 }
 
 /// `PUT /api/ai/web-search/credential`（报错文案与 provider 那条**刻意不同**：
-/// 这里会告诉用户具体的环境变量名 `COMFYHUB_CRED_keenable`，因为那是唯一的解除办法）。
+/// 这里会给出具体环境变量名 `COMFYHUB_CRED_keenable`，这是唯一的解除方式）。
 async fn put_web_search_credential(
     State(state): State<AppState>,
     Json(body): Json<CredentialSetRequest>,
@@ -1866,7 +1866,7 @@ async fn create_skill(
     Ok((StatusCode::CREATED, Json(dto)))
 }
 
-/// `DELETE /api/ai/skills/{name}` —— 只许删用户来源；没有这个名字回 `{deleted:false}`（**不是 404**）。
+/// `DELETE /api/ai/skills/{name}` —— 只允许删除自定义来源；名称不存在时返回 `{deleted:false}`（**不是 404**）。
 async fn delete_skill(
     State(state): State<AppState>,
     Path(name): Path<String>,
@@ -1875,7 +1875,7 @@ async fn delete_skill(
     Ok(Json(json!({ "deleted": deleted, "id": name })))
 }
 
-/// `GET /api/ai/skills/roots` —— 投放口位置（界面要显示绝对路径，用户得知道往哪拷）。
+/// `GET /api/ai/skills/roots` —— 投放口位置（界面显示绝对路径，用于确定复制位置）。
 async fn ai_skill_roots(
     State(state): State<AppState>,
 ) -> Result<Json<crate::ai::skills::SkillRootsDto>, ApiError> {
@@ -1999,10 +1999,10 @@ async fn ai_builtin_status(
     Ok(Json(crate::provider::builtin::preview(&state)))
 }
 
-/// `POST /api/ai/builtin/sync` —— 真正登记（**幂等**，绝不对用户改过的行下手）。
+/// `POST /api/ai/builtin/sync` —— 执行登记（**幂等**，不改动已修改的行）。
 ///
 /// ⚠ 失败**不抛 5xx**：把原因放进 `error` 字段回 200 —— 与 Kotlin 同
-/// （登记失败不该让整个设置页报错，用户要能看到"为什么没同步上"）。
+/// （登记失败不应使整个设置页报错，并需显示"未同步的原因"）。
 async fn ai_builtin_sync(
     State(state): State<AppState>,
     Json(body): Json<BuiltinSyncRequest>,
@@ -2068,7 +2068,7 @@ async fn ai_capabilities_refresh(
 ///  1. **开关默认关**：`probe-toggle` 没打开时**一个上游请求都不发**（连库都不读），
 ///     只如实回一句"实测校准没开（它会对每个模型发真实请求、产生费用）"；
 ///  2. **状态码是 200**：这是"一次正常执行、结果是没做"，不是服务器出错 ——
-///     回 501/400 会让界面的错误分支先跳出来，用户看不到那句人话。
+///     返回 501/400 会先触发界面的错误分支，导致说明文字不显示。
 async fn ai_capabilities_probe(
     State(state): State<AppState>,
     Json(request): Json<crate::provider::capability_probe::ProbeRequest>,
@@ -2160,7 +2160,7 @@ impl ApiError {
     /// **AI 领域错误**（`AiException` 的对应物，AIH-024）：`error` = 稳定码、`detail` = 人话。
     ///
     /// 状态码照 Kotlin 的 StatusPages 固定 **400**（`UNSUPPORTED_CONTENT` / `UNKNOWN_MODEL` /
-    /// `CONFIG_ERROR` … 都是 400），客户端拿 `error` 分支、拿 `detail` 给用户看。
+    /// `CONFIG_ERROR` … 均为 400），客户端走 `error` 分支，并展示 `detail`。
     /// 空的人话回落到"只给码"（Kotlin 那边 `cause.message` 为 null 时 `detail` 就是不出现）。
     pub fn ai(code: impl Into<String>, message: impl Into<String>) -> Self {
         let message = message.into();
@@ -2184,7 +2184,7 @@ impl ApiError {
     ///
     /// ⚠ 与 `401` 的语义**不能混**（`docs/pairing-design.md` §7）：
     /// `403` = "你还没证明自己是谁"，`401` = "你证明了自己，但钥匙不对/已被吊销"。
-    /// 混了以后用户看到的那句话会指向错误的排查方向（该去配对，却跑去重新配对）。
+    /// 混用后显示的提示会指向错误的排查方向（应去配对，却提示重新配对）。
     pub fn forbidden(message: impl Into<String>) -> Self {
         Self::new(StatusCode::FORBIDDEN, message, None)
     }
@@ -2255,7 +2255,7 @@ const APP_VERSION: &str = "1.0.0";
 /// 不参与"连不连得上"的判断 —— 那条判断由客户端打一次真实请求给出）。
 ///
 /// `port == 0`（测试构造的 AppState / 还没绑端口）→ `urls: []`：
-/// **宁可什么都不说，也不报一个连不上的地址**（那会让用户以为是自己的网络问题）。
+/// **不输出任何内容，也不报告无法连接的地址**（否则会被理解为网络问题）。
 /// 实现与判据见 [`crate::mobile::net_urls`]。
 async fn net_urls(State(state): State<AppState>) -> Result<Json<serde_json::Value>, ApiError> {
     Ok(Json(crate::mobile::net_urls::urls_json(state.port())))
@@ -2293,8 +2293,8 @@ async fn health(State(state): State<AppState>) -> Result<Json<serde_json::Value>
 
 /// `GET /api/system/confinement` —— **"这个后端能不能写工作区外"**，连判据一起给。
 ///
-/// 存在的理由（2026-09-29 用户 bug）：受限这件事原来只有 `doctor` 与工具文案会说，
-/// 界面上一处都看不到，于是模型如实转述成"input 目录权限不够"，用户去改 ACL —— 白忙。
+/// 存在理由：受限状态原来只有 `doctor` 与工具文案会说明，
+/// 界面上没有显示，模型转述为"input 目录权限不够"，导致按 ACL 方向排查而无结果。
 /// 受限是**环境事实**，得让人一眼看见，而且要附上"为什么"（后端映像在工作区内）。
 async fn system_confinement(
     State(state): State<AppState>,
@@ -2311,7 +2311,7 @@ struct OutboundQuery {
 
 /// `GET /api/system/outbound` —— **这次出网走不走代理**，连"这份设置从哪来"一起给。
 ///
-/// 存在的理由（2026-11-09 用户 bug）：danbooru 挂维护、Cloudflare 回 503，
+/// 存在理由：danbooru 维护、Cloudflare 返回 503 时，
 /// 而工具报错只写"暂时不可用（503）"，看着就像"本项目没吃代理"。
 /// 实际上路由是通的 —— **是对方回的 503**。这件事界面上得看得见、能自己复核。
 ///
@@ -2491,13 +2491,13 @@ pub(crate) struct PromptQuery {
     pub(crate) size: Option<i64>,
     /// **把自动捕获的提示词也算进来**（2026-10-11）。
     ///
-    /// 默认 `false`：**预设库只放"人自己存下来的"**（用户原话："从 comfy 输出目录获取的
-    /// 产物，其关联的提示词不需要送进预设库 —— 毕竟都叫这个名字了"）。
+    /// 默认 `false`：**预设库只放"手动保存的"**（"从 ComfyUI 输出目录获取的
+    /// 产物，其关联的提示词不需要进入预设库"）。
     /// 自动捕获那些仍然是提示词行（画廊详情要按 `promptId` 反查它），只是不进这个列表。
     ///
     /// ⚠ **AI 侧必须传 `true`**：`search_prompts` / `comfy_find_workflow` 找的是
     /// "库里能跑的东西"，自动捕获那些正是最好用的工作流来源 —— 默认过滤会把它们藏起来，
-    /// 表现是"AI 说库里没有，而用户明明在画廊里看得到"（而且不会有用例变红）。
+    /// 表现为"AI 报告库中不存在，而画廊中可以查看"（且不会有测试失败）。
     #[serde(default)]
     pub(crate) include_captured: bool,
     /// 按"**有没有关联产物**"过滤（`1` = 只要有关联的，`0` = 只要没关联的）。
@@ -2578,7 +2578,7 @@ pub(crate) fn query_prompts(
     if crate::media::media::bool_param(q.favorite.as_deref()) {
         where_sql.push_str(" AND favorite = 1");
     }
-    // **预设库只放人自己存的**（2026-10-11，用户拍板）：自动捕获那些
+    // **预设库只放手动保存的**：自动捕获的那些
     // （`source` 为 `ComfyUI` / `ComfyUI-Import` / `ComfyUI-File`）不进列表。
     //
     // 判据用"**不是** `Manual`"而不是"是那三个前缀"：这样以后新增任何自动来源
@@ -2646,9 +2646,9 @@ pub(crate) fn query_prompts(
             .collect::<rusqlite::Result<Vec<_>>>()?;
         for item in items.iter_mut() {
             item.tags = tags_of(conn, item.id)?;
-            // **产物数按"同款提示词"算，不是 `prompt_id` 直连**（2026-10-11 用户 bug）：
+            // **产物数按"同款提示词"计算，不是 `prompt_id` 直连**：
             // 从画廊存下来的预设，产物指向的是**自动捕获那条**提示词行，
-            // 直连判定会让卡片显示「未关联」—— 而用户明明是从那张图存的。
+            // 直连判定会使卡片显示「未关联」—— 而该图正是从该行保存的。
             //
             // 已经算过 `with_media` 集合时就白拿（`hasMedia` 那次过滤顺便算的）。
             item.media_count = match with_media.as_ref() {
@@ -2709,7 +2709,7 @@ pub(crate) fn tags_of(conn: &Connection, prompt_id: i64) -> rusqlite::Result<Vec
 ///
 /// 2026-10-11 起界面上的"关联产物数"**一律走这一条**：从画廊存下来的预设，产物指向的是
 /// **自动捕获那条**提示词行，直连 `media_assets.prompt_id == 预设 id` 会说"没关联"，
-/// 用户明明是从那张图存的（那条直连计数的老函数已删 —— 留着必然被误用）。
+/// 该图正是从该行保存的（直连计数的旧函数已删除 —— 保留必然被误用）。
 /// `WriteError` → `rusqlite::Error`。
 ///
 /// 为什么需要它：`state.with(...)` 的闭包**只能回 `rusqlite::Result`**
@@ -2726,10 +2726,10 @@ pub(crate) fn media_count_matching(conn: &Connection, prompt_id: i64) -> rusqlit
 
 /// `GET /api/media/collections`：集合清单（2026-10-18 手动集合）。
 ///
-/// 给"移到集合…"的选择器用：**手动集合排前面**（用户自己建的在上面更好找），
+/// 供"移到集合…"选择器使用：**手动集合排在前面**（手动创建的更易查找），
 /// 每条带 `kind` 与 `size` —— 界面据此把"装不下这一批"的目标置灰并说明原因。
 ///
-/// 算法分出来的集合也在列表里（用户可以把图拖进一个自动分组，那一组会**就地转成手动**），
+/// 算法分组的集合也在列表中（可将图拖入自动分组，该组会**就地转为手动**），
 /// 只是**没有名字**（`title` 缺席，界面按"算法分组"显示）。
 async fn list_collections(
     State(state): State<AppState>,
