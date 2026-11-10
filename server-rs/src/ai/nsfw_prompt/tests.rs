@@ -31,7 +31,7 @@ fn blocks_are_not_empty_and_trimmed() {
     let persona = persona_block();
     assert!(persona.len() > 5000, "常驻段正文太短，多半是提取截断了");
     // ⚠ `PERSONA_BLOCK` 在 Kotlin 里**就是**以一个空行开头、以一个换行结尾
-    // （`trimIndent` 只去掉首尾各一个空行）—— 这是真实输出，别"顺手 trim 掉"：
+    // （`trimIndent` 只去掉首尾各一个空行）—— 这是真实输出，不要"顺带 trim"：
     // 它进的是系统提示，差一个换行就是两端不一样。
     assert!(persona.starts_with('\n'));
     assert!(persona.ends_with('\n'));

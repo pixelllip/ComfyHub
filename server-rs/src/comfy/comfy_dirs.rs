@@ -718,7 +718,7 @@ fn scan_nearby(start: &Path, out: &mut Vec<PathBuf>, depth: usize, budget: &mut 
 ///
 /// `query` 是**文件名**的子串匹配（大小写不敏感）—— 例如"krea2 那条"可直接命中。
 /// 只列**真的能用**的：非 `.json` / 空文件 / 坏 JSON / 既不是界面格式也不是 API 格式的
-/// 全部跳过（列出来只会让 AI 白跑一趟 `comfy_load_workflow`）。
+/// 全部跳过（列出只会让 AI 执行一次无效的 `comfy_load_workflow`）。
 pub fn scan(dirs: &[PathBuf], query: Option<&str>, limit: usize) -> Vec<WorkflowFile> {
     let q = query
         .map(|s| s.trim().to_lowercase())
@@ -848,7 +848,7 @@ pub fn workflows_json(
     let limit = query.limit.unwrap_or(50);
     Ok(list_json(&dirs, query.q.as_deref(), limit, |sha| {
         // 库里已有的对应关系：`comfy_load_workflow` 用的是**同一把钥匙** `file:<sha256>`，
-        // 所以这里天然幂等（查库失败按"没入库"处理，不能让一次查询失败炸掉整个列表）
+        // 因此这里天然幂等（查库失败按"未入库"处理，一次查询失败不应使整个列表失败）
         library_prompt_id(state, sha)
     }))
 }

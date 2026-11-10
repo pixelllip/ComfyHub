@@ -283,7 +283,7 @@ pub struct ConversationCreate {
 /// `PATCH /api/ai/conversations/{id}` 的入参（`AiConversationPatch`）。
 ///
 /// ⚠ **`null` 与"没给这个键"同义 = 不改**（Kotlin 是 `req.x ?: current.x`）。
-/// 想清空 providerId 现在做不到 —— 那不是这个端点的能力，别在这里"顺手支持一下"。
+/// 清空 providerId 当前不可行 —— 不属于该端点的能力，不要在此"一并支持"。
 #[derive(Debug, Default, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConversationPatch {

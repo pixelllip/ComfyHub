@@ -709,7 +709,7 @@ pub fn approval_state(state: &AppState, call_id: &str) -> Result<Option<Approval
 /// 批准之后 `status` 仍是 `pending`（正在执行），invoke 返回时由
 /// [`record_tool_call`] 在**同一行**上落成 `ok` / `failed` / `denied`。
 ///
-/// ⚠ 顺手把 `status` 也写成 `approved` 看起来更"整齐"，实际会**掰断那条原地更新的路**：
+/// ⚠ 一并把 `status` 写成 `approved` 看似更"整齐"，实际会**中断那条原地更新的路径**：
 /// [`resolve_pending_tool_call`] 认的是 `status = 'pending'`，改完之后它再也匹配不到那一行，
 /// 于是**同一次调用在库里变成两行**（一行 approved、一行 ok），
 /// 而 `/api/ai/pending` 又会把它当成"还在等人批"。

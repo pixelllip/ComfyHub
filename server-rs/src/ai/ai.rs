@@ -166,7 +166,7 @@ pub struct AiProviderRow {
 /// 查一条 provider（`AiRepo.getProvider` 的对应物）。`None` = 没有这个 id。
 ///
 /// 为什么单列一条：**凭据端点与写侧都要"先确认这个 provider 在不在"**，
-/// 而 `list_providers` 那条路会顺手把整表读出来（写侧用它做存在性判断就会
+/// 而 `list_providers` 那条路会一并把整表读出（写侧用它做存在性判断就会
 /// "为了问一句在不在，把 80 个模型的行全拉一遍"）。
 pub fn get_provider_row(state: &AppState, id: &str) -> Result<Option<AiProviderRow>, ApiError> {
     state.with(|conn| {
@@ -365,7 +365,7 @@ pub struct AiProviderUpsert {
 /// `GET /api/ai/providers/{id}/models`。
 ///
 /// 顺序照抄 Kotlin：`ORDER BY display_name, model_id`（**默认 BINARY 排序，没有 COLLATE NOCASE**
-/// —— 顺手加一个"更合理"的 NOCASE 就会让两端顺序不同，而顺序不同在界面上就是"列表位置变了"）。
+/// —— 额外加一个"更合理"的 NOCASE 会使两端顺序不同，而顺序不同在界面上表现为"列表位置变化"）。
 /// provider 不存在时**先**报错（与 Kotlin 的 `requireProvider` 同一个位置、同一个信封）。
 pub fn list_models(state: &AppState, provider_id: &str) -> Result<Vec<AiModelDto>, ApiError> {
     if !provider_exists(state, provider_id)? {
@@ -1072,7 +1072,7 @@ fn unset_orphan_credential(state: &AppState, reference: &str) {
 /// ★ **一处有意的行为差异**（2026-09-25 双端对照时量到的）：body 里**少写** `providerId` 时，
 /// Kotlin 的 `AiModelDto.providerId` 没有默认值 → 反序列化失败 → `400 {"error":"BadRequestException",
 /// "detail":"Failed to convert request body to class …"}`（一个**机器码**，界面显示不出人话）；
-/// 这里因为反正要用路径参数覆盖它，缺了就按空串收下 —— 结果是**同一件事做得更好**：
+/// 这里因为路径参数会覆盖它，缺失时按空串接受 —— 结果是**同一处理更完整**：
 /// 客户端少传一个本就要覆盖的字段，不应变成难以理解的报错。
 /// 真实客户端（Flutter）永远是把 GET 到的那份原样改几个字段传回来，所以不会走到这条岔路。
 pub fn replace_models(

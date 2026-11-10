@@ -506,7 +506,7 @@ fn setting(state: &AppState, key: &str) -> Result<Option<String>, ApiError> {
 /// 字段**拍平**（前端不用再拼）：三层各自的 source / fetchedAt / entries +
 /// remote 的年龄与是否过期 + 是否允许实测校准 + 最近一次刷新的那句话。
 ///
-/// ⚠ 三件事**不能"顺手统一"**：
+/// ⚠ 三件事**不能"一并统一"**：
 /// 1. `remoteAgeHours` / `remoteStale` **与 `remote.json` 同源**（没拉过 → `remoteAgeHours`
 ///    整个键不出现、`remoteStale=true`）—— 写成"没拉过就 0 小时"会让界面显示"刚刚更新过"；
 /// 2. `remoteFetchedAt` 是**时间列**，要走 `iso_time` 重排（Kotlin `Instant.toString()`），

@@ -267,7 +267,7 @@ fn ensure_version(state: &AppState, signature: &Signature) -> Result<(String, bo
 
 /// `GET /api/ai/run-kit/status` —— `{current, revoked}`。
 ///
-/// 顺手把版本号起出来（幂等）：`current` **永远有值**（还没发过 kit 的机器也要能回答
+/// 同时取出版本号（幂等）：`current` **始终有值**（尚未下发过 kit 的机器也要能回答
 /// "现在这套规则是哪一版"）。
 pub fn status(state: &AppState) -> Result<Value, ApiError> {
     let policy = ToolPolicy::load(state)?;

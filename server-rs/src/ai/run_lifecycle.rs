@@ -804,7 +804,7 @@ impl Stream for SseStream {
         // 「首段思考要等到第一个工具调用才显示」的根因）。
         //
         // 事件总线是**批写**的（[`crate::ai::runs::EVENT_BATCH`] = 200 条一次事务，
-        // 逐字流式一次 Run 实测 4.7 万条 `text.delta`，逐条开事务正是那个坑），
+        // 逐字流式一次 Run 实测 4.7 万条 `text.delta`，逐条开事务正是该问题），
         // 而**本流只从库里读**。于是"攒在批里、还没满一批"的事件对界面**不可见** ——
         // 一次 Run 的开头恰好就是这样：`run.started` / `message.started` /
         // 几条 `reasoning.delta` 加起来远不到 200 条，全压在批里；

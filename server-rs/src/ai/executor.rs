@@ -1178,7 +1178,7 @@ async fn handle_call(
     // 为什么要单独 flush：其余事件是攒批写的（P1 的教训：一条 Run 实测 4.7 万个
     // `text.delta`，逐条开事务就是 `ai_run_events` 涨到 62 万行的成因）。而
     // `tool.requested` 是**闸门类事件** —— 另一台设备（手机 / 第二个窗口 / 刚重启的桌面）
-    // 靠它才知道"有东西在等人批"，压在批里等一批才落库，那边就是白等。
+    // 靠它才知道"有内容在等待批准"，若压在批次里等满一批才落库，对方会一直空等。
     // 与 Kotlin `HarnessRunner:316` 同一条：`TOOL_REQUESTED` / `USER_QUESTION` 立即 flush。
     state.bus.emit(
         state,

@@ -137,7 +137,7 @@ pub fn save_capture_config(
         .map_err(|e| ApiError::internal(format!("序列化捕获配置失败：{e}")))?;
     state.write(|tx| {
         // R3：被同步的表禁用 INSERT OR REPLACE（会点亮 DELETE 触发器写假 delete）——
-        // `app_settings` 不在同步范围内，但统一用 ON CONFLICT 的写法，省得将来把它加进同步时踩坑
+        // `app_settings` 不在同步范围内，但统一用 ON CONFLICT 的写法，避免将来把它加入同步时出现问题
         tx.execute(
             "INSERT INTO app_settings (k, v) VALUES (?1, ?2)
              ON CONFLICT(k) DO UPDATE SET v = excluded.v, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')",
