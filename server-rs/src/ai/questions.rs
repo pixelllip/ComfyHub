@@ -26,11 +26,11 @@ use serde_json::{Map, Value};
 
 use crate::web::routes::{ApiError, AppState};
 
-/// 一张提问卡最多几个问题（Kotlin `ToolContext.MAX_QUESTIONS_PER_CARD`，用户拍板 5）。
+/// 一张提问卡最多几个问题（Kotlin `ToolContext.MAX_QUESTIONS_PER_CARD`，上限为 5）。
 pub const MAX_QUESTIONS_PER_CARD: usize = 5;
 /// 一窗（一次回复）最多开几张提问卡（阈值制：**不问是常态**）。
 pub const MAX_ASK_CARDS_PER_WINDOW: i64 = 1;
-/// 一次 Run 里最多因"用户回答了提问"重置几次工具预算。
+/// 一次 Run 中因"完成作答"重置工具预算的最大次数。
 pub const MAX_BUDGET_RESETS: i64 = 4;
 /// 一条提问的等待上限（秒）—— 与 Kotlin `AskGate(timeoutMs = 30 分钟)` 同。
 pub const QUESTION_TIMEOUT_SECONDS: u64 = 30 * 60;
@@ -161,11 +161,11 @@ impl StoredQuestion {
     }
 }
 
-/// 用户对一条提问的回答（Kotlin `AskedAnswer`）。
+/// 对一条提问的作答（Kotlin `AskedAnswer`）。
 #[derive(Debug, Clone, PartialEq)]
 pub struct Answer {
     pub answer: String,
-    /// 用户点的是第几个选项（自己敲的为 `None`）
+    /// 选择的选项序号（自行输入时为 `None`）
     pub option_index: Option<i64>,
     /// 多选题勾了哪几个
     pub option_indexes: Vec<i64>,
@@ -432,7 +432,7 @@ pub fn list_pending(conn: &Connection) -> rusqlite::Result<Vec<Value>> {
 
 /// 某个 Run 里**还在等**的整张卡（同一 `group_id`，按题号排）。
 ///
-/// 界面重开 / 断线重连要把 N 页都补回来 —— 只回第一条的话，用户看到的是一张缺题的卡。
+/// 界面重开 / 断线重连需补回全部 N 页 —— 只返回第一条时，卡片会缺少部分题目。
 pub fn pending_group_for(state: &AppState, run_id: &str) -> Result<Vec<Value>, ApiError> {
     let run_id = run_id.to_string();
     state.with(move |conn| {
@@ -494,7 +494,7 @@ pub fn find_same_question(
     })
 }
 
-/// 用户回答了：**只改还 pending 的那一行**，返回是否被采纳。
+/// 完成作答：**只修改仍为 pending 的那一行**，返回是否被采纳。
 ///
 /// `false` = 这条提问已经不在等待（早就答过 / 超时收尾了），界面要如实说
 /// "这次回答没被采纳"，不许假装成功。
@@ -524,7 +524,7 @@ pub fn record_answer(
 
 /// 把还挂着 pending 的那一行按 `status` 收尾（`skipped` / `expired`）。
 ///
-/// **状态守卫**：只动 `pending` —— 已经 `answered` 的不许被覆盖（用户答完又被收尾抹掉，
+/// **状态守卫**：只处理 `pending` —— 已 `answered` 的不得被覆盖（否则作答会被收尾清除，
 /// 那是"我明明答了它却说没答"）。
 pub fn finalize_if_pending(
     state: &AppState,
@@ -581,7 +581,7 @@ pub fn expire_stale(state: &AppState) -> Result<usize, ApiError> {
 pub enum QuestionState {
     /// 还没人答
     Pending,
-    /// 答了（`answer` 就是内容；用户点了"跳过"不算答 —— 那是"他没回答"）
+    /// 已作答（`answer` 即内容；选择"跳过"不算作答 —— 按"未回答"处理）
     Answered(Answer),
     /// 跳过了 / 已经失效（Run 收尾、后端重启）
     Gone,

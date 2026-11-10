@@ -1,4 +1,4 @@
-//! `policy` 的单元测试（主体代码在 [`policy`](super) —— 2026-09-30 按用户要求与主体分离）。
+//! `policy` 的单元测试（主体代码在 [`policy`](super) —— 与主体分离）。
 //!
 //! `use super::*;` 照旧：子模块能看见父模块的私有项，所以用例一行都不用改。
 
@@ -99,13 +99,13 @@ fn 工具预算的出厂值与_kotlin_一致() {
     let legacy = policy(r#"{"writeRoots":["comfyui"],"permissionMode":"full"}"#);
     assert_eq!(legacy.config.max_tool_steps, DEFAULT_MAX_TOOL_STEPS);
     assert_eq!(legacy.config.max_calls_per_run, DEFAULT_MAX_CALLS_PER_RUN);
-    // 用户自己调过的值要生效
+    // 手动调整过的值需生效
     let custom = policy(r#"{"maxToolSteps":8,"maxCallsPerRun":16}"#);
     assert_eq!(custom.config.max_tool_steps, 8);
     assert_eq!(custom.config.max_calls_per_run, 16);
 }
 
-/// 2026-09-28：用户库里那份"16"是**旧默认值落库**的，不升级它，默认怎么改都不生效。
+/// 库中那份"16"是**旧默认值写入**的，不升级它则默认值调整不生效。
 #[test]
 fn 旧出厂值_deprecated_16_要升到新默认而不是永远锁着() {
     let mut old = ToolPolicyConfig {
@@ -115,7 +115,7 @@ fn 旧出厂值_deprecated_16_要升到新默认而不是永远锁着() {
     migrate_legacy_max_tool_steps(&mut old);
     assert_eq!(old.max_tool_steps, DEFAULT_MAX_TOOL_STEPS);
 
-    // 用户自己挑的值一个都不许动（设置页里 8 / 12 / 40 都是可选值）
+    // 手动选择的值不得改动（设置页中 8 / 12 / 40 均为可选值）
     for chosen in [8, 12, 20, 40] {
         let mut custom = ToolPolicyConfig {
             max_tool_steps: chosen,
@@ -127,7 +127,7 @@ fn 旧出厂值_deprecated_16_要升到新默认而不是永远锁着() {
 }
 
 /// 端到端那一半：真的从库里读一次 —— 旧值升上去、**写回库**、而且只升一次
-/// （第二次读到的 16 是用户特意选的，不许再改）。
+/// （第二次读到的 16 是特意选择的，不得再改）。
 #[test]
 fn 升级会写回库并且只做一次() {
     let conn = crate::infra::db::open_memory().unwrap();
@@ -168,7 +168,7 @@ fn 升级会写回库并且只做一次() {
         "合并写回，不许把别的键删掉：{stored}"
     );
 
-    // 用户明确选了 16（标记已落）→ 第二次读**不许**再改
+    // 已明确选择 16（标记已写入）→ 第二次读取**不得**再改
     state
         .write(|tx| {
             tx.execute(
@@ -236,7 +236,7 @@ fn 写只能在写白名单里读只能在读白名单里() {
 #[test]
 fn 禁段与用户白名单无关() {
     let root = temp_root("forbidden");
-    // 用户把白名单放宽到**项目根**（最宽的一种写法）
+    // 白名单放宽到**项目根**（最宽的写法）
     let p = policy_at(&root, r#"{"writeRoots":["."],"readRoots":["."]}"#);
     assert!(p.resolve_write("comfyui/ok.txt").is_ok());
     for bad in [
@@ -284,7 +284,7 @@ fn 自动发现的目录只放宽读() {
     let outside = root.join("ComfyUI-Installs").join("ComfyUI");
     std::fs::create_dir_all(outside.join("user").join("default").join("workflows")).unwrap();
     let p = policy_at(&root, "{}").with_auto_read_roots(vec![outside.clone()]);
-    // 读：自动发现的目录可以（用户 bug ④）
+    // 读：自动发现的目录可以
     assert!(p
         .resolve_read(
             &outside

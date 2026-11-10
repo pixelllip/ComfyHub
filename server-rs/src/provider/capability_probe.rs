@@ -21,7 +21,7 @@
 //!     超时上限；一个模型失败/超时**不许把整批拖死**，结果逐条如实（哪几个试成了、为什么失败）；
 //!  4. **写回不许碰别人的行**：只动这一个模型的 `thinkingEfforts`（必要时 `thinkingFormat`），
 //!     **别的条目一个字节都不变**（见 [`splice_entry`]：已有条目按字节定位、就地替换）；
-//!     写盘先读一遍（`custom.json` 是用户手写的，**坏了要如实报、绝不覆盖成空白文件**），
+//!     写盘前先读取（`custom.json` 为手动编写，**损坏时需如实报告、不得覆盖为空文件**），
 //!     落盘是临时文件 + rename（原子）；
 //!  5. **不猜**：网关一个档位都不认就如实 `ok:false` + `acceptedTop: null`，**绝不发明**档位；
 //!     `ladder` 里只放**真试过**的那些（从被接受的那一档往下）；
@@ -335,7 +335,7 @@ pub async fn run_ladder<T: Transport>(
                 PROBE_TIMEOUT_SECONDS,
             )
             .await;
-        // 每个探测请求都算一次尝试（连不上也算 —— 用户要看到"我们真发过几次"）；
+        // 每个探测请求都计为一次尝试（连接失败也算 —— 需显示"实际发送次数"）；
         // 只有 404 才换下一个候选（那是"地址拼错了"），其余一律认这个端点。
         let is404 = response.status == Some(404);
         last = Some(response);
@@ -541,7 +541,7 @@ fn write_atomic(target: &std::path::Path, text: &str) -> Result<(), String> {
 ///
 /// # 为什么是"改文本"而不是"反序列化再整份重写"
 ///
-/// `custom.json` 是**用户手写**的，别的条目（以及注释性的键顺序、缩进、写法）是他的东西 ——
+/// `custom.json` 是**手动编写**的，其他条目（以及键顺序、缩进、写法）属于原有内容 ——
 /// 整份 `serde_json` 重写会把它们全部重排/重格式化（"别的条目一个字节都不许变"这条就守不住了）。
 /// 所以：条目**已经存在**时就按字节定位、只替换那一个值（见 [`splice_entry`]）；
 /// 只有确实要**新增**一条（文件还没这条、或者文件都还不存在）时才整份重建
@@ -564,7 +564,7 @@ pub fn upsert_entry_text(
         "手工目录 custom.json 的顶层不是 JSON 对象 —— 拒绝覆盖，请先手工修好".to_string()
     })?;
     // `entries` 缺席是**合法**的起点（`{}` / `{"source":"custom"}`）—— 补一个空表就行。
-    // 只在**形状不对**时拒绝：`"entries": 3` 那种改下去只会把用户的文件弄坏。
+    // 仅在**结构不符**时拒绝：写入 `"entries": 3` 这类值只会破坏原有文件。
     let entries = match root.get("entries") {
         None | Some(Value::Null) => Map::new(),
         Some(Value::Object(map)) => map.clone(),
@@ -577,7 +577,7 @@ pub fn upsert_entry_text(
     };
 
     // ★ **合并**而不是替换：原文那条里我们没碰的字段（`reasoning` / `modalities` /
-    // 用户自己写的别的键）必须原样留着。整条换掉会把这模型的能力声明削成只剩档位 ——
+    // 自行编写的其他键）必须原样保留。整条替换会把该模型的能力声明削减为仅剩档位 ——
     // 而"这条模型还支持推理吗"正是档位能不能用的前提。
     let value = overlay_entry_to_value(entry);
     if let Some(hit) = find_entry(raw, &key) {
@@ -728,7 +728,7 @@ fn parse_object(text: &str) -> Option<Map<String, Value>> {
 /// 把要写的字段**合进**已有条目：旧条目里我们没碰的键一个都不丢。
 ///
 /// 只有本次真正要改的两个键（`thinkingEfforts` / `thinkingFormat`）是"以新值为准"，
-/// 其余原样保留 —— 这也顺带保住了用户手写的、我们不认识的键。
+/// 其余原样保留 —— 同时保留手动编写、未识别的键。
 fn merge_entry_value(existing: Option<Map<String, Value>>, fresh: &Value) -> Value {
     let Some(fresh) = fresh.as_object() else {
         return fresh.clone();
@@ -768,7 +768,7 @@ struct EntrySpan {
 /// 但**替换的是原文里那个值的字节**，所以文件里写的是 `GPT-4` 也照样命中。
 ///
 /// ⚠ 只认**最外层**那个 `entries`（值里嵌一个同名键不算）—— 与 `capability_catalog`
-/// 的读法一致；认错了就会去改用户别的数据。
+/// 的读法一致；识别错误会修改其他数据。
 fn find_entry(raw: &str, key: &str) -> Option<EntrySpan> {
     let bytes = raw.as_bytes();
     let mut cursor = skip_ws(bytes, 0);
@@ -1236,7 +1236,7 @@ async fn probe_one<T: Transport>(
                 outcome.message, outcome.attempts
             ),
         },
-        // 探测成功了但写不回去：**ok=false**（用户要的是"档位被写回来"，而且得知道为什么没写成）
+        // 探测成功但无法写回：**ok=false**（目标是"档位写回"，并需说明未写成功的原因）
         Err(message) => ProbeOutcome::failed(
             &provider.id,
             &model.id,
