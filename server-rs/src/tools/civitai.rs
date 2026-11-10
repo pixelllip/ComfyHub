@@ -1,10 +1,10 @@
 //! `civitai_search`：Civitai 模型库搜索（Kotlin `CivitaiSearch.kt` 的逐条对照，
-//! 用户建议 ④/⑦，2026-09-20）。
+//! 参见建议 ④/⑦）。
 //!
-//! # 用户的原话与这条实现怎么对上
+//! # 需求原文与实现的对应关系
 //!
 //! > "设计一个工具，允许 AI 搜索 civitai（注：civitai 如要搜索 NSFW 内容需要登录或者令牌，
-//! >  且域名变成 .red；这种情况下可以询问用户，如允许则模拟用户真机搜索）"
+//! >  且域名变成 .red；此时可以询问，如允许则模拟真机搜索）"
 //! >
 //! > "或许可以让 ai 联网搜索 comfy 库里各种模型信息（civitai，或者 hugging face 等等），
 //! >  贴上简短的说明（比如它拿来做什么），登记在数据库中"
@@ -12,18 +12,18 @@
 //! 所以这里做三件事：
 //!  1. **普通（安全）搜索**走 `civitai.com/api/v1/models`，免令牌；
 //!  2. **NSFW 搜索**走 `civitai.red`，**域名真的切过去**并把 `nsfw=true` 明写进查询串
-//!     （"模拟用户真机搜索"就是这个意思）；工具侧默认 `ASK` —— 也就是"这种情况可以询问用户"；
+//!     （"模拟真机搜索"即此意）；工具侧默认 `ASK` —— 对应"此时可以询问"；
 //!  3. 每条结果都带上**这个模型是干什么的**：类型 + 基础模型 + 触发词 + 简介。
 //!
 //! # ⚠ 与线上实测不一致的假设（2026-09-20 在本机实打 civitai.com / civitai.red 核对过）
 //!
-//! 用户原话里的前提是"NSFW 需要登录/令牌"。实测 `/api/v1/models` 这条**搜索**接口
+//! 原始需求的前提是"NSFW 需要登录 / 令牌"。实测 `/api/v1/models` 这条**搜索**接口
 //! **并不是**这样：匿名就返回 `nsfw=true` 的条目，`.red` 匿名同样 200，连**假的**
 //! `Authorization: Bearer` 也不会被拒 —— 这条接口根本不校验令牌。
 //!
-//! 所以"NSFW 必须有令牌"是**用户定的策略**（表达"这是登录态才做的事"，并且它天然带一次
+//! 因此"NSFW 必须有令牌"属于**既定策略**（表示"这是登录态才做的事"，并天然包含一次
 //! 审批），**不是**上游的要求。这个区别要留着：别在注释、文档或给模型的提示里把它说成
-//! "不给令牌就搜不到" —— 那是**假话**，而模型会据此对用户撒谎或者干脆放弃搜索。
+//! "不给令牌就搜不到"—— 该说法**不成立**，模型会据此给出错误说明或放弃搜索。
 //! 上游真正会 400 的是别的东西：`types` 大小写敏感、`limit` 上限 100。
 //!
 //! # 出网纪律（与 [`crate::tools::web_tools`] 同规矩）
@@ -54,7 +54,7 @@ pub const NSFW_BASE_URL: &str = "https://civitai.red";
 /// 令牌在凭据库里的引用名（与 `keenable` 同一约定）。
 pub const CREDENTIAL_REF: &str = "civitai";
 
-/// Civitai 生态里通行的环境变量名（用户手边多半已经有一个）。
+/// Civitai 生态中通行的环境变量名（通常已有配置）。
 pub const ENV_TOKEN: &str = "CIVITAI_API_KEY";
 /// 两个根地址的覆盖口子（本机假服务 / 自建代理）。
 pub const ENV_SAFE_BASE_URL: &str = "CIVITAI_BASE_URL";
@@ -73,7 +73,7 @@ pub const MAX_LIMIT: i64 = 20;
 /// 哪天有人想放宽到 50，不必再去试探一遍线上。
 pub const UPSTREAM_MAX_LIMIT: i64 = 100;
 
-/// 每条简介截断到多少字符 —— 用户要的是"简短的说明"，不是整页 README。
+/// 每条简介的字符上限 —— 需要"简短说明"，而不是整页 README。
 pub const MAX_DESCRIPTION_CHARS: usize = 600;
 
 /// 允许的模型类型（Civitai 的 `types` 参数取值）。
@@ -112,7 +112,7 @@ pub struct CivitaiModel {
     pub size_bytes: Option<i64>,
     pub download_url: Option<String>,
     pub file_name: Option<String>,
-    /// 主文件的 **sha256**（上游 `files[primary].hashes.SHA256`）：用户手动下完之后
+    /// 主文件的 **sha256**（上游 `files[primary].hashes.SHA256`）：手动下载后
     /// 拿它比对盘上那份文件，判断"是不是同一个模型"。上游没给就是 `None` —— **不编**。
     pub sha256: Option<String>,
 }
@@ -287,9 +287,9 @@ impl CivitaiClient {
         //
         // 2026-09-20 之前的写法是"没令牌当场抛 CIVITAI_TOKEN_REQUIRED、一个请求都不发"，
         // 依据是"`.red` 只认登录态"。真机核对把这个前提推翻了（见模块头）。所以那条硬门槛
-        // 等于"明明能搜，工具却说搜不了"，用户选择放宽成现在这样：
-        //   · 显式 `allowNsfw=true` 仍然必须（工具默认 ASK，用户点过头才走到这里）；
-        //   · 配了令牌就带上（登录态更稳，也符合"模拟用户真机搜索"的本意）；
+        // 等于"实际可搜，工具却报告无法搜索"，因此放宽为当前行为：
+        //   · 显式 `allowNsfw=true` 仍然必须（工具默认 ASK，确认后才执行到此）；
+        //   · 配置了令牌则带上（登录态更稳定，也符合"模拟真机搜索"的语义）；
         //   · 没配也不拒绝，但**必须如实说明这次是匿名通道**（见 [`render`] 那行提示）。
         let base = if allow_nsfw {
             &self.nsfw_base
@@ -311,7 +311,7 @@ impl CivitaiClient {
             url.push_str("&types=");
             url.push_str(&url_encode(filter));
         }
-        // 走 .red 时把 nsfw 明写进查询串：这正是"模拟用户真机搜索"要做的那一步
+        // 走 .red 时把 nsfw 显式写进查询串：即"模拟真机搜索"所需的一步
         if allow_nsfw {
             url.push_str("&nsfw=true");
         }
@@ -480,7 +480,7 @@ fn resolve_token(state: &AppState) -> Option<String> {
 ///
 /// 键名大小写不敏感（线上给的是 `SHA256`，别的实现可能写 `sha256`）；
 /// **只认 64 位十六进制**，别把 `AutoV2` 那种短码当 sha256 ——
-/// 用户拿短码去校验盘上的文件永远对不上，那比"不知道"更糟。
+/// 用短码校验盘上文件始终无法匹配，比"未知"更差。
 fn primary_sha256(hashes: Option<&Map<String, Value>>) -> Option<String> {
     let raw = hashes?
         .iter()
@@ -575,7 +575,7 @@ fn to_model(obj: &Map<String, Value>) -> Option<CivitaiModel> {
             .and_then(|s| int_field(s, "thumbsUpCount"))
             .unwrap_or(0),
         // 链接给**正式站**，不是本次请求用的 base：base 可以被环境变量指到本机假服务 /
-        // 自建代理（测试就是这么用的），把那种地址写进给用户的链接是错的
+        // 自建代理（测试中即如此），将该地址写入返回的链接是错误的
         page_url: format!("{SAFE_BASE_URL}/models/{id}"),
         description: crate::tools::tools::take_utf16(
             crate::tools::tools::java_trim(&collapse_spaces(&strip_tags(
@@ -665,7 +665,7 @@ fn strip_tags(text: &str) -> String {
 
 /// 把结果渲染成"条目 + 一句话说明"的块（给模型看的那一份）。
 ///
-/// 用户要的是"**简短的说明**（比如它拿来做什么）"，所以每条固定几行。
+/// 需要的是"**简短说明**（例如其用途）"，因此每条固定几行。
 /// `tokenless` 且 `nsfw` 时在抬头补一句"本次是匿名通道"：这不是装饰，
 /// 而是让模型知道**这次没带登录态**，免得它把"匿名可见"当成"这就是全部"。
 fn render(models: &[CivitaiModel], query: &str, nsfw: bool, tokenless: bool) -> String {

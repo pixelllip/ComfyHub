@@ -50,7 +50,7 @@
 //!
 //! 模型只会写 `launch_comfyui()`，而 `comfy launch` 起的是**安装目录里那个裸实例** ——
 //! ComfyUI Desktop 的模型 / input / output 都在共享目录，一个参数都不带（2026-09-25 现场：
-//! 用户三条主工作流全部预检失败，而模型明明躺在 `ComfyUI-Shared\models`）。
+//! 三条主工作流全部预检失败，而模型实际位于 `ComfyUI-Shared\models`）。
 //! 所以由**我们替它补上**那三个参数（[`prepare_launch`]），并把补了什么如实回给模型。
 
 use std::collections::{HashMap, VecDeque};
@@ -799,7 +799,7 @@ pub fn scripts_dir_of(python_exe: &Path) -> Option<PathBuf> {
 
 /// 给 MCP 子进程补上"comfy-cli 往哪儿写"的环境变量。
 ///
-/// 现场（2026-09-28 用户 bug「MCP 调用总是失败」的真实根因，**不是 ComfyUI 没在运行**）：
+/// 现象（「MCP 调用总是失败」的实际原因，**不是 ComfyUI 未运行**）：
 /// comfy-cli 1.20 起**任何**命令都要先探测云凭据（`where.resolve_default → find_api_key`），
 /// 凭据锁文件在 `%LOCALAPPDATA%\comfy-cli\secrets.json.lock`；它还把
 /// `config.ini` 写死在 `~\AppData\Local\comfy-cli`，缓存写 `~/.cache/comfy-cli`，
@@ -813,19 +813,19 @@ pub fn scripts_dir_of(python_exe: &Path) -> Option<PathBuf> {
 /// ② 更根本的是**方向错了** —— comfy-cli 的凭据与缓存是 ComfyHub 驱动产生的状态，
 /// 按"自己产生的内容存在自身文件夹内"这条，它默认就该在 `<根>\storage\ai\mcp\comfy-cli-home`。
 ///
-/// 所以现在**无条件**指进项目内，并且**一次性导入**用户此前在系统位置的那份：
+/// 因此现在**无条件**指向项目内，并**一次性导入**此前位于系统位置的那份：
 /// - 云凭据 + 锁：`COMFY_SECRETS_PATH` → `<home>\secrets.json`（导入旧的 `secrets.json`）
 /// - `config.ini`：**没有**环境变量可指（comfy-cli 1.20 把路径写死在
 ///   `constants.DEFAULT_CONFIG[windows] = expanduser("~")\AppData\Local\comfy-cli`），
 ///   但那条路径是**从 `~` 算出来的** —— 把 `USERPROFILE` 指进项目内同样生效，
-///   再把用户那份 `config.ini`（记着 comfy-cli 的工作区 `default_workspace`）抄过去。
+///   再把原有的 `config.ini`（记录 comfy-cli 的工作区 `default_workspace`）复制过去。
 ///   不抄的话 comfy-cli 会拿"假家目录"下的默认工作区（`~\Documents\comfy\ComfyUI`，
 ///   根本不存在）→ 起实例 / 跑工作流全错。
 /// - 缓存：`COMFY_CACHE_DIR` → `<home>\cache`
 /// - tempfile：`TMP` / `TEMP` → `<根>\.run\tmp`（不再探 `%TEMP%`，见下）
 ///
 /// ⚠ 导入是**只读复制**（读项目外是允许的，受限的只是写），且**只导一次**
-/// （目标已存在就不动，免得把用户新登录的凭据用旧文件盖回去）。
+/// （目标已存在则不覆盖，避免用旧文件覆盖新登录的凭据）。
 /// 代价要说清：凭据不再跨 ComfyHub 安装/跨机器共享 —— 但 db 与 storage 本来就在各自文件夹里，
 /// 这与"便携包"本来就是一致的。
 fn apply_comfy_cli_write_redirection(command: &mut tokio::process::Command, project_root: &Path) {
@@ -853,10 +853,10 @@ fn apply_comfy_cli_write_redirection(command: &mut tokio::process::Command, proj
     }
 }
 
-/// 把用户此前在 `%LOCALAPPDATA%\comfy-cli` 登录过的 Comfy Cloud 凭据**一次性**导入进来。
+/// 把此前在 `%LOCALAPPDATA%\comfy-cli` 登录过的 Comfy Cloud 凭据**一次性**导入进来。
 ///
-/// 只在目标缺失时导（导了两次会把用户新登录的凭据盖回旧的）；读不到就当没有，
-/// **不拦启动** —— 凭据没了用户重新登录一次即可，起不来才是大事。
+/// 仅在目标缺失时导入（重复导入会用旧凭据覆盖新凭据）；读取失败按不存在处理，
+/// **不阻止启动** —— 凭据缺失时重新登录即可，无法启动影响更大。
 fn import_legacy_comfy_cli_secrets(home: &Path) {
     let target = home.join("secrets.json");
     if target.exists() {
@@ -880,7 +880,7 @@ fn import_legacy_comfy_cli_secrets(home: &Path) {
     }
 }
 
-/// 把 comfy-cli 的"家目录"指进项目内，并把用户那份 `config.ini` 抄过去（只读副本）。
+/// 把 comfy-cli 的"家目录"指向项目内，并复制原有的 `config.ini`（只读副本）。
 ///
 /// 返回落地的那个 `…\comfy-cli` 目录（拿不到就 `None`，此时**不设** `USERPROFILE` ——
 /// 宁可按老样子失败，也不要让 comfy-cli 去一个没有工作区的假家目录里乱跑）。
@@ -889,7 +889,7 @@ fn redirect_comfy_cli_home(command: &mut tokio::process::Command, home: &Path) -
     let config_dir = fake_home.join("AppData").join("Local").join("comfy-cli");
     std::fs::create_dir_all(&config_dir).ok()?;
 
-    // 抄用户那份（读得到才抄；读不到就**不动**已有的那份，免得把上次的工作区配置抹掉）
+    // 复制原有的那份（可读才复制；不可读则**不改动**已有文件，避免覆盖上次的工作区配置）
     if let Ok(local) = std::env::var("LOCALAPPDATA") {
         let real = Path::new(local.trim()).join("comfy-cli").join("config.ini");
         if real.is_file() {
@@ -1019,7 +1019,7 @@ fn read_runtime_state(dir: &Path) -> Option<RuntimeState> {
 //  权限档（与 Kotlin `McpToolPolicy` 逐字一致）
 // ---------------------------------------------------------------------------
 
-/// 明确不允许（除非用户在设置里显式改）。
+/// 明确不允许（除非在设置中显式修改）。
 pub const DENIED_TOOLS: [&str; 8] = [
     "update_comfyui",
     "switch_comfyui_version",
@@ -1031,7 +1031,7 @@ pub const DENIED_TOOLS: [&str; 8] = [
     "billing_status",
 ];
 
-/// 要用户点批准的（起停本地进程 / 写盘 / 消耗显卡时间 / 花钱）。
+/// 需要批准的（起停本地进程 / 写盘 / 消耗显卡时间 / 产生费用）。
 pub const ASK_TOOLS: [&str; 9] = [
     "launch_comfyui",
     "stop_comfyui",
@@ -1064,7 +1064,7 @@ pub fn is_mutating(name: &str) -> bool {
 ///
 /// 判据与 comfy 那批同一条：读状态 / 列项目 / 看 caption / 看进度 → ALLOW；
 /// 其余（导入、筛选、写 caption、打标、预处理、训练、停队列）一律 ASK ——
-/// 它们会写盘或占显卡，且大多会**改动用户的数据集**。
+/// 它们会写盘或占用显卡，且大多会**改动训练数据集**。
 const ANIMA_READ_ONLY: [&str; 10] = [
     "studio_projects",
     "studio_project",
@@ -1092,7 +1092,7 @@ pub fn anima_is_mutating(name: &str) -> bool {
 
 /// 训练引擎工具描述前的出处说明。
 ///
-/// 写明“会写用户的训练数据集”不是装饰：模型在这些工具上的误用代价是**删图 / 覆盖
+/// 写明“会写训练数据集”不是装饰：模型在这些工具上误用的代价是**删图 / 覆盖
 /// caption / 起一个几小时的 GPU 作业**，而工具结果本身只是 JSON，看不出来。
 pub fn anima_description_prefix(name: &str) -> String {
     if ANIMA_READ_ONLY.contains(&name) {
@@ -1154,7 +1154,7 @@ pub const FLAG_OUTPUT: &str = "--output-directory";
 /// 模型自己写这个时，input/output 由它说了算，我们不再插嘴。
 const FLAG_BASE: &str = "--base-directory";
 
-/// `--input` **与 `--input-directory` 是同一个参数**（2026-09-30 用户 bug 的根因）。
+/// `--input` **与 `--input-directory` 是同一个参数**（该问题的原因）。
 ///
 /// ComfyUI 的 `comfy/cli_args.py` 里 input 只有 `--input-directory` 一个长选项，而它的
 /// argparse 开着默认的 `allow_abbrev=True` —— 于是 `--input` 是它的**唯一前缀缩写**，
@@ -1317,7 +1317,7 @@ pub struct LaunchPlan {
 
 /// 给 `launch_comfyui` 的参数做"补挂共享模型根"。
 ///
-/// 纯函数（除了读一次磁盘上的 Desktop 配置）——不改用户的任何文件。
+/// 纯函数（除读取一次磁盘上的 Desktop 配置）——不改动任何文件。
 /// 模型自己写过的参数一律不重复、不覆盖；拿不到配置就**如实说**（不编参数）。
 pub fn prepare_launch(args: &Value) -> LaunchPlan {
     prepare_launch_with(args, desktop(None))
@@ -1963,7 +1963,7 @@ impl McpRegistry {
             } else {
                 format!("\n\nMCP 子进程 stderr 末尾：\n{stderr}")
             };
-            // 2026-09-28 用户 bug「调用 mcp 的 nodes 工具总是失败」：工具在 comfy-mcp
+            // 「调用 MCP 的 nodes 工具总是失败」：工具在 comfy-mcp
             // 子进程内部崩了（UnexpectedToolError + 一整段 python traceback），模型只会
             // 原样复读 —— 翻成人话并告诉它下一步做什么。
             let message = humanize_mcp_failure(name, &content, &stderr).unwrap_or_else(|| {
@@ -2009,7 +2009,7 @@ pub async fn warmup(registry: &Arc<McpRegistry>, project_root: &Path) {
     }
 }
 
-/// 把 comfy-mcp 的"工具内部崩溃"翻成人话 + 下一步该做什么（2026-09-28 用户 bug
+/// 把 comfy-mcp 的"工具内部崩溃"转换为说明 + 下一步操作（
 /// 「调用 mcp 的 nodes 工具总是失败」）。
 ///
 /// 现场：`UnexpectedToolError: Error executing tool nodes` + 一整段 python traceback
@@ -2049,7 +2049,7 @@ fn humanize_mcp_failure(name: &str, content: &str, stderr: &str) -> Option<Strin
     ];
     let hint = if matches!(name, "launch_comfyui" | "restart_comfyui" | "stop_comfyui") {
         // 起停类：comfy-cli 的 `comfy launch` 有一条**绕不开**的写：把后台实例的日志重定向到
-        // `<ComfyUI>\user\comfyui_<端口>.log`（在用户的工作区里，项目外），而这个路径
+        // `<ComfyUI>\user\comfyui_<端口>.log`（位于工作区内、项目外），而该路径
         // 没有参数 / 环境变量可以改（2026-09-28 实测：config.ini 那关能用 USERPROFILE 绕过去，
         // 日志这关绕不过去）。所以**改用 ComfyHub 自己那条路**。
         "起停实例不要用这条（comfy-cli 的薄壳）：`comfy launch` 会把后台日志写进 \
