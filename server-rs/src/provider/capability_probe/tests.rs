@@ -772,7 +772,7 @@ async fn 端到端_一个模型失败不影响另一个() {
         })
         .unwrap();
 
-    // 先跑的那个模型基准就 500（网关炸了）；后跑的那个最高档被拒、逼它降一档
+    // 先执行的模型基准返回 500（网关异常）；后执行的最高档被拒，迫使降一档
     struct Flaky {
         seen: Mutex<Vec<String>>,
     }
@@ -812,7 +812,7 @@ async fn 端到端_一个模型失败不影响另一个() {
     let response = probe(&state, &dir, &ProbeRequest::default(), &transport)
         .await
         .unwrap();
-    // 真的两个都跑到了（第一个炸了之后没有提前收队），而且第二个**真的降过档**
+    // 两个都实际执行了（第一个失败后未提前结束），且第二个**确实降过档**
     assert_eq!(
         transport.seen.lock().unwrap().clone(),
         vec![

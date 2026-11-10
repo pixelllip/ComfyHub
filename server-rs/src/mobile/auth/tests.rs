@@ -336,7 +336,7 @@ fn credentials_endpoint_is_never_anonymous() {
     }
 }
 
-/// 反过来：只勾了"允许改"的设备 **不许读**（两个开关谁都不许顺手带上另一个）。
+/// 反过来：仅勾选"允许改"的设备 **不得读**（两个开关互不连带）。
 #[test]
 fn the_two_credential_switches_are_independent() {
     let file = AuthFile {

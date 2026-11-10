@@ -1655,7 +1655,7 @@ class AiWorkspaceStore extends ChangeNotifier {
       }
       return r.applied;
     } catch (e) {
-      // 通道本身炸了：pending 未知，**不动**已经挂着的定时器（挂着就还会重试）
+      // 通道异常：pending 状态未知，**不改动**已挂载的定时器（保留仍会重试）
       pushNotice = '同步到桌面失败，$e';
       return 0;
     } finally {
@@ -1719,7 +1719,7 @@ class AiWorkspaceStore extends ChangeNotifier {
       }
       return r.applied;
     } catch (e) {
-      // 通道本身炸了（桥没起来 / 库坏了）：与上行同一条处置 —— 只记一句
+      // 通道异常（桥未启动 / 库损坏）：与上行同一处置 —— 只记录一句
       pushNotice = '从桌面拉取失败，$e';
       debugPrint('[M4] 下行：异常 $e');
       return 0;
@@ -1993,7 +1993,7 @@ class AiWorkspaceStore extends ChangeNotifier {
   // 本机表离线可读**又可写**，可在手机上独立配置 provider。
   // 两份都读就会出现同一个 provider 两套 baseURL / 能力声明 —— 谁赢看不出来，
   // 而它决定"这条消息发得出去吗"。所以**一个端只留一份清单**（§14.4：两端各一份、
-  // 不做自动合并），缓存代码连同那两个键一并删掉，免得日后有人顺手读回来。
+  // 不做自动合并），缓存代码连同那两个键一并删除，避免日后被重新读回。
   //
   // ⚠ 与 AIH-012 的关系：那条纪律是"清单里不许有密钥"，它现在由**本机库**那份承载 ——
   // `ai_providers` 表里只有 `credential_ref`（名字），值在本机密钥库；
@@ -2265,7 +2265,7 @@ class AiWorkspaceStore extends ChangeNotifier {
       }
       await _clearDraft(id);
     } catch (_) {
-      // 静默：清理是"顺手做的事"，失败不该弹错误
+      // 静默：清理属于附带操作，失败不应报错
     }
   }
 
@@ -2442,7 +2442,7 @@ class AiWorkspaceStore extends ChangeNotifier {
   void removeAttachmentAt(int index) {
     if (index < 0 || index >= attachments.length) return;
     final removed = attachments.removeAt(index);
-    // 顺手删掉后端那份：还没用进聊天记录的附件留着只会占盘。
+    // 同时删除后端那份：尚未用于聊天记录的附件只会占用磁盘。
     // 已被聊天记录引用的会被后端拒绝（历史消息还要显示它的缩略图），这里忽略即可。
     final id = removed.id;
     if (id != null) unawaited(_api.deleteAttachment(id).catchError((_) {}));
@@ -2987,7 +2987,7 @@ class AiWorkspaceStore extends ChangeNotifier {
       // ⚠ 必须在 _reloadMessages **之后**清 —— 对齐时还要靠它兜"库里没落全"的底。
       _liveText.remove(assistantMessageId);
       _activeAssistantId = null;
-      // 一轮跑完是"内容定稿"的时刻：顺手把本机的会话/消息推给桌面（M4）。
+      // 一轮结束即"内容定稿"时刻：同时把本机会话/消息推给桌面（M4）。
       // 桌面不在线时它只记一句"还有几条没上去"，不拦任何东西。
       await syncOutbox();
       // 同时把桌面那份的变化拉下来（同一个理由：这是"内容定稿"的时刻，

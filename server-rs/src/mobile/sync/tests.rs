@@ -93,7 +93,7 @@ fn uplink_kinds_cover_the_phone_writable_tables() {
         );
     }
     // ★ `submit_job` **不是表**（契约 §4.1）：它的分支在 `apply_one` 最前面。
-    //   真有谁"顺手"把它加进这张映射表，就会走到按列名 upsert 那条路上 ——
+    //   一旦把它加入这张映射表，就会走到按列名 upsert 那条路径上 ——
     //   而 payload 的键（queueId / conversationId / …）跟 `submit_jobs` 的列不是一回事，
     //   表现是一律 `SCHEMA_MISMATCH`（永久拒），手机上永远排不上队。
     assert_eq!(

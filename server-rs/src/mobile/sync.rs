@@ -67,7 +67,7 @@ pub const SYNCED: &[&str] = &[
 
 /// **不同步**的表 —— 每一条都要有理由（`reason` 会原样吐给手机做诊断）。
 ///
-/// 前四条是**安全相关**的，别顺手加进 [SYNCED]：
+/// 前四条与**安全相关**，不要一并加入 [`SYNCED`]：
 /// `app_settings`（配对令牌明文）、`ai_providers`（凭据引用）、`ai_models`（模型目录由
 /// run-kit 下发）、`ai_run_events`（62 万行调试日志）。
 pub const NOT_SYNCED: &[(&str, &str)] = &[

@@ -381,7 +381,7 @@ pub fn call_id_for(queue_id: &str) -> String {
 
 /// 校验 `payload` 的形状（契约 §4.1）。**只查形状，不查"这次提交能不能成"**。
 ///
-/// 为什么不在受理时顺手查"有没有 API 图 / 审核过不过"：那些是**提交链路**自己的判断
+/// 不在受理时一并检查"是否有 API 图 / 审核是否通过"的依据：那些属于**提交链路**自身的判断
 /// （R10 的审计 + 预检），提前在这里判一遍等于**两份判断**，迟早漂移；而且真的拒了，
 /// 相比显示"手机上说排队失败"，"桌面上批准后如实返回失败原因"更清楚。
 /// 形状错不一样：它**永远**不可能成功，重推只会让手机永远卡在队首。
@@ -633,7 +633,7 @@ async fn run_inner(state: &AppState, queue_id: &str, approval_timeout: Duration)
             }
         }
         if Instant::now() >= deadline {
-            // 超时 = 拒绝（与工具闸门同语义）。**顺手把 approval 也写成 denied**，
+            // 超时 = 拒绝（与工具闸门同语义）。**同时把 `approval` 写成 denied**，
             // 否则 `/api/ai/pending` 上会一直挂着一张点了也没用的卡。
             let done = finalize(
                 state,

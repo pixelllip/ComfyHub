@@ -89,7 +89,7 @@ class PromptParams extends StatelessWidget {
                 ),
               ),
               const SizedBox(width: 4),
-              // 多个 LoRA 时，一次复制出整串标签，省得一个个点
+              // 多个 LoRA 时，一次复制出整串标签，避免逐个点击
               if (loras.length > 1)
                 TextButton.icon(
                   onPressed: () => copyToClipboard(

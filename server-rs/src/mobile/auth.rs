@@ -109,7 +109,7 @@ pub struct DeviceRecord {
     ///
     /// 为什么不合一个：读和写不是同一种权力。允许"这台手机能用我的 key"与允许
     /// "这台手机能否修改我的 key"，预期经常不同；合并后的后果是图省事
-    /// 把读打开、**顺手也把写打开了** —— 而写能让"下一次桌面自己发请求"用上别人塞的 key。
+    /// 开启读的同时**也开启了写** —— 而写会让"下一次桌面自身请求"使用外部写入的 key。
     #[serde(default, rename = "allowCredentialsUpload")]
     pub allow_credentials_upload: bool,
     /// **免桌面批准的排队提交开关**，默认 `false`。
@@ -297,7 +297,7 @@ pub fn decide(
     // ③ 凭据端点：**只认"已配对 + 已授权"的设备**，与 enabled 无关（纪律 ④）。
     //    ★ 读与写是**两个开关**（§14.1）：GET 看 `allowCredentials`、
     //      PUT 看 `allowCredentialsUpload`。合成一个就会出现"为了图方便把读打开、
-    //      顺手也把写打开了"，而写能让下一次桌面自己发请求用上别人塞的 key。
+    //      同时也开启了写"，而写会让下一次桌面自身请求使用外部写入的 key。
     if path == CREDENTIALS_PATH {
         let upload = method.eq_ignore_ascii_case("PUT") || method.eq_ignore_ascii_case("POST");
         return match token.and_then(|t| grant_of(file, t)) {
@@ -365,7 +365,7 @@ struct Sessions {
     hits: HashMap<String, Vec<u64>>,
     /// 来源地址 → 最近一分钟内的**兑码**时刻（限速用，与举手分开计数）。
     claim_hits: HashMap<String, Vec<u64>>,
-    /// deviceId → (lastSeenAt, lastIp)：**攒在内存里**，由 `GET /api/auth` 顺手落库
+    /// deviceId → (lastSeenAt, lastIp)：**保存在内存中**，由 `GET /api/auth` 一并落库
     /// （D3 的纪律：别每个请求写一次库）。
     seen: HashMap<String, (String, String)>,
     last_flush: u64,
@@ -841,7 +841,7 @@ pub async fn gate(State(state): State<AppState>, req: Request, next: Next) -> Re
     }
 }
 
-/// 记一笔"这台设备刚刚活跃过"（**只在内存**，由 `GET /api/auth` 顺手落库）。
+/// 记录"该设备刚刚活跃过"（**仅存内存**，由 `GET /api/auth` 一并落库）。
 fn note_seen(grant: &Grant, remote: Option<IpAddr>) {
     let Grant::Device { id, .. } = grant else {
         return;
@@ -951,7 +951,7 @@ fn pending_json(session: &Session, unix: u64) -> Value {
     Value::Object(obj)
 }
 
-/// 把内存里攒的 `lastSeen` 落库（最多每 30 秒一次；`GET /api/auth` 顺手调）。
+/// 把内存中累积的 `lastSeen` 落库（最多每 30 秒一次；由 `GET /api/auth` 一并调用）。
 ///
 /// 这是 D3 那条纪律的落点：**每台设备每个请求写一次库**是不行的（那是"每次刷新都写盘"），
 /// 但在查看该卡片时又需看到"刚刚活跃过"。因此分两层：
@@ -1023,7 +1023,7 @@ async fn put_auth(
         let mut file = load(conn);
         file.enabled = enabled;
         if enabled && file.token.as_deref().unwrap_or("").is_empty() {
-            // 打开开关时顺手生成一个长期令牌（D10 的既有语义）
+            // 打开开关时一并生成一个长期令牌（D10 的既有语义）
             file.token = Some(random_token().map_err(to_sql_err)?);
             file.created_at = Some(iso_now());
         }
