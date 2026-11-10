@@ -1,9 +1,9 @@
 //! ComfyUI **界面格式工作流**（`{nodes,links}`）→ **API 格式节点图**（Kotlin `WorkflowConvert` 的
-//! Rust 端逐行对照，P4 第 44 步；**第 68 步**把最后两处欠账补齐：组节点展开 + 「模拟用户行为」）。
+//! Rust 端逐行对照，P4 第 44 步；**第 68 步**补齐最后两处：组节点展开 + 「模拟前端行为」）。
 //!
-//! # 为什么必须有它（用户 bug ③）
+//! # 必须存在的依据
 //!
-//! 用户指着本机一份工作流文件让 AI 去跑，而 `comfy_submit` 只认库里的 `promptId` ——
+//! 指定本机一份工作流文件让 AI 执行，而 `comfy_submit` 只接受库中的 `promptId` ——
 //! 那条工作流从来没被捕获过，于是整件事卡死在"我不能凭一个文件路径提交"。
 //! 界面格式里 `widgets_values` **只有位置、没有参数名**，所以转换必须知道每个节点的输入
 //! 声明顺序 —— 那份声明只有 ComfyUI 的 `/object_info` 有，因此转换是**在线**的
@@ -39,7 +39,7 @@
 //! * `mode != 0` 的实例**不展开**（它自己不执行，交给旁路 / 静音那套逻辑接过去）；
 //! * 缺代理 / 输入个数对不上 / 组里还套组 → **如实 `unsupported`**，绝不猜着展开。
 //!
-//! ## 「模拟用户行为」（`emulateFrontend`）在哪个文件
+//! ## 「模拟前端行为」（`emulateFrontend`）所在文件
 //!
 //! 判据（广播型 / 显示型两张表 + 三条模式）只有一份：`workflow_audit.rs` 的
 //! [`crate::workflow::workflow_audit::is_broadcast`] / [`crate::workflow::workflow_audit::is_display`]；改写本身
@@ -48,7 +48,7 @@
 //! # 缺口清单（宁可失败，但不卡死）
 //!
 //! `unresolvedInputs` = 指向"没转换出来的节点"的悬挂引用（提交上去 ComfyUI 只会报
-//! "节点 xxx 不存在"，用户完全看不出哪一步坏的）；
+//! "节点 xxx 不存在"，无法判断哪一步出错）；
 //! `openInputs` = 现在空着的**连线型**输入（广播型节点原来就是往这些地方灌值的，
 //! 所以它正好是"要补哪些线"的作业本）。
 
@@ -81,9 +81,9 @@ pub struct Converted {
     /// 配方学习、蓝图体检、提交前的缺口清单都读它 —— 各判一遍的下场是
     /// "蓝图说没事、学习说缺件"，而两边都不会报错（2026-10-17 实测到过）。
     pub required_open_inputs: Vec<String>,
-    /// ## 模拟用户行为 ## 等价改写掉的前端节点，形如 `12 Anything Everywhere（广播 3 处）`。
+    /// ## 模拟前端行为 ## 等价改写的前端节点，形如 `12 Anything Everywhere（广播 3 处）`。
     ///
-    /// 只有 `emulateFrontend=true` 才有内容。改了哪几根线看得见，用户才能判断这次
+    /// 只有 `emulateFrontend=true` 才有内容。改动可见，才能判断本次
     /// "替前端做的事"对不对（Kotlin `Result.frontendRewritten`）。
     pub frontend_rewritten: Vec<String>,
     /// 广播灌进去的线，形如 `1.positive ← 节点 14（Anything Everywhere）`。
@@ -125,7 +125,7 @@ const FRONTEND_VIRTUAL: [&str; 6] = [
 /// ⚠ 判据来自真实提交记录（2026-10-17 从本机 ComfyUI `/history` 取回的 i2i 运行）：
 /// 界面里 `105.model ← 90（Fast Bypasser）← 89`，而**服务端收到的是 `105.model = ["89", 0]`** ——
 /// 前端确实是把这条线穿透过去的。不做这一步的表现是 `comfy_load_workflow` 直接报
-/// `105.model ← 节点 90（没有转换出来）`，用户的 i2i 工作流**整份都进不来**。
+/// `105.model ← 节点 90（未转换出来）`，i2i 工作流**整体无法导入**。
 ///
 /// 形状不对（不是恰好 1 个接了线的输入）就**不猜**：照旧留在 `unsupported` 里。
 const FRONTEND_PASSTHROUGH: [&str; 3] = [
@@ -159,7 +159,7 @@ pub fn is_node_graph(obj: &Map<String, Value>) -> bool {
 /// 界面格式 → API 节点图（Kotlin `toApiGraph`）。
 ///
 /// `emulate_frontend` = Kotlin 的第三个参数：开着时，转换完再做一遍
-/// 「模拟用户行为」（[`crate::workflow::workflow_frontend::emulate`]）—— 广播型节点按声明的
+/// 「模拟前端行为」（[`crate::workflow::workflow_frontend::emulate`]）—— 广播型节点按声明的
 /// 类型 / 名字填空、显示节点丢掉、一个输出节点都没有时补一个 `SaveImage`。
 /// 关着时纯前端节点照旧留在 `unsupported_nodes` 里（一个字都不改）。
 pub fn to_api_graph(
@@ -361,7 +361,7 @@ pub fn to_api_graph(
         collect_open_inputs(info, &inputs, &id, &mut open_inputs);
     }
 
-    // --- 第三遍：## 模拟用户行为 ##（`emulateFrontend`，Kotlin `FrontendNodes.emulate`）---
+    // --- 第三遍：## 模拟前端行为 ##（`emulateFrontend`，Kotlin `FrontendNodes.emulate`）---
     //
     // 到这一步为止，纯前端节点还都躺在 `unsupported` 里。开着就做"前端 JS 在排队前会做的
     // 那几件事"：广播型节点按它声明的类型 / 名字过滤把上游那一路**填空**、显示节点丢掉、
@@ -1015,7 +1015,7 @@ pub(crate) fn is_widget_input(decl: &Value) -> bool {
             let upper = text.to_uppercase();
             // `COMFY_DYNAMICCOMBO_V3` 之类：**它是控件**，只是子项在展开时才存在
             // （见 [`fill_widgets`] 的 `dynamic` 分支）。把它当插口的表现是
-            // "某个必填输入一直空着" —— 用户的 `krea2 i2i workflow.json` 里
+            // "某个必填输入一直为空" —— `krea2 i2i workflow.json` 中
             // `TextGenerate.sampling_mode` 就是这样被误判的。
             WIDGET_TYPES.contains(&upper.as_str()) || upper.starts_with("COMFY_DYNAMIC")
         }
@@ -1115,7 +1115,7 @@ fn collect_open_inputs(
 /// 图里有没有"指向一个不存在的节点"的输入。
 ///
 /// 这不是吹毛求疵：被摘掉的节点留下的**悬挂引用**提交上去，ComfyUI 只会回一句
-/// "节点 xxx 不存在"，用户完全看不出是哪一步坏的。
+/// "节点 xxx 不存在"，无法判断哪一步出错。
 fn dangling_inputs(out: &Map<String, Value>) -> Vec<String> {
     let mut dangling: Vec<String> = Vec::new();
     for (id, value) in out {
