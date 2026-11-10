@@ -51,7 +51,7 @@ class LibraryStore extends ChangeNotifier {
   String? promptKind;
   bool onlyFavorite = false;
 
-  /// 只看「未关联产物」的提示词（用户要求）：产物被删掉之后，
+  /// 只看「未关联产物」的提示词：产物被删除后，
   /// 对应提示词的 mediaCount 会变成 0，用这个筛出来一键清理。
   bool onlyUnlinked = false;
   String promptSort = 'newest';
@@ -249,7 +249,7 @@ class LibraryStore extends ChangeNotifier {
     size: _settings.pageSize,
   );
 
-  /// 未关联产物的提示词条数（一键清除入口要先告诉用户会删掉多少）。
+  /// 未关联产物的提示词条数（一键清除入口需要显示将删除的数量）。
   Future<int> countUnlinkedPrompts() async {
     try {
       final page = await api.listPrompts(hasMedia: false, page: 1, size: 1);
@@ -274,7 +274,7 @@ class LibraryStore extends ChangeNotifier {
   /// **页码超出总页数时要回到最后一页**：在"只有一页多"的画廊里多选删除后，
   /// 原来的页码可能已经不存在了 —— 后端对越界页码返回空数组，界面就会显示
   /// "画廊还是空的"，其实库里还有东西，刷新一下才恢复（bug 清单第 2 条）。
-  /// 这里多发一次请求把它纠正过来，用户感觉不到。
+  /// 这里额外发一次请求纠正，界面上不会察觉。
   Future<void> refreshMedia() async {
     final seq = ++_mediaSeq;
     final gen = _mediaGen;
@@ -353,8 +353,8 @@ class LibraryStore extends ChangeNotifier {
 
   /// 「仅收藏」时画廊**无视集合**：每张被收藏的图按单张列出（不折叠、也不展开成组）。
   ///
-  /// 为什么必须这样（用户 2026-10-24）：折叠视图里一个集合只留**最早那张**当代表。
-  /// 收藏的若是别的成员，它就永远不出现在「仅收藏」里；代表本身没被收藏时整组直接消失。
+  /// 约束：折叠视图里一个集合只保留**最早那张**作为代表。
+  /// 收藏的是其他成员时，它不会出现在「仅收藏」中；代表未被收藏时整组消失。
   /// 所以这一档请求 `collapse=0`（见 [_listMedia]），界面也把 `isCollection` 的格子
   /// 当单图渲染（`gallery_page.dart` 里所有 `isCollection` 判据都过这个开关）。
   bool get mediaFavoritesFlat => mediaOnlyFavorite;
@@ -372,7 +372,7 @@ class LibraryStore extends ChangeNotifier {
     //
     // ⚠ 但「仅收藏」时**不许折叠**：折叠只认每个集合的代表（最早那张），
     // 代表没被收藏就整组消失、收藏了非代表的那张也永远看不到 ——
-    // 这一档用户要看的是"我收藏过的那几张图"，见 [mediaFavoritesFlat]。
+    // 这一档需要展示"收藏过的图片"，见 [mediaFavoritesFlat]。
     collapse: !mediaFavoritesFlat,
     page: page,
     size: _settings.pageSize,

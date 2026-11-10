@@ -3,9 +3,9 @@ import 'package:flutter/foundation.dart';
 import '../core/ai_api_client.dart';
 import '../models/ai_models.dart';
 
-/// NSFW 内容开关（2026-09-20 用户要求）。
+/// NSFW 内容开关。
 ///
-/// 两个选项**放一起**（用户原话）：① 是否注入那段"越狱"系统提示词；
+/// 两个选项**放在一起**：① 是否注入"越狱"系统提示词；
 /// ② 预览图要不要模糊显示。真源在后端（`app_settings` 的 `ai.nsfw`），
 /// 这个 store 只是它的**只读镜像 + 写入通道**：
 ///
@@ -22,8 +22,8 @@ class NsfwStore extends ChangeNotifier {
   /// 冷启动闸门：等本地服务有个结论再读设置（`BackendLauncher.settled`）。
   ///
   /// 它在这里**不只是"少一句报错"**：读失败时这个 store 保留的是默认值
-  /// （`blurEnabled == false`），于是"用户开了预览图模糊、冷启动却不糊"——
-  /// 同一个根因（端口文件还没写出来就发请求）在 NSFW 这条路上是**静默错**。
+  /// （`blurEnabled == false`），表现为"开启预览图模糊、冷启动后未生效"——
+  /// 同一根因（端口文件尚未写出时发请求）在 NSFW 路径上是**静默错误**。
   final Future<void> Function()? backendReady;
 
   AiApiClient? _cached;
@@ -50,10 +50,10 @@ class NsfwStore extends ChangeNotifier {
   bool _loading = false;
   String? error;
 
-  /// 用户在这次会话里"点开看过"的图（点一下打码的图就解开）。
+  /// 本次会话中"点开查看过"的图片（点击打码图片即解除）。
   ///
-  /// **刻意只放内存**：关掉 App 再打开时重新打码 —— 用户开"模糊"就是不想一进来
-  /// 就被糊一脸，而不是"永久解锁某几张图"。
+  /// **刻意只放内存**：关闭 App 后重新打码 —— 模糊开关的语义是默认打码，
+  /// 不是"永久解锁某几张图"。
   final Set<String> _revealed = <String>{};
 
   bool get loading => _loading;
@@ -72,8 +72,8 @@ class NsfwStore extends ChangeNotifier {
   /// 这一张图现在要不要打码（[key] 通常是 `media:<id>`）。
   ///
   /// **调用方必须先确认这一条是 NSFW**（`NsfwBlur` 的 `nsfw` 参数）：
-  /// 这个方法只回答"用户开着模糊开关、且这一条这次还没被看过吗"。
-  /// 以前它就是全部判据，于是开关一开**所有**内容都被糊住（用户 bug 2026-09-20）。
+  /// 该方法只回答"模糊开关是否开启、该条目本次是否已查看"。
+  /// 此前它是唯一判据，导致开关开启后**所有**内容都被打码。
   bool shouldBlur(String? key) {
     if (!blurEnabled) return false;
     if (key == null || key.isEmpty) return true;
@@ -84,7 +84,7 @@ class NsfwStore extends ChangeNotifier {
   bool isRevealed(String? key) =>
       key != null && key.isNotEmpty && _revealed.contains(key);
 
-  /// 用户点开了这一条（详情页）：把它解开（只对本次会话有效）。
+  /// 打开该条目（详情页）：解除打码（仅本次会话有效）。
   void reveal(String? key) {
     if (key == null || key.isEmpty) return;
     if (_revealed.add(key)) notifyListeners();
