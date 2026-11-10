@@ -56,7 +56,7 @@ class AiWorkspaceStore extends ChangeNotifier {
   /// 为什么要暴露出来而不是让页面自己去读 `BackendLauncher`：AI 页里那些
   /// "一显示就去拉"的地方（右侧栏的 ComfyUI 状态 / 实时进度 / 待审批）拿到的
   /// `baseUrl` 在冷启动那一秒还是 8080 兜底值，请求注定失败 —— 而其中
-  /// `/api/capture/status` 那个失败是**会显示出来且不会自己消失**的（只有用户手点刷新）。
+  /// `/api/capture/status` 那个失败是**会显示出来且不会自己消失**的（只能手动刷新）。
   /// 走 store 这一道的好处：测试里没注入闸门时它是个空操作，不会因为缺 provider 就炸。
   Future<void> waitForBackend() => backendReady?.call() ?? Future<void>.value();
 
@@ -106,7 +106,7 @@ class AiWorkspaceStore extends ChangeNotifier {
 
   /// 布局 → 提示词：用**当前选中的 Provider / 模型**当译者。
   ///
-  /// 不另开一套配置：用户在工作台挑哪一个，翻译就用哪一个（想用便宜的本地模型
+  /// 不另开一套配置：工作台选择哪一个，翻译就使用哪一个（如需使用低成本的本地模型
   /// 就在这里把它选中即可）。校验不过的重试在服务端做，这里只负责原样带回。
   Future<Map<String, dynamic>> translateLayout({
     required Map<String, Object?> spec,
@@ -144,7 +144,7 @@ class AiWorkspaceStore extends ChangeNotifier {
   ///
   /// 为什么需要它（总纲 §27.2 第 12 条）：手机上 Provider 的真源是**本机库**，
   /// 而「AI 模型与凭据」页新建 / 改完一个 Provider 之后，聊天页手里那份 `providers`
-  /// 还是进页面时读的旧清单 —— 用户必须切走再切回来（= 重新跑一遍 [load]）才看得到，
+  /// 仍是进入页面时读取的旧清单 —— 需要切走再切回（重新执行 [load]）才能看到，
   /// 于是看起来就像"我明明建好了它却说没有"。
   ///
   /// 触发点是**打开模型选择器那一刻**（`_ModelPickerDialog.initState`）：要挑模型的时候
@@ -172,7 +172,7 @@ class AiWorkspaceStore extends ChangeNotifier {
       if (changed) await _loadModels();
       // 跨 Provider 的完整目录：选择器按来源分组显示要的就是它（见 [catalogByProvider]）。
       // 放在"清单变没变"判据**之外** —— 模型的增删改不会动 provider 那一行，
-      // 而用户要的恰恰是"刚加的模型立刻能选到"。
+      // 而需求是"刚添加的模型立即可选"。
       await _loadCatalog();
     } catch (e) {
       error = "读本机那份 Provider 清单失败，$e";
@@ -210,7 +210,7 @@ class AiWorkspaceStore extends ChangeNotifier {
 
   /// 只把**当前 Provider 的模型目录**重新读一次（与 [refreshProviders] 同一个触发点）。
   ///
-  /// 为什么要与 [refreshProviders] 分开（用户 bug「对于模型声明，需要重启客户端才能生效」）：
+  /// 与 [refreshProviders] 分开处理：否则模型声明需要重启客户端才能生效。
   /// 改的是**模型**的能力声明（补图片输入 / 勾工具 / 调思考档位），provider 行一个字节都不动
   /// —— 那边的"清单变没变"判不出来，于是聊天页手里这份旧目录一直用到重启：
   /// 发消息才被后端拒绝"模型未声明支持图片输入"。
@@ -257,7 +257,7 @@ class AiWorkspaceStore extends ChangeNotifier {
     }
   }
 
-  /// **预设页 → 工作台**的交接文本（用户 2026-10-11：「▶️运行」= 送到聊天框并跳转过去）。
+  /// **预设页 → 工作台**的交接文本（「▶️运行」表示送到聊天框并跳转）。
   ///
   /// 为什么用"待取用的一格"而不是给 `AiHomePage` 加构造参数：
   /// 那个页面是 `const AiHomePage()`（导航列表里的一项，`pages[_index]` 复用同一个实例），
@@ -400,7 +400,7 @@ class AiWorkspaceStore extends ChangeNotifier {
   ///
   /// 与 [_source] 同一个判据、同一个理由：手机上 Run 由本地 harness 执行、会话落在本地库，
   /// 那"这把 key 在不在手上"也必须问**本机** —— 桌面的 key 不下行（总纲 §3.3），
-  /// 用桌面的状态显示"已配置"只会让用户点发送然后撞 401。
+  /// 用桌面的状态显示"已配置"会导致发送时返回 401。
   CredentialStore get credentials {
     final injected = _injectedCredentials;
     if (injected != null) return injected;
@@ -421,7 +421,7 @@ class AiWorkspaceStore extends ChangeNotifier {
   /// **每条 Provider 各自的模型目录**（`providerId → 模型`）。
   ///
   /// 为什么不能只留 [models]：它只是**当前选中那条**的目录，于是工作台里
-  /// "换 Provider"根本无处可去 —— 新建的 Provider 永远选不上（用户 2026-10 报的 bug：
+  /// "换 Provider"无处可去 —— 新建的 Provider 永远无法选中（表现为：
   /// 「新加入的 provider 无法在工作台中选用」）。选择器改成按来源分组列出之后，
   /// 这里就是那一组一组的数据源。
   ///
@@ -432,7 +432,7 @@ class AiWorkspaceStore extends ChangeNotifier {
   /// 某条 Provider 的目录读失败时的原因（`providerId → 人话`）。
   ///
   /// 单独一个字段而不是并进 [error]：一条 Provider 挂了不该让整页都变成错误态，
-  /// 但界面上必须**如实标出是哪一条**（否则用户会以为"它一个模型都没有"）。
+  /// 但界面上必须**如实标出是哪一条**（否则会被理解为"它没有模型"）。
   Map<String, String> catalogIssues = const {};
 
   // --- 会话 / 消息 ---
@@ -447,7 +447,7 @@ class AiWorkspaceStore extends ChangeNotifier {
 
   /// 这份 [skills] 是不是**手机本机投放口**里的（桌面连不上时的回落）。
   ///
-  /// 界面据此说一句"只列了手机本机的"：数量少是有原因的，不能让用户以为
+  /// 界面据此显示"只列了手机本机的"：数量少是正常的，不能误认为
   /// 桌面上的 skill 被删了。
   bool skillsLocalOnly = false;
 
@@ -458,7 +458,7 @@ class AiWorkspaceStore extends ChangeNotifier {
   bool skillsBusy = false;
 
   // --- 长期记忆（M6） ----------------------------------------------------
-  /// 跨对话保留的用户偏好 / 约定；每次 Run 由后端注入系统提示。
+  /// 跨对话保留的偏好 / 约定；每次 Run 由后端注入系统提示。
   AiMemory memory = const AiMemory();
   String? memoryError;
   bool memoryBusy = false;
@@ -467,8 +467,8 @@ class AiWorkspaceStore extends ChangeNotifier {
   /// 只用来在工具卡上显示分类图标；拿不到不影响聊天。
   List<AiToolInfo> tools = const [];
 
-  // --- 权限档（用户建议 ⑤） ----------------------------------------------
-  /// `ask`（默认，需要审批的工具要用户点批准）/ `full`（自动允许，AI 无需批准）。
+  // --- 权限档 -------------------------------------------------------------
+  /// `ask`（默认，需要审批的工具需手动批准）/ `full`（自动允许，AI 无需批准）。
   ///
   /// 真源在后端（`ai.tools.policy`，每次 Run 现读），这里只是界面上的镜像：
   /// 切档写回后端后，**下一次回复立刻生效**（后端会把那段规则即时注入系统提示）。
@@ -476,7 +476,7 @@ class AiWorkspaceStore extends ChangeNotifier {
 
   bool get fullPermission => permissionMode == AiToolPolicy.modeFull;
 
-  /// 当前权限档的界面名字（用户建议 ①，2026-09-20：正在生成的回复气泡里要能看见它）。
+  /// 当前权限档的界面名称（生成中的回复气泡需显示它）。
   String get permissionLabel =>
       fullPermission ? AiToolPolicy.modeFullLabel : AiToolPolicy.modeAskLabel;
 
@@ -504,7 +504,7 @@ class AiWorkspaceStore extends ChangeNotifier {
   String? _activeRunId;
   bool get running => _activeRunId != null;
 
-  /// **正在流式生成的那一条助手消息**（用户建议 2026-09-20）：
+  /// **正在流式生成的那条助手消息**：
   /// 「AI 正在生成」的转圈动画要画在**它自己那个气泡的底部**，而不是页脚浮层。
   ///
   /// 两个条件缺一不可：
@@ -528,7 +528,7 @@ class AiWorkspaceStore extends ChangeNotifier {
   }
 
   // -----------------------------------------------------------------------
-  //  「AI 正在等用户回答」的那条提问（用户 bug 2026-09-21）
+  //  「AI 正在等待回答」的提问
   // -----------------------------------------------------------------------
 
   /// 提问接管输入区时那个"自己输入答案"文本框的焦点。
@@ -540,9 +540,9 @@ class AiWorkspaceStore extends ChangeNotifier {
     debugLabel: 'ask-user-question',
   );
 
-  /// **当前正等着用户回答的那条提问**（没有就返回 null）。
+  /// **当前等待回答的提问**（没有则返回 null）。
   ///
-  /// 输入区靠它决定"是被提问接管，还是普通输入框"（用户 bug 2026-09-21：
+  /// 输入区据此决定"由提问接管，还是显示普通输入框"（表现为：
   /// "在调用 ask_user_question 时，将原来聊天详情下部的模块替换（输入框等）"）。
   ///
   /// "还在等"的判据 = 有提问 && 还没 `answered`。**不看 Run 状态**：
@@ -573,7 +573,7 @@ class AiWorkspaceStore extends ChangeNotifier {
     }
     if (best != null) return best;
     // 兜底：**不看名字**，只看"有没有一条还没回答的提问"。
-    // 而"有没有问题"这个事实本身就够了（用户 bug 2026-09-21：输入区不接管）。
+    // 而"是否存在提问"这一事实已足够（否则输入区不会接管）。
     for (final list in _liveToolCalls.values) {
       for (final call in list) {
         consider(call, byName: false);
@@ -614,7 +614,7 @@ class AiWorkspaceStore extends ChangeNotifier {
   }
 
   // -----------------------------------------------------------------------
-  //  流式期间的刷新节流（用户 bug：聊天快速滑动 / 展开流式思考时卡顿）
+  //  流式期间的刷新节流（避免快速滑动 / 展开流式思考时卡顿）
   // -----------------------------------------------------------------------
 
   /// 流式增量攒下的"待通知"标记与定时器（见 [_notifyStreaming]）。
@@ -665,7 +665,7 @@ class AiWorkspaceStore extends ChangeNotifier {
     _liveRevisions[messageId] = (_liveRevisions[messageId] ?? 0) + 1;
   }
 
-  /// 当前还没接通的能力，用**明确的话**告诉用户，而不是假装成功。
+  /// 当前未接通的能力，用**明确文案**说明，不得显示成功。
   String? notice;
 
   bool get hasProvider => selectedProvider != null;
@@ -677,8 +677,8 @@ class AiWorkspaceStore extends ChangeNotifier {
   ///
   /// 这是准入判断的**唯一真源**（[send] 自己也用它），而且必须是**同步**的：
   /// 页面得在"清空输入框"之前就知道能不能发 —— 以前是"先清空、再由 send() 拒绝"，
-  /// 于是最常见的"正在生成中又按了一次回车"会把用户刚打的字**静默吃掉**
-  /// （用户报的 bug：只能自己把上一条复制一遍再发一次）。被拒时一个字节都不能动。
+  /// 因此"生成中再次按回车"会把刚输入的文本**静默丢弃**
+  /// （只能手动复制上一条重发）。被拒时输入内容不得改动。
   String? sendBlockReason() {
     if (sending) return '正在生成中。先点「停止」，或等这一轮结束再发。你打的字还在输入框里。';
     if (uploadingAttachments) return '附件还在上传，等它传完再发（免得只发出去一半）。';
@@ -693,7 +693,7 @@ class AiWorkspaceStore extends ChangeNotifier {
     if (selectedProvider == null || selectedModel == null) {
       return '请先选择 Provider 与模型（设置 → AI 模型）';
     }
-    // 还有没上传成功的附件时不给发：否则用户以为图发出去了，其实只发了文字
+    // 有未上传成功的附件时禁止发送：否则会误认为图片已发送，实际只发送了文字
     if (!attachments.every((a) => a.hasId)) {
       return '有附件还没上传成功，已阻断发送。请移除它们或重新选择文件。';
     }
@@ -750,7 +750,7 @@ class AiWorkspaceStore extends ChangeNotifier {
   }
 
   /// 重新扫描投放口：**给"拷进来但没写 frontmatter"的 skill 自动补上并登记**，
-  /// 然后刷新列表。用户不用重启应用，也不用点任何"导入"。
+  /// 然后刷新列表。无需重启应用或点击"导入"。
   Future<({bool ok, String message})> rescanSkills() async {
     skillsBusy = true;
     notifyListeners();
@@ -767,7 +767,7 @@ class AiWorkspaceStore extends ChangeNotifier {
     }
   }
 
-  /// 删除用户 skill；成功后重拉列表（磁盘是真源）。内置 skill 会被后端拒绝，
+  /// 删除自定义 skill；成功后重拉列表（磁盘是真源）。内置 skill 会被后端拒绝，
   /// 这里把后端的原话返回给调用方去弹提示。
   Future<({bool ok, String message})> deleteSkill(String name) async {
     skillsBusy = true;
@@ -788,7 +788,7 @@ class AiWorkspaceStore extends ChangeNotifier {
     }
   }
 
-  /// 停用 / 启用一个 skill（内置与用户都允许）。停用只影响对话，文件不动。
+  /// 停用 / 启用一个 skill（内置与自定义均允许）。停用只影响对话，不改动文件。
   Future<({bool ok, String message})> setSkillEnabled(
     String name,
     bool enabled,
@@ -816,9 +816,9 @@ class AiWorkspaceStore extends ChangeNotifier {
 
   /// 长期记忆（M6）：读回来给右侧栏显示 / 编辑。
   ///
-  /// [silent] 是给"AI 调用了 `remember`"这条路的（用户 bug：更新长期记忆之后右侧栏不刷新）：
+  /// [silent] 供"AI 调用 `remember`"路径使用：
   /// 它发生在一次 Run 的中间，右侧栏的「长期记忆」面板必须当场跟上条数，
-  /// 但**不能**顺手把编辑按钮换成转圈（那是用户自己点编辑时的反馈，见 [memoryBusy]）。
+  /// 但**不得**把编辑按钮改为加载状态（该反馈仅用于手动编辑，见 [memoryBusy]）。
   /// 失败同样静默 —— 这条路径是"顺带对齐一下"，失败不该盖掉面板上原有的错误说明。
   Future<void> loadMemory({bool silent = false}) async {
     if (!silent) {
@@ -839,7 +839,7 @@ class AiWorkspaceStore extends ChangeNotifier {
     }
   }
 
-  /// 整篇保存（用户在编辑器里改完）。
+  /// 整篇保存（编辑器修改完成后）。
   Future<({bool ok, String message})> saveMemory(String content) async {
     memoryBusy = true;
     notifyListeners();
@@ -915,7 +915,7 @@ class AiWorkspaceStore extends ChangeNotifier {
     }
   }
 
-  /// 注册 / 覆盖一个用户 skill（AI 或用户在界面上登记）。
+  /// 注册 / 覆盖一个自定义 skill（AI 或界面登记）。
   Future<({bool ok, String message})> registerSkill({
     required String name,
     required String description,
@@ -944,7 +944,7 @@ class AiWorkspaceStore extends ChangeNotifier {
     try {
       tools = await _api.listTools();
     } catch (_) {
-      // 后端老版本 / 临时不可用：图标退回按名字猜，不打扰用户
+      // 旧后端 / 临时不可用：图标按名称推断，不提示
     }
     notifyListeners();
   }
@@ -960,7 +960,7 @@ class AiWorkspaceStore extends ChangeNotifier {
     }
   }
 
-  /// 切换权限档（用户建议 ⑤：询问 / 自动允许（无需批准））。
+  /// 切换权限档（询问 / 自动允许（无需批准））。
   ///
   /// **先写后端再改界面**：这是权限，不能"界面看着切了、后端其实没切"。
   /// 是**全局**设置（存在 `ai.tools.policy` 里），切一次对之后所有对话都有效；
@@ -974,8 +974,8 @@ class AiWorkspaceStore extends ChangeNotifier {
       permissionMode = policy.permissionMode;
       if (policy.permissionMode != mode) {
         // 后端没接受这一档：旧后端（响应里根本没有 permissionMode 字段）会静默回落
-        // 成「询问」，界面上看着就是"点了没反应"（用户 bug ①）。这里如实说出来，
-        // 而不是让用户一直点。
+        // 为「询问」，界面表现为"点击无反应"。这里如实报告，
+        // 避免重复点击。
         notice =
             '切换权限失败，后端没有接受「${mode == AiToolPolicy.modeFull ? AiToolPolicy.modeFullLabel : AiToolPolicy.modeAskLabel}」'
             '（当前仍是「${policy.permissionMode == AiToolPolicy.modeFull ? AiToolPolicy.modeFullLabel : AiToolPolicy.modeAskLabel}」）。'
@@ -1019,7 +1019,7 @@ class AiWorkspaceStore extends ChangeNotifier {
       _resolveToolCall(callId, approve: true);
 
   // -----------------------------------------------------------------------
-  //  ComfyUI 实时进度（用户"其他建议"第 1 条）
+  //  ComfyUI 实时进度
   // -----------------------------------------------------------------------
 
   /// 最近一次拿到的 ComfyUI 实时进度。右侧栏显示它。
@@ -1039,7 +1039,7 @@ class AiWorkspaceStore extends ChangeNotifier {
   ///
   /// 节奏是"有活动时 1.5 秒一次、闲着时 6 秒一次"：闲着还勤问 ComfyUI，
   /// 既费电又会让 ComfyUI 的请求日志刷屏；但没有活动时**不能完全停**，
-  /// 否则用户在 ComfyUI 里手点一下就看不到进度了。
+  /// 否则在 ComfyUI 中手动提交任务后无法看到进度。
   void startWatchingComfy() {
     _jobsTimer?.cancel();
     _jobsTimer = Timer.periodic(
@@ -1056,7 +1056,7 @@ class AiWorkspaceStore extends ChangeNotifier {
     _jobsTimer = null;
   }
 
-  /// 拉一次实时进度。失败**不弹错**（进度是辅助信息，不该因为 ComfyUI 没开就骚扰用户），
+  /// 拉一次实时进度。失败**不弹错**（进度是辅助信息，ComfyUI 未启动时不提示），
   /// 但原因要留在 [comfyJobsError] 里 —— 界面据此说"拉不到"，不许装成"没有任务"。
   Future<void> refreshComfyJobs() async {
     if (_jobsInFlight) return;
@@ -1095,7 +1095,7 @@ class AiWorkspaceStore extends ChangeNotifier {
 
   /// 拉待批清单失败的原因（成功为 null）。
   ///
-  /// 界面**如实显示一行**，绝不把"拉不到"装成"没有待批"——那两句对用户的意思完全相反。
+  /// 界面**如实显示一行**，不得把"拉取失败"显示为"没有待批"——两者含义相反。
   String? pendingError;
 
   Timer? _pendingTimer;
@@ -1103,7 +1103,7 @@ class AiWorkspaceStore extends ChangeNotifier {
 
   /// 这台设备是不是"手机那一端"（本机 harness + 本机密钥库）。
   ///
-  /// 审批一律归桌面（用户拍板："有关工作流的交给桌面审批处理"），所以界面靠它决定
+  /// 审批一律归桌面，界面据此决定
   /// **画不画那张待批卡**、要不要白轮询。
   bool get isLocal => _source.isLocal;
 
@@ -1139,7 +1139,7 @@ class AiWorkspaceStore extends ChangeNotifier {
   }
 
   /// 拉一次待批清单。失败**只记在 [pendingError]**：不弹错、也不清空上一次拿到的列表
-  /// （清空就等于告诉用户"没人等你"，那是假话）。
+  /// （清空会显示"没有等待项"，与事实不符）。
   Future<void> refreshPending() async {
     if (_pendingInFlight) return;
     _pendingInFlight = true;
@@ -1231,7 +1231,7 @@ class AiWorkspaceStore extends ChangeNotifier {
 
   /// 一条助手消息里**真正入库的提示词**（= 生成这些产物用的那份工作流）。
   ///
-  /// 用户建议 ①："「生成的产物」包括生成的工作流" —— 所以回复末尾那张卡除了缩略图，
+  /// "生成的产物"包括生成的工作流 —— 回复末尾那张卡除缩略图外，
   /// 还要能直接打开这次真正跑过的工作流（而不是只给几张结果图）。
   /// 同样只认后端确认的 `capturedPromptId`，不解析正文。
   List<int> producedPromptIds(AiMessage message) {
@@ -1243,7 +1243,7 @@ class AiWorkspaceStore extends ChangeNotifier {
     return seen.toList();
   }
 
-  /// 一条助手消息里**被标记为成人内容**的产物（用户 bug 2026-09-20）。
+  /// 一条助手消息里**被标记为成人内容**的产物。
   ///
   /// 与 [producedMediaIds] 同源（工具结构化结果），只是这一份只含
   /// `comfy_submit` 明说过 `nsfw=true` 的那几张：回复里的产物卡只糊这些，
@@ -1279,10 +1279,10 @@ class AiWorkspaceStore extends ChangeNotifier {
   Future<void> denyToolCall(String callId) =>
       _resolveToolCall(callId, approve: false);
 
-  /// 回答 AI 的提问（用户建议 ⑥）。
+  /// 回答 AI 的提问。
   ///
   /// **不新建消息、也不改 Run 状态**：后端把这段文字当工具结果喂回模型，
-  /// 同一个 Run 接着往下做 —— 这正是用户要的"回答结束时不中断当前对话"。
+  /// 同一 Run 继续执行 —— 回答结束后不中断当前对话。
   ///
   /// [optionIndex] 与 [text] 至少给一个；点了按钮就用前者（后端会把它翻成选项文字）。
   Future<({bool ok, String message})> answerQuestion(
@@ -1300,7 +1300,7 @@ class AiWorkspaceStore extends ChangeNotifier {
         // 提问已经结束（超时 / Run 停了）：如实说，不能假装收到
         return (ok: false, message: '这条提问已经结束了（超时或本次回答已停止），这次回答没有被采纳。');
       }
-      // 本地立刻切成"已回答"：不等 SSE 回来（它也会来，但用户点完就该有反馈）。
+      // 本地立即切换为"已回答"：不等 SSE 返回（点击后应即时反馈）。
       // 按 **callId** 定位（提问卡挂在模型那条调用上，见 `user.question` 的注释）；
       // 拿不到 callId（历史消息里答过了）就退回 questionId。
       _patchToolCall(
@@ -1323,7 +1323,7 @@ class AiWorkspaceStore extends ChangeNotifier {
     }
   }
 
-  /// 跳过提问：后端当作"用户没有回答"放行，模型基于已有信息继续。
+  /// 跳过提问：后端按"未回答"放行，模型基于已有信息继续。
   Future<({bool ok, String message})> skipQuestion(String questionId) async {
     try {
       await _api.skipQuestion(questionId);
@@ -1363,11 +1363,11 @@ class AiWorkspaceStore extends ChangeNotifier {
     );
   }
 
-  /// 这个 `ask_user_question` 调用**还在等用户回答**吗。
+  /// 这个 `ask_user_question` 调用**是否仍在等待回答**。
   ///
   /// ⚠ 空 `questions` 也算"还在等"：`tool.requested` 先到、问题后到，那段窗口里
   /// 卡片上还没有任何题 —— 把它算成"答完了"会让提问卡挂到 `questionId` 上另开一条
-  /// （用户 bug 2026-09-21 的根因，就这么复发的）。
+  /// （该问题由此复发）。
   static bool _askPending(AiToolCallState call) {
     if (call.name != 'ask_user_question') return false;
     final qs = call.allQuestions;
@@ -1421,7 +1421,7 @@ class AiWorkspaceStore extends ChangeNotifier {
   ///
   /// 为什么必须去重：`HomeShell` 每次切页都会重建 `AiHomePage`（不是 IndexedStack），
   /// 页面 `didChangeDependencies` 里那句 `load()` 于是会跟着跑第二遍 —— 而加载流程里
-  /// 会新建会话，用户看到的就是"打开 ComfyHub 冒出好几条新对话"（用户报的 bug ①）。
+  /// 会新建会话，表现为"打开 ComfyHub 后出现多条新对话"。
   bool _loaded = false;
   Future<void>? _loading;
 
@@ -1440,7 +1440,7 @@ class AiWorkspaceStore extends ChangeNotifier {
     try {
       // **先等本地服务有个结论**（见 [backendReady] / `BackendLauncher.settled`）：
       // 冷启动时 `.run\api.json` 还没写出来，这一刻 `baseUrl` 是 8080 兜底值，
-      // 发出去的请求注定失败 —— 而后端 1 秒后就绪，用户看到的就是一句莫名其妙的
+      // 发出去的请求必然失败 —— 而后端 1 秒后就绪，界面只显示一条无法理解的
       // "连接后端失败，ClientException … 127.0.0.1:8080/api/ai/providers"。
       await backendReady?.call();
       // 先尽力把配对令牌读进内存（手机专有）：下面 ensureRunKit / syncOutbox 都要带它。
@@ -1482,7 +1482,7 @@ class AiWorkspaceStore extends ChangeNotifier {
   ///
   /// **会话与消息只认本地库**，所以这一段不需要桌面在场；provider / 模型清单是
   /// 桌面版本化下发的工件（M6 才真正下行），拿不到时**只把这件事说出来**，
-  /// 绝不让整页起不来 —— 用户至少还能翻历史会话。
+  /// 不让整页无法加载 —— 至少还能浏览历史会话。
   Future<void> _loadLocalStartup() async {
     // 装上"回到前台补推一次上行"的钩子（M4 补全）：只装一次，只装在手机上
     _installLifecycleHook();
@@ -1499,10 +1499,10 @@ class AiWorkspaceStore extends ChangeNotifier {
     }
     conversations = await _source.listConversations();
 
-    // ★ **清单只读本机库**（2026-09-27 用户拍板"手机完全可以独立配置 provider"的收尾）。
+    // **清单只读本机库**（手机端独立配置 provider）。
     //
     // 在这之前这里打的是 `GET /api/ai/providers`（桌面 HTTP），离线时回落到
-    // SharedPreferences 里那份缓存 —— 而用户**在手机上新建的 provider 只写本机库**，
+    // SharedPreferences 中的缓存 —— 而**手机上新建的 provider 只写本机库**，
     // 于是它永远不出现在聊天页的选择器里（"独立配置 provider"就还差这一段）。
     //
     // ## 那份 SharedPreferences 缓存**退役了**（不是"留着不用"）
@@ -1514,7 +1514,7 @@ class AiWorkspaceStore extends ChangeNotifier {
     // 不做自动合并）；缓存代码与那两个键一并删掉，免得日后有人顺手读回来。
     try {
       providers = await _providerStore.listProviders();
-      // 空清单要**如实说**：不然用户只看到一个空选择器，只能猜"是不是模型全被删了"。
+      // 空清单要**如实说明**：否则只会显示空选择器，无法判断"模型是否被删除"。
       // 也顺带说清手机与桌面是两份清单（否则他会以为桌面配过就够了）。
       error = providers.isEmpty ? _emptyLocalProvidersNotice : null;
     } catch (e) {
@@ -1570,7 +1570,7 @@ class AiWorkspaceStore extends ChangeNotifier {
       // 读出来的值由 `PairingTokenStore.read()` 写进进程内缓存（上面那个 getter 读的就是它）
       await PairingTokenStore().read();
     } catch (_) {
-      // 桥不可用 / 密钥库读不动：当作"还没配对"，用户去设置页配一次即可
+      // 桥不可用 / 密钥库读取失败：按"未配对"处理，到设置页配置一次即可
       PairingTokenCache.set(null);
     }
   }
@@ -1579,7 +1579,7 @@ class AiWorkspaceStore extends ChangeNotifier {
   ///
   /// 为什么必须当场重取 run-kit：冷启动时 `ensureRunKit` 很可能正是**因为没有令牌**
   /// 才失败的（闸门开着时匿名取规则工件会被挡下），而"没有规则就不许发"是硬闸门
-  /// （[sendBlockReason]）—— 不重试的话，用户配完对还得重启 App 才能聊天。
+  /// （[sendBlockReason]）—— 不重试时，配对完成后需重启 App 才能聊天。
   Future<void> reloadPairingToken() async {
     await _loadPairingToken();
     notifyListeners();
@@ -1598,7 +1598,7 @@ class AiWorkspaceStore extends ChangeNotifier {
 
   /// 上一次冷启动给几条"没跑完的 Run"收了尾（0 = 没有）。
   ///
-  /// 界面据此可以如实说一句"上次那条回复被中断了"，而不是让用户对着一个
+  /// 界面据此显示"上次那条回复被中断"，避免面对一个
   /// 永远转圈的助手气泡猜（手机被系统杀掉是常态，见总纲 §7 风险表）。
   int recoveredRuns = 0;
 
@@ -1624,7 +1624,7 @@ class AiWorkspaceStore extends ChangeNotifier {
   /// 把本机产生的会话 / 消息推到桌面（**M4**）。
   ///
   /// 桌面在线才有意义，所以**失败不抛**（离线是常态）—— 但成功推上去几条要**说出来**，
-  /// 否则用户不知道"手机上聊的东西桌面能不能看到"。返回推上去的条数。
+  /// 否则无法判断"手机上聊的内容桌面是否可见"。返回推上去的条数。
   Future<int> syncOutbox() async {
     if (!_source.isLocal) return 0;
     // 防重入：定时器到点时上一拍还没跑完就**跳过这一拍**，别把请求堆起来
@@ -1646,7 +1646,7 @@ class AiWorkspaceStore extends ChangeNotifier {
         pushNotice = '本机还有 ${r.pending} 条没同步到桌面，${r.error}';
       }
       // M4 补全：队列里还有东西就**挂着定时重试**，推空了立刻停 ——
-      // 既不能"只在冷启动与 Run 收尾各推一次"（用户停在聊天页就永远不推了），
+      // 既不能"只在冷启动与 Run 收尾各推一次"（停留在聊天页时不会再推），
       // 也不能空转（空队列还每 45 秒打一次网络 = 白烧电）。
       if (r.pending > 0) {
         _armOutboxRetry();
@@ -1690,13 +1690,13 @@ class AiWorkspaceStore extends ChangeNotifier {
       if (r.ok) {
         if (r.applied > 0) {
           syncedFromDesktop += r.applied;
-          // 全量重建与增量补几条是**两件事**，说法不能一样（前者用户可能刚 410 过）
+          // 全量重建与增量补录是**两件事**，提示文案不能相同（全量重建可能刚经历 410）
           pushNotice = r.mode == 'bootstrap'
               ? '已从桌面全量重建本机镜像（${r.applied} 行）。'
               : '已从桌面同步 ${r.applied} 条记录。';
           // **库变了，界面得跟着变**（2026-11-09 真机）：
           // 以前这里只记一句"同步了几条"，打开着的会话一个像素都不动 ——
-          // 桌面的回执（`submit-reply-<queueId>`）明明已经落到本机库，用户却要
+          // 桌面的回执（`submit-reply-<queueId>`）已落入本机库，却需要
           // 手点一次刷新才看得见。会话列表一起重读：标题里的条数与时间也在变。
           if (!running) {
             conversations = await _safeListConversations();
@@ -1763,7 +1763,7 @@ class AiWorkspaceStore extends ChangeNotifier {
   /// 为什么是"回到前台"而不是"网络恢复"：Android 的连接状态回调要新引一个依赖
   /// （`connectivity_plus`），而这个工程里**已有的**生命周期钩子是 `AppLifecycleListener`
   /// （`lib/app.dart` 用它做退出的收尾），所以这条就落在"回到前台"上 ——
-  /// 用户从别的 App / 锁屏回来时补推一次，正是"刚恢复网络"最常见的那一刻。
+  /// 从其他 App / 锁屏返回时补推一次，对应"刚恢复网络"的常见时机。
   ///
   /// 两条纪律：**先看本地队列**（没有待办就一条网络请求都不打），以及
   /// 失败只记 [pushNotice]、**绝不拦聊天页**（离线是手机的常态）。
@@ -1772,7 +1772,7 @@ class AiWorkspaceStore extends ChangeNotifier {
     // ① 上行：**先问本地队列**，没有待办就不推（绝不空转烧电）
     if (await _pendingOutbox() > 0) await syncOutbox();
     // ② 下行：**不管本机队列空不空都要拉一次** —— 桌面那边可能刚改过东西
-    //    （用户刚在桌面上删了一条会话 / 另开了一台设备在聊），而本机队列本来就是空的。
+    //    （桌面上刚删除会话 / 另一台设备正在聊天），而本机队列为空。
     //    上限是"每次回前台一次"，不是轮询；失败只记提示。
     await pullChanges();
   }
@@ -1824,12 +1824,12 @@ class AiWorkspaceStore extends ChangeNotifier {
   /// 前台周期拉取（桌面回执 / 桌面改动）的定时器。
   ///
   /// 为什么要有它：桌面的回执（`submit-reply-<queueId>`）就是一条普通 `ai_messages`，
-  /// 而 [pullChanges] 原来只在冷启动 / 回前台 / 手动下拉时触发 —— 用户坐在会话里
+  /// 而 [pullChanges] 原来只在冷启动 / 回前台 / 手动下拉时触发 —— 停留在会话中
   /// 盯着等，回执永远不来（2026-11-08 真机）。手机回到前台后补一条周期通道，
   /// 不追求实时，只要求"坐着等也能等到"。
   Timer? _pullTimer;
 
-  /// 25 秒一拍：回执不是实时通道，但也不该让用户等到重开 App；
+  /// 25 秒一次：回执不是实时通道，但不应当等到重开 App；
   /// 比上行重试（45s）密一点，两者撞在一起也无妨（拉本身有防重入）。
   static const _kPullInterval = Duration(seconds: 25);
 
@@ -1970,7 +1970,7 @@ class AiWorkspaceStore extends ChangeNotifier {
   /// 把每条 provider 的凭据状态换成**本机**的（手机专有）。
   ///
   /// 拿不到就原样保留桌面那份，并且**不抛** —— 这里失败不该让整个列表消失
-  /// （用户至少还能看见 provider 与模型）。
+  /// （至少还能查看 provider 与模型）。
   Future<List<AiProvider>> _overlayDeviceCredentials(
     List<AiProvider> list,
   ) async {
@@ -1990,7 +1990,7 @@ class AiWorkspaceStore extends ChangeNotifier {
   //
   // 它当年的用途是"桌面下发的清单在离线时可读"，而那个位置现在由**本机库**
   // （`ai_providers` / `ai_models`，见 `lib/core/provider_store.dart`）占着：
-  // 既然是本机表，离线可读**又可写**，用户能在手机上独立配 provider。
+  // 本机表离线可读**又可写**，可在手机上独立配置 provider。
   // 两份都读就会出现同一个 provider 两套 baseURL / 能力声明 —— 谁赢看不出来，
   // 而它决定"这条消息发得出去吗"。所以**一个端只留一份清单**（§14.4：两端各一份、
   // 不做自动合并），缓存代码连同那两个键一并删掉，免得日后有人顺手读回来。
@@ -2002,7 +2002,7 @@ class AiWorkspaceStore extends ChangeNotifier {
   /// 挑一条现成的空会话接着用；一条都没有才真的新建。
   ///
   /// "空"要**同时**满足两件事：会话里一条消息都没有、本地草稿里也没有打了一半的字
-  /// 或挂着的附件。只看 `messageCount` 会把用户没发出去的内容当成垃圾删掉。
+  /// 或挂着的附件。只看 `messageCount` 会把未发送的内容当成垃圾删除。
   /// 顺带清掉历史遗留的多余空壳（只留最新的一条，列表按更新时间倒序）。
   Future<void> _startFreshConversation() async {
     final reusable = <AiConversation>[];
@@ -2050,7 +2050,7 @@ class AiWorkspaceStore extends ChangeNotifier {
   ///
   /// 为什么要单独一个字段：[providers] 从缓存来时界面已经有清单可用了，但
   /// "**这个** Provider 的模型目录本机还没缓存过"是另一件事 —— 不说清楚，
-  /// 用户只会看到一个空的选择器，然后猜"是不是模型全被删了"。
+  /// 只会显示空选择器，无法判断"模型是否被删除"。
   String? modelsIssue;
 
   Future<void> _loadModels() async {
@@ -2065,7 +2065,7 @@ class AiWorkspaceStore extends ChangeNotifier {
       // 手机：模型目录也来自**本机库**（离线可用的真源）。
       //
       // 空目录要如实说：能力声明是"发得出去"的前提（附件与工具在准入那一步看它），
-      // 而这里一条都没有时用户只会看到一个空选择器 —— 得告诉他去哪儿加。
+      // 而这里为空时只会显示空选择器 —— 需要说明在哪里添加。
       try {
         models = await _providerStore.listModels(p.id);
         if (models.isEmpty) {
@@ -2095,7 +2095,7 @@ class AiWorkspaceStore extends ChangeNotifier {
     selectedProvider = p;
     selectedModel = null;
     await _loadModels();
-    // 离线且本机没缓存过这个 Provider 的目录：**当场说出来**（否则用户只看到一个空选择器，
+    // 离线且本机未缓存该 Provider 的目录：**立即说明**（否则只显示空选择器，
     // 只能猜"是不是模型全被删了"）。成功 / 有缓存时不动 error —— 别把别的错误盖掉。
     if (modelsIssue != null) error = modelsIssue;
     await refreshPreflight();
@@ -2115,7 +2115,7 @@ class AiWorkspaceStore extends ChangeNotifier {
       try {
         await _loadModels();
       } catch (e) {
-        // 目录读失败**不该让用户点不中**：那条模型明明就摆在这份界面上。
+        // 目录读取失败**不应导致无法选中**：该模型已显示在界面中。
         error = '读「${p.displayName}」的模型目录失败，$e';
         models = catalogByProvider[p.id] ?? const [];
       }
@@ -2135,12 +2135,12 @@ class AiWorkspaceStore extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// 把消息里记的 `modelId` 翻成界面上好认的名字（用户建议 2026-09-20：
+  /// 把消息中记录的 `modelId` 转换为界面可读名称（
   /// "如果本轮对话使用模型与上轮不同，需要在回复气泡显示出来"）。
   ///
   /// 后端给每条助手消息都落了 `model_id`（`ai_messages.model_id`），所以**历史气泡**
   /// 也能如实显示当时用的是哪个模型 —— 不是"当前选中的模型"。
-  /// 目录里查不到（用户换了 Provider / 删过模型）时退回 id 本身，绝不显示空白。
+  /// 目录中查不到（更换 Provider / 删除模型）时返回 id 本身，不显示空白。
   String modelLabelOf(String? modelId) {
     final id = (modelId ?? '').trim();
     if (id.isEmpty) return '';
@@ -2217,7 +2217,7 @@ class AiWorkspaceStore extends ChangeNotifier {
       await _cleanupEmptyConversation();
       conversation = conversations.firstWhere((c) => c.id == id);
       // 库里那条流式助手的 text 是空的（整轮跑完才落库）——切回来时用内存里
-      // 那份正在长的正文盖回去，不然用户看到的就是"前面的答复全没了"
+      // 那份正在生成的正文覆盖回去，否则界面显示为"前面的答复全部消失"
       messages = _overlayInflight(await _source.listMessages(id));
       _syncConversationStats();
       await _applyDraftAttachments(id);
@@ -2235,10 +2235,10 @@ class AiWorkspaceStore extends ChangeNotifier {
       messages.isEmpty &&
       attachments.isEmpty;
 
-  /// 切换会话时顺手删掉上一个空会话（用户要求）：聊天记录列表不该堆一串"新对话"。
+  /// 切换会话时删除上一个空会话：聊天记录列表不应堆积多条"新对话"。
   ///
-  /// 判定要连**本地草稿**一起看：输入框里打了一半的字也是用户内容，
-  /// 只看 `messages` 会把"打了字还没发"的会话连同草稿一起删掉（用户报的 bug ②）。
+  /// 判定需同时检查**本地草稿**：输入框中未发送的文字也属于内容，
+  /// 只看 `messages` 会把"已输入未发送"的会话连同草稿删除。
   Future<void> _cleanupEmptyConversation() async {
     final conv = conversation;
     if (conv == null) return;
@@ -2271,7 +2271,7 @@ class AiWorkspaceStore extends ChangeNotifier {
 
   /// 后端把会话标题总结出来了（`conversation.updated`）：本地就地更新，**不再拉一次接口**。
   ///
-  /// 标题是"用户第一问之后自动来的"，不该为了它多打一次网络往返；
+  /// 标题在首次提问后自动生成，不应为此增加一次网络往返；
   /// 但**只改标题**这一个字段，不整条覆盖 —— 事件里的会话对象没有 messageCount 之类的新鲜数据。
   void _applyConversationTitle(String conversationId, String title) {
     conversations = [
@@ -2313,7 +2313,7 @@ class AiWorkspaceStore extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// 用户主动删一条会话（会话列表的菜单）。
+  /// 主动删除一条会话（会话列表菜单）。
   ///
   /// ## 两半都要删，而且**如实**说清哪一半成了
   ///
@@ -2482,7 +2482,7 @@ class AiWorkspaceStore extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// 有些文件拿不到本地路径（file_picker 偶发）：如实告诉用户，
+  /// 部分文件无法获取本地路径（file_picker 偶发）：需如实提示，
   /// 而不是"选了却什么都没发生"。
   void noteAttachmentsUnreadable(List<String> names) {
     if (names.isEmpty) return;
@@ -2508,13 +2508,13 @@ class AiWorkspaceStore extends ChangeNotifier {
   /// **画廊产物**（媒体 id）的缩略图 / 视频封面地址。
   ///
   /// 必须与附件那两条分开：`/api/ai/attachments/{id}/...` 和 `/api/media/{id}/...`
-  /// 是两套 id 空间，混用一定 404（用户报的"生成产物后预览图不可用"）。
+  /// 是两套 id 空间，混用必然 404（表现为"生成产物后预览图不可用"）。
   String mediaThumbUrlFor(int mediaId) => _api.mediaThumbUrl(mediaId);
   String mediaPosterUrlFor(int mediaId) => _api.mediaPosterUrl(mediaId);
 
   /// 一条提示词的工作流原文（画廊接口，但走 AI 的 http client 以便测试能拦到）。
   ///
-  /// 用户建议 ①："生成的产物"包括生成的工作流 —— 回复末尾那张卡上的「查看工作流」用它。
+  /// "生成的产物"包括生成的工作流 —— 回复末尾卡片的「查看工作流」使用它。
   Future<String?> promptWorkflow(int promptId) => _api.promptWorkflow(promptId);
 
   /// 工作流蓝图 + 接线体检（那条卡上的「看蓝图」用它；同样走注入的 http client）。
@@ -2563,7 +2563,7 @@ class AiWorkspaceStore extends ChangeNotifier {
     // 没什么可发的（空正文 + 没附件）：静默返回，不弹任何提示
     if (body.isEmpty && attachments.isEmpty) return;
     // 准入判断与页面共用同一份（[sendBlockReason]）：不通过就**只**写提示，
-    // 绝不先清空输入框 —— 用户打的字必须原样留着。
+    // 不先清空输入框 —— 已输入的文字必须原样保留。
     final blocked = sendBlockReason();
     if (blocked != null) {
       notice = blocked;
@@ -2595,8 +2595,8 @@ class AiWorkspaceStore extends ChangeNotifier {
       final conv = conversation!;
       // **顺序是这条 bug 的关键**：这条会话的草稿（文字 + 附件）必须在任何
       // `notifyListeners()` **之前**清掉。页面收到通知会去"取回草稿"，
-      // 那时草稿要是还在，就等于把用户刚发出去的话又灌回输入框
-      // （用户报的"特定情况下一条消息会复制一遍再发送"）。
+      // 此时草稿若仍存在，会把刚发送的内容重新写回输入框
+      // （表现为"特定情况下一条消息会复制后再次发送"）。
       // 以前这一步在 `startRun` 之后才做（几十毫秒以后），中间那次通知正好落在这个空档。
       await _clearDraft(conv.id);
       notifyListeners(); // 到这里：发送中 + 这条会话的草稿已作废
@@ -2637,8 +2637,8 @@ class AiWorkspaceStore extends ChangeNotifier {
       // 这条就是"正在流式"的那条：切走会话再切回来，靠它认出内存里那份正文（_liveText）
       _activeAssistantId = assistantId;
 
-      // 乐观插入：用户消息 + 空的助手流式消息，收到 delta 就地增长。
-      // 用户消息也带上 attachment 块：气泡里立刻就能看到缩略图，不用等重新拉历史。
+      // 乐观插入：请求消息 + 空的助手流式消息，收到 delta 后就地增长。
+      // 请求消息也附带 attachment 块：气泡中立即显示缩略图，无需重新拉取历史。
       messages = [
         ...messages,
         AiMessage(
@@ -2684,7 +2684,7 @@ class AiWorkspaceStore extends ChangeNotifier {
       ];
       attachments.clear();
       preflight = null;
-      // 乐观插进去的这两条也要算进"当前会话有多少条消息"（用户 bug ①）
+      // 乐观插入的两条也要计入"当前会话消息数"
       _syncConversationStats();
       // 草稿在上面（第一次 notify 之前）就已经清掉了 —— 这里补一次没有意义，
       // 但也绝不能省掉上面那次：顺序错了就会把刚发出去的话灌回输入框。
@@ -2740,16 +2740,16 @@ class AiWorkspaceStore extends ChangeNotifier {
             );
             _appendLiveSegment(assistantMessageId, 'reasoning', delta);
             _notifyStreaming();
-          // 关键步骤（环节）开始（用户建议 2026-09-28）：`[步骤]正在查资料[/步骤]` 被后端摘掉后
+          // 关键步骤（环节）开始：`[步骤]正在查资料[/步骤]` 被后端摘掉后
           // 发出来的是**环节名**。界面拿它在**这个环节的第一张工具卡之前**画出环节头 ——
           // 与工具卡同一个道理：位置必须**当场**记进实时段，否则流式期间分组只能事后补，
-          // 又变成"工具卡先冒出来、分组后到"（用户 bug⑥ 的同一种错位）。
+          // 又变成"工具卡先出现、分组后到"（同类错位）。
           case 'step.started':
             final phase = event.data['phase']?.toString() ?? '';
             if (phase.isEmpty) break;
             _appendLiveStep(assistantMessageId, phase);
             _notifyNow();
-          // 工具调用请求：approval=pending 的要在气泡上等用户点「批准 / 拒绝」
+          // 工具调用请求：approval=pending 的需在气泡上等待「批准 / 拒绝」
           case 'tool.requested':
             final approval = event.approval ?? 'not_required';
             final added = _upsertToolCall(
@@ -2772,7 +2772,7 @@ class AiWorkspaceStore extends ChangeNotifier {
                       ),
             );
             // 第一次见到这个调用号：把工具卡的**位置**也记进实时段，
-            // 流式期间才画得出"思考 → 工具 → 正文"的真实交错（用户 bug⑥）
+            // 流式期间才能呈现"思考 → 工具 → 正文"的真实交错
             if (added) {
               _appendLiveToolCall(assistantMessageId, event.callId ?? '');
             }
@@ -2793,7 +2793,7 @@ class AiWorkspaceStore extends ChangeNotifier {
                       ),
             );
             _notifyNow();
-          // 提问（用户建议 ⑥）：AI 当场问一句，**这一次回答不会结束**。
+          // 提问：AI 当场提问，**本次回答不会结束**。
           // 与"等待批准"分开处理：这里要画的是一张带选项 / 输入框的卡片。
           case 'user.question':
             final q = _questionFrom(event.data);
@@ -2804,7 +2804,7 @@ class AiWorkspaceStore extends ChangeNotifier {
             // ⚠️ 提问事件**不带 `callId`**（真事件里只有 `questionId`，两者不是一回事：
             // 前者是模型的调用号 `call_00_…`，后者是后端生成的 UUID）。所以这里必须
             // 把问题**贴到那条已经存在的 `ask_user_question` 调用上**，不能按 `questionId`
-            // 另开一条 —— 用户的 bug（2026-09-21）就是这么来的：
+            // 另开一条 —— 同类问题由此产生：
             // 提问卡被挂在另一个键上，于是 `pendingQuestion` 在 `callId` 那条上找不到问题，
             // 输入区永远不接管（而 `tool.completed` / `tool.failed` 也按 `callId` 更新，
             // 结果就是"工具卡一直在运行中、提问卡根本不出现"）。
@@ -2869,11 +2869,11 @@ class AiWorkspaceStore extends ChangeNotifier {
                         status: AiToolCallStatus.ok,
                         preview: event.preview ?? prev?.preview,
                         elapsedMs: event.elapsedMs ?? prev?.elapsedMs,
-                        // 结构化结果里的产物 id：回复末尾的「画廊入口卡」（用户建议 ⑤）用它
+                        // 结构化结果中的产物 id：回复末尾的「画廊入口卡」使用它
                         mediaIds: AiToolCallState.mediaIdsOf(
                           event.data['result'],
                         ),
-                        // 入库的提示词 id：那张卡还要能打开"生成这些图的工作流"（用户建议 ①）
+                        // 入库的提示词 id：该卡还需能打开"生成这些图的工作流"
                         promptId: AiToolCallState.promptIdOf(
                           event.data['result'],
                         ),
@@ -2884,10 +2884,10 @@ class AiWorkspaceStore extends ChangeNotifier {
                         ),
                       ),
             );
-            // 提交了任务：立刻刷新进度，用户马上就能在右侧栏看到"排队中 / 正在生成"
+            // 提交任务后：立即刷新进度，右侧栏马上显示"排队中 / 正在生成"
             unawaited(refreshComfyJobs());
             // AI 用 `remember` 写了长期记忆：右侧栏的条数 / 预览必须当场跟上
-            // （用户 bug：写完长期记忆后侧边栏不刷新，要切走再切回来才变）。
+            // （长期记忆写入后侧边栏不刷新，需切换页面才更新）。
             // 后端改的是 memory.md，这边只有重新拉一次才知道新条数。
             if (event.toolName == 'remember') {
               unawaited(loadMemory(silent: true));
@@ -2953,8 +2953,8 @@ class AiWorkspaceStore extends ChangeNotifier {
               status: 'cancelled',
             );
             notice = '已停止本次生成。';
-          // 会话标题被后端自动总结出来了（用户建议 ③）：立刻刷新标题与对话列表，
-          // 不等这次 Run 结束 —— 用户第一眼就能在 AppBar 上看到这条对话叫什么。
+          // 会话标题由后端自动生成：立即刷新标题与对话列表，
+          // 不等待本次 Run 结束 —— AppBar 上立即可见会话名称。
           case 'conversation.updated':
             final newTitle = event.data['title']?.toString();
             final convId =
@@ -2991,7 +2991,7 @@ class AiWorkspaceStore extends ChangeNotifier {
       // 桌面不在线时它只记一句"还有几条没上去"，不拦任何东西。
       await syncOutbox();
       // 同时把桌面那份的变化拉下来（同一个理由：这是"内容定稿"的时刻，
-      // 用户接下来多半要看/继续这段对话，两边的镜像该对齐）。
+      // 接下来可能查看 / 继续该对话，两边的镜像需要对齐）。
       await pullChanges();
       _notifyNow();
     }
@@ -3032,7 +3032,7 @@ class AiWorkspaceStore extends ChangeNotifier {
       notifyListeners();
       return;
     }
-    // 助手消息前面最近的一条用户消息就是这次要重放的提问
+    // 助手消息之前最近的一条请求消息就是本次要重放的提问
     final ask = messages
         .sublist(0, index)
         .lastWhere((x) => x.isUser, orElse: () => messages[index]);
@@ -3100,8 +3100,8 @@ class AiWorkspaceStore extends ChangeNotifier {
         ];
       } else {
         // 后端**另起**了一条：原来那条失败回复里有内容（正文 / 思考 / 工具卡 / 产物入口卡），
-        // 必须原样留着 —— 以前这里无条件就地替换，用户点一次「重试」就把 AI 已经说完的内容
-        // 全擦掉了（用户 bug：429 截断之后"直接看不到它已经回复完的内容"）。
+        // 必须原样保留 —— 此前无条件就地替换，点一次「重试」会把 AI 已输出的内容
+        // 全部清除（429 截断后"看不到已经完成的内容"）。
         // 新的流式占位追加在末尾（后端取的 seq 就是 max+1）。
         messages = [...messages, streamingPlaceholder(messages.length + 1)];
       }
@@ -3144,7 +3144,7 @@ class AiWorkspaceStore extends ChangeNotifier {
 
   /// 助手消息 id → **按流顺序**排好的段（思考 / 正文 / 工具卡的位置）。
   ///
-  /// 用户要求"思考过程按照流顺序如实显示"：正文与思考是交错的，
+  /// 思考过程按流顺序如实显示：正文与思考交错，
   /// 只把思考单独堆在气泡顶上就不是"如实"了。流式过程中按到达顺序追加，
   /// `message.completed` 之后以 parts 还原的段为准。
   ///
@@ -3183,7 +3183,7 @@ class AiWorkspaceStore extends ChangeNotifier {
     }
   }
 
-  /// 把一个**环节**记进实时段（用户建议 2026-09-28：关键步骤折叠）。
+  /// 把一个**环节**记进实时段（关键步骤折叠）。
   ///
   /// 与 [`_appendLiveSegment`] 的区别：**每个环节都新开一段**（同名的相邻环节合并的话，
   /// 界面就分不清"一个环节里两段操作"与"两个环节"了 —— 与工具卡那条同一个理由）。
@@ -3195,7 +3195,7 @@ class AiWorkspaceStore extends ChangeNotifier {
         .add(AiMessageSegment('step', phase));
   }
 
-  /// 把一个工具调用的**位置**记进实时段（用户 bug⑥：流式时工具卡全跑到最后）。
+  /// 把一个工具调用的**位置**记进实时段（流式时工具卡会集中到最后）。
   ///
   /// 为什么必须记位置：`message.parts` 是**整条消息结束时**才到的（后端在
   /// `message.completed` 里一次给全），所以流式阶段气泡只能靠实时段还原顺序。
@@ -3274,7 +3274,7 @@ class AiWorkspaceStore extends ChangeNotifier {
 
   /// 一个 `user.question` 事件里解出提问。
   ///
-  /// **两种形状都要认**（用户 bug 2026-09-21 的现场根因之一）：
+  /// **两种形状都要识别**：
   ///  - 后端现在发的是**嵌套**的 `{runId, question: {…PendingQuestion…}}`（与
   ///    `message.completed` 里的 `asked` 同一个形状）；
   ///  - 但历史上后端把整份 `PendingQuestion` **平铺**在 data 顶层 —— 那时
@@ -3310,7 +3310,7 @@ class AiWorkspaceStore extends ChangeNotifier {
 
   /// 流式状态只对"还在列表里的消息"有意义：换会话 / 刷新后清掉孤儿，避免内存只增不减。
   ///
-  /// ⚠ **正在流式的那条不算孤儿**（用户 bug：生成答复时切到别的会话再切回来，
+  /// ⚠ **正在流式的那条不算孤儿**（生成答复时切换会话再切回，
   /// 前面已显示的部分答复全部消失）：它还不在这份 `messages` 里（或者被库里那份
   /// 空壳顶掉了），但内存里的实时段 / 思考 / 工具卡是切回来时唯一的还原来源 ——
   /// 清了它，切回来的就是一条空气泡。
@@ -3326,7 +3326,7 @@ class AiWorkspaceStore extends ChangeNotifier {
 
   /// 把内存里"正在长"的那份流式正文盖回刚从库里读出来的清单上（**纯前端合并**）。
   ///
-  /// 用户 bug（2026-09-28）：生成答复时切到别的会话再切回来，前面已显示的部分答复全部消失。
+  /// 已知问题：生成答复时切换会话再切回，前面已显示的部分答复全部消失。
   /// 根因：流式正文只在**整轮跑完**才落库，期间库里那条助手消息的 text 是空的 ——
   /// 任何一次"从库里重读"（[openConversation] / [_reloadMessages]）都会把内存里
   /// 正在长的那份抹掉。修法：重读之后把还活着的那条盖回去（正文取更长的那份，
@@ -3374,12 +3374,12 @@ class AiWorkspaceStore extends ChangeNotifier {
   /// 把"当前会话有多少条消息 / 最近一次对话是什么时候"对齐到本机已发生的事实，
   /// 并把有新消息的那条顶到会话列表最前面。
   ///
-  /// 为什么需要（用户 bug ①）：AppBar 上的"N 条消息"读的是 `conversation.messageCount`，
+  /// AppBar 上的"N 条消息"读的是 `conversation.messageCount`，
   /// 而那个数字**只有拉会话列表时后端才会给**。发出去的消息是本机乐观插进去的、
   /// 流式回复也是本机长出来的，所以不同步的话，标题栏那个数字会一直停在"打开这条会话时"的值，
   /// 要切走再切回来才变。
   ///
-  /// 时间戳（用户建议 ⑥）是同一个道理：左侧会话列表上写的"最近一次对话"如果也读后端那份旧值，
+  /// 时间戳同理：左侧会话列表的"最近一次对话"如果也读后端旧值，
   /// 刚聊完看着还是"3 天前"。所以这里在**消息数真的变了**的时候把它改成当前时间 ——
   /// 只是打开旧会话看看不改，否则"翻一下就变成刚刚"。
   ///
@@ -3404,7 +3404,7 @@ class AiWorkspaceStore extends ChangeNotifier {
 
   Future<void> _reloadMessages(String conversationId) async {
     try {
-      // 用户已经切到别的会话：这次对齐是给**那条**会话的，别把旧会话的消息
+      // 已切换到其他会话：本次对齐针对**那条**会话，不能把旧会话的消息
       // 盖进当前屏幕（否则 B 会话里会突然冒出 A 会话的消息）。
       if (conversation?.id != conversationId) return;
       final fresh = await _source.listMessages(conversationId);
