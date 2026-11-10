@@ -1,7 +1,7 @@
 //! Skills 的**读写两侧**（run-kit 拼系统提示 + `/api/ai/skills/*` 界面端点）。
 //!
 //! 真源是磁盘（`<storage>\ai\skills` 与 `<项目根>\skills\builtin`），**刻意不做缓存**：
-//! "AI 注册完下一次回复就能用、用户删掉立刻消失"是需求（AGENTS §10）。
+//! "注册后下一次回复即可使用、删除后立即失效"是需求（AGENTS §10）。
 //!
 //! P4 第 22 步先搬了 run-kit 用得到的那一半（扫描 + frontmatter 解析 + 校验 + 读正文），
 //! P4 第 35 步补齐**写侧**（`save` / `delete` / `autoRegister`）与**界面 DTO**（`SkillDto`
@@ -11,19 +11,19 @@
 //!
 //! 1. **非法项不静默忽略**：照样列出来、带 `validationError`，但**不进系统提示**
 //!    （`catalog()` 把它们滤掉）—— AIH-038。这里若图省事直接跳过坏文件，
-//!    用户就会看到"装了个 skill 却没生效"而没有任何线索。
+//!    否则会表现为"安装了 skill 但未生效"且没有提示。
 //! 2. **YAML 块标量必须认**（`description: |` / `>-`）：真实 SKILL.md 十有八九这么写，
 //!    不认就读出字面量 `|`，等于这个 skill 在目录里"没有描述"。
-//! 3. **同名时"用户 > 内置"、同根内"bundle（`<name>/SKILL.md`）> 平铺 `<name>.md`"**
+//! 3. **同名时"自定义 > 内置"、同根内"bundle（`<name>/SKILL.md`）> 平铺 `<name>.md`"**
 //!    —— 与 `fileOf` 的查找顺序保持一致。
 //!
-//! # 写侧的四条纪律（错了都不报错，只是"用户的 skill 不见了"）
+//! # 写侧四条约束（违反时不报错，表现为"自定义 skill 消失"）
 //!
 //! * **自动登记只补没有 frontmatter 的文件**：已经有 frontmatter 的**一个字节都不许改**
-//!   （哪怕它不合法 —— 那是用户写的内容，按既有规则"列出来 + 带 validationError"）；
-//! * **内置 skill 只能停用不能删除**（`SKILL_READONLY`），删的是**用户**那份；
-//! * `save` 写的永远是 `<用户根>/<name>/SKILL.md`（不存在"写进内置目录"这条路）；
-//! * 路径先过 `safe_child`（`..` 之类不许逃出用户根）。
+//!   （即使不合法 —— 属于自定义内容，按既有规则"列出 + 带 validationError"）；
+//! * **内置 skill 只能停用不能删除**（`SKILL_READONLY`），删除的是**自定义**那份；
+//! * `save` 写入的始终是 `<自定义根>/<name>/SKILL.md`（不存在"写入内置目录"的路径）；
+//! * 路径先经 `safe_child`（`..` 等不得逃出自定义根）。
 
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -245,7 +245,7 @@ pub struct ParsedSkill {
     /// 正文 `sha256` 的**前 16 位十六进制**（与 Kotlin `SkillStore.sha256` 同一个口径：
     /// 对**文件原文**取哈希，不是对解析后的 body）
     pub digest: String,
-    /// `user-invocable`（缺省 true）—— 界面显示 + `snapshot` 里"能不能被用户点"
+    /// `user-invocable`（缺省 true）—— 界面显示 + `snapshot` 中"是否可点击"
     pub user_invocable: bool,
     /// `disable-model-invocation` 取反（缺省 true）
     pub model_invocable: bool,
@@ -483,10 +483,10 @@ fn find_in_root(root: &Path, name: &str, source: &'static str) -> Option<(PathBu
 }
 
 /// 一次 Run / 一次加载**真正生效**的那一份：
-/// 用户版合法 → 用户版；否则内置版合法 → 内置版；再否则把用户版（可能非法）交出去当诊断。
+/// 自定义版合法 → 自定义版；否则内置版合法 → 内置版；再否则把自定义版（可能非法）作为诊断返回。
 ///
 /// 这条顺序与 [`catalog`] 必须**逐字一致**，否则会出现"系统提示里是内置版、
-/// `load_skill` 却读到用户那份非法版"的自相矛盾。
+/// `load_skill` 却读到自定义非法版"的矛盾。
 pub fn effective_entry(
     builtin_root: &Path,
     user_root: &Path,
@@ -503,9 +503,9 @@ pub fn effective_entry(
 }
 
 
-/// 全量扫描（内置 + 用户），同名冲突 **用户胜出**（AIH-037）。
+/// 全量扫描（内置 + 自定义），同名冲突 **自定义优先**（AIH-037）。
 ///
-/// 返回 `(条目, conflict)`：`conflict` 非空 = 这份是**覆盖了同名内置版**的用户版
+/// 返回 `(条目, conflict)`：`conflict` 非空 = 该条目是**覆盖同名内置版**的自定义版
 /// （Kotlin `SkillDto.conflict` 的来源；`save()` 那条路径也会用 `origin` 记来源，
 /// 我们这边**只有界面的 upsert 一种来源**，所以 `origin` 恒为 null）。
 fn scan_with_conflict(builtin_root: &Path, user_root: &Path) -> Vec<(ParsedSkill, Option<String>)> {
@@ -514,7 +514,7 @@ fn scan_with_conflict(builtin_root: &Path, user_root: &Path) -> Vec<(ParsedSkill
     let mut out: Vec<(ParsedSkill, Option<String>)> = Vec::new();
     for (name, dto) in &builtin {
         match user.iter().find(|(n, _)| n == name) {
-            // 用户那份胜出；`conflict` 只是提示，不影响可用性
+            // 自定义版优先；`conflict` 仅作提示，不影响可用性
             Some((_, override_dto)) => out.push((
                 override_dto.clone(),
                 Some("覆盖了同名内置 skill".to_string()),
@@ -624,8 +624,8 @@ pub fn list(state: &crate::web::routes::AppState) -> Vec<SkillDto> {
     scan_with_conflict(&builtin, &user)
         .iter()
         .map(|(parsed, conflict)| {
-            // 用户版覆盖了同名内置版、但用户版自己不合法时：对话会回落到内置版。
-            // 这条必须说出来，否则用户看到"我覆盖了却没生效"没有任何线索。
+            // 自定义版覆盖同名内置版、但自身不合法时：对话回落到内置版。
+            // 必须说明该情况，否则会表现为"已覆盖但未生效"且没有提示。
             let conflict = match (conflict, parsed.valid) {
                 (Some(_), false) => Some("覆盖了同名内置 skill；用户版不合法，对话仍用内置版".to_string()),
                 (conflict, _) => conflict.clone(),
@@ -673,7 +673,7 @@ fn write_disabled(path: &Path, names: &HashSet<String>) -> Result<(), String> {
     Ok(())
 }
 
-/// 停用 / 启用一个 skill（内置与用户都允许；停用只影响对话，文件不动）。
+/// 停用 / 启用一个 skill（内置与自定义均可；停用只影响对话，文件不改动）。
 pub fn set_enabled(
     state: &crate::web::routes::AppState,
     name: &str,
@@ -696,7 +696,7 @@ pub fn set_enabled(
     Ok(SkillDto { enabled, ..found })
 }
 
-/// 投放口的位置（`SkillRootsDto`）：界面要显示绝对路径，用户得知道往哪个文件夹拷。
+/// 投放口的位置（`SkillRootsDto`）：界面显示绝对路径，用于确定复制目标文件夹。
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SkillRootsDto {
@@ -749,7 +749,7 @@ pub fn validate_name(name: &str) -> Result<(), SkillFailure> {
     ))
 }
 
-/// `safeChild`：把 `<name>` 拼到用户根下，**并确认没逃出去**（`..` / 绝对路径都不行）。
+/// `safeChild`：把 `<name>` 拼到自定义根下，**并确认未越界**（`..` / 绝对路径均不允许）。
 fn safe_child(root: &Path, name: &str) -> Result<PathBuf, SkillFailure> {
     // `Path::join` 遇到绝对路径会**整段替换**（`join("D:\\x")` = `D:\x`）—— 先挡掉
     if Path::new(name).is_absolute() || name.contains(['/', '\\']) {
@@ -785,7 +785,7 @@ pub fn read_detail(
         ));
     }
     let (builtin, user) = roots_of(state);
-    // 按**这条 DTO 自己的来源**取文件：用户版覆盖内置版时，详情要给用户看的那一份。
+    // 按**该 DTO 自身的来源**取文件：自定义版覆盖内置版时，详情返回自定义版。
     let file = if dto.source == "user" {
         find_in_root(&user, name, "user")
     } else {
@@ -823,7 +823,7 @@ fn render(name: &str, description: &str, when_to_use: Option<&str>, body: &str) 
     out
 }
 
-/// `POST /api/ai/skills` —— 注册 / 覆盖一个 skill（**永远写用户根**）。
+/// `POST /api/ai/skills` —— 注册 / 覆盖一个 skill（**始终写自定义根**）。
 pub fn save(
     state: &crate::web::routes::AppState,
     name: &str,
@@ -880,7 +880,7 @@ pub fn save(
         )
     })?;
 
-    // 用户/模型刚显式写入这个名字 = 想用它；把它从停用名单里拿掉。
+    // 刚显式写入该名称 = 需要使用它；从停用名单中移除。
     let mut disabled = disabled_of(state);
     if disabled.remove(name) {
         write_disabled(&disabled_path(state), &disabled).map_err(|e| {
@@ -894,7 +894,7 @@ pub fn save(
         .ok_or_else(|| SkillFailure::new("IO_ERROR", format!("写入后读不到 skill「{name}」")))
 }
 
-/// `DELETE /api/ai/skills/{name}` —— **只允许删用户来源**（内置受保护，AIH-037）。
+/// `DELETE /api/ai/skills/{name}` —— **只允许删除自定义来源**（内置受保护，AIH-037）。
 ///
 /// 返回 `Ok(false)` = 没有这个名字（Kotlin 回 `{deleted:false}`，**不是 404**）；
 /// 删目录时连 `references/` 一起删（那是 bundle 的一部分）。
@@ -909,7 +909,7 @@ pub fn delete(state: &crate::web::routes::AppState, name: &str) -> Result<bool, 
         ));
     }
     let (_builtin, user_root) = roots_of(state);
-    // ⚠ 只找**用户根**：用户版非法覆盖内置版时，`file_of` 会回落到内置版路径 ——
+    // ⚠ 只查找**自定义根**：自定义版非法覆盖内置版时，`file_of` 会回落到内置版路径 ——
     // 用它来删会删掉内置文件。
     let Some((file, _)) = find_in_root(&user_root, name, "user") else {
         return Ok(false);
@@ -1003,12 +1003,12 @@ fn entry_of(entry: &Path) -> Option<(PathBuf, String)> {
     None
 }
 
-/// `POST /api/ai/skills/rescan` —— 把丢进用户目录、**还没有 frontmatter** 的 skill 自动登记。
+/// `POST /api/ai/skills/rescan` —— 把放入自定义目录、**还没有 frontmatter** 的 skill 自动登记。
 ///
-/// 为什么需要它：用户目录就是"把 skill 拷进来就算装好"的投放口，而从别处拷来的 `.md`
-/// 通常不带 frontmatter，按 AIH-038 的规矩那属于非法、不能加载 —— 用户会以为"拷进去没用"。
+/// 自定义目录即"复制进来即完成安装"的投放口，而从其他位置复制的 `.md`
+/// 通常不带 frontmatter，按 AIH-038 属于非法、不能加载 —— 表现为"复制后无效"。
 ///
-/// **已经有 frontmatter 的文件一律不碰**（哪怕它不合法）：那是用户自己写的内容。
+/// **已有 frontmatter 的文件一律不改动**（即使不合法）：属于自定义内容。
 pub fn auto_register(state: &crate::web::routes::AppState) -> SkillAutoRegisterResult {
     let (_, user_root) = roots_of(state);
     if let Err(e) = std::fs::create_dir_all(&user_root) {
@@ -1046,7 +1046,7 @@ pub fn auto_register(state: &crate::web::routes::AppState) -> SkillAutoRegisterR
             errors.push(format!("{label}：读不了"));
             continue;
         };
-        // 已经有 frontmatter：用户（或 AI）自己写过了，不碰
+        // 已有 frontmatter：已由自定义内容（或 AI）写入，不改动
         if !parse_front_matter(&raw).0.is_empty() {
             continue;
         }
@@ -1079,10 +1079,10 @@ pub fn auto_register(state: &crate::web::routes::AppState) -> SkillAutoRegisterR
     }
 }
 
-/// 同名时**生效的那一份**：用户版合法 → 用户版；否则内置版合法 → 内置版。
+/// 同名时**生效的那一份**：自定义版合法 → 自定义版；否则内置版合法 → 内置版。
 ///
 /// 与 [`effective_entry`] 同一条顺序；与 `scan_with_conflict` 的区别是后者要给界面
-/// 看"用户版不合法"的诊断，而这里只回答"对话里到底用哪一份"。
+/// 查看"自定义版不合法"的诊断，这里只回答"对话中使用哪一份"。
 fn effective_scan(builtin_root: &Path, user_root: &Path) -> Vec<ParsedSkill> {
     let mut by_name: BTreeMap<String, ParsedSkill> = BTreeMap::new();
     for (name, parsed) in scan_root(builtin_root, "builtin") {
@@ -1102,7 +1102,7 @@ fn effective_scan(builtin_root: &Path, user_root: &Path) -> Vec<ParsedSkill> {
 
 /// 可以进系统提示的 skills（校验不过的**不进**，但也不是"没看见"——见文件头第 1 条）。
 ///
-/// 过滤条件是**三件**：合法、`model-invocable`、没有被用户停用。
+/// 过滤条件为**三项**：合法、`model-invocable`、未被停用。
 /// 顺序 = 按 name 升序（BTreeMap 保证；进得了这里的名字都是 kebab-case，ASCII 序一致）。
 pub fn catalog(builtin_root: &Path, user_root: &Path) -> Vec<SkillEntry> {
     catalog_with(builtin_root, user_root, &HashSet::new())
@@ -1126,11 +1126,11 @@ pub fn catalog_with(
 /// 一次 Run 的 **Skills 快照**（AIH-047）：`{count, skills:[{name, digest, source}]}`。
 ///
 /// 为什么 Run 里要存这一份：事后才回答得了"这条回答当时用的是哪版规则"。
-/// 没有它，用户改了 skill 之后再问"为什么它当时那么做"就永远查不清。
+/// 缺少它时，修改 skill 后无法查清"当时为何那样执行"。
 ///
 /// 形状与 Kotlin `AiRunRepo.create(skillSnapshot = …)` **逐字一致**：
 /// `count` 是**这次能用的**条数（校验不过的、被停用的不算；`disable-model-invocation`
-/// 的**算**——用户可以显式调用它），按 name 升序。
+/// 的**算**——可显式调用），按 name 升序。
 ///
 /// ⚠ `digest` 是**文件原文** sha256 的前 16 位（不是解析后的 body）——
 /// 与 Kotlin `SkillStore.sha256(raw)` 同一个口径，改一个字就不同。
@@ -1156,7 +1156,7 @@ pub fn snapshot(
 
 /// 一个 skill 的**正文文件位置**与来源（`load_skill` 要读它）。
 ///
-/// 返回**真正生效**的那一份（用户版合法优先，否则内置版）。
+/// 返回**实际生效**的那一份（自定义版合法优先，否则内置版）。
 pub fn file_of(
     builtin_root: &Path,
     user_root: &Path,
@@ -1178,7 +1178,7 @@ pub struct SkillBody {
     pub source: &'static str,
     /// 正文文件真实路径（`load_skill` 由它算 bundle 目录与附带文件）
     pub path: PathBuf,
-    /// `disable-model-invocation` 取反：false 的只允许用户显式调用
+    /// `disable-model-invocation` 取反：false 的只允许显式调用
     pub model_invocable: bool,
     /// `user-invocable`（缺省 true）：false 的不出现在 `/` 菜单里
     pub user_invocable: bool,
@@ -1209,7 +1209,7 @@ pub fn read_body(builtin_root: &Path, user_root: &Path, name: &str) -> Option<Sk
 ///
 /// 为什么不复用 [`catalog`]：那个**刻意**只给能用的（它进系统提示），
 /// 而 `list_skills` 要的是"装了但有问题"的那些 —— 静默过滤掉正是 AIH-038 要防的事
-/// （用户看到"装了个 skill 却没生效"而没有任何线索）。
+/// （否则表现为"安装了 skill 但未生效"且没有提示）。
 pub fn scan_all(
     builtin_root: &Path,
     user_root: &Path,
@@ -1242,7 +1242,7 @@ pub struct ScannedSkill {
     pub when_to_use: Option<String>,
     pub source: &'static str,
     pub valid: bool,
-    /// 用户有没有把它停用（停用只影响对话，文件还在）
+    /// 是否已停用（停用只影响对话，文件保留）
     pub enabled: bool,
     /// 非空 = 不合格，内容是给人看的原因
     pub error: String,

@@ -1,10 +1,10 @@
 //! 「这个模型去哪儿拿」—— `find_model`（Kotlin `FindModel.kt` + `ToolRegistry.kt` 里那条
-//! 处理体与三段渲染的逐条对照；用户建议 P3，2026-09-22）。
+//! 处理体与三段渲染的逐条对照）。
 //!
-//! # 用户的原话（`docs/bug and suggestion/bug-and-suggestion-9.22.md` 的 A 表与 K 节）
+//! # 需求原文（`docs/bug and suggestion/bug-and-suggestion-9.22.md` 的 A 表与 K 节）
 //!
 //! > "加入 modelscope、huggingface 的查询功能，并与 civitai 合并成'定向查询' tool；
-//! >  **查到的贴链接让用户手动下载**"
+//! >  **查到的贴链接，由人工下载**"
 //!
 //! 决策记录（同文件 D 表第二行）：
 //!
@@ -13,15 +13,15 @@
 //!
 //! # 五条不能含糊的纪律
 //!
-//!  1. **绝不代下**（用户拍板）。这个文件里**没有任何**"把模型文件写进磁盘"的代码路径：
+//!  1. **绝不代下**。这个文件里**没有任何**"把模型文件写进磁盘"的代码路径：
 //!     [`HttpModelFinder`] 只发**检索**请求，响应体读进内存、取出元数据之后立刻丢掉。
 //!  2. **先查本机，再查外网**（顺序纪律）。同名模型已经在本机时，`search` 在 `online`
 //!     那一层就返回了 —— **一个外部请求都不发**，并把三个源标成 [`Reachability::Skipped`]。
-//!     为什么这么严：2026-09-22 那次事故里，模型让用户去下载一个**本来就在硬盘上**的
+//!     约束依据：模型要求下载一个**本来就在硬盘上**的
 //!     4.18GB 文件；只要有一个环节判断错了，这条路就会重演。
 //!  3. **每个源都要报可达性**，哪怕它一条都没返回（"没查到"里有一部分是"没查成"，
 //!     两件事必须分开说）。
-//!  4. **sha256 明写用途**：它是"用户手动下完之后，判断盘上那份是不是同一个模型"的依据。
+//!  4. **sha256 明写用途**：它是"手动下载后，判断盘上那份是否同一模型"的依据。
 //!     字面相似度**不足以**确认身份（`sd_xl_base_1.0` 与 `sd_xl_refiner_1.0` 能打到 0.63 分
 //!     却是两份不同的模型）。上游没给就留空并说明，绝不编一个 64 位十六进制。
 //!  5. **只读**。工具声明 `mutating = false`，走 `web` 类别（查询词会离开本机，
@@ -68,7 +68,7 @@ pub const MAX_TIMEOUT_SECONDS: u64 = 60;
 /// 认得出来的**权重文件**后缀。
 ///
 /// 与 [`crate::comfy::comfy_models`] 那张表**故意不一样**：那边是"ComfyUI 能加载什么"
-/// （含 `.yaml` / `.json`，因为 CLIP 那类要配置文件），这边是"用户要手下一个多大的文件"——
+/// （含 `.yaml` / `.json`，因为 CLIP 那类需要配置文件），这里是"需要下载的文件大小"——
 /// 把 `.json` 当成"模型文件"报到候选里只会让人莫名其妙。
 pub const MODEL_EXTS: [&str; 8] = [
     "safetensors",
@@ -89,7 +89,7 @@ pub const MODELSCOPE_BASE_URL: &str = "https://modelscope.cn";
 pub const ENV_HF_BASE_URL: &str = "COMFYHUB_HF_BASE_URL";
 pub const ENV_MODELSCOPE_BASE_URL: &str = "COMFYHUB_MODELSCOPE_BASE_URL";
 
-/// 用户在结果里看到的那句"该放哪"的基准目录（相对路径，绝对路径随机器而变）。
+/// 结果中"该放哪"的基准目录（相对路径，绝对路径随机器而变）。
 pub const INSTALL_ROOT_HINT: &str = "ComfyUI 的 models\\ 目录";
 
 /// 严格的 sha256 形状判定（64 位十六进制）—— 上游结构变了也不会把别的东西当成 hash 报出去。
@@ -103,7 +103,7 @@ pub fn is_sha256(raw: Option<&str>) -> bool {
     }
 }
 
-/// 三个模型源，声明顺序就是查询顺序（用户拍板：Civitai → HuggingFace → ModelScope）。
+/// 三个模型源，声明顺序即查询顺序（Civitai → HuggingFace → ModelScope）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ModelSource {
     Civitai,
@@ -176,7 +176,7 @@ impl Reachability {
 /// 统一后的模型类型 —— "该放进 `models\` 下哪个目录"就靠它推（[`ModelCandidate::install_into`]）。
 ///
 /// 认不出来时是 [`ModelKind::Unknown`]（**不是** `Checkpoint`）：宁可说"不知道放哪"，
-/// 也不猜一个目录 —— 猜错的后果是用户把一个 13GB 的 LoRA 下进 `checkpoints\`，
+/// 也不推测目录 —— 推测错误的后果是把 13GB 的 LoRA 下载到 `checkpoints\`，
 /// 而 ComfyUI 那边照旧看不到它。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ModelKind {
@@ -390,7 +390,7 @@ pub struct ModelCandidate {
     pub base_model: Option<String>,
     pub trained_words: Vec<String>,
     pub size_bytes: Option<i64>,
-    /// 直链（**给用户自己下**用的那个 URL）。
+    /// 直链（**供手动下载**的 URL）。
     pub download_url: Option<String>,
     /// 模型页（简介 / 许可 / 触发词在那边）。
     pub page_url: Option<String>,
@@ -403,15 +403,15 @@ pub struct ModelCandidate {
     /// 简介（只有 Civitai 会给；别的源留 `None` —— 不编）。
     pub description: Option<String>,
     pub downloads: Option<i64>,
-    /// 一句**必须转告用户**的提醒（拿不到类型 / 格式不对口时才有）。
+    /// 一句**必须在结果中给出**的提醒（拿不到类型 / 格式不匹配时才有）。
     pub note: Option<String>,
 }
 
 impl ModelCandidate {
-    /// **它该放进哪个目录**（相对用户 ComfyUI 的 `models\`）。
+    /// **应放入哪个目录**（相对于 ComfyUI 的 `models\`）。
     ///
     /// 拿不到类型时是 `None`：工具会明写"该放 `models\` 下哪个子目录说不准，
-    /// 让用户自己看工作流里那个加载器"——这比猜一个好。
+    /// 由工作流中的加载器判断"——优于推测。
     pub fn install_into(&self) -> Option<&'static str> {
         self.kind.folder()
     }
@@ -419,7 +419,7 @@ impl ModelCandidate {
     /// 给人看的体积（与 [`crate::tools::civitai`] 的 `size_label` 同一套分档）。
     ///
     /// `%.1f` 而不是 `%.0f`：实测有个 `pytorch_lora_weights.safetensors` 只有几 MB，
-    /// 用整数会显示成 **"0 MB"** —— 那看起来像"空文件"，用户会以为拿不到东西。
+    /// 用整数会显示为 **"0 MB"**，看起来像"空文件"，会被理解为未获取到内容。
     pub fn size_label(&self) -> Option<String> {
         self.size_bytes.map(|bytes| {
             let gb = bytes as f64 / 1024.0 / 1024.0 / 1024.0;
@@ -567,7 +567,7 @@ impl HttpModelFinder {
             return Err(ToolFailure::new("INVALID_ARGUMENT", "缺少搜索词 query"));
         }
 
-        // ① 先查本机（用户拍板的顺序纪律）。命中了就**一个外部请求都不发**。
+        // ① 先查本机（固定顺序）。命中时**不发送任何外部请求**。
         let hit = self.local_hit(&text, query.inventory.as_ref());
         if !query.online || hit.is_some() {
             let local: Vec<LocalModel> = hit.clone().into_iter().collect();
@@ -665,7 +665,7 @@ impl HttpModelFinder {
     /// 本机有没有同名的。
     ///
     /// 两层判据，**都不用纯子串**：`anima` 会命中 `anima-turbo`，而那是**另一个模型** ——
-    /// 短路到"本机有、不用下"的代价，是用户手里少一个真需要的模型。
+    /// 直接判定"本机已有、无需下载"的代价，是缺少一个确实需要的模型。
     ///  ① [`ModelName::same`]（分词后完全一致：`krea2_turbo_int8` 与 `krea2TurboInt8` 是同一个）；
     ///  ② 文件名（去掉目录前缀与后缀）**完全相等** —— 用来认 `/object_info` 那种
     ///     `SDXL\a.safetensors` 的写法与带后缀 / 不带后缀的差别。
@@ -697,12 +697,12 @@ impl HttpModelFinder {
                 detail: "本次运行没有接入 Civitai 搜索客户端（CIVITAI_DISABLED）".to_string(),
             };
         };
-        // 固定 `Most Downloaded` + `AllTime`（CivitaiClient 内部定的）：用户要的是
+        // 固定 `Most Downloaded` + `AllTime`（CivitaiClient 内部定的）：需要的是
         // "这个模型的正主在哪儿"，而不是"最近谁传了个同名的"。
         //
         // `allow_nsfw` **不在这里打开**：`find_model` 的语义是"帮我找某个具体的模型 / 文件"，
         // 成人内容有 `civitai_search` 那条专线（它才带 allowNsfw）。这里打开它，
-        // 等于替用户做了一个他没做的决定。
+        // 等于代替其做出未指定的选择。
         match search
             .search(text, false, None, limit.clamp(1, PER_SOURCE_LIMIT))
             .await
@@ -860,7 +860,7 @@ impl HttpModelFinder {
 
         let Some(best) = best else {
             // 一个权重文件都没有（只有 README / config）：**仍然报出来** ——
-            // 用户要找的可能正是"这个仓库到底有没有 safetensors"。但体积 / sha256 只能是空。
+            // 需要确认的可能正是"该仓库是否有 safetensors"。但体积 / sha256 只能为空。
             return Some(ModelCandidate {
                 name: repo_id.clone(),
                 kind: effective_kind,
@@ -898,7 +898,7 @@ impl HttpModelFinder {
         })
     }
 
-    /// `/api/models/{repo}/tree/main`：抓**最大**的那个权重文件（用户要下的就是它）。
+    /// `/api/models/{repo}/tree/main`：取**最大**的权重文件（即需要下载的文件）。
     async fn hf_tree(&self, repo_id: &str, token: Option<&str>) -> Option<Vec<WeightFile>> {
         let url = format!("{}/api/models/{repo_id}/tree/main", self.hf_base);
         // 同样是 **JSON 数组**
@@ -1004,7 +1004,7 @@ impl HttpModelFinder {
             .map(str::to_string);
 
         // 体积：`ModelInfos` 里每个框架一份 `{model_size: …}`。取**最大**那个 ——
-        // 用户要下的是权重本体，不是 tokenizer 那几 MB。
+        // 需要下载的是权重本体，不是 tokenizer 的那几 MB。
         let meta_size = model
             .get("ModelInfos")
             .and_then(Value::as_object)
@@ -1224,7 +1224,7 @@ impl HttpModelFinder {
                 500..=599 => (Reachability::Error, format!("对方暂时不可用（{status}）")),
                 _ => (Reachability::Error, format!("返回 {status}")),
             };
-            // 5xx 是"对方回了"：出网路径跟着说，别让用户以为没走代理。
+            // 5xx 表示"对端已响应"：同时说明出网路径，避免被理解为未走代理。
             let hint = if status >= 500 {
                 format!("{hint}（本次出网路径「{route}」）")
             } else {
@@ -1308,7 +1308,7 @@ fn base_without_ext(name: &str) -> String {
     }
 }
 
-/// 是不是一个"用户要手下的"权重文件（按后缀认，与 [`MODEL_EXTS`] 同源）。
+/// 是否为"需手动下载的"权重文件（按后缀判断，与 [`MODEL_EXTS`] 同源）。
 fn looks_like_weight(path: &str) -> bool {
     let ext = path
         .rsplit_once('.')
@@ -1390,7 +1390,7 @@ fn ms_models(json: &Map<String, Value>) -> Vec<&Map<String, Value>> {
 ///
 /// 键是 `分词集合 + 归一化文件名`：`krea2_turbo_int8.safetensors` 与
 /// `krea2-turbo-int8.safetensors`（两个源上的同一份东西）必须合成一条 ——
-/// 否则用户会看到"两个不同的模型"，而它们其实是同一个。
+/// 否则会显示为"两个不同的模型"，而实际为同一个。
 ///
 /// 合并时**优先保留信息更全的那条**（有 sha256 / 体积 / 触发词的赢），
 /// 并把两个来源都记进 `sources`。
@@ -1786,7 +1786,7 @@ fn render_candidate(index: usize, candidate: &ModelCandidate, asked: Option<Mode
     if let Some(downloads) = candidate.downloads {
         out.push_str(&format!("  下载量：{downloads}\n"));
     }
-    // 这一条是"不许含糊"的地方：拿不到类型 / 格式不对口时，原因要原样转给用户
+    // 这一条不得含糊：拿不到类型 / 格式不匹配时，原因需原样返回
     if let Some(note) = candidate.note.as_deref() {
         out.push_str(&format!("  ⚠ {note}\n"));
     }
