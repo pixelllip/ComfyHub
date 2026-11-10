@@ -76,7 +76,7 @@ async fn 投放要问实例它到底在读哪个_input() {
     );
 
     // ⚠ **"实例说的那一份与我们推的那一份不一致"** 那半不在这里测：探测只能返回**候选里**的一个，
-    //   而候选来自配置 / Desktop 配置 / 盘探 —— 要造出"候选第二名胜出"就得动用户的真实
+    //   而候选来自配置 / Desktop 配置 / 盘探 —— 要构造"候选第二名胜出"就得改动真实
     //   `%APPDATA%\Comfy Desktop`（测试不许碰）。那半是纯函数
     //   `image_edit::tests::实例说的_input_覆盖我们按配置推的那份` 的活。
     gateway.abort();
@@ -441,7 +441,7 @@ async fn 贴人物档不写遮罩也不碰人物图交给工作流去抠() {
         "不该出现「覆盖 12.image」那种指引（那份工作流没有 12 / 26）：{hint}"
     );
 
-    // input 目录里**不许**多出遮罩 / ring（写一张没人用的文件只会在用户目录里攒垃圾）
+    // input 目录里**不得**多出遮罩 / ring（写入无人使用的文件只会产生多余文件）
     let strays: Vec<String> = std::fs::read_dir(&input)
         .unwrap()
         .filter_map(|e| e.ok())
@@ -487,7 +487,7 @@ async fn 贴人物档不写遮罩也不碰人物图交给工作流去抠() {
 async fn 图像编辑三件在真库夹具上串起来能用() {
     // ⚠ "找不到 ComfyUI"那一支**不在这里验**：这台开发机装着 ComfyUI，
     //   `comfy_dirs::find_home` 一定探得到（连 Desktop 安装形态都认），
-    //   于是那条分支在集成用例里永远走不到 —— 而它恰恰是新用户第一次用时会撞上的那一支。
+    //   因此那条分支在集成用例里始终走不到 —— 而它正是首次使用时遇到的分支。
     //   它由 `image_edit.rs` 的单测（`找不到_comfyui_时如实报错`）用纯函数直接钉住。
     let state = state();
     let root = state.project_root();
@@ -652,7 +652,7 @@ async fn comfy_list_workflows_reads_the_same_dirs_as_the_endpoint() {
         out.payload
     );
 
-    // 按文件名过滤（用户说"krea2 那条"）
+    // 按文件名过滤（如"krea2 那条"）
     let hit = call_tool(
         &state,
         "comfy_list_workflows",
@@ -1073,7 +1073,10 @@ async fn poll_captures_a_run_into_prompts_and_media() {
             rows.collect::<rusqlite::Result<Vec<_>>>()
         })
         .unwrap();
-    assert!(tags.contains(&"ComfyUI".to_string()), "autoTag 要挂上：{tags:?}");
+    assert!(
+        tags.contains(&"ComfyUI".to_string()),
+        "autoTag 要挂上：{tags:?}"
+    );
     assert!(
         tags.contains(&"少女".to_string()) && tags.contains(&"水墨".to_string()),
         "提示词 1girl, ink painting 要推断出角色与风格标签：{tags:?}"
@@ -1101,8 +1104,8 @@ async fn poll_captures_a_run_into_prompts_and_media() {
     std::fs::remove_dir_all(&root).ok();
 }
 
-/// **未经过本项目提交**的运行（用户直接在 ComfyUI 里跑）由轮询入库时，必须按**生成顺序**
-/// 入库（2026-11-09 用户："调查未开启本项目进行生图的情况下，产物的入库顺序问题"）。
+/// **未经过本项目提交**的运行（直接在 ComfyUI 中运行）由轮询入库时，必须按**生成顺序**
+/// 入库（现象："未开启本项目进行生图时，产物的入库顺序问题"）。
 ///
 /// 以前 `poll_once` 是 `entries.iter().rev()`（先收最新的），画廊按 `created_at DESC` 排，
 /// 整批图的顺序就是**反的**。真库 11-09 那批 `test_01452_`…`test_01469_` 的 media id
@@ -1472,7 +1475,7 @@ async fn load_api_workflow_file_is_idempotent_and_feeds_api_graph() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(graph["3"]["class_type"], "KSampler");
 
-    // 用户把这条提示词删掉之后**必须还能重新导入**（`prompt_id` 被置空那条路）
+    // 该提示词被删除之后**必须还能重新导入**（`prompt_id` 被置空那条路）
     state
         .with(|conn| {
             conn.execute("DELETE FROM prompts WHERE id = ?1", [prompt_id])?;
@@ -1553,11 +1556,11 @@ async fn load_ui_workflow_uses_object_info_and_reports_gaps() {
         "{:?}",
         out.payload
     );
-    // ⚠ **第 68 步之前**这里还有一句"本后端**还没实现**「模拟用户行为」"的补白。
+    // ⚠ **第 68 步之前**这里还有一句"本后端**尚未实现**「模拟前端行为」"的补白。
     //   现在那个能力真的做了（`workflow_frontend.rs` = Kotlin `FrontendNodes.kt` 的对照），
     //   所以两件事都要钉住：
     //   ① 那句"还没做"的补白**不许再出现**（工具描述里写的能力已经兑现）；
-    //   ② 显示节点要**真的被丢掉**，而且如实列在 `frontendEmulated` 里（用户看得到才敢信）。
+    //   ② 显示节点要**确实被丢弃**，而且如实列在 `frontendEmulated` 里（可见才能确认）。
     let warnings: Vec<String> = out.payload["warnings"]
         .as_array()
         .map(|list| {
@@ -1648,7 +1651,7 @@ async fn load_ui_workflow_uses_object_info_and_reports_gaps() {
     std::fs::remove_dir_all(&root).ok();
 }
 
-/// ## 模拟用户行为 ##：走**工具这一整条路**（不只是转换函数），钉住结果里那几个字段名。
+/// ## 模拟前端行为 ##：走**工具这一整条路**（不只是转换函数），固定结果中的那几个字段名。
 ///
 /// 为什么单独一条：`frontendBroadcast` / `frontendInjected` 这些键是**给模型看的契约**
 /// （Kotlin `AiWorkflowSearch` 里那几个 `put`）—— 单元测试只验 `Converted` 的字段，
@@ -1789,7 +1792,7 @@ async fn comfy_check_inputs_reports_gaps_and_reads_the_attachment_flag() {
         out.payload
     );
 
-    // ② 本次带了图：同一个位置改列 `suppliedByAttachment`（**不要再问用户要图**）
+    // ② 本次带了图：同一位置改列 `suppliedByAttachment`（**不再要求提供图片**）
     let mut with_image = comfyhub_server_rs::tools::tools::ToolSession::default();
     with_image.has_image_attachment = true;
     let out = call_tool_with_session(
@@ -1933,12 +1936,12 @@ async fn comfy_fit_workflow_pairs_graph_models_with_the_instance_inventory() {
 // ===========================================================================
 //  审核 + 摘拼两件（P4 第 63 步）：comfy_audit_workflow / comfy_prune_workflow
 //
-//  这一对工具是用户 2026-09-22「让 AI 具有审核本地工作流的能力」的落点。
+//  这一对工具是「让 AI 具有审核本地工作流的能力」的落点。
 //  端到端要盯的是两件**只能在这一层验**的事：
 //   ① `comfy_audit_workflow` 的"必跑不了"真的能进提交闸门（`blockingRefusal`），
 //      而参数 / 显存 / 提示词风格**只提醒不拦**；
 //   ② `comfy_prune_workflow` 拿不到 `/object_info` 时**只摘不拼**（乱接一根线的代价
-//      是 ComfyUI 回一句看不懂的报错，用户根本查不出来）。
+//      是 ComfyUI 返回难以理解的报错，无法排查）。
 // ===========================================================================
 
 /// `comfy_audit_workflow`：七项检查只报事实；`/object_info` 拿不到时**不判**本机缺节点。
@@ -2138,7 +2141,7 @@ async fn comfy_prune_workflow_prunes_analyzes_and_refuses_empty_requests() {
         out.content
     );
 
-    // ② `analyze=true`：**一个字都不改**（没有 graph 键），并且要求先问用户
+    // ② `analyze=true`：**不做任何改动**（没有 graph 键），并且要求先确认
     let dead = serde_json::json!({
         "1": {"class_type":"CheckpointLoaderSimple","inputs":{"ckpt_name":"krea2.safetensors"}},
         "6": {"class_type":"CLIPTextEncode","inputs":{"text":"a cat","clip":["1",1]}},
@@ -2334,14 +2337,14 @@ async fn comfy_prune_workflow_only_prunes_when_the_instance_is_unreachable() {
 }
 
 // ===========================================================================
-//  起 / 停实例（2026-09-28 用户 bug「通过 CLI 启动 comfyui 总是失败」）
+//  起 / 停实例（「通过 CLI 启动 ComfyUI 总是失败」）
 //
 //  这一对工具是"ComfyHub 自己拥有起实例这条路"的落点：COMfy-cli 那条路要写
 //  `%LOCALAPPDATA%\comfy-cli\config.ini` 与 `<ComfyUI>\user\comfyui_8188.log`
 //  两个**项目外**的文件，受限会话里必然 Errno 13（`comfy_launch.rs` 文件头有现场）。
 //  端到端这一层盯的是两条**只能在这一层验**的纪律：
 //   ① 已经有实例在跑时**不许**再起第二个（那只会撞端口 / 抢显存）；
-//   ② 停的时候只认自己的 pid 记录 —— 用户自己的 ComfyUI Desktop 实例
+//   ② 停止时只认自身的 pid 记录 —— 由 ComfyUI Desktop 启动的实例
 //      **一个进程都不许碰**。
 // ===========================================================================
 
