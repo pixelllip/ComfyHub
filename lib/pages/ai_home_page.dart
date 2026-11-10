@@ -2053,7 +2053,11 @@ class _ToolCallCardState extends State<_ToolCallCard> {
             children: [
               Icon(_icon, size: 14, color: color),
               const SizedBox(width: 6),
-              Flexible(
+              // 标题独占"扣掉状态、耗时、展开键之后"的整行宽度。
+              // 标题与 `Spacer` 同为 flex 1 时，剩余空间按 1:1 分给两者，
+              // 长标题只能用到一半就被省略号截断，右边却空着一大片；
+              // 去掉 `Spacer` 后展开键也回到耗时旁边，不再被推到行的另一端。
+              Expanded(
                 child: Text(
                   // 主标题是"这次在干什么"（模型写的 reason，或用途名），不是机器名。
                   call.name.isEmpty ? '未知工具' : call.displayTitle,
@@ -2073,14 +2077,16 @@ class _ToolCallCardState extends State<_ToolCallCard> {
                   ),
                 ),
               ],
-              const Spacer(),
-              if (call.isRunning)
+              if (call.isRunning) ...[
+                const SizedBox(width: 6),
                 const SizedBox(
                   width: 12,
                   height: 12,
                   child: CircularProgressIndicator(strokeWidth: 2),
                 ),
-              if (call.hasDetail)
+              ],
+              if (call.hasDetail) ...[
+                const SizedBox(width: 4),
                 Tooltip(
                   // 带工具名的 tooltip：便于定位"展开哪一个工具的结果"
                   message:
@@ -2097,6 +2103,7 @@ class _ToolCallCardState extends State<_ToolCallCard> {
                     ),
                   ),
                 ),
+              ],
             ],
           ),
           // 副标题：`用途 · 机器名`。机器名保留在界面上，但不是首要信息。

@@ -895,6 +895,130 @@ void main() {
     );
   });
 
+  // 现象（用户截图）：工具卡标题明明还有地方，却只显示半句就被省略号截断，
+  // 右侧空着一大块；展开键还被推到行的最右端，离耗时很远。
+  // 根因：标题是 `Flexible(flex: 1)`，后面还跟着 `Spacer(flex: 1)` ——
+  // 剩余空间按 1:1 分给两者，标题最多只能用一半。
+  testWidgets('(b2) 工具卡标题用满整行，展开键紧挨耗时', (tester) async {
+    tester.view.physicalSize = const Size(1200, 1000);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    // 长到任何宽度都放不下：标题必然被省略号截断，但**截断点**应在行的右端。
+    const reason =
+        '取最近那次成功运行的 API 图，读出提示词输入与画幅节点的实际取值，'
+        '再按 2:3 的比例核对一遍可用选项与 megapixels 范围，'
+        '最后把参数覆盖到本次提交里，确认没有漏掉任何一个必填项';
+    final rec = _Recorder();
+    final sse =
+        _sse(1, 'run.started', '{"runId":"r1"}') +
+        _sse(2, 'message.started', '{"messageId":"a1"}') +
+        _sse(
+          3,
+          'tool.requested',
+          jsonEncode({
+            'runId': 'r1',
+            'callId': 'c1',
+            'name': 'comfy_get_run',
+            'arguments': '{"id":1560}',
+            'reason': reason,
+            'approval': 'not_required',
+          }),
+        ) +
+        _sse(4, 'tool.started', '{"callId":"c1","name":"comfy_get_run"}') +
+        _sse(
+          5,
+          'tool.completed',
+          jsonEncode({
+            'callId': 'c1',
+            'name': 'comfy_get_run',
+            'elapsedMs': 137,
+            'preview': '{"prompt":{}}',
+          }),
+        ) +
+        _sse(
+          6,
+          'message.completed',
+          jsonEncode({
+            'messageId': 'a1',
+            'text': '读完了。',
+            'steps': 1,
+            'parts': [
+              {'type': 'text', 'text': '读完了。'},
+              {
+                'type': 'tool_call',
+                'toolCallId': 'c1',
+                'jsonPayload': {
+                  'name': 'comfy_get_run',
+                  'arguments': '{"id":1560}',
+                  'reason': reason,
+                },
+              },
+              {
+                'type': 'tool_result',
+                'toolCallId': 'c1',
+                'text': '{"prompt":{}}',
+                'jsonPayload': {
+                  'name': 'comfy_get_run',
+                  'ok': true,
+                  'elapsedMs': 137,
+                  'approval': 'approved',
+                },
+              },
+            ],
+          }),
+        ) +
+        _sse(7, 'run.completed', '{"runId":"r1"}');
+
+    await tester.pumpWidget(await _homePage(rec, sse: sse));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField).first, '读一下那次运行');
+    await tester.tap(find.text('发送'));
+    await tester.pumpAndSettle();
+
+    final title = find.text(reason);
+    final elapsed = find.text('137 ms');
+    final chevron = find.descendant(
+      of: find.byTooltip('展开 $reason 的结果'),
+      matching: find.byIcon(Icons.expand_more),
+    );
+    expect(title, findsOneWidget);
+    expect(elapsed, findsOneWidget);
+    expect(chevron, findsOneWidget);
+
+    /// 同一个界面上量两档宽度：桌面端要"标题用满整行"，手机端不许溢出、
+    /// 展开键同样要贴着耗时。
+    ///
+    /// 手机端不量标题占比：360 宽时状态徽标 + 耗时本来就占掉小半行，
+    /// 占比阈值在那档宽度下没有判别力（能区分的是"展开键被推到另一端"）。
+    void expectHeader(String where, {double? minTitleShare}) {
+      final titleRect = tester.getRect(title);
+      final elapsedRect = tester.getRect(elapsed);
+      final chevronRect = tester.getRect(chevron);
+      final rowWidth = chevronRect.right - titleRect.left;
+      expect(
+        chevronRect.left - elapsedRect.right,
+        lessThan(12),
+        reason: '$where：展开键要紧挨耗时，不能被推到行的另一端',
+      );
+      if (minTitleShare != null) {
+        expect(
+          titleRect.width,
+          greaterThan(rowWidth * minTitleShare),
+          reason: '$where：标题要用满扣掉状态 / 耗时 / 展开键之后的整行宽度',
+        );
+      }
+      expect(tester.takeException(), isNull);
+    }
+
+    expectHeader('桌面端', minTitleShare: 0.6);
+
+    // 窄屏（手机）不许溢出，展开键同样要贴着耗时。
+    tester.view.physicalSize = const Size(360, 800);
+    await tester.pumpAndSettle();
+    expectHeader('手机端');
+  });
+
   testWidgets('(e3) 回复末尾贴出「生成的产物」画廊入口卡（用户建议 ⑤）', (tester) async {
     tester.view.physicalSize = const Size(1200, 1000);
     tester.view.devicePixelRatio = 1.0;
