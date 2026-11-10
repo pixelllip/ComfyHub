@@ -3,20 +3,20 @@
 //! # 为什么先搬这三条
 //!
 //! 它们决定"AI 到底能不能动手"，而且是**设置页那几张卡的地基**：
-//! 权限档（`ask` / `full`）直接决定 `ToolAccess::Ask` 的工具要不要等用户点批准；
+//! 权限档（`ask` / `full`）决定 `ToolAccess::Ask` 的工具是否需要等待批准；
 //! NSFW 开关决定系统提示里那一段注不注入；工具清单是那张"权限"表的行。
-//! 少了它们，指向 Rust 时用户**连"自动允许"都切不了**（第 31 步做的闸门就永远拦着）。
+//! 缺少它们时，指向 Rust 后**无法切换到"自动允许"**（第 31 步的闸门会持续拦截）。
 //!
 //! # 三条形状纪律（都踩过）
 //!
 //! 1. **可空键整个键不出现**（`explicitNulls = false`）—— `defaultWriteRoot` 只有配了才有；
 //! 2. **`GET` 回的是展开后的绝对路径**（Kotlin `ToolPolicyDto.writeRoots = policy.writeRoots`，
-//!    而 `ToolPolicy.writeRoots` 是 `expand(...)` 的结果），不是用户当初填的那几个字；
+//!    而 `ToolPolicy.writeRoots` 是 `expand(...)` 的结果），不是最初填写的原始值；
 //! 3. **`PUT` 只改传了的字段**（其余照旧），但 `permissionMode` **非法就 400** ——
-//!    悄悄回落成 `ask` 看着更"安全"，实际是把用户的意图静默改成另一种行为。
+//!    回落为 `ask` 看似更"安全"，实际是把配置意图静默改为另一种行为。
 //!
-//! ⚠ `autoReadRoots` 是**每次现算**的（本机 ComfyUI 目录，用户 bug ④），界面上只展示不编辑；
-//! 它和用户配的 `readRoots` 是两码事，别合并。
+//! ⚠ `autoReadRoots` 是**每次计算**的（本机 ComfyUI 目录），界面只展示不编辑；
+//! 它与配置的 `readRoots` 是两件事，不能合并。
 
 use std::path::PathBuf;
 
@@ -27,7 +27,7 @@ use crate::tools::policy::{ToolPolicy, ToolPolicyConfig};
 use crate::web::routes::{ApiError, AppState};
 
 /// `DEFAULT_MAX_READ_BYTES`（Kotlin `ToolPolicyConfig`，2MB）—— 这两项界面上不可改，
-/// Kotlin 那边 `normalizeStored` 也是**强制回落**到代码常量（实测库里冻着老值对老用户无效）。
+/// Kotlin 侧 `normalizeStored` 同样**强制回落**到代码常量（库中残留的旧值对已有配置无效）。
 ///
 /// 真源已挪进 [`crate::tools::policy`]（P4 第 40 步起文件工具真的按它截断）—— 这里只做转出，
 /// **别在本地再写一遍数字**：两份常量漂移的表现是"界面显示 2MB、工具实际读 256KB"。
@@ -38,7 +38,7 @@ const DEFAULT_MAX_WRITE_BYTES: i64 = crate::tools::policy::DEFAULT_MAX_WRITE_BYT
 /// `GET /api/ai/tools`：这台后端**能跑**的工具（界面用它画权限表）。
 ///
 /// ⚠ 只列 [`crate::tools::tools::IMPLEMENTED`] —— Kotlin 那边列的是它全部 22 个 + MCP 拉来的。
-/// 列一个这台后端跑不了的工具，等于告诉用户"AI 能改文件"（而调用会回 `TOOL_NOT_FOUND`）。
+/// 列出一个该后端无法运行的工具，等于声明"AI 能改文件"（而调用会返回 `TOOL_NOT_FOUND`）。
 /// 每条六个键：`name` / `description` / `category` / `mutating` / `access` / `overridden`
 /// （`AiToolInfo.fromJson` 读的就是这六个）。
 pub fn list_tools(state: &AppState) -> Result<Value, ApiError> {
@@ -46,11 +46,11 @@ pub fn list_tools(state: &AppState) -> Result<Value, ApiError> {
     // ⚠ 从 `tools::implemented()` 取（手机 + 桌面专属的**合并**清单，含被 `deny` 的），
     // 不是只遍历 `MOBILE_TOOLS`、也不是 `catalog`：
     // ① 第 40 步之前这条路只看手机清单，于是文件工具实现了界面也看不见 ——
-    //    用户会以为"这台后端不能改文件"；
+    //    会被理解为"该后端不能改文件"；
     // ② `catalog` 会把 `deny` 的剔掉，而设置页的权限表**必须能看见**被禁用的工具
-    //    （剔掉的话用户点过一次禁用就再也开不回来）；
+    //    （剔除后，曾禁用一次的工具将无法再启用）；
     // ③ 第 45 步起还要并上**运行时拉到的 MCP 工具**（Kotlin 那边列的就是它们，
-    //    漏了的话用户在设置里根本看不到 `run_workflow` 这些能生图的工具）。
+    //    遗漏时，设置中不会显示 `run_workflow` 这些可生成图片的工具）。
     let mut views = crate::tools::tools::implemented();
     for view in state.mcp.tools() {
         if !views.iter().any(|tool| tool.name == view.name) {
@@ -76,7 +76,7 @@ pub fn list_tools(state: &AppState) -> Result<Value, ApiError> {
                 "access".into(),
                 Value::String(access_wire(policy.access_for(tool.name, tool.access)).to_string()),
             );
-            // 「被用户覆盖过」= 设置里有这一项（没覆盖 = 出厂默认，界面据此标"改过"）
+            // 「已被覆盖」= 设置中存在该项（未覆盖 = 出厂默认，界面据此标记"改过"）
             out.insert(
                 "overridden".into(),
                 Value::Bool(policy.config.overrides.contains_key(tool.name)),
@@ -263,7 +263,7 @@ pub struct PolicyUpdate {
 
 /// `PUT /api/ai/tools/policy`：只改传了的字段，其余照旧；返回**回读**的生效值。
 pub fn save_policy(state: &AppState, body: PolicyUpdate) -> Result<Value, ApiError> {
-    // 权限档：非法值**直接拒绝**（回落成 ask 会把用户的意图静默改成另一种行为）
+    // 权限档：非法值**直接拒绝**（回落为 ask 会静默改变配置意图）
     let mode = match body
         .permission_mode
         .as_deref()
@@ -446,7 +446,7 @@ fn nsfw_config(state: &AppState) -> Result<(bool, bool), ApiError> {
 
 /// NSFW 总开关开着没有（读坏 / 没有一律按**关**）。
 ///
-/// 给"会往用户眼前塞外部图片"的工具用：关着时参考图搜索必须加 `rating:general`，
+/// 供"会展示外部图片"的工具使用：关闭时参考图搜索必须加 `rating:general`，
 /// 不许因为模型传了 `allowNsfw=true` 就把成人图带进来。
 pub fn nsfw_enabled(state: &AppState) -> bool {
     nsfw_config(state)

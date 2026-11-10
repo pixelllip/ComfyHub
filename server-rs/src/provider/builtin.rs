@@ -2,7 +2,7 @@
 //!
 //! # 为什么要有一份"冻结副本"
 //!
-//! 用户原话："把 `.dsh/settings.yaml` 里的模型挨个抄过来，可以放在数据库里，
+//! 需求："把 `.dsh/settings.yaml` 里的模型逐个复制过来，可以放在数据库里，
 //! **不要让程序直接读 settings.yaml**"。装了本项目、没装 DSH 的机器上根本没有那个文件，
 //! 所以那份 YAML 的信息被抄成了一份 JSON（31KB），运行期只读这份资源。
 //!
@@ -18,13 +18,13 @@
 //!
 //! * [`SeedMode::AddMissing`]（默认，启动时走的那条）：**只补库里没有的 model_id**；
 //!   已有的行一个字节都不改（`displayName` / `baseURL` / `credentialRef` / `revision` 全不碰），
-//!   也不删任何模型（包括用户自己加的）；
-//! * [`SeedMode::RefreshCapabilities`]（用户点按钮才走）：只把**目录里已有的那些 model_id**
-//!   的能力声明对齐到目录；不新增、不删除、不碰 provider 行、不碰用户自己加的模型。
+//!   也不删除任何模型（包括自定义添加的）；
+//! * [`SeedMode::RefreshCapabilities`]（点击按钮才执行）：只把**目录中已有的那些 model_id**
+//!   的能力声明对齐到目录；不新增、不删除、不改动 provider 行与自定义添加的模型。
 //!
 //! 这条分界的教训是真实的：本机库里早有一份手工导入的 `command-code-goat`（69 个模型，
-//! 但能力声明是导入时的乐观值），如果"provider 已存在就 skip"，用户看到的永远是"没登记"；
-//! 而如果启动时就对齐能力，用户手工调过的声明会被**悄悄冲掉**。
+//! 但能力声明是导入时的乐观值），若"provider 已存在即跳过"，界面会一直显示"未登记"；
+//! 而若启动时就对齐能力，手动调整过的声明会被**静默覆盖**。
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -163,7 +163,7 @@ pub enum SeedMode {
 impl SeedMode {
     /// `?mode=` 的取值：`null` / `""` / `add-missing` → 补齐；`refresh-capabilities` / `refresh` → 对齐。
     ///
-    /// 认不出来**直接报错**（不静默按默认走 —— 用户点了「对齐能力」，结果只补了缺的模型，
+    /// 无法识别时**直接报错**（不静默使用默认值 —— 否则「对齐能力」只补齐了缺失模型，
     /// 而界面会显示"成功"）。
     pub fn parse(raw: Option<&str>) -> Result<Self, ApiError> {
         match raw.map(|m| m.trim().to_lowercase()) {
@@ -203,7 +203,7 @@ pub struct BuiltinSyncResult {
     pub updated: i64,
     /// 与目录一致、未改动的模型数
     pub kept: i64,
-    /// 库里已有但能力声明与内置目录不同的 model_id（保持用户当前设置，等用户决定）
+    /// 库中已有但能力声明与内置目录不同的 model_id（保留当前设置，等待确认）
     pub divergent: Vec<String>,
     /// 库里该 provider 当前的模型总数
     pub model_count: i64,
@@ -240,7 +240,7 @@ pub struct SeedPlan {
     pub added: Vec<String>,
     /// 库里已有且与目录一致、保持不动的 model_id
     pub kept: Vec<String>,
-    /// 库里已有但能力声明与目录不同的 model_id（保持用户当前设置，只提示）
+    /// 库中已有但能力声明与目录不同的 model_id（保留当前设置，仅提示）
     pub divergent: Vec<String>,
 }
 
@@ -263,7 +263,7 @@ pub fn plan_seed(
 
 /// 这条库里的行，能力声明与目录是否不同（`AiSeeder.capabilityDiffers`）。
 ///
-/// 只比**能力**那几样，**不比** `displayName` / `enabled` / 附件上限 —— 那些是用户的地盘。
+/// 只比较**能力**相关项，**不比较** `displayName` / `enabled` / 附件上限 —— 这些属于自定义范围。
 pub fn capability_differs(model: &BuiltinModel, row: &AiModelDto) -> bool {
     let want = to_model_dto(model, &row.provider_id, None);
     let sorted = |mut list: Vec<String>| {
@@ -417,7 +417,7 @@ pub fn preview(state: &AppState) -> BuiltinSyncResult {
                 updated: 0,
                 kept: plan.kept.len() as i64,
                 divergent: plan.divergent,
-                // 跑完之后的总数 = 现在库里的（含用户自己加的）+ 这次要补的
+                // 执行后的总数 = 当前库中的（含自定义添加的）+ 本次要补的
                 model_count: rows.len() as i64 + plan.added.len() as i64,
                 provider_created: false,
                 error: None,
@@ -426,10 +426,10 @@ pub fn preview(state: &AppState) -> BuiltinSyncResult {
     }
 }
 
-/// `POST /api/ai/builtin/sync` —— 幂等登记；**绝不对用户改过的东西下手**。
+/// `POST /api/ai/builtin/sync` —— 幂等登记；**不改动已修改的内容**。
 ///
 /// 失败**不抛 5xx**：返回 `ok=false` 语义的 `error` 字段（与 Kotlin 同 ——
-/// 登记失败不该让整个设置页报错，用户要能看到"为什么没同步上"）。
+/// 登记失败不应使整个设置页报错，并需显示"未同步的原因"）。
 pub fn sync(state: &AppState, mode: SeedMode) -> BuiltinSyncResult {
     let fallback_version = catalog_version();
     let (version, provider) = match first_provider() {
@@ -505,7 +505,7 @@ fn insert_all(
     })
 }
 
-/// provider 已在：按模式补缺 / 对齐能力，**绝不**碰 provider 行与用户自有模型。
+/// provider 已存在：按模式补缺 / 对齐能力，**不**改动 provider 行与自定义模型。
 fn reconcile(
     state: &AppState,
     provider: &BuiltinProvider,
