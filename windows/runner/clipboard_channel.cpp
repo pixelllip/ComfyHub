@@ -158,7 +158,7 @@ static_assert(sizeof(BitmapFileHeader) == 14,
 ///
 /// [force_opaque]：把 32bpp `BI_RGB` 的 alpha 字节强制置 255。按规范那一位
 /// **未使用**，但截图工具给出来的常常是全 0 —— 照原样交给解码器会得到一张
-/// 全透明的图（用户那边看起来就是"粘上去啥也没有"）。
+/// 全透明的图（表现为"粘贴后没有内容"）。
 std::vector<uint8_t> DibToBmp(const std::vector<uint8_t>& dib,
                               bool force_opaque) {
   std::vector<uint8_t> bmp;

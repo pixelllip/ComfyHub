@@ -31,10 +31,8 @@ static int g_active_window_count = 0;
 
 // 窗口能缩到的最小尺寸（**逻辑像素**）。
 //
-// 2026-09-21 用户要求"限制窗口最小宽度为 320"；**2026-10-12 改成 360** ——
-// 界面在更窄的宽度下已经没有可用的排法：标题栏会被挤到只剩标题、输入区底行
-// 得靠折行 + 横向滚动勉强挤下。所以直接在 Win32 这一层挡住 —— 用户拖不动，
-// 不是"拖小了以后界面变形"。
+// 最小宽度为 360：更窄的宽度下界面没有可用排法 —— 标题栏只剩标题、输入区底行
+// 需要折行 + 横向滚动。因此在 Win32 层限制最小尺寸，避免窗口缩小后界面变形。
 //
 // ⚠ 这个数字与 Dart 侧是**一对**：`lib/app.dart` 的 `kWideLayoutMinWidth`（900）
 // 把 360~900 划成"手机形态"，那一档要能在 360 上不溢出
@@ -44,7 +42,7 @@ static int g_active_window_count = 0;
 // 150% 缩放的屏幕上 360 逻辑 = 540 物理。所以要按当前窗口 DPI 换算，
 // 不能直接写 360（那样 150% 屏上只能缩到 240 逻辑，界面就碎了）。
 // 这个尺寸是**内容区**（client area）的尺寸，所以"最小内容宽度" = 360 逻辑像素，
-// 比 `ptMinTrackSize` 那个"整个窗口"的下限略小 —— WM_GETMINMAXINFO 兜住用户拖动，
+// 比 `ptMinTrackSize` 那个"整个窗口"的下限略小 —— WM_GETMINMAXINFO 处理拖动，
 // 这里兜住"起点就比下限还小"（例如以后默认尺寸被改小）。
 constexpr int kMinWindowWidthLogical = 360;
 constexpr int kMinWindowHeightLogical = 360;
@@ -222,7 +220,7 @@ Win32Window::MessageHandler(HWND hwnd,
   switch (message) {
     case WM_GETMINMAXINFO: {
       // 窗口最小尺寸（见 kMinWindowWidthLogical 的注释）。
-      // 必须在这里挡：`SetWindowPos` / 用户拖动都会被系统先问一遍这个值。
+      // 必须在此处限制：`SetWindowPos` 与拖动操作都会先查询该值。
       auto* info = reinterpret_cast<MINMAXINFO*>(lparam);
       UINT dpi = FlutterDesktopGetDpiForHWND(hwnd);
       double scale_factor = dpi / 96.0;

@@ -33,7 +33,7 @@ bool FileExists(const std::wstring& path) {
   return ::GetFileAttributesW(path.c_str()) != INVALID_FILE_ATTRIBUTES;
 }
 
-// 2026-09-28（用户报 "flutter run -d windows 到打开应用之后，调试直接断掉"）：
+// 现象："flutter run -d windows 打开应用后调试连接断开"：
 // 受限会话（AI 助手的文件沙箱）会把"映像在工作区内"的进程整个关在工作区里 ——
 // 工作区之外一个字节都写不了，连自己的 `%TEMP%` 都写不了。而 debug 版的
 // VM service 要在 temp 里建 DevFS 目录，于是 flutter run 当场崩：

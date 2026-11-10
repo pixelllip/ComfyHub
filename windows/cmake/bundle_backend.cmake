@@ -2,17 +2,17 @@
 #
 # 干五件事（做完之后 `build\windows\x64\runner\Release\` 本身就是完整发布包）：
 #
-#   ① `cargo build --release`：**构建 release 时后端一起更新到最新**（用户要求）；
+#   ① `cargo build --release`：**构建 release 时后端更新到最新**；
 #   ② 把后端 exe 装到 `<bundle>\backend\`（App 自己的资产，viewer.exe 同级），
 #      并把后端**运行期真的要用的**几样一起装上：`scripts\video-poster.ps1`
 #      （抽视频封面，`poster.rs` 会起它）、`db\`（DDL 副本，给人看）、`skills\builtin`；
 #   ③ 把 viewer.exe 与后端 exe 的**完整性标签**设回 Medium；
 #   ④ 把上一份构建留在产物里的**运行期数据**（`.db` / `storage` / `.run` /
 #      `app-support`）挪进 `_leftover-data\` —— 不删，只是别让复制出去的构建把它
-#      当成"用户的库"；
+#      当成"数据目录"；
 #   ⑤ 把源码树里的 `data-dir.json`（数据目录指针）带进产物，复制出去还是同一份数据。
 #
-# # 为什么必须有 ③（2026-09-30 用户实测的两条事实）
+# # ③ 的两条依据
 #
 #   · 写限制是 **完整性级别（IL）** 判的：exe 上带着 `Low` 标签 → 进程就是 Low →
 #     Low 写不了 %TEMP% / ComfyUI 目录这些 Medium 位置（默认 NO_WRITE_UP）；
@@ -82,18 +82,18 @@ foreach(_target "${_bundle}/viewer.exe" "${_bundle}/backend/comfyhub-server-rs.e
   endif()
 endforeach()
 
-# ④ 产物目录里**不该有运行期数据**（2026-11-10）
+# ④ 产物目录中**不应包含运行期数据**
 #
-# 用户 2026-11-10 报的 bug：把 Release 构建（除了 storage）复制到别处打开，对话只剩
-# 几条旧的、角色卡不是现在这版、画廊全是加载失败。真因是**上一份构建在这个目录里
-# 跑过**，于是 `.db\comfyhub.db`、`storage\`、`.run\`、`app-support\` 都被留在了产物
-# 里；复制到别处之后那个目录自己成了根，App 就照着这份旧库开了。
+# 现象：将 Release 构建（除 storage 外）复制到其他位置打开后，对话只剩
+# 几条旧记录、角色卡版本过旧、画廊全部加载失败。原因是**上一份构建在此目录中
+# 运行过**，`.db\comfyhub.db`、`storage\`、`.run\`、`app-support\` 残留在产物中；
+# 复制后该目录成为根目录，App 按这份旧库启动。
 #
-# ⚠ **不删**，只挪到 `_leftover-data\`：
-#   本机实测（2026-11-10）那份 `Release\storage\media` 里**有 30 张图在用户的数据目录
-#   里根本不存在** —— 它们是更早那版库的独有内容。构建步骤没有资格判断"这份数据还要
-#   不要"，删掉就真没了。挪到不叫 `.db` / `storage` 的目录之后，App 不会再把它当数据
-#   目录，复制出去的构建也就不会"变成另一份库"（这是这次事故的根）。
+# ⚠ **不删除**，只移动到 `_leftover-data\`：
+#   实测该 `Release\storage\media` 中有 30 张图在数据目录中不存在，
+#   属于更早版本库的独有内容。构建步骤无法判断该数据是否需要保留，
+#   删除后不可恢复。移动到非 `.db` / `storage` 的目录后，App 不再将其视为数据
+#   目录，复制出的构建也不会引用其他库。
 foreach(_junk ".db" "storage" ".run" "app-support")
   if(EXISTS "${_bundle}/${_junk}")
     file(MAKE_DIRECTORY "${_bundle}/_leftover-data")
@@ -111,7 +111,7 @@ endforeach()
 
 # ⑤ 数据目录指针跟着走：`data-dir.json` 有就带进产物
 #
-# 复制出去的构建要还是**同一份数据**（用户就是这么用发布包的）。指针在别的机器上
+# 复制出的构建需要仍是**同一份数据**。指针在别的机器上
 # 指不到东西时，App 会回落到运行根目录，并把这件事说出来（backend_paths.dart 的
 # `resolveDataDir`）。源码树里没设过指针时，产物里那份旧的也要清掉。
 if(EXISTS "${_root}/data-dir.json")

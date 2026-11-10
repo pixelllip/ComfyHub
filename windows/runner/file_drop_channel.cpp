@@ -35,7 +35,7 @@ std::string Narrow(const std::wstring& text) {
 // `WM_DROPFILES` 交下来的那个 `HDROP` **必须** `DragFinish`。
 //
 // 它是 Shell 为这一次投递分配的一块（可移动）全局内存，不是句柄表里那种"关了
-// 窗口就跟着走"的东西：不释放就是**每次拖放都漏一份**，用户拖几十次之后进程里
+// 窗口就跟着走"的对象：不释放则**每次拖放泄漏一份**，多次拖放后进程内
 // 就攒着一堆死内存。用 RAII 兜住 —— 下面任何一条提前 return（取不到路径、
 // channel 还没注册…）都不会漏掉这一次。
 class DropHandle {
@@ -97,8 +97,8 @@ void FileDropChannel::Register(flutter::BinaryMessenger* messenger, HWND hwnd) {
 
   if (hwnd != nullptr) {
     hwnd_ = hwnd;
-    // 窗口与通道**都就绪之后**才开（见头注释）：先开的话，用户在注册完成前拖进来
-    // 的那批会因为 Dart 侧还没有接收者而丢掉。
+    // 窗口与通道**均就绪后**才启用（见头注释）：提前启用时，注册完成前拖入的
+    // 文件会因 Dart 侧没有接收者而丢失。
     ::DragAcceptFiles(hwnd, TRUE);
   }
 }

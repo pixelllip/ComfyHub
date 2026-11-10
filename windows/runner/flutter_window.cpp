@@ -31,8 +31,8 @@ bool FlutterWindow::OnCreate() {
   // 内置的 Clipboard 只会写 CF_UNICODETEXT，"复制文件本身"做不到 —— 见通道的头注释。
   RegisterClipboardChannel(flutter_controller_->engine()->messenger());
   // 拖进窗口的文件（2026-10-18）：DragAcceptFiles + WM_DROPFILES。
-  // ⚠ 一定放在这里（窗口与通道都就绪之后）—— 早于这一步开接受，用户拖进来的
-  // 那批会因为 Dart 侧还没有接收者而丢掉（见 file_drop_channel.h）。
+  // ⚠ 必须放在此处（窗口与通道均就绪后）—— 提前启用拖放时，
+  // 拖入的文件会因 Dart 侧没有接收者而丢失（见 file_drop_channel.h）。
   FileDropChannel::instance().Register(flutter_controller_->engine()->messenger(),
                                        GetHandle());
   SetChildContent(flutter_controller_->view()->GetNativeWindow());

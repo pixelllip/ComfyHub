@@ -66,8 +66,8 @@ class FileDropChannel {
   // 注册通道，并在 |hwnd| 上开 `DragAcceptFiles`。
   //
   // ⚠ 调用时机：**窗口与通道都就绪之后**（`FlutterWindow::OnCreate` 里，引擎、
-  // view、channel 都建好之后）。在这一步之前就让用户能拖，收到的那批路径会因为
-  // Dart 侧还没有接收者而丢掉 —— 表现是"拖了没反应"，谁也说不清是哪儿的问题。
+  // view、channel 都创建之后）。提前启用时，接收到的路径会因
+  // Dart 侧没有接收者而丢失，表现为"拖入无反应"。
   void Register(flutter::BinaryMessenger* messenger, HWND hwnd);
 
   // 处理一次 `WM_DROPFILES`（`wparam` 就是那个 `HDROP`）：取路径 → 推给 Dart。

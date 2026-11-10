@@ -126,7 +126,7 @@ install(FILES "${AOT_LIBRARY}" DESTINATION "${INSTALL_BUNDLE_DATA_DIR}"
 # 于是 `build\windows\x64\runner\Release\` 本身就是一份完整可跑的发布包。
 # App 启动时**直接执行**这个 exe（`lib\core\backend_paths.dart`），不再经过 pwsh。
 #
-# Debug 刻意**不装**（用户要求："debug 版的时候在老位置"）：debug 跑的是源码树里
+# Debug **不安装**：debug 运行的是源码树中
 # `server-rs\target\{release,debug}\` 那份，见 `backend_paths.dart` 的候选顺序。
 #
 # 具体做什么、为什么（含完整性标签那条）全在 windows\cmake\bundle_backend.cmake 里。
