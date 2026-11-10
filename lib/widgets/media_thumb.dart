@@ -46,7 +46,7 @@ class MediaThumb extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final store = context.read<LibraryStore>();
-    // 图片走 /thumb；**视频走 /poster**（用户 bug ③：视频格子一直没有预览图）。
+    // 图片走 /thumb；**视频走 /poster**（视频格子此前没有预览图）。
     //
     // `/api/media/{id}/thumb` 对非图片直接回 204，所以以前视频格子只能显示一个
     // 电影图标占位。后端其实有 `/api/media/{id}/poster`：用 Windows 缩略图管线抽第一帧
@@ -76,13 +76,13 @@ class MediaThumb extends StatelessWidget {
               // 格子上的渐变和带投影的文字不会跟着重新栅格化
               // （文字阴影是每层最贵的一笔，现在每张图只会白付一次）
               //
-              // NSFW 打码包在**最里面**（用户 2026-09-20 的"模糊"选项）：
-              // 糊的是图，角标 / 时长 / 文件名仍然看得见 —— 用户得先知道
-              // "这是什么"才谈得上决定要不要点开。
+              // NSFW 打码层位于**最里面**：
+              // 仅对图片打码，角标 / 时长 / 文件名仍然可见 —— 需要先识别
+              // 内容，再决定是否打开。
               //
-              // ⚠ `nsfw: media.nsfw` 是**必给的**（用户 bug 2026-09-20）：
-              // 不给就退回"开关一开全糊"，连风景图都会被糊住。打码层不吃点击，
-              // 点一下就是**打开详情**（详情页不打码）。
+              // ⚠ `nsfw: media.nsfw` 是**必须传入的**：
+              // 不传会退回"开关开启后全部打码"，连风景图也会打码。打码层不拦截点击，
+              // 点击即**打开详情**（详情页不打码）。
               RepaintBoundary(
                 child: NsfwBlur(
                   nsfw: media.nsfw,
@@ -362,7 +362,7 @@ class MediaThumb extends StatelessWidget {
 /// 缩略图：**先显示网络图，缓存下载完成后换成磁盘图**。
 ///
 /// 这样"看过的格子"在桌面离线时仍然有图，而首次滑动不会为了等缓存而空着。
-/// 缓存失败不改变界面（继续用网络图），也不报错打扰用户。
+/// 缓存失败不改变界面（继续使用网络图），也不显示错误提示。
 class CachedThumbImage extends StatefulWidget {
   const CachedThumbImage({
     super.key,

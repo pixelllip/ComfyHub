@@ -9,8 +9,8 @@ import 'workflow_blueprint_page.dart';
 ///
 /// 界面格式工作流长这样：`{"nodes": [...], "links": [...], "version": 0.4}`；
 /// API 格式是 `{"1": {"class_type": "KSampler", "inputs": {...}}, ...}` —— 每个值都是带 `class_type` 的对象。
-/// agent / 脚本直接调 `/prompt` 生图时只会留下后者，提示语要跟着变，别让用户以为
-/// "拖回去就是原来的界面工作流"。
+/// agent / 脚本直接调 `/prompt` 生图时只会留下后者，提示语需随之调整，
+/// 避免理解为"拖回去即为原来的界面工作流"。
 bool looksLikeApiGraph(Object? json) {
   if (json is! Map || json.isEmpty) return false;
   return json.values.every((v) => v is Map && v.containsKey('class_type'));
@@ -18,8 +18,8 @@ bool looksLikeApiGraph(Object? json) {
 
 /// ComfyUI 工作流查看器。
 ///
-/// ComfyUI 存下来的是 UI 格式的工作流 JSON，用户把它拖回 ComfyUI 就能复现同一次生成。
-/// 所以这里只做一件事：把后端存的原文完整、可选中地交到用户手上。
+/// ComfyUI 保存的是 UI 格式的工作流 JSON，拖回 ComfyUI 可复现同一次生成。
+/// 这里只做一件事：把后端保存的原文完整、可选中地交给调用方。
 /// （要看**蓝图**（节点-连线画布 + 接线体检 + 改参数）走 [`showWorkflowBlueprint`]，
 /// 那是另一整屏，不在这个弹窗里。）
 
@@ -203,7 +203,7 @@ class _WorkflowDialogState extends State<_WorkflowDialog> {
   Future<void> _copy() async {
     final text = _raw;
     if (text == null) return;
-    // 复制永远给完整原文，即使用户看到的是截断版
+    // 复制始终提供完整原文，即使界面显示的是截断版
     await Clipboard.setData(ClipboardData(text: text));
     if (!mounted) return;
     widget.messenger?.showSnackBar(

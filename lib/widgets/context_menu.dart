@@ -22,7 +22,7 @@ import 'app_menu.dart';
 /// if (action == 'link') { ... }
 /// ```
 ///
-/// ## 为什么不用 `showMenu` / `showContextMenuAt`（用户 bug ②）
+/// ## 不使用 `showMenu` / `showContextMenuAt`
 ///
 /// `showMenu` 推的是 `_PopupMenuRoute`：它会铺一层铺满窗口的 `ModalBarrier`，
 /// 而屏障的 `RawGestureDetector(behavior: HitTestBehavior.opaque)` 在命中测试里

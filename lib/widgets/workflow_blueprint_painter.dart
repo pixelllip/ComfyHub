@@ -4,7 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../core/workflow_blueprint.dart';
 
-/// 一次绘制实际画了多少东西（**给用例看的**，不是给用户看的）。
+/// 一次绘制实际绘制的元素数量（**供测试用例使用**，不面向界面）。
 ///
 /// 仓库约定：界面类改动不写 golden / 不断言像素，而是把"画了什么"变成可断言的量
 /// （见 `docs/archive/workflow-blueprint-research.md` §5 的 P2 验收）。视口剔除是性能的
@@ -53,15 +53,15 @@ double contrastRatio(Color a, Color b) {
   return (hi + 0.05) / (lo + 0.05);
 }
 
-/// 蓝图配色。**两套主题各一份，都得成立**。
+/// 蓝图配色。**两套主题各一份，均需成立**。
 ///
-/// # 为什么要有这个类
+/// # 用途
 ///
-/// 2026-10-18 用户报："蓝图对比度过高，比较刺眼。" 真因是画布把**一整套浅色**写死在
-/// 画笔里（节点底 `#F3F5F7` + 近黑正文），而 App **默认深色主题** ——
-/// 深底上压一片近白的大色块，对比度约 17:1，远高于 WCAG AAA 的 7:1。
-/// 反过来切浅色主题时，节点底与浅色画布几乎同色、分组底板 `alpha 0.06` 也看不见。
-/// 也就是说：那套颜色**只对"它没被设计来适配"的那个主题成立**，两边都不对。
+/// 已知问题："蓝图对比度过高。" 原因是画布把**一整套浅色**写死在
+/// 画笔中（节点底 `#F3F5F7` + 近黑正文），而 App **默认深色主题** ——
+/// 深底上覆盖近白的大色块，对比度约 17:1，高于 WCAG AAA 的 7:1。
+/// 切换到浅色主题时，节点底与浅色画布接近同色、分组底板 `alpha 0.06` 也不可见。
+/// 即该组颜色**只对其未适配的主题成立**，两种主题均不正确。
 ///
 /// 现在的规矩两条：
 /// 1. **节点底跟画布同一侧**（深色主题下也是深色），只靠**一档明度差 + 一圈描边**分层
@@ -109,7 +109,7 @@ class BlueprintPalette {
 
   /// ComfyUI 的**插口 / 连线**类型色（真源：ComfyUI 前端 `link_type_colors`）。
   ///
-  /// 用户 2026-10-24："不同输入/输出的节点和连线配色取自 comfyui。"
+  /// 不同输入/输出的节点与连线配色取自 ComfyUI。
   /// 深色一套直接取 ComfyUI 的色值；浅色一套保持同一个色相、压暗明度 ——
   /// 把 `#FFD500` 这种高亮黄原样铺在浅色画布上等于看不见。
   final Map<String, Color> typeColors;
@@ -529,8 +529,8 @@ Rect blueprintWidgetLabelRect(BlueprintNode node, Rect box, int index) =>
 
 /// 参数行里"值"那一格（**可变**的那一半）。
 ///
-/// 用户 2026-10-18："最起码得显示成：text（不变） | xxx...（可变）的形式，
-/// 点击的时候右边出现可修改的 textfield。" —— 就地编辑器就落在这个矩形上。
+/// 显示形式为：text（不变） | xxx...（可变），点击后右侧出现可编辑 textfield。
+/// 就地编辑器位于该矩形上。
 Rect blueprintWidgetValueRect(BlueprintNode node, Rect box, int index) =>
     _widgetRowOf(node, box, index)?.value ?? Rect.zero;
 
@@ -1319,7 +1319,7 @@ class BlueprintPainter extends CustomPainter {
       old.spec.viewport != spec.viewport ||
       old.spec.selectedId != spec.selectedId ||
       old.spec.scale != spec.scale ||
-      // ⚠ 配色必须一起比：漏了的表现是"用户在设置里切深浅主题，蓝图不变色"，
+      // ⚠ 配色必须一起比较：遗漏时表现为"切换深浅主题后蓝图不变色"，
       // 而**一个错都不报**。（`BlueprintPalette.of()` 回的是两个 const 单例，
       // 所以这里是身份比较，不会每帧都判"变了"。）
       old.spec.palette != spec.palette ||

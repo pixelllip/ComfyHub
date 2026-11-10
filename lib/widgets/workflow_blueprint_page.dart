@@ -25,8 +25,8 @@ typedef BlueprintSave = Future<SavedWorkflow> Function(
 
 /// 打开工作流蓝图（整屏）。
 ///
-/// 从「查看工作流」弹窗里点「看蓝图」进来：弹窗**不关**，所以关掉蓝图就回到 JSON 原文，
-/// 用户随时还能复制原文拖回 ComfyUI（那是当前最核心的用途）。
+/// 从「查看工作流」弹窗点「看蓝图」进入：弹窗**不关闭**，关闭蓝图后回到 JSON 原文，
+/// 仍可复制原文并拖回 ComfyUI（当前的核心用途）。
 ///
 /// 蓝图**不在弹窗里**：弹窗正文被 clamp 在 760×460，而库内真实工作流的坐标包围盒
 /// 实测约 9600×2400 —— 塞进去初始缩放只有 8%，没法看（研究文档 §6.4）。
@@ -87,7 +87,7 @@ class _WorkflowBlueprintPageState extends State<WorkflowBlueprintPage> {
   int _loadSeq = 0;
 
   /// 同一份原文的蓝图缓存（最多 6 份，5 分钟）：
-  /// 用户"关掉蓝图 → 再点开"是常态，第二次不该再等一次网络 + 体检。
+  /// "关闭蓝图 → 再次打开"是常态，第二次不应重复等待网络与体检。
   static final Map<String, ({WorkflowBlueprint blueprint, DateTime at})>
   _cache = {};
   static const int _cacheLimit = 6;
@@ -97,24 +97,24 @@ class _WorkflowBlueprintPageState extends State<WorkflowBlueprintPage> {
   bool _editing = false;
   bool _showIssues = false;
 
-  /// 正在**就地编辑**哪一行参数（`widgets_values` 的下标）。null = 没在编辑。
+  /// 正在**就地编辑**哪一行参数（`widgets_values` 的下标）。null = 未编辑。
   ///
-  /// 用户 2026-10-18："编辑时应该可以在蓝图上直接操作，而不是在右侧侧边栏慢慢选择。"
+  /// 编辑应在蓝图上直接操作，不在右侧边栏逐项选择。
   int? _editingWidget;
 
-  /// 侧/下方面板开不开。用户 2026-10-18："（况且它还不能折叠）"。
+  /// 侧/下方面板是否展开。
   ///
-  /// 折叠之后画布会变宽 —— 这时**故意不重新适配**：用户多半是想多看点图，
-  /// 把视角抢回"适应窗口"反而碍事。要重新适配有工具栏那颗「适应窗口」。
+  /// 折叠后画布变宽 —— 此时**不重新适配**：目的通常是查看更多图，
+  /// 重置为"适应窗口"会改变视角。需要重新适配时使用工具栏的「适应窗口」。
   bool _panelOpen = true;
 
-  /// 初始视角只适配一次（用户自己缩放之后不许被抢回去）
+  /// 初始视角只适配一次（手动缩放后不得被重置）
   bool _fitted = false;
 
   /// 画布**自己**的视口尺寸（不是 `_body` 的 `constraints.biggest`）。
   ///
-  /// ⚠ 2026-10-18 用户 bug："打开之后默认跑到右上角"。真因是适配用的是**整个 body** 的
-  /// 尺寸（含右侧 380 面板与上方横幅），比画布宽一截，算出来的平移把内容推到右边。
+  /// ⚠ 已知问题："打开之后默认跑到右上角"。原因是适配使用**整个 body** 的
+  /// 尺寸（含右侧 380 面板与上方横幅），比画布宽，计算出的平移把内容推到右侧。
   /// 现在由 [`_canvasArea`] 的 `LayoutBuilder` 给出真实尺寸。
   Size? _viewport;
 
@@ -140,7 +140,7 @@ class _WorkflowBlueprintPageState extends State<WorkflowBlueprintPage> {
     final seq = ++_loadSeq;
     final cached = _cachedBlueprint(raw);
     if (cached != null) {
-      // 缓存命中：先把它画出来，不等网络。后台仍会复检一次（文件可能被用户在 ComfyUI 里改过）。
+      // 缓存命中：先绘制，不等待网络。后台仍会复检一次（文件可能在 ComfyUI 中被修改）。
       _applyBlueprint(cached, loading: false);
     } else {
       setState(() {
@@ -149,8 +149,8 @@ class _WorkflowBlueprintPageState extends State<WorkflowBlueprintPage> {
       });
     }
 
-    // ① 结构快照（diagnose=false）：后端不取 `/object_info`，通常几毫秒就回。
-    //    它先让用户看到图；② 的体检回来后再补问题清单。
+    // ① 结构快照（diagnose=false）：后端不取 `/object_info`，通常几毫秒返回。
+    //    先显示图；② 的体检返回后再补问题清单。
     Future<Map<String, dynamic>>? fast;
     if (cached == null) {
       fast = widget.diagnose(raw, diagnose: false);
@@ -187,7 +187,7 @@ class _WorkflowBlueprintPageState extends State<WorkflowBlueprintPage> {
     }
   }
 
-  /// 把一份蓝图套到页面上。**不重置 `_fitted`**（用户视角不许被抢回去）。
+  /// 把一份蓝图套到页面上。**不重置 `_fitted`**（视角不得被重置）。
   void _applyBlueprint(WorkflowBlueprint blueprint, {required bool loading}) {
     setState(() {
       _loading = loading;
@@ -305,7 +305,7 @@ class _WorkflowBlueprintPageState extends State<WorkflowBlueprintPage> {
   /// `origin = _canvasPadding - bounds.left`，也就是说 `bounds.left` 已经被 `origin`
   /// 抵消过一次了，再减一次 `bounds.left * fit` 等于按"图坐标"平移到一个已经是
   /// "画布坐标"的空间里 —— 表现就是内容整体往右下推。
-  /// 用户 bug 2026-10-18："打开之后默认跑到右上角"。
+  /// 已知问题："打开之后默认跑到右上角"。
   void _fitToView(Size viewport) {
     final layout = _layout;
     if (layout == null || layout.bounds.isEmpty) return;
@@ -459,7 +459,7 @@ class _WorkflowBlueprintPageState extends State<WorkflowBlueprintPage> {
       _canvasPadding - layout.bounds.left,
       _canvasPadding - layout.bounds.top,
     );
-    // 编辑器落在**值那一格**上（用户 2026-10-18："点击的时候右边出现可修改的 textfield"），
+    // 编辑器落在**值那一格**上（点击后右侧出现可编辑 textfield），
     // 而不是盖住整个节点。
     final cell = blueprintWidgetValueRect(node, box, index);
     final target = Rect.fromPoints(
@@ -890,9 +890,9 @@ class _WorkflowBlueprintPageState extends State<WorkflowBlueprintPage> {
                     ],
                   ),
                   const SizedBox(height: 4),
-                  // ⚠ 后端这几段文案里带 markdown（`` `comfy_load_workflow` ``、`**加粗**`、
-                  // 以及本仓库约定的 `##强调##`）。用 `Text` 直接显示就是**字面的反引号和井号**
-                  // —— 用户 2026-10-18 报的"到处都是 markdown 格式文案，但是又没有支持渲染"。
+                  // ⚠ 后端这几段文案包含 markdown（`` `comfy_load_workflow` ``、`**加粗**`、
+                  // 以及本仓库约定的 `##强调##`）。用 `Text` 直接显示会呈现**字面的反引号和井号**
+                  // —— 表现为"到处都是 markdown 格式文案，但没有渲染"。
                   MarkdownText(
                     issue.detail,
                     style: theme.textTheme.bodySmall,
@@ -1074,12 +1074,11 @@ class _WorkflowBlueprintPageState extends State<WorkflowBlueprintPage> {
     );
   }
 
-  /// 一个参数一行，**左边名字（不变）、右边值（可变）**。
+  /// 一个参数一行，**左侧名称（不变）、右侧值（可变）**。
   ///
-  /// 用户 2026-10-18："最起码得显示成：text（不变） | xxx...（可变）的形式，
-  /// 点击的时候右边出现可修改的 textfield。"
+  /// 显示形式为：text（不变） | xxx...（可变）；点击后右侧出现可编辑 textfield。
   ///
-  /// 为什么不做成 `名字 = 值` 一行：长值（一段提示词）会把名字挤没，
+  /// 不采用 `名称 = 值` 单行布局：长值（一段提示词）会把名称挤掉，
   /// 而"这是什么参数"恰恰是最不该丢的信息。
   ///
   /// ⚠ 类型是从**当前值**推的，不是从 `/object_info` 推的 —— 蓝图里没有控件声明，
@@ -1233,8 +1232,8 @@ class _WorkflowBlueprintPageState extends State<WorkflowBlueprintPage> {
 
 /// 面板里"参数名"那一列的宽度。
 ///
-/// 与画布上的两列布局是同一套观感（名字窄、值宽）—— 用户 2026-10-18：
-/// "最起码得显示成：text（不变） | xxx...（可变）的形式"。
+/// 与画布上的两列布局保持同一观感（名称窄、值宽）：
+/// 显示形式为：text（不变） | xxx...（可变）。
 const double kBlueprintParamLabelWidth = 96;
 
 /// 文本框里的字符串 → 原来的类型（数字还是数字，别的原样）。
@@ -1252,9 +1251,9 @@ Object? coerceWidgetValue(String text, Object? previous) {
 /// 单独做成 StatefulWidget 只为一件事：**它自己持有 `TextEditingController`**，
 /// 这样才能在"点到别处"时把当前文本提交上去。
 ///
-/// ⚠ 为什么"点到别处"必须提交：多行文本框里回车是换行，`onFieldSubmitted`
-/// **永远不会触发** —— 只挂它的话，用户改完一段提示词点别处就走了，
-/// 而**一个字都没落库、还什么都不报**（本仓库最讨厌的那一类 bug）。
+/// ⚠ "点到别处"必须提交：多行文本框中回车为换行，`onFieldSubmitted`
+/// **不会触发** —— 只挂它时，修改后点击别处即离开，
+/// 而**内容未落库且不报错**。
 class _PanelWidgetField extends StatefulWidget {
   final String initial;
   final bool numeric;
@@ -1307,11 +1306,10 @@ class _PanelWidgetFieldState extends State<_PanelWidgetField> {
 
 /// 画布上的**就地参数编辑器**：一个贴在那行参数上的小输入框。
 ///
-/// 用户 2026-10-18："编辑时应该可以在蓝图上直接操作，而不是在右侧侧边栏慢慢选择
-/// （况且它还不能折叠）。"
+/// 编辑应在蓝图上直接操作，不在右侧边栏逐项选择。
 ///
-/// 为什么只给文本框、不按类型分派控件：画布上这一行常常只有十几像素高，
-/// 放不下开关和下拉框；而且用户随时可以「适应窗口」放大之后再改。
+/// 只提供文本框、不按类型分派控件：画布上该行通常只有十几像素高，
+/// 无法容纳开关与下拉框；可通过「适应窗口」放大后再编辑。
 ///
 /// ⚠ 它**不能**放进 `InteractiveViewer` 里面：那样控件会跟着缩放一起糊，
 /// 内嵌的 `TextField` 还会跟画布的拖动抢手势。这里是由调用方按当前矩阵投影出来的

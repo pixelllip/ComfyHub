@@ -158,7 +158,7 @@ class _WinVideoViewState extends State<WinVideoView> {
           ),
         ),
         // 全屏入口只留控制条上这一个。以前右上角还有一个悬浮按钮，
-        // 同一个页面出现两个"全屏"图标，用户会以为是两个功能（bug 清单第 1 条）。
+        // 同一页面出现两个"全屏"图标会被理解为两个功能。
         _Controls(
           controller: controller,
           onFullscreen: _openFullscreen,

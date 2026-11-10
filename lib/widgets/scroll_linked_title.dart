@@ -4,8 +4,7 @@ import 'package:flutter/foundation.dart'
     show debugDefaultTargetPlatformOverride, kIsWeb, TargetPlatform;
 import 'package:flutter/material.dart';
 
-/// 标题形态按**平台**分，不按窗口宽度分（用户 2026-11-05："手机端 UI 维持
-/// 现状，电脑端的标题恢复原状（始终在 appbar 里）"）：
+/// 标题形态按**平台**区分，不按窗口宽度区分：
 ///
 /// * 手机（Android / iOS）：大标题在正文里、滚走后在 AppBar 淡入；
 /// * 电脑（Windows / macOS / Linux）：标题始终在 AppBar 里。
@@ -23,7 +22,7 @@ bool get useCollapsingPageTitle {
   return !kIsWeb && (Platform.isAndroid || Platform.isIOS);
 }
 
-/// 「大标题 → AppBar 标题」的滚动联动（2026-11-05 用户定下的规则）：
+/// 「大标题 → AppBar 标题」的滚动联动：
 ///
 /// * 页面顶部有一个**大标题**，它属于主体内容；
 /// * 内容往上滚、大标题逐渐离开可视区时，**同一个标题**在顶部栏里逐渐出现；
@@ -70,7 +69,7 @@ class ScrollTitleListener extends StatelessWidget {
       onNotification: (notification) {
         // 只认**纵向**且在最外层的滚动：画廊里还套着横向翻页的 `PageView`，
         // 它停在第二页时 `metrics.pixels` 是一整屏宽，会被误判成"已经滚到底"，
-        // 大标题在页首就没了（用户 2026-11-05 报的"页首留一块空白"）。
+        // 大标题在页首消失（表现为"页首留一块空白"）。
         if (notification.depth == 0 &&
             notification.metrics.axis == Axis.vertical) {
           progress.updateFromOffset(
@@ -107,9 +106,8 @@ class CollapsingPageTitle extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    // ⚠ 高度要**跟着进度收掉**，不能只把字淡出：标题块留在布局里的话，滚走之后
-    // 页面顶部会永远空着一条（用户 2026-11-05："搜索框等没有慢慢顶掉原大标题的
-    // 位置，留有空白"）。现在滚动多少，标题块就矮多少，下面的内容自然顶上来。
+    // ⚠ 高度要**随进度收起**，不能只淡化文字：标题块留在布局中时，滚走后
+    // 页面顶部会持续留空。当前滚动多少，标题块就缩短多少，下方内容自然上移。
     return AnimatedBuilder(
       animation: progress,
       builder: (context, _) {

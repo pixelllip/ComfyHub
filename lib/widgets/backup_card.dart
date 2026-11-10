@@ -18,12 +18,12 @@ import '../state/library_store.dart';
 /// 换库只能发生在**没有任何连接**的时候（后端 `infra/backup.rs` 的文件头写了理由）。
 /// 这条卡片的顺序是：`POST /api/system/restore`（校验 + 拍保险 + 落标记）→
 /// 重启本地服务 → 重启时 `open_or_create` 看到标记才真的换文件 → 再读一次列表，
-/// 把后端写下的 `lastRestore` 原样说给用户听。
+/// 原样展示后端写入的 `lastRestore`。
 ///
 /// # 只备份库
 ///
 /// 产物原图在 `<根>\storage`，几十 GB，不在备份里。这一点必须写在卡片上 ——
-/// 用户以为"备份了全部"、真出事时才发现图没了，比没有这个功能更糟。
+/// 显示"已备份全部"但实际缺少图片，后果比不提供该功能更严重。
 class BackupCard extends StatefulWidget {
   const BackupCard({super.key, this.onRestart});
 

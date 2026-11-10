@@ -4,14 +4,13 @@ import 'package:flutter/material.dart';
 
 import '../models/models.dart';
 
-/// 「选择现有工作流」对话框：列出本机 ComfyUI 里已经保存的工作流。
+/// 「选择现有工作流」对话框：列出本机 ComfyUI 中已保存的工作流。
 ///
-/// 用户 2026-10-21 的要求：
-/// - **给用户选择现有工作流的机会**（不要 AI 自己编一份）；
-/// - 选中的路径会写回输入框，让 AI 明确"用这一份"，而不是靠它猜。
+/// - 提供选择现有工作流的入口，不生成新的工作流；
+/// - 选中的路径写回输入框，明确指定使用该份工作流。
 ///
-/// 2026-11-05：用户要求"把查看蓝图入口移除"—— 这个对话框只做**选择**，
-/// 不再带「看蓝图」按钮（蓝图仍可从工作流卡片 / 详情页的「查看工作流」进）。
+/// 该对话框只做**选择**，不提供「看蓝图」按钮（蓝图仍可从工作流卡片 /
+/// 详情页的「查看工作流」进入）。
 ///
 /// 只读：列表走 `GET /api/capture/workflows`（路径准入在后端，前端不拼盘路径）。
 Future<ComfyWorkflowFile?> showWorkflowPicker(
@@ -229,7 +228,7 @@ class _WorkflowPickerDialogState extends State<_WorkflowPickerDialog> {
           ),
           isThreeLine: true,
           onTap: () => Navigator.of(context).pop(file),
-          // 只做选择：不再有「看蓝图」入口（2026-11-05 用户要求移除）。
+          // 只做选择：不提供「看蓝图」入口。
           trailing: const Icon(Icons.chevron_right, size: 20),
         );
       },

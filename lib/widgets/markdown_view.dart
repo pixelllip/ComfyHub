@@ -4,7 +4,7 @@
 //   · **流式友好**：每次 setState 都重新解析整段文本。解析是纯函数、量级很小
 //     （聊天回复单条最多几 KB），换来的好处是"半截文本也能正确显示"；
 //   · **只读**：不提供编辑；
-//   · **可跨段选择**（用户 bug ②："仅能选择 3 行文本"）：一段回复会被解析成很多个块
+//   · **可跨段选择**：一段回复会被解析为多个块
 //     （段落 / 标题 / 列表项 / 表格单元格 / 代码块），而 `SelectableText` 是**每块一个选择域** ——
 //     结果就是鼠标拖到这一段的末尾就再也拉不过去了（短段落正好三行）。
 //     现在整块正文包在一个 `SelectionArea` 里，内部用普通的 `Text.rich`，
@@ -229,7 +229,7 @@ class MarkdownText extends StatelessWidget {
       out = out.copyWith(
         fontFamily: 'Consolas',
         fontFamilyFallback: const ['Courier New', 'monospace'],
-        // 行内代码也留透光率：纯色底色会把选中高亮盖住（用户 2026-10-21 的反馈）。
+        // 行内代码也保留透明度：纯色底色会覆盖选中高亮。
         backgroundColor: theme.colorScheme.surfaceContainerHighest.withValues(
           alpha: 0.65,
         ),
@@ -343,7 +343,7 @@ class _CodeBlockState extends State<_CodeBlock> {
     final reflowed = body != widget.code;
     // 单行代码 / 硬折行散文 / 纯文本块：软换行（超过容器宽度就折）；
     // 真·多行代码：横向滚动（缩进 / 对齐本身有意义，自动折行反而更难读），
-    // 并且**常驻一条横向滚动条** —— 在此之前什么提示都没有，用户根本不知道右边还有内容。
+    // 并且**常驻横向滚动条** —— 否则无法判断右侧还有内容。
     final softWrap = codeBlockWraps(
       widget.code,
       widget.language,
@@ -431,7 +431,7 @@ class _CodeBlockState extends State<_CodeBlock> {
           else
             Scrollbar(
               controller: _hScroll,
-              // 常驻：用户**看得见**右边还有内容（默认只在滚动时闪一下，桌面端很容易错过）。
+              // 常驻：**可看见**右侧还有内容（默认仅在滚动时短暂显示，桌面端容易错过）。
               // 内容不超宽时 Flutter 自己不会画（`maxScrollExtent == 0`），不会白占一条。
               thumbVisibility: true,
               scrollbarOrientation: ScrollbarOrientation.bottom,
@@ -459,7 +459,7 @@ bool _tableLooksWide(
   List<List<MdInline>> header,
   List<List<List<MdInline>>> rows,
 ) {
-  // **两列表格永远铺满容器、自动换行**（用户要求：优先满足铺满对话容器，
+  // **两列表格始终铺满容器、自动换行**（优先铺满对话容器，
   // 而不是向右延伸）。两列的表大多是"参数 → 说明"这种说明表，横向拖读很难受。
   if (alignments.length <= 2) return false;
   if (alignments.length >= 6) return true;
@@ -573,7 +573,7 @@ class _MarkdownTableState extends State<_MarkdownTable> {
         builder: (context, constraints) {
           return Scrollbar(
             controller: _scroll,
-            // 常驻：用户**看得见**这里可以横向滚动（默认只在滚动时闪一下，桌面端很容易错过）。
+            // 常驻：**可看见**此处可以横向滚动（默认仅在滚动时短暂显示，桌面端容易错过）。
             thumbVisibility: true,
             scrollbarOrientation: ScrollbarOrientation.bottom,
             child: SingleChildScrollView(

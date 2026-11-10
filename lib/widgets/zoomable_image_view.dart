@@ -386,10 +386,10 @@ class _ZoomableImageViewState extends State<ZoomableImageView> {
                             setState(() => _dragging = false),
                         child: SizedBox.fromSize(
                           size: viewport,
-                          // **大图不打码**（用户 2026-09-20："打开详情之后就没必要模糊了"）。
-                          // 走到这里说明用户已经主动点开了这一条 —— 再糊一层只会让他
-                          // 多点一次"点击查看"。打码只发生在列表 / 缩略图那类"被动看到"的位置
-                          // （见 `media_thumb.dart` 与回复里的产物卡）。
+                          // **大图不打码**。
+                          // 进入此处表示已主动打开该条 —— 再次打码会额外增加一次
+                          // "点击查看"操作。打码只发生在列表 / 缩略图等被动浏览位置
+                          // （见 `media_thumb.dart` 与回复中的产物卡）。
                           child: _image(viewport),
                         ),
                       ),
@@ -678,7 +678,7 @@ class _ZoomBar extends StatelessWidget {
 ///
 /// 为什么要有这个封装：`ZoomableImageView` 本身只是个"铺满父级"的组件，
 /// 聊天里的图片附件以前直接 `launchUrl(externalApplication)`，于是点一张参考图
-/// 会把整个浏览器拉起来（用户 bug 2026-10-18）。查看器早就有，缺的只是这个入口。
+/// 会启动整个浏览器。查看器已存在，缺少的只是入口。
 ///
 /// 尺寸按窗口的 86% 给（有上下限），这样窄窗口里不会挤出屏幕、宽屏也不会糊成一片。
 Future<void> showImagePreview(

@@ -3,13 +3,13 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
-/// **分页内容的左右滑动切换**（用户 2026-10-24 定的统一交互）。
+/// **分页内容的左右滑动切换**（统一交互）。
 ///
-/// 2026-11-07 用户把过渡要求说清楚了：
+/// 过渡要求：
 ///
-/// > "过渡动画会同时显示新旧两页的内容，动画结束后注销旧界面。"
+/// > 过渡动画同时显示新旧两页的内容，动画结束后注销旧界面。
 ///
-/// 所以它不是一个"旧内容淡出、新内容淡入"的替换器，而是一个**小号 PageView**：
+/// 因此它不是"旧内容淡出、新内容淡入"的替换器，而是一个**小号 PageView**：
 ///
 ///   * 手指拖动时，当前页跟着走，相邻页从另一侧一起露出来 —— 拖到一半就是
 ///     "左边半页旧内容 + 右边半页新内容"；
@@ -40,7 +40,7 @@ import 'package:flutter/material.dart';
 ///
 /// ⚠ 手势只认**水平**拖动。子树里如果自己有纵向滚动 / 拖动，各自照常工作。
 class SwipePageView extends StatefulWidget {
-  /// 用户要求看的那一页（点翻页按钮 / 滑动松手后立刻变）。
+  /// 目标页（点翻页按钮 / 滑动松手后立即切换）。
   final int page;
 
   final int pages;
@@ -304,7 +304,7 @@ class _SwipePageViewState extends State<SwipePageView>
     _refreshPages();
     _scheduleNeeded();
 
-    // 动画这 300ms 里用户可能又点了一页：数据到了就接着滑，别让页码和画面对不上。
+    // 动画的 300ms 内可能再次点击翻页：数据到达后继续滑动，保持页码与画面一致。
     if (widget.page != _shownPage && _pages[widget.page] != null) {
       _startTransitionTo(widget.page);
     }
@@ -546,7 +546,7 @@ class _SwipePageViewState extends State<SwipePageView>
 ///
 /// Scaffold 只把 FAB 定位在**屏幕**底部，不知道 body 里还有一条 PageBar；
 /// 于是 360dp 上「上传产物」/「新建提示词」的右半边正好压在「下一页」上
-/// （2026-10-31 用户反馈）。这里用一圈透明 padding 把 FAB 的布局盒整体抬高，
+/// 这里用透明 padding 把 FAB 的布局盒整体抬高，
 /// 比在 PageBar 上留右内边距更稳：翻页按钮仍然居中，FAB 也不会跑到内容上面。
 const double kFabPageBarLift = 56;
 

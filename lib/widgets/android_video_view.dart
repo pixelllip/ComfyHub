@@ -166,7 +166,7 @@ class _AndroidVideoViewState extends State<AndroidVideoView> {
                 : c.value.aspectRatio,
             child: VideoPlayer(c),
           ),
-          // 暂停时给一个看得见的"继续播放"，否则用户会以为是卡住了
+          // 暂停时提供可见的"继续播放"，否则会被误认为卡住
           if (!c.value.isPlaying)
             Container(
               decoration: const BoxDecoration(

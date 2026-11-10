@@ -24,9 +24,8 @@ Future<MediaExportReport?> showExportDialog(
 }) {
   return showDialog<MediaExportReport>(
     context: context,
-    // 点弹窗外面就能关（用户 2026-11-05："这个窗口不允许我点击弹窗以外的区域
-    // 以退出"）。导出进行中的误点由弹窗内部的 `PopScope(canPop: !_busy)` 挡住，
-    // 所以这里放开不会把正在写的文件关掉。
+    // 点击弹窗外部可关闭。导出进行中的误点由弹窗内部的 `PopScope(canPop: !_busy)` 拦截，
+    // 因此此处放开不会中断正在写入的文件。
     barrierDismissible: true,
     builder: (_) => _ExportDialog(
       mediaIds: mediaIds,

@@ -12,7 +12,7 @@ import 'scroll_linked_title.dart';
 /// （[SettingsTileGrid]），而不是再放第二列设置。
 ///
 /// 超宽屏的规则是"**停在 1680、居中**"，不是继续铺满：
-///   · 1495 逻辑宽（用户那台）时正文就是全宽（1375），和改之前一样；
+///   · 1495 逻辑宽时正文即为全宽（1375），与此前一致；
 ///   · 1920 时 1680，两侧各 76；再宽（2560 / 3440）也只到 1680，多出来的留白。
 /// 理由：设置行的可读宽度由"标签 ↔ 右端控件"的距离决定，超过 ~1700 就开始
 /// 来回找；而"再宽一列"正是这次要消掉的高度参差。**别再往上抬**，也别在
@@ -130,8 +130,8 @@ class _SettingsScaffoldState extends State<SettingsScaffold> {
 /// 设置家族的**统一顶栏**（首页 / 子页 / 两个自定义正文的页面共用）。
 ///
 /// * 返回键**始终在 AppBar 里**，带外圈、40×40 的圆形 `BackButton`
-///   （用户 2026-11-05："这种返回按钮应该待在 appbar"）；
-/// * 电脑端标题**始终在 AppBar 里**（用户 2026-11-05：电脑端恢复原状）；
+///   （返回按钮位于 AppBar）；
+/// * 电脑端标题**始终在 AppBar 里**；
 /// * 手机端这条 AppBar 是透明的，标题按 [progress] 淡入 —— 大标题在正文里
 ///   滚走之后，这里才出现同一个名字（AGENTS §6.3）。
 class SettingsAppBar extends StatelessWidget implements PreferredSizeWidget {
@@ -188,7 +188,7 @@ class SettingsAppBar extends StatelessWidget implements PreferredSizeWidget {
   }
 }
 
-/// AppBar 里的返回键：**带外圈的圆形按钮**（用户 2026-11-05 指定的样式）。
+/// AppBar 里的返回键：**带外圈的圆形按钮**。
 ///
 /// 用 `BackButton` 而不是裸 `IconButton`：`tester.pageBack()` 与系统返回都
 /// 认这个类型；外圈靠 40×40 的按钮背景画，不会撑满 56 的 leading 槽。
@@ -300,7 +300,7 @@ class SettingsSection extends StatelessWidget {
 
   /// 放在**等高的并排行**里时置 true：卡片撑满这一行剩下的高度。
   ///
-  /// 设置首页的状态区是 4:6 的 NSFW / 库统计两栏（用户 2026-11-09 的草图），
+  /// 设置首页的状态区是 4:6 的 NSFW / 库统计两栏，
   /// 两张卡的下边缘必须齐平。平时纵向排布时保持 false —— `Expanded` 在没有
   /// 高度约束的 `Column` 里会直接断言失败。
   final bool fill;
@@ -349,11 +349,11 @@ List<Widget> _withSectionGaps(List<Widget> sections) => [
 
 /// 设置首页（以及子页里的跳转项）的**入口行**：图标 + 标题 + 一句说明 + 箭头。
 ///
-/// 用户 2026-11-05 的要求：一张卡里超过两项的配置不要摊在首页，收进子界面；
+/// 一张卡里超过两项的配置不放在首页，收进子界面；
 /// 首页只留这种"能点进去"的行。
 ///
-/// ⚠ 2026-11-09：**手机 / 窄窗口仍然用它**（用户："手机端的排版是对的"、
-/// "电脑端窄屏应该恢复成手机那种排版"）。宽屏首页才换成 [SettingsTileGrid]
+/// ⚠ **手机 / 窄窗口仍然使用它**（手机端排版保持不变、
+/// 电脑端窄屏恢复为手机排版）。宽屏首页才换成 [SettingsTileGrid]
 /// 的等高磁贴 —— 两套并存的判据在 `settings_page.dart`（宽度 ≥
 /// `kWideLayoutMinWidth`）。
 class SettingsEntryTile extends StatelessWidget {
