@@ -8,7 +8,7 @@
 //
 // 另外钉住：保存失败时页面不关、错误说人话、可以重试；编辑走 PUT 且
 // `extraParams` / `negativeMode` / `favorite` / 标签原样带回去（这些不是本页的输入框，
-// 丢了就是静默改用户数据）。
+// 丢失即静默修改数据）。
 
 import 'dart:convert';
 

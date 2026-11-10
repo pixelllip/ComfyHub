@@ -95,7 +95,7 @@ void main() {
       final args = Map<String, dynamic>.from(call.arguments as Map);
       // 给模型的正文仍是完整那份（含卡正文）
       expect(args['text'], '[STYLE SPEC]\n赛博\n霓虹\n\n按这个画');
-      // 用户看到的那句单独送下去：少了它，重开会话那条气泡会退化成一大段卡正文
+      // 界面显示的正文单独下发：缺少时，重开会话后气泡会退化为大段卡正文
       expect(args['displayText'], '按这个画');
       final mentions = jsonDecode(args['mentions'] as String) as List;
       expect(mentions, hasLength(1));
@@ -257,7 +257,7 @@ void main() {
 
     final skills = await source().localSkills();
     expect(skills.map((s) => s.name).toList(), ['r2i-prompt', 'broken']);
-    // 来源不能写成"用户自建"：用户自建的那份在电脑上，这份只是手机的副本
+    // 来源不得显示为"自建"：自建条目位于电脑端，这份为手机副本
     expect(skills.first.source, 'local');
     expect(skills.first.sourceLabel, '本机');
     expect(skills.last.validationError, 'frontmatter 缺少 description');

@@ -170,7 +170,7 @@ void main() {
   setUp(() {
     _log = [];
     // 用例期望的地址是出厂默认 `http://127.0.0.1:8080`。而后端端口现在是**自动挑的**
-    // （用户 2026-09-22）：`SettingsStore` 默认会去读本机 `.run\api.json` 里后端记录的真实端口。
+    // `SettingsStore` 默认读取本机 `.run\api.json` 中后端记录的真实端口。
     // 不关掉这个探测，用例结果就会随"这台机器上后端正跑在哪个端口"变化
     // （实测：复制出来的 URL 变成了当时后端的随机端口）。
     SettingsStore.portFileRootsOverride = const [];

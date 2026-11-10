@@ -63,7 +63,7 @@ void main() {
     expect(find.text('公网请求走 HTTP 代理 127.0.0.1:7890'), findsOneWidget);
     expect(find.textContaining('来自系统的代理设置'), findsOneWidget);
     expect(find.textContaining('本机与局域网地址永远直连'), findsOneWidget);
-    // 例外列表要列出来（用户能对着系统设置核对）
+    // 需列出例外列表（便于与系统设置核对）
     expect(find.textContaining('这些地址直连'), findsOneWidget);
   });
 

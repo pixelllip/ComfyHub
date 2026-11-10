@@ -14,7 +14,7 @@ import 'package:viewer/state/nsfw_store.dart';
 
 /// **冷启动闸门**：后端还没"有结论"之前，首屏一个请求都不许发（2026-10-12）。
 ///
-/// 现场（用户贴的那句）：
+/// 现象（报错原文）：
 ///
 /// ```
 /// ClientException with SocketException: Connection attempt cancelled,

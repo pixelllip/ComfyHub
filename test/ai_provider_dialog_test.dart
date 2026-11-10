@@ -1,10 +1,10 @@
-// 新建 Provider 对话框的回归（2026-10 用户要求改过一版）：
+// 新建 Provider 对话框的回归：
 //
 //   1. **端点信任级别与凭据引用名都不再是表单项** —— 这两项由软件自动决定：
 //      信任档由后端按 baseURL 推断，引用名由 Provider ID 推出来（`defaultCredentialRef`）；
 //   2. 表单里**多了 API Key 一栏**：填了就跟着一起保存（不用"先建 provider、再进去填一次"）；
 //   3. 推出来的引用名**永远合法**：ID 以数字开头时前缀 `P`（`2fast` → `P2FAST_API_KEY`），
-//      再也不会出现"要用户手填一个引用名"的死角。
+//      不再出现"需手动填写引用名"的入口。
 
 import 'dart:convert';
 
@@ -86,7 +86,7 @@ Future<void> _openDialog(WidgetTester tester, _Recorder recorder) async {
 }
 
 void main() {
-  /// 引用名是纯函数推出来的（用户看不见它），两种 ID 都要推得出合法值。
+  /// 引用名由纯函数推导（不在界面显示），两种 ID 都需得到合法值。
   test('凭据引用名由 ID 推出，且永远合法（数字开头补前缀）', () {
     expect(defaultCredentialRef('my-gateway'), 'MY_GATEWAY_API_KEY');
     expect(defaultCredentialRef('deepseek'), 'DEEPSEEK_API_KEY');
@@ -110,7 +110,7 @@ void main() {
     expect(find.text('API Key（可选）'), findsOneWidget, reason: '新建时就能填密钥');
     expect(find.text('端点信任级别'), findsNothing, reason: '信任档改由软件按地址决定，不再问用户');
     expect(find.text('凭据引用名（可选）'), findsNothing, reason: '引用名由程序按 ID 生成，不再问用户');
-    // 协议下拉还在（这个必须由用户选：三家协议不能猜）
+    // 协议下拉框保留（必须手动选择：三种协议不能推测）
     expect(find.text('OpenAI Chat Completions'), findsOneWidget);
   });
 

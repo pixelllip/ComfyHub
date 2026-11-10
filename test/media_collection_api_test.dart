@@ -2,8 +2,8 @@
 //
 // 为什么单独钉这一条：`clearCollection` 与 `collectionId` 在 `updateMedia` 里是
 // **互斥**的（clear 优先），而且它们决定了两件在界面上一模一样、语义完全不同的事：
-//   · `clearCollection: true` = 用户**移出**集合 → 后端同时打 `collection_opt_out = 1`；
-//   · `collectionId: N`      = 用户**移进**集合 → 后端清掉那个标记。
+//   · `clearCollection: true` = **移出**集合 → 后端同时设置 `collection_opt_out = 1`；
+//   · `collectionId: N`      = **移进**集合 → 后端清除该标记。
 // 写错任何一边的症状都是静默的：图还在那儿，只是"下次启动又回到原组"。
 
 import 'dart:convert';

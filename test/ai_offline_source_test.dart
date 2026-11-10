@@ -198,7 +198,7 @@ class _FakeLocalSource implements RunEventSource, LocalSkillSource {
   /// 每次 `deleteConversation` 删掉的是哪条（M3.2 ③ 的第二块砖）。
   final List<String> deleted = [];
 
-  /// 本机删除要不要失败（用户主动删会话那条路的"如实报错"用例）。
+  /// 本机删除是否失败（主动删除会话路径的"如实报错"用例）。
   bool failDelete = false;
 
   @override
@@ -366,7 +366,7 @@ void main() {
     expect(store.skills.map((s) => s.name).toList(), ['r2i-prompt']);
     expect(store.skillsLocalOnly, isTrue, reason: '界面要能说明这里只有本机的');
     expect(store.skillsError, isNull, reason: '回落成功就不该报"加载失败"');
-    // 来源徽标不能写成"用户自建"（那份在电脑上）
+    // 来源徽标不得显示为"自建"（自建条目位于电脑端）
     expect(store.skills.single.sourceLabel, '本机');
 
     // 本机也一份都没有 → 仍然如实报错，不许假装加载成功
@@ -397,7 +397,7 @@ void main() {
     // 本地那条空会话被复用（不是新建的）
     expect(store.conversation?.id, 'local-conv-1');
     expect(source.calls, isNot(contains('createConversation')));
-    // 清单拿不到要**如实说**，但不能说成"连接后端失败"（用户会以为整个 App 坏了）。
+    // 清单获取失败需**如实说明**，但不能显示为"连接后端失败"（否则会被理解为整个 App 异常）。
     // 手机侧清单来自本机库，所以这里的"拿不到"= 本机库还没配过（默认空）——
     // 说的必须是**本机**这件事，而不是"桌面不在线"（桌面在不在都与它无关了）。
     expect(store.error, contains('这台手机上还没有配置任何 Provider'));
@@ -642,10 +642,10 @@ void main() {
   });
 
   // -------------------------------------------------------------------------
-  //  用户主动删会话（§25.1 第三条的欠账）：本机 + 远端两半，且如实说清哪一半成了
+  //  主动删除会话（§25.1 第三条）：本机 + 远端两半，且如实说明哪一半成功
   // -------------------------------------------------------------------------
 
-  /// 用户主动删会话的**本机**那一半必须走 [RunEventSource.deleteConversation]（本地库）。
+  /// 主动删除会话的**本机**部分必须走 [RunEventSource.deleteConversation]（本地库）。
   ///
   /// 在这之前这一步只打**远端** DELETE：那条请求够不着本地镜像，于是"看起来删了、
   /// 其实还在"，而本地那份还带着一个本机删除标记（`local_deletions`）——
@@ -816,7 +816,7 @@ void main() {
     expect(store.pushNotice, contains('已从桌面同步 3 条记录'));
   });
 
-  /// 全量重建与"补几条"是两件事，说法不能一样（用户可能刚被 410 过）。
+  /// 全量重建与"增量补录"是两件事，提示文案不能相同（全量重建可能刚经历 410）。
   test('下行走的是全量时说法不一样（如实说"重建本机镜像"）', () async {
     final source = _FakeLocalSource()
       ..pullMode = 'bootstrap'
@@ -960,7 +960,7 @@ void main() {
   // -------------------------------------------------------------------------
 
   testWidgets('手机：本机库有 Provider、但没给它配模型 → 仍进得了聊天页，并如实说原因', (tester) async {
-    // 本机库里有 provider，模型目录空（用户还没在手机上为它加过模型）
+    // 本机库中存在 provider，模型目录为空（尚未在手机上添加模型）
     mockPairingChannel(providers: [localProviderJson()]);
     final store = AiWorkspaceStore(
       api: offlineApiWith(<String>[]), // 桌面永远离线
@@ -1353,7 +1353,7 @@ void main() {
 
   test('下行拉到变化 → 打开着的会话立刻重读（不用手点刷新）', () async {
     // 2026-11-09 真机：桌面的回执（`submit-reply-…`）已经落到本机库，
-    // 会话却一直停在"2 条消息"，用户手点刷新才看见 —— 这一条钉住"库变了界面就变"。
+    // 会话却一直停在"2 条消息"，手动刷新后才更新 —— 该用例验证"库变化后界面同步更新"。
     final source = _FakeLocalSource();
     final store = AiWorkspaceStore(
       api: _okApi(),
@@ -1445,7 +1445,7 @@ void mockPairingChannel({
 
   /// **本机库那份清单**（手机侧 provider 的唯一真源，`ProviderStore` → 桥）。
   ///
-  /// 默认空 = "这台手机上还没配过"（就是用户第一次打开 App 时的样子）。
+  /// 默认空 = "这台手机上尚未配置"（首次打开 App 时的状态）。
   /// ⚠ 桥回的 DTO 里**没有** `credential` 键：那是"这台机器有没有 key"的即时状态，
   /// 真源是本机密钥库（界面用 `CredentialStore.statusOf` 现问）。
   List<Map<String, dynamic>> providers = const [],

@@ -111,7 +111,7 @@ void main() {
     final labels = rail.destinations
         .map((d) => (d.label as Text).data)
         .toList();
-    // 「提示词」2026-10-11 改组成「预设」（用户：预设 = 可复用的一段提示词 + 用途）
+    // 「提示词」改名为「预设」（预设 = 可复用的一段提示词 + 用途）
     expect(labels, ['AI 工作台', '画廊', '预设', '标签', '设置']);
 
     // 3) 点第二个才进画廊。
@@ -134,7 +134,7 @@ void main() {
     expect(find.byType(PromptsPage), findsOneWidget);
     expect(tester.getRect(find.byType(PromptsPage)).height, greaterThan(0));
 
-    // 5) ★ **侧边栏必须常驻**（用户 2026-10-11："侧边栏没有常驻显示"）。
+    // 5) ★ **侧边栏必须常驻**。
     //
     // 判据用**几何**：换页前后 `NavigationRail` 的矩形必须逐像素相同。
     // 光看 `findsOneWidget` 抓不到这个 bug —— 每次 build 现拼一个导航栏也只有一个，
@@ -143,7 +143,7 @@ void main() {
     expect(railRect.width, greaterThan(0), reason: '侧边栏要有宽度');
     // ★ 更要紧的是 **State 的 identity**：几何相同不代表没被重建。
     // "每次 build 现拼一个 NavigationRail" 时矩形一模一样，但它其实被重新挂载了
-    // （这就是用户看到的"侧边栏闪一下 / 没有常驻"）。
+    // （表现为"侧边栏闪一下 / 非常驻"）。
     final railState = tester.state(find.byType(NavigationRail));
 
     await tester.tap(find.text('标签'));
@@ -169,7 +169,7 @@ void main() {
     );
   });
 
-  // ★ **后端重启时壳子不许被换掉**（用户 2026-10-11："让后端能够静默重启，
+  // ★ **后端重启时外壳不得被替换**（"让后端能够静默重启，
   // 不显示那个加载中界面，导致整个前端热重启；我要的桌面端侧边栏常驻呢？"）
   //
   // 老结构是 `StartupGate` 用 `return HomeShell()` / `return _StartupView()` **二选一**，

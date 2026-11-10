@@ -1,4 +1,4 @@
-// 弹出菜单不能挡住页面滚动 / 点击（用户 bug ②）的回归。
+// 弹出菜单不能影响页面滚动 / 点击的回归。
 //
 // 背景：Material 的 `PopupMenuButton` / `showMenu` 推的是 `_PopupMenuRoute`，它会铺一层
 // 铺满窗口的 `ModalBarrier`，而屏障的 `RawGestureDetector(behavior: opaque)` 在命中测试里

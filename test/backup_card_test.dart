@@ -5,7 +5,7 @@
 //   2) 「立即备份」真的 POST，然后把新备份显示出来（列表刷新过）；
 //   3) 「恢复」必须先确认，确认之后 POST /api/system/restore，**再重启服务**；
 //   4) 后端留下的 `pending` / `lastRestore` 要如实画出来 —— 恢复到底成没成，
-//      用户只能从这两处知道。
+//      仅这两处会显示该信息。
 
 import 'dart:convert';
 
@@ -184,7 +184,7 @@ void main() {
 
     expect(backend.calls, contains('POST /api/system/restore'));
     expect(restarted, 1, reason: '落完标记必须重启一次，换库发生在启动时');
-    // 后端写下的 lastRestore 原样说给用户
+    // 原样展示后端写入的 lastRestore
     expect(find.textContaining('已恢复这份备份'), findsWidgets);
   });
 

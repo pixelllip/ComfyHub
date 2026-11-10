@@ -123,7 +123,7 @@ void main() {
       backend: oneProviderBackend(),
     );
 
-    // 手机上是**两级面板**（用户原话："上下分屏难受，而且有些东西在手机上应该表现为子界面"）：
+    // 手机上为**两级面板**（上下分屏体验不佳，部分内容应作为子界面）：
     // 一级 = Provider 列表。目录卡已经不在这一页的页顶了（2026-10：能力目录改成嵌在
     // **某一条 Provider 的详情里**，内置目录卡整块删掉），主屏只剩列表。
     expect(find.text('AI 模型与凭据'), findsOneWidget);
@@ -172,7 +172,7 @@ void main() {
     expect(find.text('新建 Provider'), findsNothing, reason: '进了详情就不该还留着列表');
 
     // ★ **系统返回**（手势 / 实体返回键）必须退回列表，而不是把这整页弹掉
-    //   （用户实测报的就是这个：划一下手势直接回到设置首页了）。
+    //   （返回手势会直接回到设置首页）。
     await tester.binding.handlePopRoute();
     await tester.pumpAndSettle();
     expect(

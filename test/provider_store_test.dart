@@ -1,6 +1,6 @@
 // Provider 清单的**来源分叉**（M6 的另一半）：
 //
-//   用户拍板的第 4 条是"**手机完全可以独立配置 provider，有密钥的也同步到手机端**"。
+//   第 4 条约束：**手机可独立配置 provider，带密钥的也同步到手机端**。
 //   密钥那一半早就做完了，可清单这一半以前不成立：`AiProviderSettingsPage` 的
 //   provider / 模型 CRUD 清一色打 `AiApiClient`（桌面 HTTP）—— 桌面不在线时手机上
 //   连"新建一个 provider / 改个 baseURL"都做不到，而 `android/harness` 的本机库里
@@ -411,7 +411,7 @@ void main() {
     );
 
     // provider 那一份 PUT：**一个字节的 endpointTrust 都不带**
-    // （2026-10 用户要求：信任档由软件按地址决定）。带了旧档的话，"把公网 Provider 的地址
+    // （信任档由程序按地址决定）。携带旧档时，"把公网 Provider 的地址
     // 改成本机"会拿着 public 去校验，当场被后端拒 —— 而表单里已经没有这一栏可改了。
     expect(providerPut, isNotNull, reason: '更新必须真的 PUT 出去');
     expect(
@@ -477,7 +477,7 @@ void main() {
     await tester.pumpWidget(await page(store, _Backend()));
     await tester.pumpAndSettle();
 
-    // §14.4：两端各一份清单、不自动合并 —— 不说这句用户会以为桌面也能用
+    // §14.4：两端各一份清单、不自动合并 —— 不说明时会被理解为桌面同样可用
     expect(find.textContaining('只在这台手机上'), findsOneWidget);
     expect(find.textContaining('不会自动合并'), findsOneWidget);
 
@@ -589,7 +589,7 @@ void main() {
     await tester.tap(find.text('编辑 Provider'));
     await tester.pumpAndSettle();
 
-    // 对话框要**预填**现有那一行（用户一眼看得出在改什么）
+    // 对话框需**预填**现有记录（便于确认修改内容）
     final urlField = find.ancestor(
       of: find.text('Base URL'),
       matching: find.byType(TextField),
@@ -605,7 +605,7 @@ void main() {
     );
     expect(tester.widget<TextField>(idField).readOnly, isTrue);
 
-    // 改 baseURL（用户原话里那一件事）→ 保存
+    // 修改 baseURL → 保存
     await tester.enterText(urlField, 'http://192.168.1.20:11434/v1');
     await tester.pumpAndSettle();
     await tester.tap(find.text('保存'));

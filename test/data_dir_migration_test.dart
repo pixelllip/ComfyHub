@@ -1,7 +1,7 @@
 // 数据目录迁移（`lib\core\data_dir_migration.dart`）的回归。
 //
-// 用户 2026-11-06："我能在设置内修改数据目录吗？还要考虑数据迁移。"
-// 用户 2026-11-09：搬过去之后变成 `storage\storage`、手动挪平后软件不认，
+// 设置内可修改数据目录，并支持数据迁移。
+// 迁移后形成 `storage\storage`、手动移平后无法识别，
 // 想搬回上一级 / 程序目录又都被"目标里已经有一份数据"挡回来。
 //
 // 这里钉住这些事：
@@ -70,7 +70,7 @@ void main() {
     write(root, ['.run', 'api.json'], '{}');
   }
 
-  /// 扁平布局：用户把里层 `storage` 的内容挪到了数据目录本身。
+  /// 扁平布局：里层 `storage` 的内容被移动到数据目录本身。
   void seedFlat(Directory data) {
     write(data, ['.db', 'comfyhub.db'], 'db');
     write(data, ['media', 'a.png'], 'img');
@@ -230,7 +230,7 @@ void main() {
       expect(readDataDirOverride(root.path), newData.path);
       expect(dataDirOf(root.path), newData.path);
 
-      // 旧数据原样留着（用户确认后才删）
+      // 旧数据保留（确认后才删除）
       expect(exists(oldData, ['.db', 'comfyhub.db']), isTrue);
       expect(exists(oldData, ['storage', 'media', 'a.png']), isTrue);
     });

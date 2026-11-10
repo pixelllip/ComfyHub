@@ -4,7 +4,7 @@
 //   刷新本页才恢复。
 //
 // 成因：删除前停在最后一页，删完之后这个页码已经不存在了，后端对越界页码返回空数组。
-// 期望：`LibraryStore.refreshMedia()` 自己回到最后一页，用户感觉不到。
+// 期望：`LibraryStore.refreshMedia()` 自动回到最后一页，界面上不体现。
 
 import 'dart:convert';
 

@@ -223,7 +223,7 @@ void main() {
     await tester.tap(find.text('新建 Provider'));
     await tester.pumpAndSettle();
 
-    // 表单里已经没有信任档与引用名这两栏（用户要求：都由软件自动决定），
+    // 表单中不再有信任档与引用名两栏（均由程序自动决定），
     // 模拟"填完就点创建"的真实操作。
     expect(find.text('端点信任级别'), findsNothing);
     expect(find.text('凭据引用名（可选）'), findsNothing);
@@ -417,7 +417,7 @@ void main() {
 
     // 按真后端的形状搭一个假库：**存完密钥之后**，`GET /providers` 才会说 configured。
     //
-    // 这正是用户 2026-10 报的 bug 的成因：`POST /providers` 的返回值里 credential 是
+    // 这正是该现象的原因：`POST /providers` 的返回值中 credential 是
     // **回读那一刻**算的（那时密钥还没 PUT 过去），页面拿它当"当前选中项"就永远差一步。
     final stored = <String>[];
     final client = MockClient((request) async {

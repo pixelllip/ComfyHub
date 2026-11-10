@@ -4,7 +4,7 @@
 // 这里钉的是**调用契约**与**失败降级**，因为后者决定了它会不会把别的东西弄坏：
 //
 //   `Ctrl+V` 的拦截判据就是 `hasFiles()`。它要是抛异常 / 卡住，普通文本粘贴
-//   就会被一起弄坏 —— 而"粘不上字"这种症状，用户根本不会往剪贴板通道上想。
+//   会被一并破坏 —— "无法粘贴文本"这一现象通常不会关联到剪贴板通道。
 
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';

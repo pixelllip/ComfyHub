@@ -1,7 +1,7 @@
 // 回归（配对设置卡，`docs/pairing-design.md` §11）：这块界面最容易悄悄做错的两件事 ——
 //
 //   ① 开关**照请求画**而不是**照后端回的画**：后端回 `ok:false`（enabled 仍是 false）时
-//      界面却显示"已打开"，用户以为开了、手机却连不上，界面上一点线索都没有；
+//      界面却显示"已打开"，而手机无法连接，界面上没有提示；
 //   ② 待配对请求必须画成**能念出来的 6 位码 + 来源 + 剩余时间**：这一块的全部价值就是
 //      "人看着桌面屏幕把码敲进手机"，码画不出来（或藏在收起的折叠里）等于配对做不了。
 //
@@ -44,12 +44,12 @@ Finder _masterSwitch() => find.ancestor(
 
 void main() {
   // 「允许移动端连接」与「本地服务」那张卡里的「允许手机 / 局域网设备连接」
-  // **不是同一件事**，两个名字却都像"允许手机连"（用户 2026-10-13 问过
+  // **不是同一件事**，两个名称都近似"允许手机连接"（
   // "是不是重复了"）：
   //   · 那个 = 后端**听不听**局域网（起进程时定，要重启）；
   //   · 这个 = **配对闸门**：局域网请求要不要带令牌。
   // 关掉这个不是"不许连"，而是"局域网内任何设备都能连、不用令牌"（更松）。
-  // 两边都必须把顺序写出来，否则用户分不清"我明明开了，手机还是连不上"卡在哪一道。
+  // 两边都必须写出顺序，否则无法判断"已开启但手机连不上"发生在哪一步。
   testWidgets('闸门这一项要写明它与「本地服务」那个开关的关系（防"看着像重复"）', (tester) async {
     tester.view.physicalSize = const Size(900, 1600);
     tester.view.devicePixelRatio = 1.0;
@@ -198,7 +198,7 @@ void main() {
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
 
-    // 下行已经开着、上行还关着（用户接着要勾的就是上行那一个）
+    // 下行已开启、上行仍关闭（接下来需勾选上行开关）
     var allow = true;
     var allowUpload = false;
     final bodies = <String>[];
@@ -276,8 +276,8 @@ void main() {
     addTearDown(tester.view.reset);
 
     // 老后端：设备行与回执里**都没有** allowCredentialsUpload 这个键，
-    // 于是"用户点了开"与"回读是关"必然矛盾 —— 这时候唯一诚实的做法是
-    // 把开关画回"关"并说清是后端版本问题（而不是显示成开、让用户白等）。
+    // 因此"本地开启"与"回读为关"必然矛盾 —— 此时的处理方式是
+    // 将开关显示为"关"并说明后端版本问题（不显示为开启）。
     final client = MockClient((request) async {
       if (request.url.path == '/api/auth/devices/phone-1/credentials') {
         return _json({
@@ -426,7 +426,7 @@ void main() {
 
     expect(find.byType(PairingQrImage), findsNothing);
     expect(find.textContaining('还没有"扫码配对"接口'), findsOneWidget);
-    // ⚠ 文案 2026-09-30 由用户自己精简过（「手机举手 + 敲码」→「手动敲验证码」）——
+    // ⚠ 文案已精简（「手机举手 + 敲码」→「手动敲验证码」）——
     //   这一条钉的是**指路**本身（不许只说失败、不说另一条路怎么走），不钉具体措辞。
     expect(find.textContaining('手动敲验证码'), findsOneWidget);
 

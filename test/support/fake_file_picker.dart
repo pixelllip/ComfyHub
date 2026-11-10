@@ -63,10 +63,10 @@ final class FakePlatformFile extends PlatformFile {
 final class FakeFilePicker extends FilePickerPlatform {
   FakeFilePicker({this.directory, this.files = const []});
 
-  /// 下一次 `getDirectoryPath` 返回什么；`null` = 用户点了取消。
+  /// 下一次 `getDirectoryPath` 返回什么；`null` = 取消选择。
   String? directory;
 
-  /// 下一次 `pickFiles` 返回什么；空列表 = 用户点了取消。
+  /// 下一次 `pickFiles` 返回什么；空列表 = 取消选择。
   List<PlatformFile> files;
 
   int directoryCalls = 0;

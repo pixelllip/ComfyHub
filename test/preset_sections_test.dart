@@ -13,7 +13,7 @@ import 'package:viewer/core/settings_store.dart';
 import 'package:viewer/pages/prompts_page.dart';
 import 'package:viewer/state/library_store.dart';
 
-/// 预设库的**同级页签**（用户 2026-10-24）：
+/// 预设库的**同级页签**：
 ///  ① 普通预设 / 角色卡 / 画风卡在**同一条导航**上，不再是"卡片库子页"；
 ///  ② 卡片页签**第一次点开才拉数据**（别在进预设页时白拉两个端点）；
 ///  ③ 新建按钮跟着页签换；

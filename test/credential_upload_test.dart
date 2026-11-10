@@ -1,6 +1,6 @@
 // 回归（密钥上行，「推给桌面」——`docs/pairing-design.md` §14）：
 //
-//   手机上的 key 存在本机密钥库，桌面上那把是**另一份**。用户拍板"双向"之后，
+//   手机上的 key 保存在本机密钥库，桌面那份是**另一份**。支持"双向"后，
 //   手机上多了一个显式动作：把本机这一把推给桌面。这一批钉住四件事：
 //   ① **上行请求的形状**（`PUT /api/ai/credentials` + 配对令牌 + `credentials` 映射）；
 //   ② **两个开关分开**（`allow` 与 `allowUpload` 各自独立，谁都不许顺手带上另一个）；
@@ -290,7 +290,7 @@ void main() {
       expect(tester.widget<OutlinedButton>(pushButton).onPressed, isNotNull);
       await tester.tap(pushButton);
       await tester.pumpAndSettle();
-      // 先弹出确认：值会离开本机，这件事用户得知道
+      // 先弹出确认：该值会离开本机
       expect(find.text('推上去'), findsOneWidget);
 
       await tester.tap(find.text('推上去'));

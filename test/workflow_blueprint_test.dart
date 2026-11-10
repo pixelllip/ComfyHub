@@ -511,7 +511,7 @@ void main() {
     });
 
     test('参数行的几何只有一份：画出来的矩形，点它的中心必须命中它自己', () {
-      // 用户 2026-10-18 要求"在蓝图上直接改参数"。命中与绘制**共用同一个算式**，
+      // 在蓝图上直接修改参数。命中与绘制**共用同一个算式**，
       // 否则表现是"点得到的地方和画出来的地方不重合"，而且一个错都不报。
       final blueprint = _blueprint();
       final layout = BlueprintLayout.of(blueprint);
@@ -548,7 +548,7 @@ void main() {
     });
 
     test('参数行是"名字 | 值"两列：不重叠、不留缝、宽度有上下限', () {
-      // 用户 2026-10-18："最起码得显示成：text（不变） | xxx...（可变）的形式。"
+      // 显示形式为：text（不变） | xxx...（可变）。
       final blueprint = _blueprint();
       final layout = BlueprintLayout.of(blueprint);
       var checked = 0;
@@ -584,7 +584,7 @@ void main() {
     });
 
     test('长文本 / Note 按多行撑高，后面的参数与节点底边都不被顶穿', () {
-      // 用户 2026-10-24："有些该多行显示的就多行显示。"
+      // 需要多行显示的内容使用多行显示。
       // 以前所有参数都是 11px 高的一行，一段提示词只露前 24 个字。
       final node = BlueprintNode(
         id: 'text',
@@ -756,7 +756,7 @@ void main() {
     });
 
     testWidgets('打开就把内容缩放对齐到画布中心 —— 不是跑到右上角', (tester) async {
-      // 用户 bug 2026-10-18："蓝图打开之后默认跑到右上角去了，应缩放对齐窗口。"
+      // 现象："蓝图打开后默认位于右上角，应缩放对齐窗口。"
       // 真因：适配用的是**整个 body** 的尺寸（含右侧 380 面板与上方横幅），
       // 比画布宽一截，算出来的平移把内容推到了右边。
       //
@@ -818,7 +818,7 @@ void main() {
     });
 
     testWidgets('面板能折叠：收起之后画布变宽，再展开回来', (tester) async {
-      // 用户 2026-10-18 的原话里专门点了这一句："（况且它还不能折叠）"。
+      // 该内容不能折叠。
       tester.view.physicalSize = const Size(1200, 800);
       tester.view.devicePixelRatio = 1.0;
       addTearDown(tester.view.reset);
@@ -851,7 +851,7 @@ void main() {
     });
 
     testWidgets('编辑模式下点画布上的参数行 = 就地改，不用去右侧面板', (tester) async {
-      // 用户 2026-10-18："编辑时应该可以在蓝图上直接操作，而不是在右侧侧边栏慢慢选择。"
+      // 编辑时可在蓝图上直接操作，不需要在右侧侧边栏选择。
       tester.view.physicalSize = const Size(1400, 1000);
       tester.view.devicePixelRatio = 1.0;
       addTearDown(tester.view.reset);
@@ -937,7 +937,7 @@ void main() {
     });
 
     testWidgets('体检里的 markdown 真的被渲染（不许露出反引号与井号）', (tester) async {
-      // 用户 2026-10-18："到处都是 markdown 格式文案，但是在这些组件又没有支持渲染。"
+      // 现象：文案包含 Markdown 格式，但相关组件不支持渲染。
       // 后端那几段文案里带 `` `代码` ``、`**加粗**`，以及本仓库约定的 `##强调##`。
       tester.view.physicalSize = const Size(1400, 1000);
       tester.view.devicePixelRatio = 1.0;
@@ -1012,7 +1012,7 @@ void main() {
   // ---------------------------------------------------------------------------
   //  配色
   //
-  //  用户 bug 2026-10-18："蓝图对比度过高，比较刺眼。"
+  //  现象：蓝图对比度过高。
   //  真因：配色是**一整套浅色**写死在画笔里（节点底 #F3F5F7 + 近黑正文），
   //  而 App 默认深色主题 ⇒ 深底上压一片近白，对比约 17:1。
   //
@@ -1096,7 +1096,7 @@ void main() {
     });
 
     test('插口 / 连线取 ComfyUI 的类型色：同类同色、异类异色', () {
-      // 用户 2026-10-24："不同输入/输出的节点和连线配色取自 comfyui。"
+      // 不同输入/输出节点与连线的配色取自 ComfyUI。
       final dark = BlueprintPalette.dark;
       expect(dark.typeColor('MODEL'), const Color(0xFFB39DDB));
       expect(dark.typeColor('CLIP'), const Color(0xFFFFD500));

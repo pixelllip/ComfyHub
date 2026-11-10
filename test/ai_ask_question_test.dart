@@ -1,11 +1,11 @@
-// 回归（用户 bug 2026-09-21：`ask_user_question` 的作答体验不完善）：
+// 回归（`ask_user_question` 的作答体验）：
 //
-//   ① 提问要**向用户抛出选项**，点一下就答；末尾**固定**再给一条"自己输入答案"
-//      （用户原话："最末尾选项固定让用户决定（输入你的答案）"）；
+//   ① 提问需**给出选项**，点击即答；末尾**固定**提供"自己输入答案"
+//      （末尾选项固定为"由自己输入答案"）；
 //   ② 提问期间**接管聊天下部的模块**（原来的输入框整块换成答题卡），
 //      参考 DeepSeek Harness 的 composer takeover —— 答完 / 跳过后普通输入框自动回来。
 //
-// 两条都是"界面结构"级别的约定：出了问题用户是直接看不懂该怎么答，所以这里
+// 两条均为"界面结构"级约定：结构缺失会导致无法判断如何作答，因此这里
 // 走真实链路（起一次 Run + 手拼 SSE 的 `user.question` 事件），把四件事钉住：
 //   · `user.question` 到达后：答题卡出现、问题与选项都在、末尾固定是"自己输入答案"；
 //   · 点选项 → POST /api/ai/questions/{id}/answer（带 optionIndex、不带文字）；
@@ -223,7 +223,7 @@ String _askCompleted() =>
     _sse(5, 'run.completed', '{"runId":"r1"}');
 
 /// 假后端：SSE 里 `user.question` 之后**还跟着** `message.completed` + `run.completed`
-/// —— 那是"用户回答之后"才发生的收尾。事件流是**一次性全部给出**的（客户端的
+/// —— 该收尾在"回答之后"发生。事件流是**一次性全部给出**的（客户端的
 /// `runEvents` 一次性读完再逐条 yield），但客户端的 `_consumeRun` 会在
 /// `user.question` 那条上挂住等回答，所以用例看到的仍然是"提问时 Run 还没结束"。
 class _Fake {
@@ -316,7 +316,7 @@ class _Fake {
     } else if (path == '/api/ai/runs/r1/events') {
       // 客户端 `runEvents` 会把整条流读完再逐条 yield，所以这里**一次性**
       // 把"提问 + 收尾"都给出去。用例看到的仍然是"提问时 Run 还没结束"：
-      // `_consumeRun` 在 `user.question` 那条上就挂住等用户回答了。
+      // `_consumeRun` 在 `user.question` 事件上等待回答。
       return http.Response.bytes(
         utf8.encode(
           _body(
@@ -416,9 +416,9 @@ void main() {
     // 而这个假后端的流已经把它后面的 run.completed 一起给了（见 `_Fake` 的注释）。
   });
 
-  // 用户 bug 2026-09-21 的**根因回归**：`user.question` 事件里没有 `callId`，
+  // **根因回归**：`user.question` 事件中没有 `callId`，
   // 提问卡必须贴到 `tool.requested` 那条已经存在的调用上，不能按 `questionId` 另开一条。
-  // 另开一条的后果就是用户截图那样：工具卡一直在"运行中"，提问卡根本不出现、输入区不接管。
+  // 另开一条的后果：工具卡一直显示"运行中"，提问卡不出现、输入区不接管。
   testWidgets('提问卡贴在模型那条调用上：只有一张卡、callId 不被 questionId 顶掉', (tester) async {
     final store = await _openAsk(tester, _Fake());
     final message = store.messages.firstWhere((m) => !m.isUser);
@@ -500,7 +500,7 @@ void main() {
     expect(answered.single['optionIndex'], isNull);
   });
 
-  // 用户 bug 2026-09-21 的**第二个根因**：后端当时把 `PendingQuestion` **平铺**在事件
+  // **第二个根因**：后端此前把 `PendingQuestion` **平铺**在事件
   // data 顶层（`data['question']` 于是是**问题文字**，不是对象），客户端按嵌套形状解，
   // 解出来 null → 界面永远不解出提问。现在两边都认，这里把老形状也钉住。
   testWidgets('老的平铺形状也认：question 是字符串 + 有 questionId 就当成一份 PendingQuestion', (
@@ -551,9 +551,9 @@ void main() {
     expect(find.byKey(const Key('ask-answer-submit')), findsOneWidget);
   });
 
-  // ---- 多问改造（2026-09-22，用户给的 DSH 形态）--------------------------------
+  // ---- 多问形态（参照 DSH）--------------------------------
   // 一张卡装多题、分页、「最后一页按钮变提交」、多选题画复选框、
-  // 答案可为空（空着的那题按"跳过"发 = 告诉模型"用户没回答"）。
+  // 答案可为空（未作答的题按"跳过"发送 = 告知模型"未回答"）。
 
   testWidgets('一卡三题：分页「第 N/M 题」，最后一页按钮变「提交」，逐题作答', (tester) async {
     final store = await _openAsk(
@@ -663,7 +663,7 @@ void main() {
       findsOneWidget,
       reason: '题目要带裁图，否则用户不知道问的是哪个部位',
     );
-    // 用户 2026-11-04 的反馈：图铺满整行时上下都是黑边，鼠标一停弹出的「点击放大」
+    // 图铺满整行时上下出现黑边，鼠标停留时「点击放大」
     // 还会把脸挡住。现在图是右侧一条窄栏、问题在左，而且不再有悬浮提示。
     final imageRect = tester.getRect(
       find.byKey(const Key('ask-composer-question-image')),

@@ -158,7 +158,7 @@ void main() {
       expect(text, contains('雾夜废墟'));
       expect(text, contains('```json'));
       expect(text, contains('"comfyhubLayout"'));
-      // 用户 2026-11-03："强调这是用户的实际用意" —— 回传时要表明
+      // 回传时需要表明"强调实际用意"
       // 这是他自己定下的图，不是 AI 的建议稿。
       expect(text, contains('亲手定下'));
       expect(text, contains('不是建议稿'));

@@ -13,7 +13,7 @@ import 'package:viewer/pages/gallery_page.dart';
 import 'package:viewer/state/library_store.dart';
 import 'package:viewer/widgets/media_thumb.dart';
 
-/// 用户 2026-11-07："至少给我一个预览吧？"
+/// 集合需要提供预览图。
 ///
 /// 一排「未命名集合（3 张）」长得一模一样；选择器必须把后端给的
 /// `coverMediaId` 画成缩略图，否则根本分不出要移进哪一个。

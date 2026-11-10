@@ -1,15 +1,15 @@
-// NSFW 模糊选项的回归（用户 2026-09-20 要求：
+// NSFW 模糊选项的回归：
 // 「再加一个 NSFW 模糊选项，开启后 NSFW 内容的预览图模糊显示。这两个选项放一起」）。
 //
-// ⚠ 同日晚上按用户 bug 重写过一版：「NSFW内容模糊——怎么丝毫不区分正常内容全部模糊呢？」
-// 那版的判据只有"用户开着模糊开关"，于是**所有**缩略图都被糊住（连测试图和音频封面）。
-// 现在判据是两条：**这一条被标记过 NSFW**（`nsfw: true`）+ 用户开着模糊开关。
+// ⚠ 此前版本的问题：开关开启后未区分正常内容，全部打码。
+// 该版本判据只有"模糊开关开启"，因此**所有**缩略图都被打码（含测试图与音频封面）。
+// 现在判据为两条：**该条被标记为 NSFW**（`nsfw: true`）+ 模糊开关开启。
 //
 // 盯住五件事，缺一条这个功能就是"看着开了、其实没用"或"用起来反而更糟"：
 //   1) 没标记的内容**一张都不糊**（哪怕开关开着）—— 这是那次 bug 的本身；
 //   2) 后端说 `effectiveBlur=false` 时也不打码；
 //   3) 标记过的内容**真的被 `ImageFiltered` 糊住**，打开详情（`reveal`）后不再糊；
-//   4) 打码层**不吃点击**：点下去要能走到"打开详情"那一层（用户要的是点开就能看）；
+//   4) 打码层**不拦截点击**：点击需传递到"打开详情"层；
 //   5) "看过"只记在内存里：关掉 App 再打开（新 store）重新打码。
 
 import 'dart:convert';
@@ -116,7 +116,7 @@ void main() {
     expect(find.byType(ImageFiltered), findsNothing);
   });
 
-  // 用户 bug 的本身：开关一开，**没被标记过的正常内容也被糊了**。
+  // 问题本身：开关开启后，**未标记的正常内容也被打码**。
   testWidgets('没标记为 NSFW 的内容：开关开着也一张都不糊（用户 bug）', (tester) async {
     final store = await _store(_nsfwBackend(enabled: true, blur: true));
     await tester.pumpWidget(_wrap(store, nsfw: false));
@@ -140,7 +140,7 @@ void main() {
     expect(find.byType(ImageFiltered), findsOneWidget);
     expect(find.text('已模糊 · 点击查看'), findsOneWidget);
 
-    // 用户点开详情 = 主动要看（用户 2026-09-20：「打开详情之后就没必要模糊了」）。
+    // 打开详情表示主动查看，详情页不打码。
     // 详情页不打码，并顺手把"这一条看过了"记下来 —— 回到列表也不再糊。
     store.reveal('media:1');
     await tester.pumpAndSettle();

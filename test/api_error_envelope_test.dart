@@ -7,7 +7,7 @@
 //   ApiClient._decode   （lib/core/api_client.dart:50）   `error` 当人话、`detail` 当附加说明
 //   AiApiClient._decode （lib/core/ai_api_client.dart:26）**先读 `detail`**、再读 `error`
 //
-// 任何一边改错，用户看到的就是 `NOT_FOUND` 这种机器码 —— 而它**不会报错**。
+// 任意一侧错误时，界面显示 `NOT_FOUND` 这类机器码，且**不会报错**。
 // 背景：Rust 侧早先写的是 `{error:"NOT_FOUND", message:"提示词 999 不存在"}`，
 // 两个客户端都读不到那句人话（2026-09-24 才对齐成 `{error, detail?}`）。
 
@@ -57,7 +57,7 @@ void main() {
           isA<ApiException>()
               .having((e) => e.message, 'message', 'CONFIG_ERROR')
               .having((e) => e.detail, 'detail', '会话不存在: 9')
-              // 展示串是 "人话（码）" 的顺序：人话在前，用户先看到能懂的那半句
+              // 展示串顺序为"说明（码）"：说明在前，先显示可理解的内容
               .having(
                 (e) => e.toString(),
                 'toString',

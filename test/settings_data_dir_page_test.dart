@@ -1,6 +1,6 @@
 // 「设置 → 数据目录」页（`lib/pages/settings_data_dir_page.dart`）的回归。
 //
-// 用户 2026-11-10 的要求：**傻瓜化** —— 一个按钮自动搬走，一个按钮搬回默认位置，
+// 交互约束：一个按钮执行搬移，一个按钮搬回默认位置，
 // 页面上不许出现他看不懂的技术词（「整理成标准布局」「把指针改到这里」都已删掉）。
 //
 // 用例钉住这几条：
@@ -137,7 +137,7 @@ void main() {
     expect(find.text('搬到别处…'), findsOneWidget);
     expect(find.text('搬回默认位置'), findsNothing);
     expect(find.byTooltip('打开文件夹'), findsOneWidget);
-    // 用户 2026-11-10：这两个看不懂，删掉
+    // 这两个技术按钮已删除
     expect(find.text('整理成标准布局'), findsNothing);
     expect(find.text('把指针改到这里'), findsNothing);
     expect(find.textContaining('同一棵树'), findsNothing);
@@ -304,7 +304,7 @@ void main() {
     expect(launcher.stopCalls, 1, reason: '搬之前必须先停本地服务');
     expect(launcher.ensureForced, contains(true));
 
-    // 搬完必须问一次（用户 2026-11-06："搬完会问你一次"）
+    // 搬移完成后必须询问一次
     expect(find.text('搬运完成'), findsOneWidget);
     expect(find.textContaining('原来的文件夹仍然存在：${root.path}'), findsOneWidget);
     await tester.tap(find.widgetWithText(TextButton, '暂不删除'));
@@ -400,7 +400,7 @@ void main() {
           .existsSync(),
       isTrue,
     );
-    // 新目录里的副本留着（用户自己决定删不删），界面说清了它在哪
+    // 新目录中的副本保留（是否删除由界面决定），界面说明其位置
     expect(Directory(dataStorageDirOf(target.path)).existsSync(), isTrue);
   });
 }

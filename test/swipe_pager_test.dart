@@ -3,7 +3,7 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:viewer/widgets/paged_swipe.dart';
 
-/// 分页交互的回归（用户 2026-10-24 定的统一交互）：
+/// 分页交互的回归（统一交互）：
 ///  ① 左右滑动 = 切页（不是滚一屏），且松手后内容真的换；
 ///  ② 翻页按钮同样走"滑入"过渡（`didUpdateWidget` 那条路），不是硬切；
 ///  ③ 第一页往右 / 最后一页往左**不能**越界，也不能把页码改成 0 或页数 +1；
@@ -104,7 +104,7 @@ void main() {
     expect(find.text('page 2'), findsOneWidget);
   });
 
-  // 2026-11-07 用户反馈："点击翻页后重新加载界面，会有个显式的注销旧界面的过程"。
+  // 现象："点击翻页后重新加载界面，会出现显式注销旧界面的过程"。
   // 分页接口还没回来时，旧页必须**原地留着**；回来之后才滑走。
   testWidgets('新页数据没到时停在旧页，到了才滑过去（不闪空白 / 不闪加载页）', (tester) async {
     final key = GlobalKey<_AsyncHostState>();
@@ -167,7 +167,7 @@ class _AsyncHost extends StatefulWidget {
 class _AsyncHostState extends State<_AsyncHost> {
   final changes = <int>[];
 
-  /// 用户要求看的页；[content] 是列表数据实际装着的页。
+  /// 需要显示的页；[content] 是列表数据实际装着的页。
   int page = 1;
   int content = 1;
   final Set<int> loaded = {1};

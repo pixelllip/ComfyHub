@@ -5,18 +5,18 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:viewer/core/settings_store.dart';
 
-/// **后端端口自动发现**（用户 2026-09-22："不再显式指定端口，启动时自动挑一个"）。
+/// **后端端口自动发现**（不显式指定端口，启动时自动分配）。
 ///
 /// 端口这件事只有一个真源：后端绑定成功后写的 `<项目根>\.run\api.json`。
 /// 这组用例钉的是 Dart 侧读它的那条路 —— 四个读端（Dart / PowerShell / Kotlin /
-/// ComfyUI 捕获扩展）里只要有一个读错，用户看到的就是"后端明明在跑、界面却连不上"。
+/// ComfyUI 捕获扩展）中任一读取错误，界面都会显示"后端在运行、界面却连不上"。
 ///
 /// 所以每一条都对着一个**具体的坏情形**：
 ///  · 没有文件 / 文件坏了 / 字段不对 → 回落默认值，**绝不抛**（它在启动路径上，抛了就是白屏）；
 ///  · `host=0.0.0.0` → 换成 127.0.0.1（客户端连 `0.0.0.0` 连不上，这是最容易写错的一条）；
-///  · 用户手填了**别的机器**的地址 → **不许**被本机端口发现覆盖（那是远程 / 局域网配置）；
-///  · 用户"手填"的其实是**本机**地址（设置页把自动发现来的值原样存回去）→ 仍然是自动，
-///    端口记录说了算（2026-10-12 的回归，见下面那几条）。
+///  · 手动填写了**其他机器**的地址 → **不得**被本机端口发现覆盖（远程 / 局域网配置）；
+///  · 填写的其实是**本机**地址（设置页把自动发现的值原样存回）→ 仍按自动处理，
+///    以端口记录为准（回归见下方用例）。
 void main() {
   // `SettingsStore.load()` 走 SharedPreferences（设置项本身），测试里要给它一个空的内存实现。
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -25,8 +25,8 @@ void main() {
 
   setUp(() {
     // 每个用例都从"设置里什么都没有"开始：不清的话上一个用例 `setBaseUrl` 写进去的值
-    // 会被下一个用例读到（mock 的 prefs 是进程内共享的），于是"用户手填过地址"这条
-    // 会悄悄影响后面的断言。
+    // 会被下一个用例读到（mock 的 prefs 进程内共享），"填写过地址"这一状态
+    // 会影响后续断言。
     SharedPreferences.setMockInitialValues({});
     root = Directory.systemTemp.createTempSync('comfyhub-port-dart');
     Directory('${root.path}${Platform.pathSeparator}.run')
@@ -161,12 +161,12 @@ void main() {
   });
 
   // ---------------------------------------------------------------------------
-  //  "本机地址永远自动"（2026-10-12 用户报"直接启动软件连接不上后端"的回归）
+  //  "本机地址始终自动"（"直接启动后无法连接后端"的回归）
   //
   //  现场：`storage\app-support\shared_preferences.json` 里躺着
   //  `"flutter.comfyhub.baseUrl":"http://127.0.0.1:2175"`（设置页「保存并测试连接」
   //  把框里**自动发现来的**地址原样存了回去），而后端这次绑在 9610 上。
-  //  老判据是"偏好里有值 = 用户手填过"，于是 `refreshBaseUrlFromPortFile` 永远提前返回：
+  //  旧判据为"偏好中有值 = 手动填写过"，因此 `refreshBaseUrlFromPortFile` 始终提前返回：
   //  后端活得好好的，App 对着 2175 等满 60 秒超时。
   // ---------------------------------------------------------------------------
 

@@ -1,9 +1,9 @@
 // 窗口很窄（320 逻辑像素，**产品约定的最小宽度**）时，画廊 / 提示词库 / 标签页
-// 顶部那排筛选控件的排版回归（用户要求 2026-09-21）：
+// 顶部筛选控件排版的回归：
 //
 //   原来它们都是 `SingleChildScrollView(scrollDirection: horizontal)` ——
 //   窗口一窄，右边的「仅收藏 / 未关联 / 一键清除未关联 / 排序」就被切在屏幕外，
-//   用户得横向拖才看得见。用户明确说这样**不符合直觉**：
+//   需要横向拖动才能看到，该交互**不符合直觉**：
 //   「一行显示不完的控件用两行显示，两行还不行就三行」。
 //
 // 现在统一走会折行的容器：
@@ -33,7 +33,7 @@ import 'package:viewer/state/library_store.dart';
 import 'package:viewer/widgets/common.dart';
 
 /// 320 逻辑像素：`windows/runner/win32_window.cpp` 里 `kMinWindowWidthLogical` 的值，
-/// 也就是用户**能拖到的最窄**。比这更窄的窗口不存在，不必测。
+/// 即**可拖动到的最小宽度**。更窄的窗口不存在，不必测试。
 const _minWidth = 320.0;
 
 final _mediaJson = {
@@ -143,7 +143,7 @@ Future<void> _pump(WidgetTester tester, Widget page, LibraryStore store) async {
   await tester.pumpAndSettle();
 }
 
-/// 这个控件被自己祖先里的裁剪区切掉了吗？（被切 = 用户看不见）
+/// 该控件是否被祖先裁剪区裁掉？（被裁 = 不可见）
 bool _clipped(WidgetTester tester, Finder finder) {
   final rect = tester.getRect(finder.first);
   for (
@@ -171,7 +171,7 @@ bool _clipped(WidgetTester tester, Finder finder) {
 
 /// 共同断言：所有控件都在页面上、都完整可见、筛选行不再靠横向滚动、没有 overflow。
 Future<void> _expectAllVisible(WidgetTester tester, List<String> labels) async {
-  // 横向 `Scrollable` 一个都不该有 —— 那正是用户不要的交互。
+  // 不应存在任何横向 `Scrollable` —— 该交互已排除。
   // 注意 `TextField` 内部也有一个横向 `Scrollable`（`restorationId: editable`，
   // 是它自己的光标滚动），要把它排掉，否则用例会在无关的东西上红。
   final horizontal = find.byType(Scrollable).evaluate().where((e) {
@@ -192,7 +192,7 @@ Future<void> _expectAllVisible(WidgetTester tester, List<String> labels) async {
     isTrue,
     reason: '筛选行要走会折行的容器（FilterGroupRow 或 FilterChipRow）',
   );
-  // ★ **组之间不许用分隔线**（用户 2026-10-11："尤其是分割线"很难看）：
+  // ★ **组之间不得使用分隔线**：
   // 分隔线在 `Wrap` 里是独立的一项，换行时会孤零零留在行尾。
   // 分组的边界交给 `FilterGroup` 自己的容器 —— 它换行时整块走。
   expect(
@@ -324,7 +324,7 @@ void main() {
   });
 
   // 收起筛选栏：按钮在搜索栏右侧，收起后**露出生效筛选摘要**
-  // （否则用户看不出自己在筛选状态，会以为"图怎么少了"）
+  // （否则无法判断处于筛选状态，会误认为"图片数量减少"）
   testWidgets('画廊：收起筛选栏后露出生效筛选摘要', (tester) async {
     final store = await _store();
     addTearDown(store.dispose);
@@ -359,8 +359,8 @@ void main() {
     );
   });
 
-  // 折叠状态要**记住**（用户 2026-10-11：记忆当前状态）。
-  // 少了这条，用户每次进画廊都要重新收一遍。
+  // 折叠状态需**记住**。
+  // 缺少该逻辑时，每次进入画廊都需要重新收起。
   testWidgets('画廊：筛选栏折叠状态被记住', (tester) async {
     final store = await _store();
     addTearDown(store.dispose);

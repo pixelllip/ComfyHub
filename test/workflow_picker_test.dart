@@ -7,7 +7,7 @@ import 'package:viewer/widgets/workflow_picker.dart';
 ///
 /// 只喂假数据，不碰网络。
 ///
-/// 2026-11-05：用户要求"把查看蓝图入口移除"，选择器里不再有「看蓝图」，
+/// 查看蓝图入口已移除，选择器中不再有「看蓝图」，
 /// 所以这里只钉"列表信息如实展示 + 点一行返回路径"。
 void main() {
   ComfyWorkflowFile file() => const ComfyWorkflowFile(

@@ -10,7 +10,7 @@ import 'package:viewer/pages/train_page.dart';
 
 /// 训练台页面：**手机宽度不溢出** + 三种状态（没装 / 没起 / 离线）如实画出来。
 ///
-/// WebView 本身不参与：这里验的是它外面那层壳 —— 用户在没有引擎、WebUI 没起、
+/// WebView 本身不参与：这里验证外层容器 —— 在没有引擎、WebUI 未启动、
 /// 后端连不上时看到的东西。真机 / Windows 的 WebView 渲染由 `flutter build` 把关。
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();

@@ -69,7 +69,7 @@ void main() {
     // 现场：`flutter build windows --debug` 会把后端装进
     // `build\windows\x64\runner\Debug\backend\`，于是那个产物目录命中了产物判据、
     // 自己成了"根" —— Debug 版 App 去用它的空库 + 旧后端 exe（界面报 HTTP 400），
-    // 而用户的真库一直在项目根下。判据要"往上再找一层源码树"。
+    // 而实际库位于项目根目录。判据需"向上再查找一层源码树"。
     test('产物目录里有 backend\\，但上面有源码树 → 根取源码树', () {
       touch(['server-rs', 'Cargo.toml']); // 项目根
       final runner = Directory(
@@ -211,7 +211,7 @@ void main() {
     });
   });
 
-  // 数据目录（2026-11-06）：库 + storage 可以被用户搬到别的盘。
+  // 数据目录：库 + storage 可以移动到其他磁盘。
   // 判据是 `<根>\data-dir.json`；没有它就是运行根目录。
   group('数据目录覆盖：<根>\\data-dir.json', () {
     test('没设过 = 运行根目录（默认）', () {
@@ -251,7 +251,7 @@ void main() {
 
   // 产物目录的实际位置（2026-11-09）：
   //   · 标准 = `<数据目录>\storage`；
-  //   · 扁平 = 数据目录本身（用户把里层 storage 的内容挪到了上一级）；
+  //   · 扁平 = 数据目录本身（里层 storage 内容被移动到上一级）；
   //   · 双层 = `<数据目录>\storage\storage`（旧版把 storage 当成数据目录）。
   // 判据只能是"哪个目录里真的有内容"，空壳不算。
   group('resolvedStorageDirOf：三种布局都认', () {
@@ -386,7 +386,7 @@ void main() {
       expect(info.dataDir, root.path);
       expect(info.pointerMissing, isTrue);
       expect(info.notice, contains('已不存在'));
-      // 一句人话，不提"移动盘"这种用户没说过的东西
+      // 一句提示，不提"移动盘"这类未定义的概念
       expect(info.notice, contains('这次使用的是'));
     });
 
@@ -401,14 +401,14 @@ void main() {
 
       final info = resolveDataDir(root.path);
       // ⚠ 这里**不许**按大小自动换（2026-11-10 复查）：用指针那一级，
-      // 另一份只在 `otherCandidates` 里报出来，换不换由用户点。
+      // 另一份只在 `otherCandidates` 中报告，是否切换由界面决定。
       expect(info.pick, DataDirPick.chosen);
       expect(info.dataDir, hub);
       expect(
         info.otherCandidates.map((c) => c.path),
         contains(p([hub, 'storage'])),
       );
-      // 这不是故障：横幅不该为它弹（用户 2026-11-10："每次启动都顶着一条黄条"）
+      // 这不属于故障：不应显示横幅（否则每次启动都会出现提示条）。
       expect(info.notice, isNull);
     });
 

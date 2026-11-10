@@ -446,7 +446,7 @@ void main() {
 
       expect(tester.takeException(), isNull);
       expect(find.byType(SingleChildScrollView), findsOneWidget);
-      // 用户 2026-10-29：横向滚动的块**必须配一条看得见的滚动条**，
+      // 横向滚动的块**必须配一条可见的滚动条**，
       // 否则右边被裁掉的内容根本不知道能拖。
       expect(find.byType(Scrollbar), findsOneWidget);
       expect(find.text(multi), findsOneWidget);
@@ -581,7 +581,7 @@ void main() {
       );
       region.selectAll();
       await tester.pump();
-      // 用「复制」菜单项自己的 onPressed（等价于用户点右键 → 复制），
+      // 使用「复制」菜单项自身的 onPressed（等价于右键 → 复制），
       // 不直接调已废弃的 copySelection。
       final copy = region.contextMenuButtonItems.firstWhere(
         (item) => item.type == ContextMenuButtonType.copy,

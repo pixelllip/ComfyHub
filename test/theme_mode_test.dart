@@ -1,6 +1,6 @@
 // 界面外观（深色 / 浅色 / 跟随系统）的回归。
 //
-// 这条链路有三段，任何一段断了用户看到的都是"点了没反应"或者"下次启动又变回去"：
+// 这条链路有三段，任一段中断都表现为"点击无反应"或"下次启动恢复原值"：
 //   ① 偏好：`SettingsStore` 默认深色、写盘、冷启动读回来；
 //   ② 脏值：认不出的值（老版本写的 / 手改过的偏好）回默认，**不许抛** ——
 //      它在 App 启动路径上，抛了就是白屏；
@@ -54,7 +54,7 @@ void main() {
   });
 
   // 设置页点一下 chip 就要立刻换肤 —— 钉住的是 `ComfyHubApp` 那层 ListenableBuilder：
-  // 少了它，`settings` 变了但 `MaterialApp` 不重建，用户看到的是"点了没反应"。
+  // 缺少它时，`settings` 变化但 `MaterialApp` 不重建，表现为"点击无反应"。
   testWidgets('切换外观后整个界面立刻跟着变（不需要重启 App）', (tester) async {
     tester.view.physicalSize = const Size(1600, 1100);
     tester.view.devicePixelRatio = 1.0;

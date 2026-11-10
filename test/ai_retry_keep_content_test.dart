@@ -1,7 +1,7 @@
-// 回归（用户 bug：429 之类"不可抗力"打断回复后，**已经回复完的内容直接看不到了**）：
+// 回归（429 等中断回复后，**已回复的内容不可见**）：
 //
 // 现场（查库实据，会话 9b6d01af 的 seq12）：那次 Run 跑了 4 分钟、成功调了 3 次 comfy_submit，
-// 最后一轮撞上 HTTP 429；用户接着点了「重试」，结果整条回复连同工具卡一起消失
+// 最后一轮返回 HTTP 429；随后点「重试」，整条回复连同工具卡一起消失
 // —— 库里那条消息 `text=''`、一个 part 都没有。
 //
 // 两半根因：
@@ -118,7 +118,7 @@ MockClient _fakeBackend() {
     } else if (path == '/api/ai/conversations/c1/runs') {
       final sent = jsonDecode(request.body) as Map<String, dynamic>;
       if (sent['retryOfRunId'] == null) {
-        // 第一次提问：追加用户消息 + 空的助手占位（与后端一致）
+        // 第一次提问：追加请求消息 + 空的助手占位（与后端一致）
         _server = [
           ..._server,
           {
@@ -247,7 +247,7 @@ void main() {
     final failed = store.messages.firstWhere((m) => m.id == 'a1');
     expect(failed.status, 'failed');
     if (expectContent) {
-      // 用户 bug 的另一半：失败之后内容不能凭空消失
+      // 另一部分：失败之后内容不能消失
       expect(failed.text, contains(_partial), reason: '失败之后已经说出去的正文必须还在');
       expect(failed.parts.length, 3, reason: '正文 / 工具卡 / 工具结果都要在（缺了界面上就看不见）');
     } else {

@@ -293,7 +293,7 @@ void main() {
     final settings = await loadSettings();
     final data = Directory('${root.path}${Platform.pathSeparator}flat-data')
       ..createSync(recursive: true);
-    // 扁平布局：产物直接在数据目录里（2026-11-09 用户手挪后的样子）
+    // 扁平布局：产物直接位于数据目录（手动移动后的形态）
     final media = Directory('${data.path}${Platform.pathSeparator}media')
       ..createSync();
     File('${media.path}${Platform.pathSeparator}a.png').writeAsStringSync('x');
@@ -375,7 +375,7 @@ void main() {
   });
 
   test('启动：程序被复制到别处时，按"上次用的库"的记录打开原来那份', () async {
-    // 2026-11-10 用户报的那次：把构建复制到别处打开，看到的是另一份旧库。
+    // 将构建复制到其他位置打开后，使用的是另一份旧库。
     // 现在每个库都带身份，偏好里记着"上次用的是哪一份、在哪" —— 复制出去的构建
     // 照样打开你的库（并且这件事在界面能看见）。
     writeApiJson(await deadPort());
@@ -707,7 +707,7 @@ void main() {
   // -------------------------------------------------------------------------
   //  端口"粘住"：重启不要换端口，手机存的那个地址才一直有效
   //
-  //  背景（用户 2026-10-13）：后端默认 `--port 0`（系统挑，避免被占 /
+  //  背景：后端默认 `--port 0`（系统分配，避免被占用 /
   //  落在 Windows 保留段起不来），代价是**重启就换端口**；而手机存的是
   //  `http://<局域网IP>:<端口>` —— 端口一变就得回桌面重扫二维码。
   //  现在 App 会把上次实际用的端口记住，下次**先要回它**；只有"确实被占了"
@@ -775,7 +775,7 @@ void main() {
     // ① 新端口要记下来：下次先要回它，别每次重启都换
     expect(settings.lastApiPort, server.port);
     // ② 回落这件事要能被界面看见（设置页「本地服务」卡片据此显示那行提示）——
-    //    不然用户遇到的只是"手机突然连不上"，猜不到该去重扫二维码
+    //    否则只会遇到"手机突然连不上"，无法判断需要重新扫码
     expect(launcher.portFallbackFrom, 45678);
     expect(launcher.logLines.any((l) => l.contains('没能用上')), isTrue);
     launcher.dispose();

@@ -13,7 +13,7 @@ List<ContextMenuButtonItem> _builtin({required VoidCallback onPaste}) => [
 ];
 
 void main() {
-  // 用户 2026-10-18："右键粘贴贴的是文件地址。"
+  // 现象："右键粘贴得到的是文件路径。"
   //
   // 真因：`Ctrl+V` 与右键「粘贴」是**两条路**。前者被我们拦下、读剪贴板里的
   // `CF_HDROP` 挂成附件；后者走 `EditableText` 内置的粘贴动作，**只读
