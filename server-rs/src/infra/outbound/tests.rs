@@ -1,4 +1,4 @@
-//! `outbound` 的单元测试（主体代码在 [`outbound`](super) —— 2026-09-30 按用户要求与主体分离）。
+//! `outbound` 的单元测试（主体代码在 [`outbound`](super) —— 与主体分离）。
 //!
 //! `use super::*;` 照旧：子模块能看见父模块的私有项，所以用例一行都不用改。
 
@@ -106,7 +106,7 @@ fn proxy_priority_and_direct_words() {
     );
 }
 
-/// `ProxyOverride` 是"用户自己写的直连名单"，必须照办（含 `<local>` 与通配）。
+/// `ProxyOverride` 是"自定义直连名单"，必须遵循（含 `<local>` 与通配）。
 #[test]
 fn system_proxy_override_list_is_honoured() {
     let system = SystemProxy {
@@ -139,7 +139,7 @@ fn system_proxy_override_list_is_honoured() {
             "{host} 应当走系统代理"
         );
     }
-    // 显式环境变量不该被系统例外表盖掉（那是用户另外下的指令）
+    // 显式环境变量不应被系统例外表覆盖（那是额外指定的指令）
     assert_eq!(
         route_for(
             "a.example.com",
@@ -209,7 +209,7 @@ fn reg_query_output_is_parsed() {
     assert!(dword_is_on("0x10"));
 }
 
-/// `status()` 的四个来源各给一句话，界面照这句显示（别让用户靠猜）。
+/// `status()` 的四个来源各给一句说明，界面直接显示（不留推测空间）。
 #[test]
 fn outbound_status_reports_its_source() {
     let system = sys_proxy("127.0.0.1:7890");
@@ -261,7 +261,7 @@ fn pac_is_reported_not_silently_ignored() {
     let status = status_for(no_env, || Some(pac.clone()));
     assert_eq!(status.route, "direct");
     assert!(status.warning.as_deref().unwrap_or("").contains("PAC"));
-    // 但用户自己用环境变量指定了代理时，就不该再唠叨 PAC
+    // 但已通过环境变量指定代理时，不再追加 PAC 提示
     let explicit = status_for(
         |n| (n == ENV_PROXY).then(|| "127.0.0.1:7890".into()),
         || Some(pac.clone()),
@@ -269,7 +269,7 @@ fn pac_is_reported_not_silently_ignored() {
     assert!(explicit.warning.is_none());
 }
 
-/// `Route::describe()` 是**给用户看的那句话**（错误信息里要能判断"是代理的事还是对方的事"）。
+/// `Route::describe()` 是**界面显示的说明**（错误信息中可区分"代理问题还是对端问题"）。
 #[test]
 fn route_description_is_human_readable() {
     assert_eq!(Route::Direct.describe(), "直连（DIRECT）");

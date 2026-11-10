@@ -43,7 +43,7 @@ pub const MAX_UPLOAD_BYTES: u64 = 32 * 1024 * 1024;
 
 /// `POST /api/ai/attachments` 整个请求体的上限（**不是**单文件上限，见下）。
 ///
-/// ⚠ 这个常量是**补一个真实漏洞**（2026-09-27 用户报"上传不了图片附件"）：
+/// ⚠ 该常量用于**修复一个实际缺陷**（现象："上传不了图片附件"）：
 /// axum 的 `DefaultBodyLimit` 默认只有 **2MB**，而 Kotlin 那边是
 /// `call.receiveMultipart(formFieldLimit = MAX_UPLOAD_BYTES)` —— **32MB**。
 /// 搬过来时漏了这一层，于是"选一张手机拍的照片（4MB）→ 传不上去"：
@@ -78,7 +78,7 @@ pub const MAX_INLINE_BYTES: u64 = 8 * 1024 * 1024;
 //  1. **被引用的永远不删**：消息块里的 `attachment_id`、提问卡的 `image_url` /
 //     `option_images_json` 都算引用 —— 删了历史里的图就变成破图。
 //  2. **没被引用的留 7 天**：草稿（SharedPreferences 里的附件 id）不在库里，
-//     所以不能"一没引用就删"；7 天是给用户回来继续那条草稿的余量。
+//     因此不能"无引用即删除"；7 天为继续该草稿保留的余量。
 //  3. **总量 2GB 封顶，只淘汰"没被引用且超过 1 小时"的旧图**：1 小时的宽限是
 //     防"搜图刚返回 id、AI 还没把它写进选项"那一瞬间被 GC 抢走。
 /// 未被引用的附件保留天数（草稿宽限）。
@@ -409,7 +409,7 @@ pub fn save(
 
 /// 与 [`save`] 同一条链，只是把来源记下来（upload / crop / search）。
 ///
-/// 来源只用于缓存统计与 GC：**用户上传的图**哪怕一时没被引用也留得久一点，
+/// 来源仅用于缓存统计与 GC：**上传的图片**即使暂时未被引用也保留更久，
 /// 裁图 / 搜图这类"过程图"可以更早清掉。
 pub fn save_with_origin(
     state: &AppState,
@@ -522,7 +522,7 @@ pub fn file_url(id: &str) -> String {
 /// 归一化裁剪区（`"x,y,w,h"`，0~1，左上角原点）。
 ///
 /// 只认逗号分隔的 4 个浮点；解析失败 / 非有限值 / 退化成 0 面积一律 `None`
-/// （调用方报参数错，**不要**悄悄当成整张图 —— 那样用户看到的裁图与问题对不上）。
+/// （调用方报参数错误，**不要**静默当作整张图 —— 否则显示的裁剪区域与问题不一致）。
 pub fn parse_region(raw: &str) -> Option<(f64, f64, f64, f64)> {
     let parts: Vec<f64> = raw
         .split(',')
@@ -644,7 +644,7 @@ pub fn file_of(state: &AppState, id: &str) -> Result<Option<PathBuf>, ApiError> 
 /// 上传路径不该为一张可能永远没人看的缩略图停下来。
 ///
 /// 图片分支有**两级降级**（与画廊 `/thumb` 同一条规矩）：先试 JPEG 缩略图，
-/// 解不了就把**原件当预览发出去**（带它自己的 MIME）——断在这里的话用户只会看到文件图标，
+/// 无法解码时把**原件作为预览发出**（带其自身 MIME）—— 在此中断只会显示文件图标，
 /// 而"图明明在那儿"。
 pub fn thumbnail_of(state: &AppState, id: &str) -> Result<Option<(PathBuf, String)>, ApiError> {
     let Some(dto) = get(state, id)? else {
@@ -726,7 +726,7 @@ fn option_image_urls(raw: Option<&str>) -> Vec<String> {
 
 /// 现在**还被历史引用**的附件 id。
 ///
-/// 两处真源：消息块里的 `attachment_id`（用户上传）与提问卡里的 `image_url` /
+/// 两处真源：消息块里的 `attachment_id`（上传）与提问卡里的 `image_url` /
 /// `option_images_json`（裁图 / 选项示意图）。工具结果 json_payload 里出现过、
 /// 但没进任何提问的参考图**故意不算引用** —— 那种图没在界面上出现过，可以清。
 fn referenced_ids(state: &AppState) -> Result<HashSet<String>, ApiError> {

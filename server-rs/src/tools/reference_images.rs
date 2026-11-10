@@ -2,8 +2,8 @@
 //!
 //! # 为什么要有这条工具
 //!
-//! 用户 2026-11-04：AI 问场景 / 人物细节（发型、发饰、服装、房间）时，选项里只有文字，
-//! 用户得自己去搜"齐刘海长什么样"。Danbooru 的 tag 体系正好覆盖这些视觉关键词
+//! 现象：AI 询问场景 / 人物细节（发型、发饰、服装、房间）时，选项只有文字，
+//! 需要自行搜索"齐刘海长什么样"。Danbooru 的 tag 体系正好覆盖这些视觉关键词
 //! （`blunt_bangs` / `hair_ornament` / `classroom` / `night` / `shrine` …），
 //! 而且 `posts.json` 回的是**真实图片**，比让模型自己编链接可靠。
 //!
@@ -13,8 +13,8 @@
 //!    `cdn.donmai.us`（国内直连不稳、外链还会 403 / 过期），历史消息里也能一直显示。
 //! 2. **NSFW 闸门只认本机设置**：`ai.nsfw` 关着时一律加 `rating:general`，模型传
 //!    `allowNsfw=true` 也不放行。
-//! 3. **不替用户挑艺术风格**：这是参考图，不是"最终效果"；正文里要说明"这是外部资料、
-//!    只作参考"，别让模型把图里的其它元素当成用户确认过的设定。
+//! 3. **不代为选择艺术风格**：这是参考图，不是"最终效果"；正文需说明"这是外部资料、
+//!    仅作参考"，避免模型把图中的其他元素当作已确认设定。
 
 use serde_json::{json, Map, Value};
 
@@ -35,7 +35,7 @@ const MAX_TERMS: usize = 4;
 /// 规则：
 ///  * 逗号分隔多个 tag；单个 tag 内部的空格会归一成下划线（`long hair` → `long_hair`）；
 ///  * `allow_nsfw` 为假时**强制** `rating:general`；为真时也不放 `rating:`（Danbooru 默认全档，
-///    但调用方只在用户开了 NSFW 时才传 true）。
+///    但调用方仅在 NSFW 开关开启时才传 true）。
 pub(crate) fn build_tags(query: &str, allow_nsfw: bool) -> String {
     let mut terms: Vec<String> = query
         .split(',')
@@ -114,7 +114,7 @@ pub async fn tool_search(state: &AppState, arguments: &Value) -> Result<ToolOutc
     let tags = build_tags(query, allow_nsfw);
     let client = DanbooruClient::from_env()?;
 
-    // 先按"分数够高"要一轮；没有结果再放开分数（冷门 tag 也总得给用户一张能看的图）。
+    // 先按"分数够高"检索一轮；无结果再放宽分数（冷门 tag 也需返回可查看的图）。
     let mut posts = client
         .fetch_posts(&format!("{tags}+score:%3E10"), limit)
         .await?;

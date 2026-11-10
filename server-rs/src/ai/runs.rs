@@ -70,7 +70,7 @@ pub struct AiRunDto {
     /// 以前只写库、谁也读不到；现在随 Run DTO 交给界面做"当时用的是哪版规则"的追溯。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub skill_snapshot: Option<Value>,
-    /// 本次 Run **实际生效**的思考强度（`off` = 不支持或用户关掉了，AIH-056）
+    /// 本次 Run **实际生效**的思考强度（`off` = 不支持或已关闭，AIH-056）
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reasoning_effort: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -659,7 +659,7 @@ pub enum ApprovalState {
 /// ⚠ **先看 `approval` 再看 `status`**：批准之后那一行的 `status` **仍然是 `pending`**
 /// （它要等 invoke 返回才落终态，见 [`resolve_approval`]）。反过来判会把"已经批过"读成
 /// "还在等"——而那个分支的后果是**永远等下去**，直到 5 分钟超时按拒绝处理，
-/// 用户明明点了批准却什么都没发生。
+/// 已批准但没有任何变化。
 pub fn approval_state(state: &AppState, call_id: &str) -> Result<Option<ApprovalState>, ApiError> {
     let row: Option<(String, String)> = state.with(|conn| {
         let mut stmt = conn.prepare(
@@ -697,7 +697,7 @@ pub fn approval_state(state: &AppState, call_id: &str) -> Result<Option<Approval
     }))
 }
 
-/// 用户点了「批准」/「拒绝」（`POST /api/ai/tool-calls/{callId}/approve|deny`）。
+/// 已选择「批准」/「拒绝」（`POST /api/ai/tool-calls/{callId}/approve|deny`）。
 ///
 /// 返回 `true` 表示**确实改到了一行 pending**（界面据此回答 `accepted`：
 /// 手快先点了、或者这个调用已经超时收尾了，都是 `accepted=false` —— 那不是错误）。
@@ -705,7 +705,7 @@ pub fn approval_state(state: &AppState, call_id: &str) -> Result<Option<Approval
 /// # 只改 `approval`，**不动 `status`**
 ///
 /// 两列的分工与 Kotlin 逐字一致（`AiRunRepo.insertPendingToolCall` / `resolvePendingToolCall`）：
-/// **`approval` 记用户的决定，`status` 记这次调用最终跑成什么样**。
+/// **`approval` 记录决定，`status` 记录调用的最终结果**。
 /// 批准之后 `status` 仍是 `pending`（正在执行），invoke 返回时由
 /// [`record_tool_call`] 在**同一行**上落成 `ok` / `failed` / `denied`。
 ///
@@ -804,7 +804,7 @@ pub struct EventArchive {
     pub file: String,
     /// 截止时间（ISO）；比它早的事件进了这份归档。
     pub cutoff: String,
-    /// 还有多少条同样够老、这次没装下的（> 0 就提示用户再点一次）。
+    /// 还有多少条同样超期且本次未包含（> 0 时提示再次操作）。
     pub remaining: i64,
 }
 
@@ -977,7 +977,7 @@ pub fn archive_events(
 /// 只留最新的 [`KEEP_ARCHIVES`] 份归档。不设上限的话"归档"只是把库里的涨
 /// 换成了磁盘上的涨，等于没解决问题。
 ///
-/// 只认我们自己命名的 `run-events-*.jsonl`（用户往这个目录里放别的东西不动）；
+/// 只识别自行命名的 `run-events-*.jsonl`（该目录中的其他文件不改动）；
 /// 删不掉不算错（可能被杀毒软件占着），下次再删。
 fn prune_archives(dir: &std::path::Path) {
     let Ok(read) = std::fs::read_dir(dir) else {

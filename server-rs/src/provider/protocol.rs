@@ -117,7 +117,7 @@ impl ThinkingFormat {
         }
     }
 
-    /// 线上的拼写（Kotlin `ThinkingFormat.wire`）—— **保存模型目录时给用户看的那串**
+    /// 线上的拼写（Kotlin `ThinkingFormat.wire`）—— **保存模型目录时显示的那串**
     /// （"未知的思考方言: x（可选 openai / deepseek / qwen / openrouter / zai）"）。
     pub fn wire(self) -> &'static str {
         match self {
@@ -557,7 +557,7 @@ impl Adapter for OpenAiCompletionsAdapter {
 /// 只占 1 个 token。
 ///
 /// ⚠ 它不是"编一段假思考"：不含任何语义，只标记"这一轮没有思考"。
-/// 用户 2026-11-09 的口径：**开了 reasoning 就一定回传一点内容，哪怕是不可视字符**。
+/// 约束：**开启 reasoning 就必须回传部分内容，即使是不可视字符**。
 pub const NO_REASONING_TEXT: &str = "\u{200b}";
 
 /// 一条 OpenAI 格式的 `messages[]`。
@@ -1036,7 +1036,7 @@ fn mark_last_block_for_cache(messages: Option<&mut Value>) {
 /// 形状要点（照抄 Kotlin）：系统提示是**顶层 `system` 字符串**（不是消息）；
 /// `max_tokens` **必填**（没有默认值，缺了直接 400）；工具的参数 schema 叫
 /// `input_schema`；内容块是 `content: [{type:"text"}]`；
-/// 工具结果是**用户轮的 `tool_result` 块**（不是 `role:"tool"`）。
+/// 工具结果是**请求轮的 `tool_result` 块**（不是 `role:"tool"`）。
 ///
 /// # 显式缓存断点（2026-10，只加在 Anthropic 这一家）
 ///
@@ -1073,7 +1073,7 @@ impl Adapter for AnthropicMessagesAdapter {
         let mut root = Map::new();
         root.insert("model".into(), json!(model));
         root.insert("stream".into(), json!(true));
-        // `max_tokens` 是**必填**：给一个保守默认值，别让用户看到一个没有线索的 400
+        // `max_tokens` 是**必填**：给出保守默认值，避免返回无说明的 400
         root.insert(
             "max_tokens".into(),
             json!(max_output_tokens.unwrap_or(4096)),
@@ -1093,7 +1093,7 @@ impl Adapter for AnthropicMessagesAdapter {
         for turn in turns.iter().filter(|t| t.role != "system") {
             match turn.role.as_str() {
                 "tool" => {
-                    // 工具结果是**用户轮**里的 `tool_result` 块
+                    // 工具结果是**请求轮**里的 `tool_result` 块
                     messages.push(json!({
                         "role": "user",
                         "content": [{
@@ -1168,7 +1168,7 @@ impl Adapter for AnthropicMessagesAdapter {
                 );
             } else {
                 // 等级名（low/high…）在 Anthropic 上表达不了 —— 按"最小可用预算"给，
-                // 并**不**假装它等于用户选的那个等级（宁可少给，也不要给出一个假的精确值）
+                // 且**不**假设它等于所选的等级（宁可少给，也不给出不准确的精确值）
                 root.insert(
                     "thinking".into(),
                     json!({ "type": "enabled", "budget_tokens": 1024 }),
