@@ -34,7 +34,7 @@
 //! | 连不上 / 超时 | `PROVIDER_UNREACHABLE` |
 //!
 //! ⚠ `MISSING_CREDENTIAL` 与 `CONFIG_ERROR` 不能混：前者是"去配一把 key"，
-//! 后者是"地址/模型填错了"—— 界面给用户的下一步完全不一样。
+//! 后者是"地址/模型填错了"—— 界面显示的下一步完全不同。
 
 use std::time::Duration;
 
@@ -409,7 +409,7 @@ where
     // Anthropic 用 `message_stop`，两者都会被适配器译成 [`StreamEvent::Finished`]）。
     //
     // 漏了这一条的后果很具体：网线被拔、代理掐连接、上游崩进程 —— 一律被当成
-    // "它答完了"，于是库里是一条 `complete` 的半截回复。用户看到的是
+    // "它答完了"，因此库中留下一条 `complete` 的不完整回复。表现为
     // **一句话说到一半就没了，而界面上没有任何异常标记**。
     if !seen_done && outcome.finish_reason.is_none() {
         return Err(ApiError::ai(
@@ -511,7 +511,7 @@ pub struct Outcome {
 /// 见 `protocol.rs` 里给"没思考的工具轮"补的那个空 content 项）。
 ///
 /// 但**必须两样都命中** —— 只看到 `reasoning` 就重发，会把"这个模型不支持思考"
-/// 那类配置错误也悄悄降档成非思考，用户就再也看不到真正的原因了。
+/// 那类配置错误也静默降档为非思考，就再也看不到真正的原因。
 pub fn is_reasoning_passback_error(detail: &str) -> bool {
     let lower = detail.to_ascii_lowercase();
     let mentions_reasoning = lower.contains("reasoning") || lower.contains("thinking");

@@ -3,7 +3,7 @@
 //! # 为什么必须有它
 //!
 //! Rust 侧此前只有"端点/工具触发一次"的抓取（`POST /api/capture/poll` 与
-//! `comfy_sync_history`）。于是**用户自己在 ComfyUI 界面里跑的东西永远不会被收** ——
+//! `comfy_sync_history`）。因此**在 ComfyUI 界面中直接运行的任务不会被捕获** ——
 //! 表现就是那句经典抱怨："AI 说生成了、画廊里却没有"的另一半。
 //! Kotlin 侧对应物是 `ComfyCapture.start()`。
 //!
@@ -12,7 +12,7 @@
 //! | 行为 | Kotlin | 这里 |
 //! | --- | --- | --- |
 //! | 启动后**先等 2.5 秒**再跑第一轮 | `delay(2500)` | ✅（避开"后端起好了、ComfyUI 还没好"那几秒） |
-//! | 配置里 `enabled=false` 时**空转但不退出** | `delay(5_000)` + `continue` | ✅（用户在设置里打开就立刻生效，不必重启后端） |
+//! | 配置中 `enabled=false` 时**空转但不退出** | `delay(5_000)` + `continue` | ✅（在设置中开启后立即生效，无需重启后端） |
 //! | 间隔 = `pollSeconds`，夹在 **1..600** | `coerceIn(1, 600)` | ✅（0 或负数会让循环变成忙等） |
 //! | **同一时刻只跑一轮** | `pollInFlight.compareAndSet` | ✅（[`CapturePoller::tick`] 的 `in_flight`） |
 //! | 成功写 `lastPollAt` 并**清空** `lastError` | `lastPollAt = now; lastError = null` | ✅ |
@@ -160,7 +160,7 @@ impl CapturePoller {
     /// 起后台任务（**只在 `main.rs` 调一次**；测试调 [`CapturePoller::tick`]）。
     ///
     /// 这个循环**永不退出**（除非进程结束）：配置改了、ComfyUI 起停，都由下一轮自己适应 ——
-    /// 与 Kotlin 那个 `while (isActive)` 一样，"用户打开开关就立刻生效"是需求。
+    /// 与 Kotlin 那个 `while (isActive)` 一致，"开启开关后立即生效"是需求。
     pub fn spawn(self: &std::sync::Arc<Self>, state: AppState) {
         let poller = self.clone();
         tokio::spawn(async move {

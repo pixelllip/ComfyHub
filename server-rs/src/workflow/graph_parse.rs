@@ -126,7 +126,7 @@ const NEGATIVE_HINT_KEYS: [&str; 3] = ["negative", "negative_prompt", "neg"];
 ///
 /// ⚠ **不能含 `system_prompt` / `instruction`**：那是 `TextGenerate` 的扩写指令
 /// （真机 prompt 549 / 597 的编码器 `text` 直接连到 `TextGenerate`），把它当正向
-/// 比留空更糟 —— 画廊里会显示一整段"你是一个提示词工程师……"而不是用户要画的画面。
+/// 比留空更差 —— 画廊中会显示一整段"你是一个提示词工程师……"而不是目标画面。
 const LINKED_TEXT_KEYS: [&str; 8] = [
     "text",
     "prompt",
@@ -362,7 +362,7 @@ pub fn parse(graph: Option<&Map<String, Value>>) -> Parsed {
 /// `TextGenerate`（本地看图 / 扩写模型）→ `ComfySwitchNode` → `PreviewAny` → `CLIPTextEncode.text`。
 /// 节点图里只有 `TextGenerate.system_prompt` 和两个**空**的输入槽，最终那一整段话
 /// 只出现在 `/history` 的 `outputs` 里（`PreviewAny` / `ShowText` 的 `text` 数组）。
-/// 只看图的话，画廊详情里的提示词会一直是空的（用户 2026-10-25 的 `test_00901_.png`）。
+/// 只看图的话，画廊详情中的提示词会一直为空（`test_00901_.png` 即如此）。
 ///
 /// # 判据（只认"它确实喂给了正向条件"）
 ///
@@ -646,7 +646,7 @@ fn walk_model(
 
 /// 这个节点像不像"加载 LoRA"的节点。
 ///
-/// 两条判据任一命中即可（**不要**维护第三方类名白名单 —— 用户装了什么节点包我们猜不到）：
+/// 两条判据任一命中即可（**不要**维护第三方类名白名单 —— 安装的节点包无法预知）：
 ///  ① 类名里带 `lora`：官方 `LoraLoader` / `LoraLoaderModelOnly`、rgthree 的
 ///     `Lora Loader Stack` / `Power Lora Loader`、Krea2 的 `Krea2ControlLoRALoader`……
 ///  ② 有以 `lora` 开头的**文件名槽位**：有些自定义节点类名看不出用途，但槽位名是

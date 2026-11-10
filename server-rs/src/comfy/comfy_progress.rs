@@ -388,7 +388,7 @@ impl ComfyProgress {
 
     /// 提交成功后登记 API 图的 `节点 id → 可读名` 映射。
     ///
-    /// 名字取 `_meta.title`（ComfyUI 界面上用户自己起的标题），没有才是 `class_type`。
+    /// 名称取自 `_meta.title`（ComfyUI 界面中自行设置的标题），缺失时使用 `class_type`。
     /// **两者都没有就不登记** —— 于是 `executing` 帧只会给出节点 id，
     /// 界面显示"正在执行节点 33"而不是一个编出来的名字。
     pub fn register_graph(&self, prompt_id: &str, graph: &Value) {
@@ -678,7 +678,7 @@ fn trim(inner: &mut Inner) {
 ///
 /// ⚠ 我们**只连明文 `ws://`**（`tokio-tungstenite` 连 TLS feature 都没开）：
 /// ComfyUI 就在本机/内网，为它拖进 native-tls / openssl 会让发布包不再便携。
-/// 用户把 `comfyUrl` 配成 `https://` 时**如实连不上并记错误**，而不是假装支持——
+/// 将 `comfyUrl` 配置为 `https://` 时**如实连接失败并记录错误**，而不是假装支持 ——
 /// 那正是"需要一个能用的错误信息"的场合。
 pub fn ws_url(comfy_url: &str, client_id: &str) -> Option<String> {
     let base = comfy_url.trim().trim_end_matches('/');
@@ -700,7 +700,7 @@ pub fn ws_url(comfy_url: &str, client_id: &str) -> Option<String> {
 /// 起后台任务（**只在 `main.rs` 调一次**）。
 ///
 /// **永不退出**：ComfyUI 起停、`comfyUrl` 改了，都由下一轮自己适应 ——
-/// 与 `capture_poller` 那个循环同一条纪律（用户改完设置不必重启后端）。
+/// 与 `capture_poller` 那个循环同一条约束（修改设置后不必重启后端）。
 pub fn spawn(tracker: &Arc<ComfyProgress>, state: AppState) {
     let tracker = tracker.clone();
     tokio::spawn(async move {

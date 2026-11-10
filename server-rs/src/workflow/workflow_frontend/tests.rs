@@ -1,4 +1,4 @@
-//! `workflow_frontend` 的单元测试（主体代码在 [`workflow_frontend`](super) —— 2026-09-30 按用户要求与主体分离）。
+//! `workflow_frontend` 的单元测试（主体代码在 [`workflow_frontend`](super) —— 与主体分离）。
 //!
 //! `use super::*;` 照旧：子模块能看见父模块的私有项，所以用例一行都不用改。
 
@@ -71,7 +71,7 @@ fn 名字过滤优先于类型且大小写不敏感() {
 /// 新版本 cg-use-everywhere（`properties` 里没有类型）：**每个接了线的插口各一路**，
 /// 类型写在插口自己的 `type` 上。
 ///
-/// 判据来源是用户 2026-10-17 存下来的 `krea2 t2i workflow.json`：那个
+/// 判据来源是此前存下的 `krea2 t2i workflow.json`：那个
 /// `Anything Everywhere` 长着 `anything[CLIP]` / `anything15[MODEL]` / `anything16[VAE]`
 /// 三个接了线的插口，而 `properties` 里只有 `title_regex` 这类正则键。
 /// 只认老版本的表现是"一处广播都填不上"，且**不报错**。
@@ -153,7 +153,7 @@ fn 没有输出节点时才补_saveimage() {
     assert_eq!(emulated["3"]["inputs"]["images"], json!(["2", 0]));
     assert_eq!(report.injected.len(), 1, "{:?}", report.injected);
 
-    // 已经有 SaveImage 就不再补（绝不覆盖用户自己的工作流）
+    // 已有 SaveImage 就不再补（不覆盖既有工作流）
     let with_save = object(
         r#"{"1":{"class_type":"VAEDecode","inputs":{}},
              "7":{"class_type":"SaveImage","inputs":{"images":["1",0]}}}"#,
