@@ -15,7 +15,7 @@ import '../widgets/settings_scaffold.dart';
 ///  3. **预算**：单次回复的工具轮数与调用总数上限。
 ///
 /// 这里**不做本地校验、也不本地兜底判权限**：白名单的解析、`.git` 之类的禁写段
-/// 都由后端 `ToolPolicy` 决定，前端只负责把用户的选择发过去并把生效结果展示回来。
+/// 均由后端 `ToolPolicy` 决定，前端只负责提交选择并展示生效结果。
 class AiToolsSettingsPage extends StatefulWidget {
   /// [api] 仅供测试注入假后端；正式运行时按设置里的后端地址创建。
   final AiApiClient? api;
@@ -174,7 +174,7 @@ class _AiToolsSettingsPageState extends State<AiToolsSettingsPage> {
     }
   }
 
-  /// 联网搜索卡：说明 + 可选密钥。**出厂免密钥可用**，这里只是给想提额的用户一个入口。
+  /// 联网搜索卡：说明 + 可选密钥。**默认免密钥可用**，该入口用于提高额度。
   Widget _webSearchCard() {
     final theme = Theme.of(context);
     final cred = _searchCred;
@@ -345,7 +345,7 @@ class _AiToolsSettingsPageState extends State<AiToolsSettingsPage> {
     ],
   );
 
-  /// 默认状态要**大声说清楚**：不然用户会以为"没配就是随便写"。
+  /// 默认状态需**明确说明**：否则会被理解为"未配置即不限制"。
   Widget _defaultBanner() {
     final theme = Theme.of(context);
     return Card(
@@ -392,10 +392,10 @@ class _AiToolsSettingsPageState extends State<AiToolsSettingsPage> {
     );
   }
 
-  /// 后端**自动发现**的只读目录（用户 bug ④）。
+  /// 后端**自动发现**的只读目录。
   ///
-  /// 只展示、不可编辑：它不是用户配置，而是每次现算的探测结果（本机 ComfyUI 装在哪、
-  /// 共享目录在哪）。放在这里是为了回答"为什么我明明没配、AI 却能读我的工作流文件"。
+  /// 只展示、不可编辑：它不属于配置，而是每次计算的探测结果（本机 ComfyUI 位置、
+  /// 共享目录位置）。展示该区域的目的是说明"未配置时 AI 仍能读取工作流文件"。
   Widget _autoReadCard() {
     final theme = Theme.of(context);
     return Card(
@@ -484,8 +484,8 @@ class _AiToolsSettingsPageState extends State<AiToolsSettingsPage> {
             if (_policy.maxReadBytes > 0 || _policy.maxWriteBytes > 0) ...[
               const SizedBox(height: 10),
               Text(
-                // 用户 2026-09-19：「单轮读写上限给得太低了」→ 读 256KB→2MB、写 1MB→4MB，
-                // 而且 read_file 现在支持 offset 分段读（没读完会告诉你下一段从哪读）。
+                // 单轮读写上限：读 2MB、写 4MB，
+                // 且 read_file 支持 offset 分段读取（未读完时返回下一段起点）。
                 '单次读写上限是读 ${formatSize(_policy.maxReadBytes)}、'
                 '写 ${formatSize(_policy.maxWriteBytes)}。后端固定，界面不能改，'
                 '读不完可以按 offset 分段读。',
@@ -723,9 +723,8 @@ class _AiToolsSettingsPageState extends State<AiToolsSettingsPage> {
 
   /// 「逐工具权限」的入口。
   ///
-  /// 这一块**不再摊在本页**：工具有一百多个，每个还带两三行说明，展开后整页
-  /// 会变成一条几百行的长卷（用户 2026-11-05："这种预测会非常长的卡片，应该
-  /// 放进子界面"）。这里只留一行入口，点进去是独立的一页（带搜索）。
+  /// 该区域**不放在本页**：工具有一百多个，每个含两三行说明，展开后整页
+  /// 会形成数百行的长列表。这里只保留一行入口，点击进入独立页面（带搜索）。
   Widget _toolsEntryCard() {
     return Card(
       clipBehavior: Clip.antiAlias,
@@ -884,7 +883,7 @@ class _ToolPermissionsPageState extends State<_ToolPermissionsPage> {
                     padding: const EdgeInsets.fromLTRB(16, 0, 16, 32),
                     itemCount: shown.length,
                     // 工具之间给一个小间距，最后一项后面不留空
-                    // （用户 2026-11-05："考虑在每项之间给定较小的 sizedbox"）。
+                    // （各项之间使用较小的 sizedbox）。
                     separatorBuilder: (_, _) => const SizedBox(height: 6),
                     itemBuilder: (context, i) => _row(theme, shown[i]),
                   ),

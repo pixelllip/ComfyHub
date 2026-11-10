@@ -86,7 +86,7 @@ class AiProviderDetail extends StatelessWidget {
               Expanded(
                 child: Text(p.displayName, style: theme.textTheme.titleLarge),
               ),
-              // 「改个 baseURL / 协议」的路（用户要的"独立配置 provider"）：
+              // 「修改 baseURL / 协议」的路径（独立配置 provider）：
               // 两端都走同一条 store（手机 = 本机库、桌面 = 后端），提交时带 revision（乐观锁）。
               OutlinedButton.icon(
                 onPressed: () => onEdit(),

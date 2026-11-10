@@ -2,14 +2,14 @@ import 'package:flutter/material.dart';
 
 import '../models/ai_models.dart';
 
-/// 「模型能力目录」卡片（2026-09-23"全做了"，2026-10 挪进 Provider 详情里）。
+/// 「模型能力目录」卡片（挪进 Provider 详情中）。
 ///
-/// 能力的预填来源是**在线数据集 models.dev**（「立即更新」拉它）；手工目录排在它前面，
-/// 接口自己声明的永远优先。**内置目录那张卡已经删掉**（用户 2026-10："模型能力不再依赖
-/// 内置目录"）—— 那份是 `%USERPROFILE%\.dsh\settings.yaml` 的冻结副本，而
-/// AGENTS §10 已经定了"运行期不许依赖 `.dsh`"：装我们项目的人可能根本没装 DSH。
-/// 剩下那条 `内置规则` 只是后端的一小张兜底推断表（`capability_catalog.rs`），
-/// 拿它当"网关什么都没说"时的最后一层，不是一个用户要去维护的目录。
+/// 能力的预填来源是**在线数据集 models.dev**（「立即更新」拉取）；手工目录排在它前面，
+/// 接口自身声明优先。**内置目录卡片已删除**：该目录是 `%USERPROFILE%\.dsh\settings.yaml`
+/// 的冻结副本，而 AGENTS §10 规定"运行期不得依赖 `.dsh`"——
+/// 安装本项目时可能没有安装 DSH。
+/// 剩余 `内置规则` 是后端的兜底推断表（`capability_catalog.rs`），
+/// 作为"网关未声明"时的最后一层，不需要手动维护。
 /// 实测校准默认关，打开后才能发真实请求校准思考档位。
 /// 所有状态都从后端读（`/api/ai/capabilities/*`），前端不存一份自己的。
 class AiModelCapabilityCard extends StatelessWidget {

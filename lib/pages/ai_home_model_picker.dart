@@ -32,7 +32,7 @@ class _ModelPicker extends StatelessWidget {
         builder: (_) => _ModelPickerDialog(store: store),
       ),
       child: Container(
-        // 三档都保证 ≥44 高（用户："按钮太小了比较难点"）
+        // 三档均保证 ≥44 高
         constraints: const BoxConstraints(minHeight: 44),
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
         decoration: BoxDecoration(
@@ -63,7 +63,7 @@ class _ModelPicker extends StatelessWidget {
                 ),
               ),
               // 能力徽标只在**全称**档给：短标签档的空间要留给模型名本身
-              // （用户要的是"显示出有用的关键信息"，模型名比"文本/图片"那两枚小徽标更关键）。
+              // （模型名比"文本/图片"两个小徽标更关键）。
               if (density == _ComposerLabel.full) ...[
                 const SizedBox(width: 6),
                 for (final m in model?.modalities ?? const <AiModality>[])
@@ -99,11 +99,11 @@ class _ModelPicker extends StatelessWidget {
 
 /// 可搜索的模型选择对话框 —— **按 Provider 分组**（懒构建：只建屏幕上看得见的那几行）。
 ///
-/// 分组是用户 2026-10 提的要求，原话两条：
-///  1. 「来自不同 provider 的模型要套在一个 padding 里面区分，**padding 外标注模型来源**」
-///     —— 所以布局是：**来源那一行在容器外面**，模型行**套在同一个 padding 里面**；
-///  2. 顺带把「换 Provider」这件事补上：以前这个对话框只有**当前那一条**的模型，
-///     界面上又没有别的地方能换，于是刚建好的 Provider 在工作台里永远选不上。
+/// 分组约束两条：
+///  1. 不同 provider 的模型需在同一个容器内区分，**容器外标注模型来源**——
+///     因此布局为：**来源行在容器外**，模型行**位于同一容器内**；
+///  2. 提供「换 Provider」入口：此前该对话框只有**当前那一条**的模型，
+///     且其他位置无法切换，导致新建 Provider 在工作台中无法选中。
 class _ModelPickerDialog extends StatefulWidget {
   final AiWorkspaceStore store;
   const _ModelPickerDialog({required this.store});
@@ -132,7 +132,7 @@ class _ModelPickerDialogState extends State<_ModelPickerDialog> {
     // 打开选择器 = "我要挑一个" = 清单必须是最新的（总纲 §27.2 第 12 条）：
     // 手机上 Provider 的真源是本机库，刚在「AI 模型与凭据」页建好的那一条，
     // 不重读一次就不会出现在这里（以前要切走再切回来才看得到）。
-    // 模型目录同理（用户 bug「模型声明要重启客户端才生效」）：改的是模型的能力声明，
+    // 模型目录同理：修改的是模型的能力声明，
     // provider 行不动，refreshProviders 的"清单变没变"判不出来 —— 目录要单独重读。
     unawaited(widget.store.refreshProviders());
     unawaited(widget.store.refreshModels());
@@ -334,7 +334,7 @@ class _ModelPickerDialogState extends State<_ModelPickerDialog> {
     );
   }
 
-  /// 三种状态各说各的话（用户原话纪律：看不见的现象只能靠猜，所以都要**如实说**）。
+  /// 三种状态分别说明（界面不可见的现象无法判断，因此均需**如实显示**）。
   Widget _body(
     ThemeData theme,
     List<_ProviderGroup> groups,

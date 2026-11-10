@@ -76,8 +76,8 @@ class AiProviderListPanel extends StatelessWidget {
         ),
         // ⚠ **如实**：手机上这一页管的是**本机那份清单**（`ai_providers` / `ai_models`
         //    是手机的本机表），它与桌面那份**各归各、不自动合并** —— 同步的只有密钥明文
-        //    （用户显式点「推给桌面」/「从桌面同步密钥」那些动作，`docs/pairing-design.md` §14）。
-        //    不写这一句，用户建完会以为桌面也能用（而桌面那边压根没有这条 provider）。
+        //    （显式执行「推给桌面」/「从桌面同步密钥」时，`docs/pairing-design.md` §14）。
+        //    不显示该说明会被理解为桌面同样可用（而桌面没有这条 provider）。
         //    §14.6 又加了一条**显式**的搬运通道，所以这句要说清"要手动点"，免得它被读成"会自动同步"。
         if (local)
           Padding(

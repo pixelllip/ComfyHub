@@ -87,7 +87,7 @@ class _AiProviderCredentialsSectionState
             OutlinedButton.icon(
               // 手机上**还不能**：这一步要由本机自己向上游发请求（用本机密钥 + 端点信任档那套），
               // 而桌面那一份 `provider_probe` 手机侧还没实现。禁用 + 下面那句话，
-              // 比让用户点下去拿到一句"Provider 不存在: x"（桌面不认识手机这条 id）诚实得多。
+              // 比点击后返回"Provider 不存在: x"（桌面不认识手机这条 id）更明确。
               onPressed: (_busy || !widget.providers.supportsProbe)
                   ? null
                   : _test,
@@ -135,7 +135,7 @@ class _AiProviderCredentialsSectionState
           )
         else ...[
           // 手机上密钥存在**本机**（Android Keystore），桌面那份不会同步过来 ——
-          // 不说清楚，用户会以为"桌面配过就够了"，然后每发一条都失败（M6）
+          // 不说明时会被理解为"桌面配过即可"，随后每次发送都失败（M6）
           if (widget.credentials.isLocal)
             Padding(
               padding: const EdgeInsets.only(bottom: 8),
@@ -255,10 +255,10 @@ class _AiProviderCredentialsSectionState
   /// **把本机这一把推给桌面**（`docs/pairing-design.md` §14.2 密钥上行）。
   ///
   /// 四步，一步都不能省：
-  ///  ① **先问一次**：值会离开本机，这是用户该知情的事；
+  ///  ① **先询问一次**：该值会离开本机，需要先确认；
   ///  ② `reveal` 取明文（**全仓唯一允许读密钥的地方**）：本机没有就如实说"没有可推的"，
   ///     **绝不拿空串去覆盖桌面上那把好的**；
-  ///  ③ `PUT /api/ai/credentials`，带上配对令牌；`rev` **不带** = 用户显式点的强制覆盖
+  ///  ③ `PUT /api/ai/credentials`，带上配对令牌；`rev` **不带** = 显式触发的强制覆盖
   ///     （带 rev 才是"等值才应用"，见 §14.3）；
   ///  ④ 回执**逐条如实**：`applied` 说成功、`rejected` 说清是哪一种（开关没开 / 桌面更新过 /
   ///     名字不合法），旧后端（404/501）直说"还没有这条接口"。

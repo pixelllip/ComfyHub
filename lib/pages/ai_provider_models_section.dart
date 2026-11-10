@@ -11,7 +11,7 @@ import 'ai_provider_dialogs.dart';
 /// 一行模型的高度（常数）。
 ///
 /// **别改成按内容自适应**：`SliverFixedExtentList` 就是靠这个常数精确算出
-/// `maxScrollExtent` 的，一旦不固定，滚动条滑块又会随滚动变短（用户报的 bug ④）。
+/// `maxScrollExtent` 的，一旦不固定，滚动条滑块会随滚动变短。
 const double kModelRowHeight = 64;
 
 /// 模态 → 图标（模型行右侧的能力一览）。
@@ -33,7 +33,7 @@ const Map<AiModality, IconData> kModalityIcons = {
 ///  1. **固定行高 + 编辑弹窗**（[_editor]）：`SliverFixedExtentList` 的 extent 是常数，
 ///     滚动条首帧就精确；能力编辑搬进弹窗，不再每行 7 个 chip + 下拉框；
 ///  2. 本地改动先留在本组件（`_dirty`），点「保存模型目录」才落库；父级重建
-///     不会把用户没保存的编辑冲掉。
+///     不会覆盖未保存的编辑。
 class AiProviderModelsSection extends StatefulWidget {
   /// 滚动区顶部那一块：Provider 信息 + 凭据（由详情页拼好传进来）。
   final Widget header;
@@ -48,7 +48,7 @@ class AiProviderModelsSection extends StatefulWidget {
   /// 「模型能力目录」那一块（在线数据集 = **models.dev**）。
   ///
   /// ⚠ 它是**全局**状态（一个 `remote.json`），却只显示在**这一条** Provider 的详情里 ——
-  /// 2026-10 用户要求："模型能力目录区域占用窗口区域太大，改成嵌在具体 provider 信息里"。
+  /// 模型能力目录嵌在具体 provider 信息中，不占用窗口独立区域。
   /// 折叠起来默认不展开：它是低频动作（更新目录 / 校准档位），不该把模型目录挤下去。
   final AiCapabilityStatus? capability;
   final bool capabilityBusy;
@@ -88,7 +88,7 @@ class _AiProviderModelsSectionState extends State<AiProviderModelsSection> {
   /// 本地有未保存的改动（增删模型、改能力勾选）。
   bool _dirty = false;
 
-  /// 任何本地模型改动都要置脏：否则父级重建时会把用户没保存的编辑冲掉。
+  /// 任何本地模型改动都要置脏：否则父级重建时会覆盖未保存的编辑。
   void _markDirty() => _dirty = true;
 
   @override
@@ -102,7 +102,7 @@ class _AiProviderModelsSectionState extends State<AiProviderModelsSection> {
   /// **必须有这一条**：只靠 `initState` 初始化的话，父级异步补上目录时
   /// 本地 `_models` 还停在空列表，界面就一直显示"还没有模型" ——
   /// 这正是"获取完可用模型并加入后，退出重进看不到模型"的成因。
-  /// 用户在本地已经改过（还没保存）时**不要**用父级数据覆盖。
+  /// 本地已修改（未保存）时**不得**用父级数据覆盖。
   @override
   void didUpdateWidget(AiProviderModelsSection oldWidget) {
     super.didUpdateWidget(oldWidget);
@@ -184,14 +184,14 @@ class _AiProviderModelsSectionState extends State<AiProviderModelsSection> {
       ),
       const SizedBox(height: 8),
       if (_models.isEmpty) Text('还没有模型', style: theme.textTheme.bodySmall),
-      // 「模型能力目录」：**嵌在这一条 Provider 的详情里**（2026-10 用户要求）。
+      // 「模型能力目录」：**嵌在该 Provider 的详情里**。
       // 放在模型目录之后、且默认折叠 —— 它是低频动作，不该把上面的密钥/连接测试挤走。
       const SizedBox(height: 16),
       _capabilitySection(theme),
     ];
     final count = _models.length;
 
-    // 列表结构是 **固定行高 + 编辑弹窗**（用户报的 bug ③ 卡顿 / ④ 滚动条不准）：
+    // 列表结构是 **固定行高 + 编辑弹窗**（避免卡顿与滚动条长度不准）：
     //
     //   · 懒构建的 `ListView` / `SliverList` 只能用"**已布局**子项的平均高度"估算
     //     `maxScrollExtent`。卡片高矮不一时（支持推理的卡片多出 7 个档位 chip），
@@ -264,10 +264,9 @@ class _AiProviderModelsSectionState extends State<AiProviderModelsSection> {
 
   /// 「模型能力目录」那张卡，**折叠**着挂在这一条 Provider 的详情末尾。
   ///
-  /// 为什么折叠而不是直接摊开：它有"立即更新 / 校准档位"两个按钮和一行状态标签，
-  /// 展开一次就有两百多像素 —— 而模型目录才是这一页的主体（2026-10 用户报的原话：
-  /// 「模型能力目录区域占用窗口区域太大」）。标题上永远看得见新鲜度那一行，
-  /// 折叠状态下也知道"目录是什么时候的"，不用展开才知道。
+  /// 折叠而不展开：该卡包含"立即更新 / 校准档位"两个按钮与一行状态标签，
+  /// 展开高度约两百多像素，而模型目录才是该页主体。
+  /// 标题始终显示新鲜度，折叠状态下也能确认"目录的时间"。
   Widget _capabilitySection(ThemeData theme) {
     final s = widget.capability;
     return Theme(
@@ -462,7 +461,7 @@ class _AiProviderModelsSectionState extends State<AiProviderModelsSection> {
               providerId: widget.provider.id,
               id: c.id,
               displayName: c.displayName,
-              // 用发现阶段预填/用户确认过的能力，而不是无脑"仅文本"
+              // 使用发现阶段预填或确认过的能力，不使用默认的"仅文本"
               inputModalities: c.modalities.map((m) => m.wire).toList(),
               attachmentTransports: {
                 for (final m in c.modalities)
@@ -470,12 +469,12 @@ class _AiProviderModelsSectionState extends State<AiProviderModelsSection> {
               },
               tools: c.tools,
               reasoning: c.reasoning,
-              // 思考档位/方言也从内置目录预填（AIH-056）：用户能在模型卡片上改
+              // 思考档位/方言也从内置目录预填（AIH-056）：可在模型卡片上修改
               thinkingEfforts: c.thinkingEfforts,
               thinkingFormat: c.thinkingFormat,
               contextWindow: c.contextWindow,
               maxOutputTokens: c.maxOutputTokens,
-              // 来源如实记录：接口声明 → discovered；内置目录 → builtin；未识别 → manual（用户接受默认）
+              // 来源如实记录：接口声明 → discovered；内置目录 → builtin；未识别 → manual（接受默认）
               capabilitySource: switch (c.capabilitySource) {
                 'discovered' => 'discovered',
                 'builtin' => 'builtin',
@@ -491,7 +490,7 @@ class _AiProviderModelsSectionState extends State<AiProviderModelsSection> {
         _toast('这些候选已经在目录里了。');
         return;
       }
-      // 立刻落库：不要让用户以为"加了但没生效"
+      // 立即落库：避免显示为"已添加但未生效"
       await _saveModels();
       _toast('已加入并保存 $added 个模型');
     } catch (e) {
@@ -543,10 +542,9 @@ class _AiProviderModelsSectionState extends State<AiProviderModelsSection> {
       // 手机走本机库（一条网络请求都不打）；桌面走后端库。**同一份 toJson()**，两端不翻译。
       await widget.providers.saveModels(widget.provider.id, _models);
       _dirty = false; // 已经落库，之后父级重建可以直接覆盖本地副本
-      // 工作台手里那份模型目录只在"打开模型选择器 / 重新进页面"时才重读；用户在这里
-      // 改完思考强度 / 能力声明、保存后直接切回工作台，看到的还是旧声明
-      // （用户 bug 2026-10-24："在 AI 模型设置里手动指定过模型的思考强度，但保存之后
-      // 并没有在 AI 工作台应用"）。保存成功就当场把工作台那份刷掉，别等他再点一次选择器。
+      // 工作台持有的模型目录仅在"打开模型选择器 / 重新进入页面"时重读；
+      // 在此修改思考强度 / 能力声明并保存后切回工作台，显示的仍是旧声明。
+      // 保存成功后立即刷新工作台中的副本，不需要再次打开选择器。
       if (mounted) {
         try {
           final workspace = Provider.of<AiWorkspaceStore>(

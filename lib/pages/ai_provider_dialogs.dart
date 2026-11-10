@@ -15,10 +15,10 @@ import 'ai_provider_widgets.dart';
 ///
 /// 后端要求环境变量风格（大写字母/数字/下划线，且**以字母开头**）。例：`my-gateway` → `MY_GATEWAY_API_KEY`。
 ///
-/// ⚠ **用户看不到它、也不该问他**（2026-10 用户要求：端点信任级别与凭据引用名都由软件自动决定）——
+/// ⚠ **不在界面上显示**（端点信任级别与凭据引用名均由程序自动决定）——
 /// 所以这里必须**永远推得出一个合法值**：Provider ID 允许以数字开头（`2fast` 是合法 kebab ID），
 /// 而推出来的 `2FAST_API_KEY` 不是合法引用名，前缀一个 `P` 就合法了（`P2FAST_API_KEY`）。
-/// 以前那种"ID 以数字开头就请用户手填"的做法，在表单里已经没有那一栏了。
+/// "ID 以数字开头时手动填写"的做法已移除，表单中不再有该字段。
 String defaultCredentialRef(String providerId) {
   final name =
       '${providerId.trim().toUpperCase().replaceAll('-', '_')}_API_KEY';
@@ -79,7 +79,7 @@ class _AiProviderDialogState extends State<AiProviderDialog> {
   @override
   void initState() {
     super.initState();
-    // 编辑：把现有那一行填进来（ID 锁住，其余都能改 —— 用户要的"改个 baseURL"）
+    // 编辑：填入现有记录（ID 锁定，其余可修改，例如 baseURL）
     final existing = widget.existing;
     if (existing != null) {
       _id.text = existing.id;
@@ -124,7 +124,7 @@ class _AiProviderDialogState extends State<AiProviderDialog> {
     return null;
   }
 
-  /// 提交条件：**只有用户真的能填错的那几项**。
+  /// 提交条件：**仅限可能填写错误的字段**。
   ///
   /// 端点信任级别与凭据引用名都**不在表单里**（软件自动决定），所以这里不再校验它们 ——
   /// 引用名由 [`defaultCredentialRef`] 保证合法，信任档由后端按地址推断。
@@ -262,7 +262,7 @@ class AiDiscoverDialog extends StatefulWidget {
 }
 
 class _AiDiscoverDialogState extends State<AiDiscoverDialog> {
-  /// id -> 用户确认后的能力（默认取预填值）
+  /// id -> 确认后的能力（默认取预填值）
   late final Map<String, AiModelCandidate> _drafts = {
     for (final c in widget.result.candidates) c.id: c,
   };
@@ -469,7 +469,7 @@ class _AiModelDialogState extends State<AiModelDialog> {
   final _modalities = <AiModality>{AiModality.text};
 
   /// 工具默认给上：网关多半不声明工具能力但实际支持，而当前请求体还不发 `tools`，
-  /// 勾着不会让请求失败（用户随时能取消）。
+  /// 勾选不会导致请求失败（可随时取消）。
   bool _tools = true;
 
   @override
@@ -587,7 +587,7 @@ class AiModelEdit {
     contextWindow: m.contextWindow,
     maxOutputTokens: m.maxOutputTokens,
     maxAttachmentCount: m.maxAttachmentCount,
-    // 用户手工动过能力就标成 manual（AIH-011：声明从哪来要看得见）
+    // 手动修改过能力时标记为 manual（AIH-011：来源需可见）
     capabilitySource: manual ? 'manual' : m.capabilitySource,
     enabled: m.enabled,
   );
@@ -741,7 +741,7 @@ class _AiModelEditorDialogState extends State<AiModelEditorDialog> {
                   spacing: 6,
                   runSpacing: 6,
                   children: [
-                    // 「关闭」是模型能力（2026-11-09 用户报「没有关闭思考的档位」）：
+                    // 「关闭」属于模型能力：
                     // 勾上之后聊天界面才有这一档，发出去的是目录里的关闭取值。
                     // ⚠ 键沿用历史的 `off`（内置规则与老库都这么存），后端两个键都认。
                     FilterChip(
