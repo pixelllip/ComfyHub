@@ -23,7 +23,7 @@
 //! # 落在哪
 //!
 //! 状态在 `app_settings.k = 'auth.pairing'`（**不同步**，手机拿不到它 —— §4.6）；
-//! ticket / 滚动码 / 待配对请求**只在内存**（进程重启 = 正在进行的那次配对作废，用户再点一次即可）。
+//! ticket / 滚动码 / 待配对请求**仅存于内存**（进程重启即作废当前配对，重新发起即可）。
 
 use axum::{
     extract::{ConnectInfo, FromRequestParts, Path as AxumPath, Query, Request, State},
@@ -108,7 +108,7 @@ pub struct DeviceRecord {
     /// （`docs/pairing-design.md` §14.1）。
     ///
     /// 为什么不合一个：读和写不是同一种权力。允许"这台手机能用我的 key"与允许
-    /// "这台手机能改我的 key"，用户心里的答案经常不一样；合成的后果是用户为了图方便
+    /// "这台手机能否修改我的 key"，预期经常不同；合并后的后果是图省事
     /// 把读打开、**顺手也把写打开了** —— 而写能让"下一次桌面自己发请求"用上别人塞的 key。
     #[serde(default, rename = "allowCredentialsUpload")]
     pub allow_credentials_upload: bool,
@@ -659,7 +659,7 @@ mod dpapi {
     ///
     /// 与 `unprotect` 同一档参数（空熵 + CurrentUser + `CRYPTPROTECT_UI_FORBIDDEN`）——
     /// 两端（Kotlin 的 `ProtectedData.Protect` 与这里）必须写出**对方解得开**的密文，
-    /// 而 DPAPI 的作用域就藏在这三个参数里，改一个就是"换台机器/换个用户解不开"。
+    /// 而 DPAPI 的作用域包含在这三个参数中，改动其一即"换机器 / 换账户无法解密"。
     pub fn protect(plain: &[u8]) -> Result<Vec<u8>, String> {
         let mut buf = plain.to_vec();
         let input = DataBlob {
@@ -699,7 +699,7 @@ mod dpapi {
 
     /// 非 Windows：**必须失败**，不许退化成明文落盘 ——
     /// `CredentialService.set` 的纪律（AIH-015）就是这一条：
-    /// 把明文当"加密存储"写下去，比明文存文件更坏（用户以为它是加密的）。
+    /// 把明文当作"加密存储"写入，比明文存文件更差（会被误认为已加密）。
     pub fn protect(_plain: &[u8]) -> Result<Vec<u8>, String> {
         Err("DPAPI 只在 Windows 上可用（拒绝以明文保存密钥）".to_string())
     }
@@ -902,7 +902,7 @@ fn device_json(device: &DeviceRecord) -> Value {
         Value::Bool(device.allow_credentials),
     );
     // 与上面那条**分开报**：读和写是两个开关（§14.1）。
-    // ⚠ 旧后端没有这个键，客户端把「缺键」当 false —— 但那与"用户没开"是两件事，
+    // ⚠ 旧后端没有该键，客户端把「缺键」视为 false —— 但那与"未开启"是两件事，
     // 所以手机侧要据**键在不在**提示"这台后端还不支持上行密钥"（见 pairing-design §14.5）。
     obj.insert(
         "allowCredentialsUpload".into(),
@@ -954,7 +954,7 @@ fn pending_json(session: &Session, unix: u64) -> Value {
 /// 把内存里攒的 `lastSeen` 落库（最多每 30 秒一次；`GET /api/auth` 顺手调）。
 ///
 /// 这是 D3 那条纪律的落点：**每台设备每个请求写一次库**是不行的（那是"每次刷新都写盘"），
-/// 但用户在看这张卡片时又必须看到"刚刚活跃过"。所以分两层：
+/// 但在查看该卡片时又需看到"刚刚活跃过"。因此分两层：
 /// [flush_seen] 负责**落库**（节流 30 秒、清空内存），[merge_seen] 负责**让响应准确**
 /// （把还没落库的那几笔叠加到响应上）。少了后一层，界面上"最后活跃"会停在 30 秒前 ——
 /// 那种"数据其实没错、只是旧了"的显示最容易被当成 bug 去查后端。
@@ -1110,8 +1110,8 @@ async fn revoke_device(
 /// `POST /api/auth/devices/{id}/credentials` `{allow, allowUpload?}`（**仅回环**）。
 ///
 /// 两个开关：`allow` = 把 API Key **发给**手机（§11.3），`allowUpload` = 允许这台手机
-/// **改**桌面上的 key（§14.1）。**都默认关着**，用户显式勾选才开 —— 合成一个的后果是
-/// 用户为了图方便把读打开、顺手也把写打开了（写能让下一次桌面自己发请求用上别人塞的 key）。
+/// **修改**桌面上的 key（§14.1）。**默认均关闭**，显式勾选才开启 —— 合并后的后果是
+/// 为图省事开启读的同时也开启写（写会让下次桌面请求使用外部写入的 key）。
 ///
 /// `allowUpload` 可以**不传**（只动下行那个开关）：老的桌面 UI / e2e 就是这么调的，
 /// 要求必填会把它们全打断。
@@ -1152,7 +1152,7 @@ async fn set_device_credentials(
 /// 不走「等桌面点批准」那 300 秒（见 `mobile::submit_queue::accept`）。
 ///
 /// **默认关**：拿到这台手机或它的配对令牌的人，因此可以**不经过桌面确认就消耗
-/// GPU**。这是用户显式放权的一次动作 —— 按设备生效、随时能关，界面上要写明代价。
+/// GPU**。这是一次显式授权操作 —— 按设备生效、可随时关闭，界面需写明代价。
 async fn set_device_auto_approve(
     State(state): State<AppState>,
     RemoteAddr(remote): RemoteAddr,
@@ -1549,7 +1549,7 @@ async fn get_credentials(
     let mut body = Map::new();
     body.insert("credentials".into(), Value::Object(out));
     if !failures.is_empty() {
-        // 如实说哪几把没拿到（**不含值**）：手机那边要能告诉用户"这一把还得自己填"
+        // 如实说明哪几项未获取（**不含值**）：手机端需能提示"该项仍需自行填写"
         body.insert(
             "missing".into(),
             Value::Array(failures.into_iter().map(Value::String).collect()),
@@ -1568,7 +1568,7 @@ async fn get_credentials(
 struct CredentialUploadBody {
     #[serde(default)]
     credentials: std::collections::BTreeMap<String, String>,
-    /// 手机读到的那一版修订号；**不带 = 用户显式点的强制覆盖**（§14.3）。
+    /// 手机读取的修订号；**不带 = 显式触发的强制覆盖**（§14.3）。
     #[serde(default)]
     rev: Option<i64>,
 }

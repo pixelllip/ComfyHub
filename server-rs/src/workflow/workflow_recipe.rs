@@ -29,7 +29,7 @@
 //!
 //! 这里产出的只是**知识**：槽位（该改哪个键）+ 旋钮（能改什么）+ 骨架（这一族长什么样）。
 //! 真正提交永远走 `comfy_submit(promptId=…, overrides=…)` 那条链路
-//! （审批 → 提交 → 等 → `capture.captureRun()` 入库），配方既不生成图也不写用户的文件。
+//! （审批 → 提交 → 等待 → `capture.captureRun()` 入库），配方既不生成图也不写入文件。
 //!
 //! # 四、纯函数、可单测
 //!
@@ -46,14 +46,14 @@
 //! # 六、最要紧的一条：**不许学一条缺了节点的骨架**
 //!
 //! 界面格式转 API 图时会**摘掉**它转换不了的节点（`unsupportedNodes`）并留下悬空输入。
-//! 现场（2026-09-26 真机抽查）：用户有两份 Krea 2 图像编辑工作流，而当前跑着的实例里
+//! 情形（真机抽查）：存在两份 Krea 2 图像编辑工作流，而当前运行的实例中
 //! 没有那几个 Krea2 自定义节点 —— 转换于是把整条编辑链摘掉了，19 个节点只剩 13 个。
 //! 如果就这么学下去，配方会是一条**看着像、其实缺了编辑链**的骨架，而且**没有任何报错**。
 //! 所以默认档是**拒学**（`tolerateUnsupported = false`，稳定码 `UNSUPPORTED_NODES`），
 //! 只有显式带上它才学，且配方会带 `complete=false` 与 `gaps`。
 //!
 //! ⚠ **2026-09-27 的那条"有意与 Kotlin 不同"已经在 P4 第 68 步撤销**：`workflow_convert.rs`
-//! 现在真的实现了「模拟用户行为」（[`crate::workflow::workflow_frontend`]），所以这里不再需要那句
+//! 现在已实现「模拟前端行为」（[`crate::workflow::workflow_frontend`]），因此这里不再需要那句
 //! "本后端还没做这一步"的补白 —— `emulateFrontend` 与 Kotlin 一样**真的改变转换结果**：
 //! 开着时纯前端节点被等价改写（不进 `gaps`），关着时它们照旧留在 `unsupportedNodes` 里。
 
@@ -102,7 +102,7 @@ pub enum Task {
     ///
     /// 它**优先于** [`Task::Inpaint`]：Krea 2 的 Identity Edit 同时带遮罩链（`ImageToMask` /
     /// `GrowMask`），但它的能力是"照参考图改" —— 把它归成 inpaint 的话，
-    /// `comfy_list_recipes(task="edit")` 永远找不到它，而那正是用户说的"图像编辑工作流"。
+    /// `comfy_list_recipes(task="edit")` 始终找不到它，而那正是"图像编辑工作流"。
     Edit,
     /// 遮罩局部重绘（`LoadImageMask` / `SetLatentNoiseMask` / `InpaintModelConditioning` …）。
     Inpaint,
@@ -576,7 +576,7 @@ const MASK_NODES: [&str; 12] = [
 
 /// **参考图编辑**链的显式节点。
 ///
-/// 名单来自用户机器上真有的工作流（只读扫过，见设计 §5），**逐字对着真文件的
+/// 名单来自本机实际存在的工作流（只读扫描，见设计 §5），**逐字对应真实文件的
 /// `class_type` 抄的** —— 第一版照着统计表写成了 `…Editx2`（那是"出现 2 次"的后缀），
 /// 结果 Krea 2 的两份编辑工作流被归成了 `inpaint` / `i2i`（探针当场照出来的）：
 /// - Krea 2：`Krea2EditModelPatch` / `Krea2OstrisEditModelPatch` / `Krea2EditGroundedEncode` /
@@ -1783,7 +1783,7 @@ impl<'a> Deps<'a> {
 /// 两处各写一份就会出现"同一台机器，两个工具看到两份节点定义"。
 ///
 /// 结果**过 [`crate::workflow::object_info_cache`]**：`/object_info` 是兆字节级响应，
-/// 每开一次蓝图就重拉一遍会让"打开蓝图"比 ComfyUI 自己慢一个量级（用户 2026-10-18）。
+/// 每次打开蓝图都重新拉取会使"打开蓝图"比 ComfyUI 自身慢一个数量级。
 /// 返回值是 `Arc`，调用方**不要再拷一份**。
 pub async fn object_info_of(state: &AppState) -> Option<Arc<Map<String, Value>>> {
     let config = crate::comfy::capture::capture_config(state).ok()?;
@@ -1837,7 +1837,7 @@ fn prompt_title(state: &AppState, prompt_id: i64) -> Option<String> {
 
 /// 一次学习请求（工具 / 端点把参数摊平到这里）。
 ///
-/// `path` 进这一层时是**用户给的原文**（准入在 [`learn_and_save`] 那一步做，
+/// `path` 进入该层时是**传入的原始文本**（准入在 [`learn_and_save`] 那一步完成，
 /// 这一层不碰策略、也不读环境变量）。
 #[derive(Debug, Clone, Default)]
 pub struct LearnArgs {
@@ -2220,7 +2220,7 @@ fn analyze_learned(
 
 /// 学 + 落库（工具与端点**共用这一个**）。返回 `(id, learned)`。
 ///
-/// `args.path` 进来时是用户给的原文，**准入只在这一个地方做**（[`ToolPolicy::resolve_read`]，
+/// `args.path` 传入时是原始文本，**准入只在此处完成**（[`ToolPolicy::resolve_read`]，
 /// 与 `comfy_load_workflow` 同一条白名单）—— 界面与 AI 都不能借这个入口读白名单以外的文件。
 pub async fn learn_and_save(
     state: &AppState,
@@ -2374,7 +2374,7 @@ pub fn verified_in(conn: &Connection, recipe_id: i64) -> rusqlite::Result<Vec<Ve
 ///  * **按 `(overrideKey, 模型名)` 去重**：同一个槽位配同一个文件跑第二遍只刷新 `runKey` / `at`，
 ///    不会一行一行堆起来；换了模型才是新的一条。
 ///  * **新的排在最前**（最近的验证最有用），只用 [`MAX_VERIFIED`] 条。
-///  * **只增不改**别的槽位 / 别的模型 —— 用户跑一条别的组合不该抹掉之前的结论。
+///  * **只增不改**其他槽位 / 其他模型 —— 执行其他组合不应抹掉之前的结论。
 ///
 /// 返回真正写进去几条（0 = 没有新东西，配置也就不用写库）。
 pub fn record_verified(
@@ -2477,7 +2477,7 @@ pub enum Status {
     Exact,
     /// 盘上有同名，但**这个实例枚举不到**（模型根没挂全）：先重启 / 修挂载，**别下载**。
     OnDiskOnly,
-    /// 本机有更接近的（字面相似度 ≥ 阈值）：**先问用户**（那是他的模型）。
+    /// 本机存在更接近的（字面相似度 ≥ 阈值）：**先确认**（属于本地模型）。
     Substitute,
     /// 本机没有：去 `find_model` / `civitai_search` 查，**不许编文件名**。
     Missing,
@@ -2923,7 +2923,7 @@ enum SlotLookup {
 
 /// "底模那一格"：`checkpoints` 或 `diffusion_models`。
 ///
-/// 参数名叫 `model`、用户说的也是"换成这个底模"，所以**没说角色**时按它兜底 ——
+/// 参数名为 `model`、语义为"换成这个底模"，因此**未指定角色**时以此为兜底 ——
 /// 但兜底要**说出来**（[`SlotLookup::One`] 的 `assumed` → 报告里一条警告），
 /// 不能让人以为"它自己知道我指的是哪一格"。
 const BASE_ROLES: [&str; 2] = ["checkpoints", "diffusion_models"];
@@ -3013,7 +3013,7 @@ fn resolve_slot(
         };
     }
     // 清单里没有这个文件（或根本没有清单）：按"底模那一格"兜底 —— 参数名叫 model、
-    // 用户说的也是"换成这个底模"。兜底**要标出来**，见 `BASE_ROLES` 的注释。
+    // 语义为"换成这个底模"。兜底**需标注**，见 `BASE_ROLES` 的注释。
     let base: Vec<&Slot> = recipe
         .slots
         .iter()
