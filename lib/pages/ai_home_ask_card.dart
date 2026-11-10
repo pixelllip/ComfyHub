@@ -136,7 +136,10 @@ class _AskCardState extends State<_AskCard> {
                   color: color,
                 ),
                 const SizedBox(width: 6),
-                Flexible(
+                // 标题用满"扣掉状态徽标与展开键"之后的整行宽度：
+                // 标题与 `Spacer` 同为 flex 1 时，剩余空间按 1:1 分给两者，
+                // 长标题只能用到一半就被省略号截断。
+                Expanded(
                   child: Text(
                     q.header?.isNotEmpty == true
                         ? q.header!
@@ -148,7 +151,7 @@ class _AskCardState extends State<_AskCard> {
                     style: theme.textTheme.labelMedium?.copyWith(color: color),
                   ),
                 ),
-                const Spacer(),
+                const SizedBox(width: 6),
                 // 状态徽标：**等你回答**与**已回答**一眼分得开。
                 // 等回答时它顺便当"去下面作答"的指标（真正能点的选项在输入区里）。
                 Container(
@@ -851,7 +854,8 @@ class _AskComposerState extends State<_AskComposer> {
                       color: theme.colorScheme.tertiary,
                     ),
                     const SizedBox(width: 6),
-                    Flexible(
+                    // 与上面的折叠头一样：标题独占整行剩余宽度，不再与 `Spacer` 平分。
+                    Expanded(
                       child: Text(
                         q.header?.isNotEmpty == true ? q.header! : 'AI 想确认一件事',
                         maxLines: 1,
@@ -861,7 +865,7 @@ class _AskComposerState extends State<_AskComposer> {
                         ),
                       ),
                     ),
-                    const Spacer(),
+                    const SizedBox(width: 6),
                     // 多题卡需显示"还有几题"（参照 DSH 的「第 N/M 题」）
                     Text(
                       paged ? '第 ${page + 1}/$total 题' : '等你回答',
