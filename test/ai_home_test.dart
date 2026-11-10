@@ -61,7 +61,7 @@ MockClient _fakeBackend({
   bool failFirstRun = false,
   String conversationId = 'c1',
   List<Map<String, dynamic>> conversations = const [],
-  // 模型显示名可以换：名字长的模型会把输入区底行挤紧（用户 bug 的复现条件之一）
+  // 模型显示名可替换：名称较长的模型会使输入区底行变紧（复现条件之一）
   String modelName = '纯文本模型',
   // 权限档：`full` 时那枚按钮的文案是「自动允许（无需批准）」（底行最宽的一枚控件）
   String permissionMode = AiToolPolicy.modeAsk,
@@ -223,7 +223,7 @@ MockClient _fakeBackend({
         },
       ];
     } else if (path == '/api/ai/tools/policy') {
-      // 权限档（用户建议 ⑤）的真源：界面读它决定那枚按钮显示哪一档
+      // 权限档的真源：界面据此决定按钮显示的档位
       body = {'permissionMode': permissionMode};
     } else if (path == '/api/ai/preflight') {
       body = {
@@ -317,7 +317,7 @@ void main() {
     expect(find.text('新建对话'), findsOneWidget);
     expect(find.text('AI 工作台'), findsOneWidget); // 空态标题
     // 右侧栏用「ComfyUI」/ Skills 目录做锚点：以前那栏顶部写着"上下文"，
-    // 但栏里其实只有模型能力 + ComfyUI 状态 + Skills，名不副实（用户建议第 5 条）。
+    // 但栏中只有模型能力 + ComfyUI 状态 + Skills，与名称不符。
     expect(find.text('ComfyUI'), findsOneWidget);
     expect(find.text('上下文'), findsNothing, reason: '「上下文」这个含混的标题已经去掉');
     // 左侧栏和右侧栏同时存在，说明是三栏而不是单列
@@ -368,7 +368,7 @@ void main() {
     expect(find.text('上下文与状态'), findsNothing);
   });
 
-  // 用户建议（2026-09-20）：「给右边栏除了实时进度以外的内容也拿类似容器分别包裹起来」。
+  // 右侧栏除实时进度外的内容也使用相同容器分组。
   //
   // 以前只有"实时进度"是 Card，其余几块（模型能力 / ComfyUI / Skills / 长期记忆）
   // 是直接摊在背景上的文字与列表 —— 一眼看不出哪几行属于同一块、到哪里算下一块。
@@ -423,16 +423,15 @@ void main() {
     expect(skillsCard.borderRadius, modelCard.borderRadius);
   });
 
-  // 用户建议（2026-09-20）：
-  //   「聊天界面主体，距离两侧边栏空出了一大片空白，空间利用率低，也不美观。
-  //     建议滚动条贴边放置，聊天气泡距离边缘 20 到 30 像素。」
+  // 聊天主体与两侧边栏之间存在大片空白，空间利用率低；
+  // 滚动条需贴边，气泡与边缘距离为 20 到 30 像素。
   //
-  // 根因是两处**默认对齐**，光调主题里的 `crossAxisMargin` 治不了：
-  //   ① `_Thread` 的 Column 没写 crossAxisAlignment（默认 center）→ 消息区缩到
-  //      "最宽气泡 + 内边距"（720 + 32 = 752）再**居中**，两侧各空一大片；
-  //      滚动条画在那条 752 的右边缘上，离右侧栏老远（用户说的"没贴边"）；
-  //   ② `_MessageList` 的 Column 写的是 start → 每条消息也只有气泡那么宽，
-  //      `_MessageBubble` 里"用户消息靠右"（end）因此**完全没生效**。
+  // 原因是两处**默认对齐**，仅调整主题中的 `crossAxisMargin` 无法解决：
+  //   ① `_Thread` 的 Column 未设置 crossAxisAlignment（默认 center）→ 消息区缩至
+  //      "最宽气泡 + 内边距"（720 + 32 = 752）后**居中**，两侧留白；
+  //      滚动条画在 752 区域的右边缘，与右侧栏距离较远（未贴边）；
+  //   ② `_MessageList` 的 Column 使用 start → 每条消息只有气泡宽度，
+  //      `_MessageBubble` 中"请求消息靠右"（end）因此**没有生效**。
   testWidgets('聊天主体铺满整栏：气泡距边缘 24、滚动条贴右侧边栏（用户建议）', (tester) async {
     tester.view.physicalSize = const Size(1600, 1000);
     tester.view.devicePixelRatio = 1.0;
@@ -441,7 +440,7 @@ void main() {
     await tester.pumpWidget(await buildAiHomePage());
     await tester.pumpAndSettle();
 
-    // 发一条短消息：一条用户气泡 + 一条助手气泡，两条都短到"窄于整栏"，
+    // 发送一条短消息：一条请求气泡 + 一条助手气泡，均短于整栏，
     // 这样才量得到它们各自贴的是哪一边
     await tester.enterText(find.byType(TextField).first, '短消息');
     await tester.tap(find.text('发送'));
@@ -577,7 +576,7 @@ void main() {
 
     // ① 当前会话必须有**看得见的底色**。
     //    M3 的 ListTile 选中态默认只把文字染成主题色、没有底色，于是"鼠标压过的那一行"
-    //    反而比真选中的更像选中 —— 用户报的就是这个。
+    //    反而比选中态更接近选中。
     expect(tileOf('会话 A').selected, isTrue);
     expect(tileOf('会话 B').selected, isFalse);
     expect(
@@ -617,7 +616,7 @@ void main() {
     expect(find.text('发送'), findsOneWidget);
   });
 
-  // 用户 bug（2026-09-21）："当宽度低于一定值的时候，控件显示不全；进一步降低宽度，
+  // 现象："宽度低于一定值时控件显示不全；进一步降低宽度，
   // 当仅有聊天详情本身时，本来该出现在 appbar 里的 comfy UI 状态变成了盖住发送按钮的
   // 独立按钮，同时底下控件也显示不全。"
   //
@@ -626,8 +625,8 @@ void main() {
   //      按钮正好在右下角，于是窗口一窄就**被 FAB 盖住**（实测 320~899px 全部重叠，
   //      连发送按钮的点击面都被吃掉）。
   //   ② 输入区底行左侧操作组能横向滚动，但窄窗口下视口只剩 21px（内容 847px）——
-  //      权限档 / 模型选择被从**左边缘**裁掉，用户"显示不全"且滚不动。
-  //   ③ 用户的要求：**一行放不完就折行**，不要横向滚动。
+  //      权限档 / 模型选择被从**左边缘**裁掉，显示不全且无法滚动。
+  //   ③ 约束：**一行放不下时折行**，不使用横向滚动。
   testWidgets('窄屏：ComfyUI 状态入口在标题栏，不再有盖住发送按钮的 FAB', (tester) async {
     tester.view.physicalSize = const Size(420, 900);
     tester.view.devicePixelRatio = 1.0;
@@ -755,7 +754,7 @@ void main() {
       closeTo(input.right, 1),
       reason: '这一排的右边界就是发送按钮 / 输入区右边缘',
     );
-    // 操作控件**从左边起排**（用户 2026-09-24：除了发送按钮和 token 用量，其他都靠左）：
+    // 操作控件**从左侧开始排列**（除发送按钮与 token 用量外均靠左）：
     // 老写法整排 `Wrap(alignment: end)`，附件左边空着一大片，所有控件都被甩到右边。
     // 容差 5px 是 `IconButton` 自己的内缩（48 的命中区里那 40 宽的可见盒居中，左缩 4）。
     expect(
@@ -764,7 +763,7 @@ void main() {
       reason: '第一枚操作控件（添加附件）必须贴在输入区左边缘，不能整排靠右',
     );
     expect(find.byTooltip('不支持思考。该模型未声明推理能力，请到「设置 → AI 模型」声明。'), findsWidgets);
-    // 窄屏不再显示 token 用量（用户：宽度太窄的时候可以不显示）
+    // 窄屏不显示 token 用量
     expect(
       find.textContaining('本对话 ↑'),
       findsNothing,
@@ -773,7 +772,7 @@ void main() {
   });
 
   // 「最小窗口宽度」那一档也要能看：320 是产品约定的下限（`windows/runner/win32_window.cpp`
-  // 的 `kMinWindowWidthLogical`，用户能拖到的最窄）。这一档下底行就是**一排**：
+  // 的 `kMinWindowWidthLogical`，即窗口可达到的最小宽度）。该档下底行为**一排**：
   // 四枚紧凑图标 + 发送按钮，全部落在输入区范围内。
   testWidgets('最小宽度 320：四枚图标 + 发送一排放下，不裁不溢出', (tester) async {
     tester.view.physicalSize = const Size(320, 900);
@@ -793,7 +792,7 @@ void main() {
     await tester.tap(find.widgetWithText(FilledButton, '发送'));
     await tester.pumpAndSettle();
 
-    // ★ 底行**始终是一排**（用户 2026-10-11："在其他特定宽度下，控件变成两行排列也很难看"）。
+    // ★ 底行**始终为一排**（特定宽度下控件变为两行会影响可读性）。
     // 以前 560 以下会切到 `ai-composer-two-row` 那个两行布局 —— 现在那个分支已经删了，
     // 判据只剩"窗口宽度"，窄了就压缩文字/退图标，**不折行**。
     expect(
@@ -821,7 +820,7 @@ void main() {
     );
     expect(tester.takeException(), isNull, reason: '320 宽下不许 overflow');
 
-    // ★ 每一枚操作控件都要**够大、点得准**（用户 2026-10-11："按钮太小了比较难点"）。
+    // ★ 每个操作控件需**尺寸足够、便于点击**。
     // 44 是 Windows / Material 都认的最小可点尺寸。
     final controls320 = <String, Finder>{
       '添加附件 / 插入卡片（@）': find.byTooltip('添加附件 / 插入卡片（@）'),
@@ -865,14 +864,13 @@ void main() {
     expect(find.textContaining('本对话 ↑'), findsNothing);
   });
 
-  // ★ 三档文字密度（2026-10-11）：判据是**窗口宽度**，不是平台。
+  // ★ 三档文字密度：判据是**窗口宽度**，不是平台。
   //
-  // 用户两条原话：
-  //   · "AI 工作台界面下方的控件，有时候按钮太小了比较难点，也没显示出有用的关键信息；
-  //     在其他特定宽度下，控件变成两行排列也很难看。"
-  //   · "还有是判据是窗口宽度不是平台哦。"
+  // 约束：
+  //   · 控件过小难以点击，且未显示关键信息；特定宽度下变为两行排列影响可读性。
+  //   · 判据是窗口宽度，不是平台。
   //
-  // 所以这一组在**同一台机器**上只改窗口宽度，看它怎么变 —— 平台一个字都不参与。
+  // 因此这一组在**同一台机器**上只改变窗口宽度，平台不参与判定。
   // ⚠ 每档单独一条用例（**不要在同一条里反复 pumpWidget 换尺寸**）：
   // 换了尺寸之后旧的 element 树还挂着，`find` 会看到两份混在一起的东西。
   testWidgets('底行密度·宽窗口：给全称（"自动允许（无需批准）"）', (tester) async {
@@ -1089,7 +1087,7 @@ void main() {
     final store = tester
         .element(find.byType(AiHomePage))
         .read<AiWorkspaceStore>();
-    // 模拟用户添加了一张图片附件（能力由后端判定）
+    // 模拟添加一张图片附件（能力由后端判定）
     store.addAttachment(
       const AiAttachment(
         name: 'poster.png',
@@ -1129,7 +1127,7 @@ void main() {
     await tester.tap(find.text('发送'));
     await tester.pumpAndSettle();
 
-    // 用户消息 + 助手回复都在（回复来自 SSE 的 text.delta / message.completed）
+    // 请求消息与助手回复均存在（回复来自 SSE 的 text.delta / message.completed）
     expect(find.text('你好'), findsWidgets);
     expect(find.text('你好，我是假模型'), findsOneWidget);
     expect(store.sending, isFalse);
@@ -1236,7 +1234,7 @@ void main() {
 
   // --- token 统计（AIH-057） ---------------------------------------------
 
-  // 用户 2026-09-24："当数 token 用量字过大时，切换 K/M/B 的单位。"
+  // token 用量数值过大时切换 K/M/B 单位。
   // 老实现只有 `k` 一档 → 150 万会写成 `1500k`（四位数还带单位，比原来还长）。
   test('token 用量按数量级切 K / M / B 单位', () {
     expect(AiTokenUsage.compact(0), '0');
@@ -1283,7 +1281,7 @@ void main() {
   });
 
   testWidgets('输入区底行：token 汇总不被挤没，发送按钮永远贴右（用户 bug）', (tester) async {
-    // 1440 宽 = 用户那台机器的窗口：中栏 = 1440 - 240(会话列表) - 260(右栏) - 2 = 938，
+    // 1440 宽：中栏 = 1440 - 240(会话列表) - 260(右栏) - 2 = 938，
     // 模型名长 + 能力徽标多的时候底行会被挤紧，正好复现"汇总被省略 / 按钮不贴右"。
     tester.view.physicalSize = const Size(1440, 900);
     tester.view.devicePixelRatio = 1.0;
@@ -1441,7 +1439,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.textContaining('角色卡 · 凛'), findsOneWidget);
 
-    // 2026-11-08 用户："@卡片不会自动收回" —— 选一张就收起，要再选就重新打开。
+    // 选择一张后收起；选择第二张需重新打开。
     // （面板常驻会把输入区顶出屏幕，尤其是键盘弹起时。）
     expect(
       find.text('诗音'),
@@ -1461,7 +1459,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.textContaining('画风卡 · 物理感动画'), findsOneWidget);
 
-    // 面板已经收起（选卡即收），直接写用户自己的要求
+    // 面板已收起（选择后即收），写入需求内容
     await tester.enterText(find.byType(TextField).first, '保留构图');
     await tester.tap(find.widgetWithText(FilledButton, '发送'));
     await tester.pumpAndSettle();
@@ -1502,7 +1500,7 @@ void main() {
       find.byKey(const ValueKey('mention-style_card-物理感动画')),
       findsOneWidget,
     );
-    // 发送内容里同时带"用户看到的正文"和卡片快照（模型侧仍是原来的卡块）
+    // 发送内容同时包含"界面显示的正文"与卡片快照（模型侧仍为原卡块）
     expect(lastRunBody!['displayText'], '保留构图');
     final mentions = lastRunBody!['mentions'] as List;
     expect(mentions.first['kind'], 'style_card');
@@ -1533,7 +1531,7 @@ void main() {
 
     await tester.tap(find.text('凛'));
     await tester.pumpAndSettle();
-    // 选完就收：要选第二张得重新打开（用户 2026-11-08）
+    // 选择后收起：选择第二张需重新打开
     await tester.tap(find.byTooltip('添加附件 / 插入卡片（@）'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('角色卡 / 画风卡…'));
@@ -1554,8 +1552,8 @@ void main() {
     expect(find.textContaining('角色卡 · 凛'), findsOneWidget);
   });
 
-  // 2026-11-08 用户："窗口高度太低，元素太小，很难操作" —— 手机上卡片选择器
-  // 改成**底部弹层**：独立路由、自己的高度与滚动，不再跟输入区抢高度。
+  // 手机上卡片选择器改为**底部弹层**：独立路由、独立高度与滚动，
+  // 不与输入区争用高度。
   testWidgets('手机：卡片选择器是底部弹层，选完自动关闭', (tester) async {
     debugDefaultTargetPlatformOverride = TargetPlatform.android;
     try {
@@ -1585,8 +1583,8 @@ void main() {
     }
   });
 
-  // 用户 2026-11-08："多行文本输入仍然 overflow" —— 输入框行数必须按
-  // "输入区可用高度 - 卡片 - 底行"现算；键盘高度（viewInsets）变了也成立。
+  // 多行文本输入不能溢出：输入框行数按
+  // "输入区可用高度 - 卡片 - 底行"计算；键盘高度（viewInsets）变化时同样成立。
   testWidgets('手机 + 键盘 + 卡片 + 长文本：输入区不溢出', (tester) async {
     debugDefaultTargetPlatformOverride = TargetPlatform.android;
     try {
@@ -1619,8 +1617,8 @@ void main() {
     }
   });
 
-  // 用户 2026-11-08：手机端 "输入 @ → 取消 → 焦点回到输入框又弹一遍，
-  // 得取消两次才能打字"。取消时必须把行末的 `@` 摘掉，并且同一段文本不许重复弹。
+  // 手机端 "输入 @ → 取消 → 焦点回到输入框后再次弹出，需取消两次才能输入"。
+  // 取消时必须移除行末的 `@`，且同一段文本不重复弹出。
   testWidgets('手机：取消卡片弹层 → @ 被摘掉且不会重复弹', (tester) async {
     debugDefaultTargetPlatformOverride = TargetPlatform.android;
     try {
@@ -1659,7 +1657,7 @@ void main() {
     }
   });
 
-  // 用户 2026-11-08："点击这个角色卡/画风卡，弹窗显示详细内容（只读）"
+  // 点击角色卡 / 画风卡时，弹窗显示详细内容（只读）。
   testWidgets('已选卡片：点 chip 打开只读详情', (tester) async {
     tester.view.physicalSize = const Size(1200, 900);
     tester.view.devicePixelRatio = 1.0;
@@ -1692,7 +1690,7 @@ void main() {
     expect(find.text('正面提示词'), findsNothing);
   });
 
-  // 用户 2026-11-08："手机的回车逻辑被你改成了发送" —— 回车 = 发送只属于电脑端。
+  // 回车 = 发送仅适用于电脑端。
   testWidgets('手机：回车是换行，不是发送', (tester) async {
     debugDefaultTargetPlatformOverride = TargetPlatform.android;
     try {

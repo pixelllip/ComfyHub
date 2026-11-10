@@ -1,4 +1,4 @@
-// AI 工作台「卡顿」类回归（用户 bug 9.19）：
+// AI 工作台「卡顿」类回归：
 //
 //   1. 聊天快速上下滑动卡顿 —— 同一段文本反复解析 Markdown 是主因之一；
 //   2. 流式输出时每来一个字就整页重建一次（含一屏历史气泡）；
@@ -51,7 +51,7 @@ class _Fake {
   final String text;
   int runCount = 0;
 
-  /// 权限档（用户建议 ① 的用例要验证"生成中切档"）：默认 `ask`。
+  /// 权限档（用例需验证"生成中切换档位"）：默认 `ask`。
   String permissionMode = 'ask';
 
   /// 冷启动落在一条空会话上（设计如此），历史要点开左侧列表里的那条才进来。
@@ -60,15 +60,14 @@ class _Fake {
 
   /// 第二条历史会话：内容**和第一条一样长**。
   ///
-  /// 用来复现"内容整批换掉（切会话）而 `pixels` 被原样带过去"：总长一样时它甚至
-  /// 不会被夹回来，用户落在新会话的**半路**上 —— 聊天软件里这是错的，
-  /// 换会话该落在最新一条。
+  /// 用来复现"内容整批换掉（切会话）而 `pixels` 被原样带过去"：总长一样时甚至
+  /// 不会被夹回，滚动位置落在新会话的**中间** —— 换会话应落在最新一条。
   static const String otherConversationId = 'c3';
 
   /// 第三条历史会话：**只有两条短消息**（内容比第一条短得多）。
   ///
-  /// 用来复现用户实测的"总长第一次量完会变小，`pixels` 还停在按旧总长算的位置上
-  /// —— 内容被顶到视口外，第一条消息在界面上直接消失"。
+  /// 用来复现"总长第一次量完会变小，`pixels` 仍停在按旧总长计算的位置上
+  /// —— 内容被顶到视口外，第一条消息在界面上消失"。
   static const String shortConversationId = 'c2';
 
   Object? body(String method, String path, {String? requestBody}) {
@@ -186,7 +185,7 @@ class _Fake {
         ];
       }
       if (convId == shortConversationId) {
-        // 两条短消息：总长比第一条小一个数量级（用户实测"估计 220 → 真实 52"的放大版）
+        // 两条短消息：总长比第一条小一个数量级（"估计 220 → 真实 52"的放大版）
         return [
           {
             'id': 's1',
@@ -210,7 +209,7 @@ class _Fake {
       }
       final history = convId == historyConversationId
           // **长短交错**的一长串：滚动条跳变只在"高度差异大 + 项目多"时才明显
-          // （用户现场就是一条聊了很久的会话）。30 条足够复现，也让
+          // （对应长期会话）。30 条足够复现，也让
           // "总长稳定性"那条用例真的量得到东西。
           ? [for (var i = 1; i <= 30; i++) _historyMessage(i)]
           : <Map<String, dynamic>>[
@@ -238,7 +237,7 @@ class _Fake {
       ];
     }
     if (path == '/api/ai/skills') return <Object>[];
-    // 权限档（用户建议 ①）：GET 给当前档，PUT 收下新的档再回读 ——
+    // 权限档：GET 返回当前档，PUT 接收新档并回读 ——
     // 与后端 `PUT /api/ai/tools/policy` 同语义，否则切档会静默回落。
     if (path == '/api/ai/tools/policy') {
       if (method == 'PUT') {
@@ -311,7 +310,7 @@ class _Fake {
 ///
 /// **高度差异故意做得很大**（短句 / 中段 / 带大代码块的长段，三种交错）：
 /// 滚动条跳变（总长估算乱跳）只在"有的气泡一行、有的两屏"时才明显 ——
-/// 用户现场就是这种聊了很久的会话。"总长稳定性"那条用例全靠它量得出东西。
+/// 对应长期会话。"总长稳定性"用例依赖它测量。
 Map<String, dynamic> _historyMessage(int i) => {
   'id': 'h$i',
   'conversationId': _Fake.historyConversationId,
@@ -395,7 +394,7 @@ Future<Widget> _homePage(
     ],
     child: MaterialApp(
       // 滚动条的拖动 / 鼠标拖动在 widget test 的默认作用域里是关着的，
-      // 要测"用户拖着滚"就得把它打开（见下面那条用户 bug 用例）。
+      // 测试"拖动滚动"时需开启（见下方相关用例）。
       scrollBehavior: scrollBehavior,
       home: const AiHomePage(),
     ),
@@ -491,17 +490,16 @@ void main() {
     expect(store.messages.last.text, text, reason: '攒着通知不能把内容攒丢');
   });
 
-  // 用户 bug（2026-09-20）："如果在 AI 正输出回答的时候滚动页面，只滚一小段的话
-  // 界面会立即重置到底部，再继续滚才不会滚下去。"
+  // 现象："在 AI 输出回答时滚动页面，只滚一小段就会立即重置到底部，继续滚动才不再回到下方。"
   //
-  // 根因在 `_onScroll` 的"贴底"判据：老写法是 `distance < 80`，等于给"贴底"画了个
-  // 80px 宽的笼子。流式期间用户往上滚一点点，内容同时在往下长，
-  // `maxScrollExtent - pixels` 一直落在 80 以内 → 下一帧又被判成"贴底"、
-  // 被 `_followIfAtBottom()` 的 `animateTo(max)` 拽回去。
-  // 一次滚够 80px 以上才逃得出去 —— 用户的"再继续滚才不会滚下去"就是这么来的。
+  // 原因在 `_onScroll` 的"贴底"判据：旧写法为 `distance < 80`，判定范围为 80px。
+  // 流式期间向上滚动一小段，内容同时增长，
+  // `maxScrollExtent - pixels` 始终在 80 以内 → 下一帧再次判定为"贴底"、
+  // 被 `_followIfAtBottom()` 的 `animateTo(max)` 拉回。
+  // 需要一次滚动 80px 以上才能脱离该判定。
   //
-  // 用例走**真实链路**：贴底 → 往上跳 30px（等价于滚轮推一下 / 拖一小段，
-  // 会触发同一个 `_onScroll`）→ 继续灌流式增量 → 位置必须留在原地。
+  // 用例走**真实链路**：贴底 → 向上跳 30px（等价于滚轮推一下 / 拖一小段，
+  // 会触发同一个 `_onScroll`）→ 继续灌入流式增量 → 位置必须保持在原处。
   testWidgets('流式输出中往上滚一小段：位置要留住，不能被拽回底部（用户 bug）', (tester) async {
     tester.view.physicalSize = const Size(1200, 900);
     tester.view.devicePixelRatio = 1.0;
@@ -557,12 +555,12 @@ void main() {
       reason: '流式输出时本来就该贴底',
     );
 
-    // 用户往上滚**一小段**（30px —— 老判据那个 80px 笼子里的一小步）
+    // 向上滚动**一小段**（30px，位于原 80px 判定范围内）
     position.jumpTo(bottom - 30);
     await tester.pump();
     expect(position.pixels, closeTo(bottom - 30, 1.0), reason: '手势本身要真的滚上去');
 
-    // AI 还在往外吐字（用户说的"正输出回答的时候"）：每帧都来一段
+    // AI 仍在输出（对应"正在输出回答"）：每帧产生一段
     for (var i = 0; i < 8; i++) {
       events.add(
         utf8.encode(
@@ -633,12 +631,12 @@ void main() {
     await tester.pumpAndSettle();
   });
 
-  // 用户 bug（2026-09-20）："快速拉动滚动条时，其位置变化异常。"
+  // 现象："快速拖动滚动条时，位置变化异常。"
   //
-  // 和上一条是同一个根因的另一个症状：老判据（距离 < 80 也算贴底）让用户以为
-  // "我还在底部"，于是 `_followIfAtBottom()` 的 `animateTo(maxScrollExtent)` 一直在排队，
-  // 用户一边拉滚动条、那个 180ms 的动画一边在跑 —— 手指和动画各拉一个方向，位置就跳。
-  // 容差收到 1.5 之后，用户滚一像素就脱离"贴底"，跟随当场不再排新的动画。
+  // 与上一条为同一原因的另一表现：旧判据（距离 < 80 也算贴底）使滚动位置被判定为
+  // "仍位于底部"，于是 `_followIfAtBottom()` 的 `animateTo(maxScrollExtent)` 持续排队，
+  // 拖动滚动条时 180ms 的动画同时执行 —— 拖动与动画方向不同，位置发生跳动。
+  // 容差改为 1.5 后，滚动一像素即脱离"贴底"，不再触发新的跟随动画。
   //
   // 这条用例直接**真的拖**：从贴底往上拖 300px，然后要求位置就是"往上 300px 左右"，
   // 而不是被拖回底部；再往上拖，位置继续跟着走。
@@ -756,8 +754,8 @@ void main() {
     await tester.pumpAndSettle();
   });
 
-  // 用户撞上的第四个坑（2026-09-20）："总长第一次量完会变小，而 pixels 还停在
-  // 按旧总长算的位置上 —— 内容被顶到视口外，第一条消息在界面上直接消失。"
+  // 第四个现象："总长第一次量完会变小，而 pixels 仍停在
+  // 按旧总长计算的位置上 —— 内容被顶到视口外，第一条消息在界面上消失。"
   //
   // 对应的真实时机就是"内容整批换掉"：**切会话**。切过去之后 `messages` 整批换成
   // 新的，而 `_Thread` 只是换了数据，**滚动位置不会自己重置** —— `pixels` 被原样
@@ -821,7 +819,7 @@ void main() {
     );
 
     // 第三种：切到**内容短得多**的会话。
-    // 这是用户实测的那个现场 —— 总长一下子小掉一个数量级，
+    // 对应实测场景 —— 总长一次减少一个数量级，
     // `pixels` 要是还按旧总长算，新内容就被顶到视口外去了。
     position.jumpTo(position.maxScrollExtent);
     await tester.pump();
@@ -843,7 +841,7 @@ void main() {
     );
   });
 
-  // 上面两条证明"总长精确"。这条把结论落到**用户看到的那个滑块**上：
+  // 上述两条验证"总长精确"。这条检查**界面上的滚动条滑块**：
   // 滑块的长度 = `viewport / (maxScrollExtent + viewport)`，位置 = `pixels / maxScrollExtent`
   // —— 总长一稳，滑块就稳。
   //
@@ -916,7 +914,7 @@ void main() {
     }
   });
 
-  // 用户 bug（2026-09-20）："在最新一条聊天记录里，滚动条会跳变 1/3 的进度。"
+  // 现象："在最新一条聊天记录中，滚动条进度跳变约 1/3。"
   //
   // 根因：懒构建的 `ListView.builder` 对**还没布局到的**子项只能估算总长，
   // 估法是把剩余未建项数乘以"已建那几项的平均高度"（`estimateMaxScrollOffset`）——
@@ -1051,7 +1049,7 @@ void main() {
     );
   });
 
-  // 用户 bug（2026-09-20）的性能现场：DevTools 抓到一帧 **Build 24.7ms**（UI Jank），
+  // 性能现场：DevTools 记录到一帧 **Build 24.7ms**（UI Jank），
   // Rebuild Stats 上排前几名的全是**左侧会话列表**里的东西
   // （Tooltip 12 / MenuAnchor 12 / ListTile 10 / AppMenuButton 10）。
   //
@@ -1148,7 +1146,7 @@ void main() {
     await tester.pump(const Duration(milliseconds: 50));
     await tester.pump(); // 帧后回调里那次 jumpTo 需要再来一帧
 
-    // ① 展开后要能看到最新一行（用户 bug："展开后无法及时刷新"）
+    // ① 展开后需显示最新一行（"展开后无法及时刷新"）
     final lastLine = find.textContaining('第 40 行思考内容');
     final viewport = tester.getRect(
       find
@@ -1161,7 +1159,7 @@ void main() {
       reason: '贴底时内层视口要跟到最新一行，否则新思考长在可视区外面，看起来像没刷新',
     );
 
-    // ② 没变过的块要复用上一次的 widget（用户 bug："展开后卡顿"）：
+    // ② 未变化的块复用上一次的 widget（"展开后卡顿"）：
     //    复用之后 Flutter 连 RenderParagraph 的布局都不重做，每帧只重排最后一块。
     expect(
       identical(tester.widget<Text>(firstBlock), firstWidget),
@@ -1191,13 +1189,13 @@ void main() {
     await tester.pumpAndSettle();
   });
 
-  // 用户建议（2026-09-20）：「"AI 正在生成"不要出现在底部（很影响观感），
-  // 而是当前正在生成回复的气泡底部，并且只保留转圈圈动画」。
+  // 「AI 正在生成」不显示在页面底部（影响观感），
+  // 而是显示在当前正在生成回复的气泡底部，并只保留转圈动画。
   //
-  // 这里钉三件事，缺一条就是建议没落地：
-  //   1. **页脚那条提示整个没有了**（连文字都不该存在）；
-  //   2. 转圈动画画在**正在流的那一条气泡里**（不是页面底部）；
-  //   3. 这一轮结束就收掉（不能留下一个转个不停的历史气泡）。
+  // 这里检查三件事，缺一条即未实现：
+  //   1. **页脚提示完全移除**（不应存在文字）；
+  //   2. 转圈动画位于**正在流式生成的那条气泡内**（不在页面底部）；
+  //   3. 本轮结束即移除（不能留下持续转圈的历史气泡）。
   testWidgets('「正在生成」只在当前气泡底部转圈，页脚不再有提示', (tester) async {
     tester.view.physicalSize = const Size(1200, 900);
     tester.view.devicePixelRatio = 1.0;
@@ -1224,7 +1222,7 @@ void main() {
       reason: '首字未到时，正在生成的那条气泡里要有一个转圈',
     );
 
-    // 已经有正文了：转圈**依然在**（用户要的就是"只要还在生成就一直转"）
+    // 已有正文时转圈**仍然显示**（"生成中持续显示"）
     events.add(
       utf8.encode(
         _sse(1, 'run.started', '{"runId":"r1"}') +
@@ -1241,7 +1239,7 @@ void main() {
     expect(spinner, findsOneWidget, reason: '有正文时页脚那条旧提示会消失，转圈不能跟着消失');
     expect(find.text('AI 正在生成…'), findsNothing, reason: '任何阶段都不该再有页脚提示');
 
-    // 它在**最后一条气泡内部**，而且贴在气泡底部（用户说的"气泡底部"）
+    // 它位于**最后一条气泡内部**，贴在气泡底部
     final bubbleRect = tester.getRect(
       find.byKey(ValueKey('ai-bubble-a1')).first,
     );
@@ -1283,7 +1281,7 @@ void main() {
     );
   });
 
-  // 用户建议（2026-09-20）①：「实时权限切换，并在正在运行的回复气泡中展示相关信息」。
+  // 实时权限切换，并在正在运行的回复气泡中显示相关信息。
   //
   // "实时"是可观察的事实：生成**过程中**切档，那个气泡里的字立刻跟着变 ——
   // 不是等这一轮结束、也不用去输入区低头找按钮。
