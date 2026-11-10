@@ -1,7 +1,6 @@
-/// 数据目录迁移（2026-11-06）。
+/// 数据目录迁移。
 ///
-/// 用户要把库 + 产物搬到别的盘（C: 满了 / 想放移动硬盘），这里负责三件事：
-/// **量**（多大）、**查**（目标能不能用）、**搬**（复制 + 校验 + 落指针）。
+/// 负责三件事：**测量**（数据量）、**检查**（目标是否可用）、**迁移**（复制 + 校验 + 写指针）。
 ///
 /// # 搬什么
 ///
@@ -13,19 +12,19 @@
 ///
 /// **源目录的产物层按实际布局认**（`backend_paths.dart` 的 `resolvedStorageDirOf`）：
 /// 标准是 `<数据目录>\storage`，旧版把 `storage` 当数据目录会套成
-/// `storage\storage`，用户手动挪过则是"扁平"（产物直接在数据目录里）。
+/// `storage\storage`，手动移动后为"扁平"布局（产物直接位于数据目录）。
 /// 搬过去一律写成**标准布局** —— 双层顺手压平，扁平落进目标目录的 `storage\`。
 ///
 /// **不搬**：`tmp`（24 小时就清的中转文件）、`app-support`
 /// （偏好已经搬到 `<根>\app-support`，那是程序目录的东西，不跟着数据走）。
 ///
-/// # 三条纪律
+/// # 四条约束
 ///
-///  1. **只复制、不删源**：源目录原样留着，用户确认没问题后自己删（界面会问一次）。
+///  1. **只复制、不删除源目录**：源目录保留，确认后由界面询问是否删除。
 ///  2. **校验过才落指针**：每个文件都比对字节数；有一个对不上就当场失败、
 ///     **不写** `data-dir.json` —— 半份数据比不搬更糟。
-///  3. **失败 / 取消都如实说**：目标目录里会留下已经拷完的部分，告诉用户它在哪、
-///     可以删掉重来，别假装什么都没发生。
+///  3. **失败 / 取消必须如实报告**：目标目录中会保留已复制部分，界面需说明位置
+///     并允许删除重来。
 ///  4. **覆盖旧库之前一定先备份**：目标里已经有一份库（"搬回程序目录"）时，
 ///     先把它放进 `<根>\backups\`；备份不成就一个字节都不动。
 ///
@@ -65,7 +64,7 @@ class DataDirCheck {
 
   final bool ok;
 
-  /// 给用户看的一句人话：不通过时是原因；通过但目标里已经有库时是提醒。
+  /// 界面提示文案：未通过时为原因；通过但目标已有库时为提醒。
   final String message;
 
   /// 当前数据目录的规模（给确认弹窗用）。
@@ -73,9 +72,8 @@ class DataDirCheck {
 
   /// 目标目录里已经有一份库，搬过去会**覆盖**它（迁移会先把它备份到 `backups`）。
   ///
-  /// 2026-11-09：用户把数据搬到别处、又想搬回来时，旧目录里的库还在 ——
-  /// 以前一律拒绝并让人去「备份与恢复」，可那份备份根本不存在。现在改成
-  /// "先备份、再覆盖"，并在确认弹窗里把这件事说清楚。
+  /// 数据迁移到别处后又迁回时，旧目录中的库仍然存在。处理方式为"先备份、再覆盖"，
+  /// 并在确认弹窗中说明。
   final bool replacesTarget;
 }
 
@@ -116,7 +114,7 @@ class MigrationResult {
 
   final bool ok;
 
-  /// 给用户看的一句人话（失败 / 取消时**必须**说清楚现场）。
+  /// 界面提示文案（失败 / 取消时必须说明具体位置与状态）。
   final String message;
 
   final bool cancelled;
@@ -152,7 +150,7 @@ class _Entry {
 }
 
 /// 列出"迁移要搬的文件"。读不动的目录**直接报错**，不静默跳过 ——
-/// 少搬一个目录，用户看到的就是"产物少了一批"。
+/// 少搬一个目录会表现为"产物少了一批"。
 ///
 /// 目标里一律写成**标准布局**（`.db\…` 与 `storage\…`），源目录是扁平 / 双层
 /// 布局时也先归一到这两条路径上 —— 于是"双层搬一次就压平"、"扁平的产物
@@ -279,12 +277,11 @@ bool isStorageNamedDir(String path) {
   return norm.split(Platform.pathSeparator).last.toLowerCase() == 'storage';
 }
 
-/// 把用户选中的目录**归一到数据目录**。
+/// 把选中的目录**归一到数据目录**。
 ///
-/// 数据目录 = "库 + 一个 `storage` 子目录"的容器。用户常直接选 `…\storage`
-/// （他想要的是"产物放这儿"），照原样用就会得到 `…\storage\storage` ——
-/// 2026-11-09 报上来的嵌套 bug 就是这么来的。选中 `storage` 文件夹时按它的
-/// 上一级算：产物仍然落在用户点的那个文件夹里，只是不再多套一层。
+/// 数据目录是"库 + 一个 `storage` 子目录"的容器。直接选择 `…\storage` 时，
+/// 原样使用会得到 `…\storage\storage` 嵌套。因此选中 `storage` 文件夹时取
+/// 其上一级：产物仍落在所选文件夹中，不再多套一层。
 String normalizeDataDirTarget(String target) {
   final norm = _normalize(target.trim());
   if (norm.isEmpty || !isStorageNamedDir(norm)) return norm;
@@ -329,16 +326,16 @@ Future<DataDirCheck> checkDataDirTarget({
   final targetHasData = targetDb || targetHasStorage;
 
   final sourceStorage = resolvedStorageDirOf(current);
-  // 产物本来就已经在目标目录的 `storage` 里（用户把数据目录选成了 `…\storage`），
-  // 或者当前数据目录**就是**目标的 `storage`（双层布局往上压平）：
-  // 这次"搬"其实只是把库挪到上一级，产物不用换地方。
+  // 产物已位于目标目录的 `storage` 中（数据目录被选为 `…\storage`），
+  // 或当前数据目录**就是**目标的 `storage`（双层布局压平）：
+  // 本次迁移只需把库移到上一级，产物无需移动。
   final artifactsInPlace =
       _samePath(targetStorage, sourceStorage) ||
       _samePath(targetStorage, current);
 
   if (_isInside(current, trimmed)) {
-    // 上一级 / 更上一级：只允许"直接上一级且产物已经在位"，或者目标本来是干净的。
-    // 更远的上级目录里什么都有（用户自己的文件），不能拿它当数据目录。
+    // 只允许"直接上一级且产物已在位"，或目标目录为空。
+    // 更远的上级目录包含其他文件，不能作为数据目录。
     final parent = Directory(_normalize(current)).parent.path;
     if (!_samePath(parent, trimmed)) {
       return DataDirCheck(
@@ -375,8 +372,7 @@ Future<DataDirCheck> checkDataDirTarget({
     );
   }
 
-  // 目标里已经有一份数据：不是"不能搬"，而是"搬过去要先备份、再覆盖"。
-  // 用户 2026-11-09 报的"搬回程序目录被踢去备份与恢复、可我没备份过"就是这里。
+  // 目标中已有数据：允许迁移，但需要"先备份、再覆盖"。
   final String message;
   if (targetDb) {
     message =
@@ -407,9 +403,7 @@ Future<DataDirCheck> checkDataDirTarget({
 /// **调用前必须先停掉本地服务**（见文件头）。[isCancelled] 每搬一个文件问一次，
 /// 返回 true 就停手（已经拷完的部分留在目标目录，不写指针）。
 ///
-/// 目标目录里已经有一份库时（"搬回程序目录"最常见）：**先把它备份到
-/// `<根>\backups\`，再覆盖**。以前这里直接拒绝，用户被指去「备份与恢复」，
-/// 可那次搬家根本没做过备份 —— 2026-11-09 卡住的现场。
+/// 目标目录已有库时：**先备份到 `<根>\backups\`，再覆盖**。
 Future<MigrationResult> migrateDataDir({
   required String source,
   required String target,
@@ -438,8 +432,8 @@ Future<MigrationResult> migrateDataDir({
     );
   }
 
-  // 有未完成的库恢复：那份标记里写的是**旧路径**，搬走之后重启会找不到 tmp。
-  // 让用户先把恢复做完（重启一次后端就会应用），再来搬家。
+  // 有未完成的库恢复：标记中记录的是**旧路径**，迁移后重启会找不到 tmp。
+  // 需要先完成恢复（重启一次后端后生效），再执行迁移。
   final pendingRestore = File('${dataDbFileOf(source)}.restore-pending.json');
   if (pendingRestore.existsSync()) {
     return const MigrationResult(
@@ -614,7 +608,7 @@ Future<MigrationResult> migrateDataDir({
   );
 }
 
-/// 覆盖旧库之后给用户的一句提醒（没覆盖时为空）。
+/// 覆盖旧库后的提示文案（未覆盖时为空）。
 String _backupNote(String? backupPath) =>
     backupPath == null ? '' : '新位置原有的数据保存在 $backupPath。';
 
@@ -654,7 +648,7 @@ String _timestamp() {
 }
 
 // ---------------------------------------------------------------------------
-//  删旧数据（用户确认之后才调）
+//  删除旧数据（确认后调用）
 // ---------------------------------------------------------------------------
 
 /// 删掉旧数据目录里的数据（`.db\` 与 `storage\`），**不碰程序目录里的任何东西**。

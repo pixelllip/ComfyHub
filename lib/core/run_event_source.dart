@@ -46,23 +46,22 @@ class RunStartRequest {
   /// 这次 Run 是重放哪一次失败的（AIH-024），远端用它把两次 Run 关联起来。
   final String? retryOfRunId;
 
-  /// 用户**看到的**正文（卡片块已剥掉）；缺省 = [text]。
+  /// 界面**显示的**正文（已剥离卡片块）；缺省等于 [text]。
   ///
   /// `text` 仍是给模型的完整正文（含卡正文），界面按 [displayText] +
   /// [mentions] 画小卡片。
   final String? displayText;
 
-  /// `@` 卡片 / `/技能` 的发送时快照（后端落成用户消息的 `mention` 块）。
+  /// `@` 卡片 / `/技能` 的发送时快照（后端写入消息的 `mention` 块）。
   final List<OutgoingMention> mentions;
 
-  /// 调用方**自己生成**的会话 / 消息主键（M3.2）。
+  /// 调用方**自行生成**的会话 / 消息主键（M3.2）。
   ///
-  /// 为什么要由界面给：界面在"发出请求"的同一刻就乐观插好一条用户气泡 + 一条空的助手
-  /// 流式气泡，随后靠事件里的 `messageId` 找到那条气泡往上写字。若本地 harness 自己另起
-  /// UUID，界面手里那个 id 就永远对不上库里那条 —— 表现是**事件一条不少、界面上却一个
-  /// 字都不长**，而且两端都不报错，极难查。
+  /// 界面在发出请求时乐观插入消息气泡，并根据事件中的 `messageId` 定位该气泡。
+  /// 若本地 harness 另外生成 UUID，界面持有的 id 与库中记录不一致，表现为
+  /// **事件完整到达、界面不显示内容**，且两端都不报错，排查困难。
   ///
-  /// 远端（桌面）后端自己生成这两个 id 并**回传**，所以走远端时这几个字段留 null。
+  /// 远端（桌面）后端生成这两个 id 并**回传**，因此远端调用时这些字段为 null。
   final String? userMessageId;
   final String? assistantMessageId;
 }
@@ -81,7 +80,7 @@ class RunHandles {
   final String runId;
   final String conversationId;
 
-  /// 用户消息 / 助手消息的主键。
+  /// 请求消息与助手消息的主键。
   ///
   /// 远端：后端生成并回传；本地 harness：**就是请求里传进去的那一对**（回显）。
   /// 界面用它认自己乐观插的那两条气泡，也用它把"助手消息 → Run"记下来供重试用。
@@ -149,9 +148,9 @@ abstract class RunEventSource {
   /// 下行覆盖时按它跳过这一个 id（`SyncApply` / `HarnessStore.applyMirrorRow`）。
   /// **它不是 wire 上的 delete**：标记不出本机、不进同步范围、不挂触发器。
   ///
-  /// 用户主动删会话时，除了这里改走本地实现，界面**仍然会打一次远端 DELETE**
-  /// （桌面是唯一真源，桌面那份也该删）—— 那一句在 `AiWorkspaceStore.deleteConversation`
-  /// 里，不是这个抽象的一部分：本方法只负责"本端这一份"。
+  /// 主动删除会话时，除本地实现外，界面**仍会调用一次远端 DELETE**
+  /// （桌面是唯一真源，桌面记录也需删除）。该调用位于
+  /// `AiWorkspaceStore.deleteConversation`，不属于本抽象：本方法只处理本端记录。
   ///
   /// 幂等：删一个不存在的 id **不算失败**（重复清理是常态）。
   Future<void> deleteConversation(String conversationId);
@@ -199,7 +198,7 @@ abstract class RunEventSource {
   /// 手机上产生的会话 / 消息 / 块会落在本地库并进队列，桌面在线时推上去才"桌面可见可续写"。
   /// 只推**一批**；`pending` 是推完之后还剩几条（想推完就再调一次）。
   ///
-  /// ⚠ `ok=false` 时**不许**在界面上说"已同步"：那会让用户以为桌面上已经有了。
+  /// ⚠ `ok=false` 时界面**不得**显示"已同步"，否则会误认为桌面上已存在。
   Future<({bool ok, int applied, int pending, String? error})> syncNow({
     String? baseUrl,
     String? token,
@@ -223,12 +222,12 @@ abstract class RunEventSource {
 
   /// 回答 `user.question`（提问闸门；桌面是 HTTP，手机是本地闸门）。
   ///
-  /// [answer] 与 [optionIndex] **至少给一个**，另一个留 null：点了选项就用 `optionIndex`，
-  /// 手打文字就用 `answer`。⚠ 别把 null 写成空串 —— 那会让"点选项"的请求里多出一个
-  /// `answer: ""`，后端会当成用户答了一段空文字（选项那半边就白点了）。
+  /// [answer] 与 [optionIndex] **至少提供一个**，另一个为 null：选择选项时使用
+  /// `optionIndex`，输入文字时使用 `answer`。⚠ 不要把 null 写成空串 —— 否则
+  /// 选择选项的请求会多出 `answer: ""`，后端按空回答处理，选项失效。
   ///
-  /// 返回**是否真的被采纳**：`false` = 这条提问已经结束（超时 / Run 停了），
-  /// 界面要如实说出来，不能假装收到。
+  /// 返回**是否真的被采纳**：`false` 表示提问已结束（超时 / Run 已停止），
+  /// 界面必须如实显示，不得显示为已收到。
   Future<bool> answerQuestion(
     String questionId,
     String? answer, {
@@ -502,12 +501,12 @@ class LocalHarnessRunEventSource implements RunEventSource, LocalSkillSource {
 
   /// 本机投放口里的 skill（**桌面连不上时**界面靠它列列表与 `/技能`）。
   ///
-  /// `source` 固定写 `local`：这些既不是桌面随包的内置（`builtin`，那份在电脑上），
-  /// 也不是用户自己注册的（`user`，注册要写桌面磁盘）—— 界面据此显示「本机」，
-  /// 而不是把手机的副本说成"用户自建"。
+  /// `source` 固定写 `local`：这些既不是桌面随包的内置 skill（`builtin`），
+  /// 也不是通过注册流程创建的（`user`，注册需写桌面磁盘）—— 界面据此显示「本机」，
+  /// 不得把手机副本标记为自建 skill。
   ///
-  /// 启停 / 用户可调用这两组开关是**桌面的状态**，手机本地没有：按"能用"处理，
-  /// 不在这里编一个可能过期的值（与 `listProviders` 不编 `credential` 同一条纪律）。
+  /// 启停与可调用开关属于**桌面状态**，手机本地没有：按"可用"处理，
+  /// 不在此生成可能过期的值（与 `listProviders` 不构造 `credential` 的约束一致）。
   @override
   Future<List<AiSkill>> localSkills() async {
     final rows = _list(
@@ -611,7 +610,7 @@ class LocalHarnessRunEventSource implements RunEventSource, LocalSkillSource {
       'conversationId': request.conversationId,
       'text': request.text,
       // 界面画气泡要用这两样（与桌面 `POST /runs` 同一套字段）：
-      // `displayText` 是用户看到的正文、`mentions` 是 `@` 卡片 / `/技能` 的快照。
+      // `displayText` 是界面显示的正文、`mentions` 是 `@` 卡片 / `/技能` 的快照。
       // 少了它们，刚发出去的小卡片在**重开会话**后会退化成一大段卡正文。
       'displayText': ?request.displayText,
       if (request.mentions.isNotEmpty)

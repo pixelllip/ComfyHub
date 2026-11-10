@@ -1,10 +1,7 @@
 /// **「根目录在哪、后端 exe 在哪」—— 全 App 唯一的一份解析。**
 ///
-/// 以前这件事住在 `scripts\backend.ps1`（`Resolve-RustExe`）与
-/// `backend_launcher.dart` 两处，靠"两边都写一遍、别写歪"维持。2026-09-30 起
-/// **App 自己直接起后端**（不再经过 pwsh），所以 Dart 侧成了唯一真源 ——
-/// `scripts\backend.ps1` 只剩 e2e / dev 那条旁路，它的候选顺序是**本文件的镜像**
-/// （AGENTS §7 的纪律：改一边必须改另一边）。
+/// 解析逻辑只有这一份：`scripts\backend.ps1` 是它在脚本侧的**镜像**（仅服务 e2e / dev），
+/// 候选顺序必须与本文一致（AGENTS §7：改一边必须改另一边）。
 ///
 /// # 两种布局（AGENTS §7）
 ///
@@ -16,14 +13,14 @@
 ///
 /// Release 布局把后端当成 **App 自己的资产**（`windows\CMakeLists.txt` 在 release
 /// 装配时 `cargo build --release` 并把它装到 `backend\`），所以"往上找根目录"这条
-/// 在发布包里几乎用不到 —— 但那一步仍然要有：用户可能把 `viewer.exe` 挪出去单跑。
+/// 在发布包里几乎用不到，但仍需保留：`viewer.exe` 可能被单独移动后运行。
 ///
 /// # 三条纪律
 ///
 ///  1. **`COMFYHUB_SERVER_EXE` 始终最高优先**：它是 `AGENTS §12` 里"把后端映像挪到
 ///     工作区外"的唯一开关（写限制按**完整性标签 + 父子继承**判，与谁启动、什么档位无关）；
-///  2. **找不到就如实回 null**，由调用方给人话（"跑一次 `cargo build --release`"
-///     或"设 `COMFYHUB_SERVER_EXE`"）—— 绝不猜一个路径去起；
+///  2. **找不到就如实回 null**，由调用方给出明确提示（"执行一次 `cargo build --release`"
+///     或"设置 `COMFYHUB_SERVER_EXE`"）—— 不猜测路径启动；
 ///  3. **根目录判据要认两种布局**，别只按源码树的路径写：发布包里根目录 = 包目录。
 library;
 
@@ -100,9 +97,8 @@ bool _has(List<String> parts) {
 
 /// 从 [from]（默认 exe 所在目录 / 当前目录）往上找运行根目录；找不到返回 null。
 ///
-/// ⚠ **显式给了 [from] 就只听它的**（用户手填的"项目根目录"）：那时连它自己都找不到
-/// 就**原样回它** —— 用户可能刚从别处拷过来、还没来得及 build，报"找不到根目录"
-/// 只会比"按他说的试一次"更让人困惑。
+/// ⚠ **显式传入 [from] 时只使用该路径**（手动填写的"项目根目录"）：即使校验未通过，
+/// 也**原样返回它**，由调用方按该路径尝试。
 String? detectRoot({String? from}) {
   if (kIsWeb) return null;
 
@@ -132,17 +128,17 @@ String? _searchUp(String start) {
     var dir = Directory(start);
     String? bundleHit;
     for (var depth = 0; depth < 8; depth++) {
-      // ⚠ **源码树优先于产物根**（2026-10-11 踩到的坑）。
+      // ⚠ **源码树优先于产物根**。
       //
-      // 场景：`flutter build windows --debug` 会把后端装进
-      // `build\windows\x64\runner\Debug\backend\`，于是那个产物目录**命中了产物判据**、
-      // 自己成了"根" —— 结果是 Debug 版 App 去用它自己那份空库
-      // （`build\...\Debug\.db\comfyhub.db`，0 条产物）和那份**旧的后端 exe**
-      // （不认识新参数 → 界面报 HTTP 400），而用户的真库一直在项目根下。
+      // `flutter build windows --debug` 会把后端装进
+      // `build\windows\x64\runner\Debug\backend\`，该产物目录同时命中产物判据、
+      // 成为"根" —— 结果是 Debug 版 App 使用该目录下的空库
+      // （`build\...\Debug\.db\comfyhub.db`，0 条产物）和旧的后端 exe
+      // （不认识新参数 → 界面报 HTTP 400），而真实库位于项目根目录。
       //
-      // 所以这里**不立刻返回**：先把产物命中记下来，继续往上找源码树根
-      // （`server-rs\Cargo.toml` / `db\schema.sqlite.sql`）；找到就用它。
-      // 整条链上没有源码树时才回退到产物根 —— 那时它是真的发布包/产物目录。
+      // 因此这里**不立即返回**：先记录产物命中，继续向上查找源码树根
+      // （`server-rs\Cargo.toml` / `db\schema.sqlite.sql`）；找到后使用它。
+      // 整条链上没有源码树时才回退到产物根。
       if (_isSourceRoot(dir.path)) return dir.path;
       if (bundleHit == null && _isBundleRoot(dir.path)) bundleHit = dir.path;
       final parent = dir.parent;
@@ -242,19 +238,20 @@ String storageDirOf(String root) =>
     [root, 'storage'].join(Platform.pathSeparator);
 
 // ---------------------------------------------------------------------------
-//  数据目录（2026-11-06）：库 + 产物 / AI 数据可以搬出程序目录
+//  数据目录（2026-11-06）：库 + 产物 / AI 数据可移出程序目录
 // ---------------------------------------------------------------------------
 //
-// 用户要"把数据放到别的盘"。判据只有一条：**数据目录里装什么**——
+// 判据只有一条：**数据目录包含什么** ——
 //   · `<数据目录>\.db\comfyhub.db`（库）
 //   · `<数据目录>\storage\`（产物 / 缩略图 / 附件 / Skills / 记忆 / MCP 运行时）
 //
-// 程序目录（运行根目录）里留下的东西**不动**：`.run\`（端口记录）、`backups\`
-// （库备份）、`comfyui\`（工具写白名单）、`skills\builtin\`、`app-support\`（偏好）。
-// 这样 App / 脚本 / ComfyUI 捕获扩展读端口文件的位置不变，而大文件可以搬到别的盘。
+// 运行根目录中的内容不变：`.run\`（端口记录）、`backups\`（库备份）、`comfyui\`
+// （工具写白名单）、`skills\builtin\`、`app-support\`（偏好）。因此 App / 脚本 /
+// ComfyUI 捕获扩展读取端口文件的位置不变，大文件可放到其他磁盘。
 //
-// 覆盖值存在 `<根>\data-dir.json`，**不放偏好里**：偏好文件在 `<根>\app-support`，
-// 而数据目录可能在可移动盘上；把"数据在哪"写进数据自己里面，等于拔了盘就忘了路。
+// 覆盖值存放在 `<根>\data-dir.json`，**不放在偏好里**：偏好文件位于
+// `<根>\app-support`，而数据目录可能位于可移动磁盘；把"数据在哪"写入数据自身，
+// 移除磁盘后配置仍可读。
 
 /// 数据目录覆盖文件的名字（`<根>\data-dir.json`）。
 const String kDataDirFileName = 'data-dir.json';
@@ -262,11 +259,10 @@ const String kDataDirFileName = 'data-dir.json';
 String dataDirFileOf(String root) =>
     [root, kDataDirFileName].join(Platform.pathSeparator);
 
-/// 读"数据目录被指到哪儿了"；没设 / 文件坏了都回 `null`（= 用运行根目录）。
+/// 读"数据目录被指到哪儿了"；未设置 / 文件损坏均返回 `null`（= 使用运行根目录）。
 ///
-/// ⚠ **读不动 ≠ 没设过**：这两个结论对用户的意思完全相反（一个"数据在别的盘"，
-/// 一个"数据就在这儿"）。所以读失败一定要留一行日志；界面上会看到"库里空空的"，
-/// 排查时第一件事就是看这行。
+/// ⚠ **读取失败不等于未设置**：两种结论含义相反（"数据在其他磁盘"与"数据在此处"）。
+/// 读取失败必须记录一行日志；界面会显示"库为空"，排查时首先查看该日志。
 String? readDataDirOverride(String root) {
   try {
     final file = File(dataDirFileOf(root));
@@ -284,12 +280,11 @@ String? readDataDirOverride(String root) {
   return null;
 }
 
-/// 这次真正用的数据目录：覆盖值优先，否则就是运行根目录。
+/// 本次实际使用的数据目录：覆盖值优先，否则为运行根目录。
 ///
-/// ⚠ 指针写的那个目录**未必真的是数据目录**：旧版允许把 `…\storage` 选成数据目录，
-/// 于是库落进了 `storage\.db`，指针却停在上一级 —— 照指针找就会读到另一份旧库
-/// （2026-11-10 用户报的"复制出去的构建对话不见了 / 角色卡是旧版"）。
-/// 校正规则只有一份，在 [resolveDataDir] 里。
+/// ⚠ 指针指向的目录**未必是数据目录**：旧版允许把 `…\storage` 选为数据目录，
+/// 库因此落在 `storage\.db`，而指针停留在上一级 —— 按指针查找会读到另一份旧库。
+/// 校正规则只有一份，在 [resolveDataDir] 中。
 String dataDirOf(String root) => resolveDataDir(root).dataDir;
 
 /// 写 / 清数据目录覆盖。`dataDir` 为 null 或空 = 恢复默认（删掉覆盖文件）。
@@ -354,16 +349,16 @@ bool looksLikeStorageDir(String dir) {
   return false;
 }
 
-/// **产物目录实际在哪** —— 三种布局都认（2026-11-09 用户报的 bug）。
+/// **产物目录实际位置** —— 识别三种布局。
 ///
-/// | 布局 | 长什么样 | 来历 |
+/// | 布局 | 形态 | 来源 |
 /// | --- | --- | --- |
-/// | 标准 | `<数据目录>\storage\media` | 默认，也是迁移写出来的样子 |
-/// | 双层 | `<数据目录>\storage\storage\media` | 旧版把 `storage` 文件夹选成数据目录 |
-/// | 扁平 | `<数据目录>\media` | 用户把里层 `storage` 的内容挪到数据目录本身 |
+/// | 标准 | `<数据目录>\storage\media` | 默认布局，迁移后的形态 |
+/// | 双层 | `<数据目录>\storage\storage\media` | 旧版把 `storage` 文件夹选为数据目录 |
+/// | 扁平 | `<数据目录>\media` | 里层 `storage` 的内容被移动到数据目录本身 |
 ///
-/// 顺序是"标准 → 双层 → 扁平"：标准布局有内容时永远优先，免得两套目录并存时
-/// 读到旧的那一套。三种都不像就回标准路径，由调用方去建。
+/// 顺序为"标准 → 双层 → 扁平"：标准布局有内容时优先，避免两套目录并存时读取旧数据。
+/// 三种均不匹配时返回标准路径，由调用方创建。
 String resolvedStorageDirOf(String dataDir) {
   final canonical = dataStorageDirOf(dataDir);
   if (looksLikeStorageDir(canonical)) return canonical;
@@ -380,23 +375,20 @@ bool isFlatStorageLayout(String dataDir) =>
     _samePath(resolvedStorageDirOf(dataDir), dataDir);
 
 // ---------------------------------------------------------------------------
-//  数据目录校正（2026-11-10）：指针写的那一级，未必真的是数据目录
+//  数据目录校正（2026-11-10）：指针指向的层级未必是数据目录
 // ---------------------------------------------------------------------------
 //
-// 现场（用户报"复制出去的构建对话不见了、画廊加载不出来、角色卡是旧版"）：
+// 已知形态：
+//   · `data-dir.json` 指向 `<根>\dist\ComfyHub`；
+//   · 实际库位于 `<根>\dist\ComfyHub\storage\.db\comfyhub.db`；
+//   · 指针层级也存在 `<根>\dist\ComfyHub\.db\comfyhub.db`，但那是上一份构建残留的旧库。
 //
-//   · `data-dir.json` 写的是 `D:\dist\ComfyHub`；
-//   · 真正的库却在 `D:\dist\ComfyHub\storage\.db\comfyhub.db`（57 个会话）；
-//   · 指针那一级也有一份 `D:\dist\ComfyHub\.db\comfyhub.db`，但那是**上一份构建
-//     残留的旧库**（3 个会话、2 张角色卡）。
+// 按指针打开旧库时，数据仍在磁盘上，界面却显示为空。判据：`storage\` 下出现
+// `.db\comfyhub.db` 只可能来自"该 `storage` 曾作为数据目录"（旧版允许把 `…\storage`
+// 选为数据目录，见 pitfalls 第 188 条）。标准布局中 `storage` 只存放产物，不存放库。
 //
-// 于是 App 照着指针打开旧库 —— 数据明明在，界面却"什么都没有"。这不是猜出来的：
-// `storage\` 里出现 `.db\comfyhub.db` 只有一种来历，就是**那个 `storage` 本身当过
-// 数据目录**（旧版允许把 `…\storage` 选成数据目录，见 pitfalls 第 188 条）。正常布局
-// 里 `storage` 只装产物，绝不会装库。
-//
-// 判据（都在这一处，界面 / 脚本 / 迁移共用）：
-//   · 指针指的目录不在了 → 回运行根目录，并说出来（别悄悄开一个空库）；
+// 判据集中在此处，界面 / 脚本 / 迁移共用：
+//   · 指针目录不存在 → 返回运行根目录，并报告（不得静默创建空库）；
 //   · `<选中目录>\storage\` 本身是数据目录 → 以它为准；两边都有库时**更大的那份**
 //     才可能是正在用的那份（残留那份通常只有几百 KB 到几 MB）。
 
@@ -446,9 +438,9 @@ bool _dirExists(String path) {
   }
 }
 
-/// 这次的数据目录是**怎么定下来的**（界面上按它说人话，别各拼一份）。
+/// 本次数据目录的确定方式（界面根据该值生成说明，不在各处重复拼装）。
 enum DataDirPick {
-  /// 指针（或运行根目录）指的那一份 —— 用户显式选的，或者有身份且就是它。
+  /// 指针（或运行根目录）指向的那一份 —— 显式指定，或身份匹配。
   chosen,
 
   /// 按"上次用的那份库"的记录切回来的（复制出去的构建 / 换盘 / 目录改名）。
@@ -457,9 +449,9 @@ enum DataDirPick {
 
 /// 一个"看着像数据目录"的候选（真的有一份库才算）。
 ///
-/// ⚠ 候选只用来**报告**，不用来自动挑：哪份是"你的库"由身份（[DataDirResolution.usedLibraryId]）
-/// 说了算，判断不出来时交给用户点一下 —— **绝不按大小 / 时间 / 层级去猜**
-/// （2026-11-10 复查：写死盘符、"谁更大就选谁"这类规则只对某一台机器成立）。
+/// ⚠ 候选只用于**报告**，不用于自动选择：库的归属由身份
+/// （[DataDirResolution.usedLibraryId]）决定，无法判断时由界面手动选择 ——
+/// **不得按大小 / 时间 / 层级猜测**（这类规则只在单台机器上成立）。
 @immutable
 class DataDirCandidate {
   const DataDirCandidate({required this.path, required this.bytes});
@@ -524,7 +516,7 @@ class DataDirResolution {
 
   /// 这次考虑过的所有"像数据目录"的候选（按优先级，**只留真有库的**）。
   ///
-  /// 只用于**报告**（界面 / 日志：让用户知道机器上还有哪些库），不参与挑选。
+  /// 只用于**报告**（界面 / 日志显示机器上还有哪些库），不参与挑选。
   final List<DataDirCandidate> candidates;
 
   /// 除了这次用的那份之外，还有哪些库。
@@ -544,7 +536,7 @@ class DataDirResolution {
   /// 偏好里记着的那个位置。
   final String? knownLibraryPath;
 
-  /// 指针那一级有**另一份有身份的库**（用户显式选过的），这次尊重指针但要说出来。
+  /// 指针层级存在**另一份有身份的库**（显式指定过），本次尊重指针并提示。
   final bool pointerHasOtherLibrary;
 
   /// 有记录，但那份库在这台机器上找不到了。
@@ -557,14 +549,12 @@ class DataDirResolution {
   bool get matchesRemembered =>
       knownLibraryId == null || usedLibraryId == knownLibraryId;
 
-  /// 界面上要说的一句话（没有异常时是 null，横幅一个字都不占）。
+  /// 界面提示文案（无异常时为 null，不占用横幅）。
   ///
-  /// 顺序就是"用户最需要先知道什么"：打开的是另一份库 > 上次那份找不到 > 按记录
-  /// 切回来了 > 指针失效 > 产物不在。
+  /// 顺序按优先级：打开的是另一份库 > 上次那份找不到 > 按记录切回 > 指针失效 > 产物缺失。
   ///
-  /// ⚠ 别把"同一棵树里还有别的库"写进这里：那不是故障，天天弹横幅只会变成噪音
-  /// （2026-11-10 用户截图：每次启动都顶着一条黄条）。它只出现在设置页的
-  /// 「还发现另一份库」一节，由用户自己决定要不要换。
+  /// ⚠ "同一棵树里还有别的库"不写入此处：它不属于故障，每次启动显示横幅会成为噪音。
+  /// 该信息只出现在设置页的「还发现另一份库」一节，是否切换由界面决定。
   String? get notice {
     if (pointerHasOtherLibrary) {
       return '这次打开的不是上次使用的那一份。上次使用的是 '
@@ -596,19 +586,18 @@ class DataDirResolution {
 ///
 /// # 判定顺序（改之前先读完这段）
 ///
-/// 1. **指针 / 运行根目录** 定"想用哪儿"（`chosen`）；
-/// 2. 如果偏好里记着"上次用的是哪一份库"（`knownLibraryId`）：
-///    · `chosen` 就是那一份 → 用它；
-///    · `chosen` 里是**另一份有身份的库** → 尊重用户显式指定的位置，但把
-///      `pointerHasOtherLibrary` 亮出来（界面提醒 + 一键换回去）；
-///    · `chosen` 里没有库、或者那份库**没有身份**（老数据）→ 听记录的：
-///      先看记录里的路径还在不在，再在候选里按身份找；找到就用它（`remembered`）。
-///      ⚠ 这一条就是"复制出去的构建照样打开你的库"「换盘 / 改名也不丢」的实现。
-/// 3. **没有记录时就用 `chosen`**，别的候选只在 `notice` / 设置页里**列出来**让用户自己选。
-///    ⚠ 这里**不许**按大小 / 修改时间 / 层级去猜"哪份是你的库"：那是拿某台机器的
-///    情况当通用规则（2026-11-10 复查）；判据只能是**身份**，判断不了就问用户。
-/// 4. 候选只包含**同一棵树里**的目录（`chosen` / 根目录 / 它们的 `storage` 层），
-///    不做全盘搜索 —— 搜盘既慢又容易把别人的库当成你的。
+/// 1. **指针 / 运行根目录** 确定目标位置（`chosen`）；
+/// 2. 偏好中存在"上次使用的库"记录（`knownLibraryId`）时：
+///    · `chosen` 即该库 → 使用它；
+///    · `chosen` 中存在**另一份有身份的库** → 尊重显式指定的位置，同时设置
+///      `pointerHasOtherLibrary`（界面提醒并提供换回入口）；
+///    · `chosen` 中没有库，或库**没有身份**（旧数据）→ 按记录处理：
+///      先检查记录中的路径是否存在，再在候选中按身份查找；找到则使用（`remembered`）。
+/// 3. **没有记录时使用 `chosen`**，其他候选只在 `notice` / 设置页中**列出**，由界面选择。
+///    ⚠ **不得**按大小 / 修改时间 / 层级猜测"哪份是目标库"：判据只能是**身份**，
+///    无法判断时交由界面选择。
+/// 4. 候选只包含**同一棵树内**的目录（`chosen` / 根目录 / 它们的 `storage` 层），
+///    不做全盘搜索 —— 全盘搜索速度慢，且可能把其他库误认为目标库。
 DataDirResolution resolveDataDir(
   String root, {
   String? knownLibraryId,
@@ -642,7 +631,7 @@ DataDirResolution resolveDataDir(
     if (chosenLibraryId == known) {
       // 指针这一级就是上次那份库 —— 最正常的一条路
     } else if (chosenLibraryId != null && hasDataDb(chosen)) {
-      // 指针里是另一份**有身份**的库：那是用户显式选过的位置，尊重它，只提醒。
+      // 指针中是另一份**有身份**的库：该位置由显式指定，尊重它并提示。
       pointerHasOtherLibrary = true;
     } else {
       final remembered = _rememberedDataDir(
@@ -668,7 +657,7 @@ DataDirResolution resolveDataDir(
       .map((c) => c.path)
       .toList(growable: false);
   if (others.isNotEmpty) {
-    // 只是报告，不换：换哪份由用户点（设置 → 数据目录）
+    // 仅报告，不切换；切换由设置页操作（设置 → 数据目录）
     debugPrint('[paths] 同一棵树里还发现别的库：${others.join('、')}');
   }
 

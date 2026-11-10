@@ -5,14 +5,13 @@ import 'package:flutter/material.dart';
 
 /// 界面外观的三个选项（真源在 `SettingsStore.themeMode`，偏好键 `comfyhub.themeMode`）。
 ///
-/// 它**不持有状态**：只描述"用户选了什么"，由 [material] 翻成 `MaterialApp.themeMode`。
-/// 默认 [dark] —— 2026-10-13 之前 App 只有这一套外观（`themeMode` 写死），
-/// 改默认值等于给所有存量用户换一套配色，所以**别动它**。
+/// 它**不持有状态**：只描述当前选择，由 [material] 转换为 `MaterialApp.themeMode`。
+/// 默认 [dark]：此前 `themeMode` 固定为 dark，修改默认值会改变已安装环境的配色。
 ///
-/// ⚠ 浅色不是"把 brightness 一改就完事"：界面里压在图片 / 视频上的白字黑底
-/// （缩略图渐变、图片查看器）在两种主题下都成立，但**占位图标**那种
-/// "白图标画在 surface 上"的写法在浅色下会消失 —— 加浅色时那些点要一起看
-/// （`media_thumb` / `collection_thumb` 的占位已经改成 `onSurfaceVariant`）。
+/// ⚠ 浅色主题不只是修改 `brightness`：压在图片 / 视频上的白字黑底（缩略图渐变、
+/// 图片查看器）在两种主题下都成立，但**占位图标**"白图标画在 surface 上"的写法
+/// 在浅色下会消失 —— 添加浅色主题时需同步检查这些位置
+/// （`media_thumb` / `collection_thumb` 的占位已改为 `onSurfaceVariant`）。
 enum AppThemeMode {
   dark('深色'),
   light('浅色'),
@@ -28,8 +27,8 @@ enum AppThemeMode {
     AppThemeMode.system => ThemeMode.system,
   };
 
-  /// 读偏好。认不出来的（老版本写的、用户手改过的）一律回默认，**绝不抛** ——
-  /// 它在 App 启动路径上，崩了就是白屏。
+  /// 读偏好。无法识别的值（旧版本写入或手动修改）返回默认值，**不抛异常** ——
+  /// 它在 App 启动路径上，异常会导致白屏。
   static AppThemeMode parse(String? raw) {
     for (final mode in values) {
       if (mode.name == raw) return mode;
@@ -42,16 +41,15 @@ enum AppThemeMode {
 /// `comfyhub.accentMode`；老版本只存了布尔 `comfyhub.followSystemAccent`，
 /// 由 [parse] 迁移）。
 ///
-/// 三档的差别只在"表面（surface）要不要跟着种子色走"：
-///   · [off]    —— 不读系统颜色，永远默认紫；
-///   · [accent] —— 2026-10-24 定的口径：系统强调色只用于**组件**（主色 / 选中态 /
-///                 进度条 / 焦点环），页面、卡片、侧栏保持中性白灰；
-///   · [full]   —— Material You 的标准做法：整份 `ColorScheme`（含各档
-///                 `surfaceContainer*`）都由种子派生，页面会带一层很淡的同色相。
+/// 三档的差别在于**表面（surface）是否跟随种子色**：
+///   · [off]    —— 不读取系统颜色，始终使用默认种子色；
+///   · [accent] —— 系统强调色只用于**组件**（主色 / 选中态 / 进度条 / 焦点环），
+///                 页面、卡片、侧栏保持中性白灰；
+///   · [full]   —— 整份 `ColorScheme`（含各档 `surfaceContainer*`）由种子派生，
+///                 页面带一层很淡的同色相。
 ///
-/// ⚠ 默认 **[full]**（2026-11-05 用户拍板"动态取色的尺度做到 A"）：打开就是
-/// Material You —— 系统强调色同时决定组件色与表面色。想回到"只染组件"或
-/// "固定紫"仍可在设置里选 [accent] / [off]，但默认值不再是它们。
+/// ⚠ 默认 **[full]**：系统强调色同时决定组件色与表面色。可在设置中改选
+/// [accent] / [off]。
 enum AppAccentMode {
   off('固定配色', '不读系统颜色，始终使用默认种子色。'),
   accent('跟随强调色', '只把系统强调色用于按钮 / 选中态 / 焦点环，页面底色回到默认种子的中性色。'),
@@ -70,9 +68,9 @@ enum AppAccentMode {
     return AppAccentMode.full;
   }
 
-  /// 老偏好迁移：`comfyhub.followSystemAccent` 为 true → [full]，false → [off]。
+  /// 旧偏好迁移：`comfyhub.followSystemAccent` 为 true → [full]，false → [off]。
   ///
-  /// 老用户当时选的"自动套用系统颜色"，在 A 口径下就是完整动态取色。
+  /// 旧版"自动套用系统颜色"对应完整动态取色。
   static AppAccentMode fromLegacyBool(bool? followSystemAccent) =>
       (followSystemAccent ?? true) ? AppAccentMode.full : AppAccentMode.off;
 
@@ -347,8 +345,8 @@ class AppTheme {
   static String? primaryFontFamily() {
     if (kIsWeb) return null;
     try {
-      // 桌面端统一用思源黑体（本机 2026-11-05 用户要求）：装了就生效，
-      // 没装会沿 [cjkFallback] 退到 YaHei，不会出现"字体名不存在 → 方块"。
+      // 桌面端统一使用思源黑体：已安装时生效，未安装时沿 [cjkFallback]
+      // 回退到 YaHei，不会出现"字体名不存在 → 方块"。
       if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
         return 'Source Han Sans SC';
       }
@@ -372,9 +370,8 @@ class AppTheme {
     //  · accent —— 只把强调角色从种子里取过来，表面角色仍来自默认种子；
     //  · off    —— accent 的 seed 已经被钉成默认紫，等同老外观。
     //
-    //  ⚠ 2026-11-05 用户把默认档拍成 [full]（"动态取色的尺度做到 A"），
-    //    但 2026-10-24 那句"底色别变"仍然有效 —— 它现在对应 [accent] 这一档，
-    //    用户想回去随时能选。**别把这一支删掉**，那是"只染组件"的唯一实现。
+    //  ⚠ 默认档为 [full]；"底色保持不变"的要求对应 [accent] 档。
+    //    **保留该分支**：它是"只染组件"的唯一实现。
     // -------------------------------------------------------------------------
     final ColorScheme scheme;
     if (accentMode == AppAccentMode.full || seed == defaultSeed) {
@@ -410,9 +407,9 @@ class AppTheme {
           );
     }
 
-    // 背景一律保持白 / 灰（用户 2026-10-24 最后定的口径）：页面、卡片、
-    // 侧边栏、手机底部导航都用这套中性 surface；强调色只作用于**组件**
-    // （按钮、开关、选中胶囊、焦点、进度条…），不铺到底色 / 卡片上。
+    // 背景保持白 / 灰：页面、卡片、侧边栏、手机底部导航使用中性 surface；
+    // 强调色只作用于**组件**（按钮、开关、选中胶囊、焦点、进度条等），
+    // 不用于底色 / 卡片。
     final navBackground = scheme.surfaceContainerLow;
 
     final base = ThemeData(useMaterial3: true, colorScheme: scheme);
@@ -522,10 +519,8 @@ class AppTheme {
 
       // 卡片：M3 表达性的「填充卡」—— **surfaceContainerHigh + 24 圆角、无描边**。
       //
-      // 2026-11-05 用户拿了一份别人的 Material You 主题做参照：那一版的分组卡
-      // 是"实心浅一档 + 大圆角"，而不是"和页面同色 + 一圈细边"。
-      // 描边版在深色下会显得干、边界像表格；填充版才是 Android 12+ 的观感。
-      // 网格里的缩略图不算卡片（它们有自己的 12 圆角），不受这一条影响。
+      // 描边版在深色主题下边界近似表格；填充版符合 Android 12+ 的观感。
+      // 网格中的缩略图不属于卡片（使用 12 圆角），不受此条影响。
       cardTheme: CardThemeData(
         color: scheme.surfaceContainerHigh,
         elevation: 0,
@@ -534,8 +529,8 @@ class AppTheme {
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
       ),
 
-      // 输入框：M3 的 filled 变体（4 圆角）+ **看得见的焦点环**。
-      // 以前只有 `borderSide: none`，键盘用户 Tab 进来除了光标没有任何提示。
+      // 输入框：M3 的 filled 变体（4 圆角）+ **可见的焦点环**。
+      // 键盘 Tab 进入时除光标外需要有焦点提示。
       inputDecorationTheme: InputDecorationTheme(
         filled: true,
         fillColor: fill,
@@ -750,10 +745,10 @@ class AppTheme {
         }),
       ),
 
-      // 滚动条**贴边**（用户 bug 2026-09-20："AI 工作台的聊天详情，滚动条没有贴边"）。
+      // 滚动条**贴边**。
       //
-      // M3 默认给滚动条留了内边距（轨道离视口右边 8px 左右、滑块本身还有一圈留白），
-      // 在聊天这种"内容铺到边缘"的页面上看着就是滑块**悬在离边老远的地方**。
+      // M3 默认为滚动条保留内边距（轨道距视口右侧约 8px，滑块本身也有留白），
+      // 在内容铺到边缘的聊天页面上会显示为滑块**远离边缘**。
       // 这里把两处留白都收掉：
       //   · `thickness` 是滑块本体宽度；
       //   · `crossAxisMargin` 是轨道与视口边缘的距离（默认非 0，就是"没贴边"的元凶）。

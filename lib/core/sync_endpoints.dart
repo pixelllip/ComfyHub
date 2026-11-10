@@ -4,13 +4,11 @@ import 'dart:io' show Socket;
 
 import 'package:http/http.dart' as http;
 
-/// 一个"可以连的后端地址"，以及它大概属于哪一类网络。
+/// 一个"可以连接的后端地址"，以及它所属的网络类别。
 ///
-/// 为什么要分类：跨端用户实际会同时存在三条路 —— 模拟器/同机（回环）、
-/// 同一 Wi-Fi（局域网）、异地（Tailscale）。**三者的地址长得完全不一样，
-/// 但界面只能说人话**：`100.64.x.x` 对用户毫无意义，"Tailscale" 才有。
-/// 反过来，分类**只用于显示与排序**，绝不参与"连不连得上"的判断 ——
-/// 能不能用是 [probeSyncEndpoint] 打一次真实请求说了算的（见那里的注释）。
+/// 分类有三种用途：地址显示、排序与候选分组。`100.64.x.x` 这类地址本身没有意义，
+/// 显示为 "Tailscale" 才可理解。分类**只用于显示与排序**，不参与
+/// 连通性判断 —— 是否可用由 [probeSyncEndpoint] 发起真实请求决定。
 class SyncEndpoint {
   const SyncEndpoint(this.url, {required this.source});
 
@@ -18,8 +16,8 @@ class SyncEndpoint {
 
   /// 这个候选是从哪来的：`自动发现` / `最近用过` / `桌面报告` / `手填`。
   ///
-  /// **必须如实显示**：候选列表不是猜出来的，用户要能看出"这条是谁告诉我的"
-  /// （桌面报告的那几条来自对端自己的网卡枚举，不是我们扫网段扫出来的）。
+  /// **必须如实显示**：候选地址需标明来源（桌面报告的条目来自对端网卡枚举，
+  /// 不是本机扫描网段的结果）。
   final String source;
 
   SyncEndpointKind get kind => classifyEndpoint(url);
@@ -35,7 +33,7 @@ extension SyncEndpointKindLabel on SyncEndpointKind {
     SyncEndpointKind.other => '其他',
   };
 
-  /// 给用户的一句"这条什么时候用得上"。
+  /// 说明该地址的适用场景。
   String get hint => switch (this) {
     SyncEndpointKind.loopback => '同一台机器（模拟器用 10.0.2.2）',
     SyncEndpointKind.lan => '同一个 Wi-Fi / 网线',
@@ -51,7 +49,7 @@ SyncEndpointKind classifyEndpoint(String url) {
   if (host == 'localhost' || host == '127.0.0.1' || host == '::1') {
     return SyncEndpointKind.loopback;
   }
-  // 模拟器访问宿主机那三个特殊地址，用户视角同样是"本机"
+  // 模拟器访问宿主机的特殊地址，同样视为"本机"
   if (host == '10.0.2.2' || host == '10.0.3.2') {
     return SyncEndpointKind.loopback;
   }
@@ -66,8 +64,8 @@ SyncEndpointKind classifyEndpoint(String url) {
   if (a == 10 && b == 0 && (nums[2] == 2 || nums[2] == 3) && nums[3] == 2) {
     return SyncEndpointKind.loopback;
   }
-  // Tailscale 走 CGNAT 段 100.64.0.0/10 —— 它看起来像"公网"但其实是私网组网，
-  // 排在这里判断（否则会被归进"其他"，用户看不出该怎么用）。
+  // Tailscale 使用 CGNAT 段 100.64.0.0/10：形式上接近公网地址，实际属于私网组网。
+  // 需在此处判断，否则会被归入"其他"，无法显示适用场景。
   if (a == 100 && b >= 64 && b <= 127) return SyncEndpointKind.tailscale;
   if (a == 10) return SyncEndpointKind.lan;
   if (a == 172 && b >= 16 && b <= 31) return SyncEndpointKind.lan;
@@ -114,11 +112,11 @@ List<SyncEndpoint> localEndpointCandidates({
 /// 自动挑地址跑在"还没连上任何桌面"的时刻，问不到对面。保留它是因为**手机配对**那条路
 /// 需要它（先把地址显示给人看，见 `docs/pairing-design.md`）—— 改那块时从这儿接。
 ///
-/// 三条纪律：
-///  · **best-effort**：老后端没有这条端点（404）、或现在就连不上 —— 都不是错误，
-///    回空列表 + 一句 note 即可（界面照旧有"自动发现 / 最近用过 / 手填"三条路）；
-///  · **不许编**：对面给什么就显示什么，绝不按网卡名猜地址；
-///  · 标 `source: 桌面报告`：用户要知道这几条是对端告诉我们的。
+/// 三条约束：
+///  · **best-effort**：旧后端没有该端点（404）或当前无法连接，都不算错误，
+///    返回空列表 + 一句 note（界面仍有"自动发现 / 最近用过 / 手填"三条路）；
+///  · **不编造**：对端返回什么就显示什么，不按网卡名推测地址；
+///  · 标 `source: 桌面报告`：这些条目由对端提供。
 Future<({List<SyncEndpoint> endpoints, String? note})> discoveredEndpoints(
   String baseUrl, {
   http.Client? client,
@@ -177,8 +175,8 @@ Future<({List<SyncEndpoint> endpoints, String? note})> discoveredEndpoints(
 
 /// 一次"测试连接"的结果。
 ///
-/// **成败只由真实请求决定**：[ok] 为 true 意味着 `/api/health` 真的回了 200
-/// 且带着 ComfyHub 那几个键。任何"猜它应该行"的实现都会在用户面前变成假绿灯。
+/// **成败只由真实请求决定**：[ok] 为 true 表示 `/api/health` 返回 200
+/// 且包含 ComfyHub 的标识字段。任何"推测可用"的实现都会产生假阳性。
 class SyncProbe {
   const SyncProbe({
     required this.ok,
@@ -228,9 +226,9 @@ class SyncProbe {
 
 /// 打一次真实的 `/api/health`（+ best-effort 的 `/api/sync/manifest`）。
 ///
-/// 为什么 health 是**唯一**的通过判据、manifest 只作补充：manifest 需要配对令牌
-/// （未配对/令牌过期时回 401），而"这个地址后面有没有一台 ComfyHub"跟"我配没配对"
-/// 是两件事 —— 混在一起会让用户以为地址填错了。
+/// health 是**唯一**的通过判据，manifest 仅作补充：manifest 需要配对令牌
+/// （未配对或令牌过期时返回 401），而"该地址后是否存在 ComfyHub"与"是否已配对"
+/// 是两个独立事实，混用会误报为地址错误。
 Future<SyncProbe> probeSyncEndpoint(
   String baseUrl, {
   http.Client? client,
@@ -409,17 +407,16 @@ class AutoPickedEndpoint {
   }
 }
 
-/// **自动挑一台能连的桌面**（用户不再需要管"连哪台"）。
+/// **自动选择一台可连接的桌面**。
 ///
-/// 为什么可以自动：候选本来就只有那么几条（最近用过的 → 本机自动值 → 历史），
-/// 而每条能不能用一条 `/api/health` 就判死了（[probeSyncEndpoint]）。原来把这件事
-/// 摆成一页让用户点，等于把机器该做的活推给了人 —— 2026-09-30 用户要求改成自动。
+/// 候选数量有限（最近使用 → 本机自动值 → 历史），每条是否可用由一次
+/// `/api/health` 请求判定（[probeSyncEndpoint]）。
 ///
-/// 三条纪律：
-///  · **一条都不通就原样返回 `null`**，调用方保持现有地址（**不许清空**）——
-///    "连不上"是事实，不是"把配置删掉"的理由；
-///  · **超时短**（默认 3s）：这是在启动路径上跑的，串行试 4 条也只是十几秒；
-///  · **绝不猜地址**：只试 [localEndpointCandidates] 给的那几条（当前 / 自动发现 / 历史），
+/// 三条约束：
+///  · **全部不通时返回 `null`**，调用方保留现有地址（**不得清空**）——
+///    "连不上"是事实，不能作为删除配置的依据；
+///  · **超时短**（默认 3s）：它在启动路径上执行，串行尝试 4 条约十几秒；
+///  · **不推测地址**：只尝试 [localEndpointCandidates] 返回的条目（当前 / 自动发现 / 历史），
 ///    不按网卡名编一个出来。
 Future<AutoPickedEndpoint> autoPickBaseUrl({
   required String autoUrl,

@@ -127,13 +127,12 @@ class BackendLauncher extends ChangeNotifier {
   /// 会被顺手带走。
   bool servicesClaimed = false;
 
-  /// 这次后端**没能用回**我们想要的端口时，记下当初想要的那个（null = 一切正常）。
+  /// 这次后端**没能用回**想要的端口时，记录原目标（null = 正常）。
   ///
-  /// 判据**不是我猜的**，是后端自己写的 `.run\api.json`：`fellBack: true` +
-  /// `requestedPort: <我们给的>`。为什么要让界面看得见（`settings_page.dart` 的
-  /// 「本地服务」卡片会显示它）：**端口一换，手机上保存的那个地址就失效了** ——
-  /// 用户得回桌面上重新扫一次配对二维码。不写出来的话，手机"突然连不上"
-  /// 就只剩用户自己猜（本仓 §12.3「界面上看不见的现象，用户只能靠猜」）。
+  /// 判据来自后端写入的 `.run\api.json`：`fellBack: true` + `requestedPort: <原目标>`。
+  /// 界面需要显示该状态（`settings_page.dart` 的「本地服务」卡片）：**端口变化会使
+  /// 手机保存的地址失效**，需要重新扫描配对二维码。不显示时，手机"突然连不上"
+  /// 无法定位原因（本仓 §12.3「界面上看不见的现象，无法靠猜定位」）。
   int? portFallbackFrom;
 
   /// 起子进程的实现，测试里替换成假的；见 [BackendProcessStarter]
@@ -170,8 +169,8 @@ class BackendLauncher extends ChangeNotifier {
       phase == StartupPhase.ready || phase == StartupPhase.skipped;
 
   /// 给后端的额外环境变量。端口文件与工具权限的基准是 `COMFYHUB_PROJECT_ROOT`；
-  /// 开了「允许手机 / 局域网设备连接」时再带上 `COMFYHUB_ALLOW_REMOTE`
-  /// （不开时后端只听 127.0.0.1，真机连不上 —— 2026-09-28 用户 bug）。
+  /// 开启「允许手机 / 局域网设备连接」时追加 `COMFYHUB_ALLOW_REMOTE`
+  /// （未开启时后端只监听 127.0.0.1，真机无法连接）。
   Map<String, String>? _childEnvironment(String root) {
     final env = <String, String>{'COMFYHUB_PROJECT_ROOT': root};
     if (_settings.allowRemoteBackend) env['COMFYHUB_ALLOW_REMOTE'] = '1';
@@ -230,27 +229,24 @@ class BackendLauncher extends ChangeNotifier {
     }
   }
 
-  /// **首屏拉数据的闸门**：等"这一轮启动/探测有没有结论"（就绪 / 失败 / 跳过）。
+  /// **首屏拉数据的闸门**：等待"这一轮启动 / 探测已有结论"（就绪 / 失败 / 跳过）。
   ///
-  /// # 为什么必须有它
+  /// 冷启动时 `<根>\.run\api.json` **尚不存在**（后端正常退出时会删除它），
+  /// 因此 `SettingsStore.baseUrl` 只能取兜底值 `http://127.0.0.1:8080`。
+  /// 此时发出的请求**必然失败**，错误形式为
+  /// `ClientException … Connection attempt cancelled, host: 127.0.0.1, port: 8080`。
   ///
-  /// 冷启动时 `<根>\.run\api.json` **还不存在**（后端优雅退出时会把它删掉），
-  /// 于是 `SettingsStore.baseUrl` 只能是 `http://127.0.0.1:8080` 那个兜底值 ——
-  /// 那一刻发出去的任何请求都**注定失败**，而失败的样子还很吓人：
-  /// `ClientException … Connection attempt cancelled, host: 127.0.0.1, port: 8080`
-  /// （2026-10-12 用户报的"刚启动 AI 工作台就显示这个"）。
+  /// 另一种情况是**半截失败**：后端绑定端口后触发 `notifyListeners`，store 按新地址
+  /// 将旧 client `dispose()`，仍在连接 8080 的请求被取消而非被拒绝，因此错误信息
+  /// 显示 cancelled。等结论确定后再发请求可以消除这类现象。
   ///
-  /// 更阴的是**半截失败**：后端绑好端口后我们一 `notifyListeners`，store 就按新地址
-  /// 把旧 client `dispose()` 掉，那个还在连 8080 的请求于是被"取消"（而不是"拒绝"）——
-  /// 所以消息里写的是 cancelled。等出结论再发，这一整类现象就都没有了。
+  /// # 三条约束
   ///
-  /// # 三条纪律
-  ///
-  ///  1. **只等"有没有结论"，不保证结论是好的** —— 后端起不来时照样放行，
-  ///     让各页面如实报"连不上"（不许替用户静默重试到底）；
-  ///  2. **不许把首屏卡死**：超时就放行（那时请求失败是如实的结果）；
-  ///  3. **它不阻塞用户动作** —— 只有"冷启动第一波"该等（`AiWorkspaceStore.load` /
-  ///     `NsfwStore.load`），用户点出来的动作照旧直接发。
+  ///  1. **只等"是否已有结论"，不保证结论成功** —— 后端起不来时同样放行，
+  ///     由各页面如实报告"连不上"（不得静默重试到底）；
+  ///  2. **不得阻塞首屏**：超时即放行（此时请求失败是真实结果）；
+  ///  3. **不阻塞界面动作** —— 只有"冷启动第一波"需要等待（`AiWorkspaceStore.load` /
+  ///     `NsfwStore.load`），其他动作直接发送。
   Future<void> settled({Duration? timeout}) async {
     if (!busy) return;
     final completer = Completer<void>();
@@ -345,7 +341,7 @@ class BackendLauncher extends ChangeNotifier {
         _log('按"上次用的库"打开：${info.dataDir}（指针写的是 ${info.chosen}）');
       }
       if (info.otherCandidates.isNotEmpty) {
-        // 只是报告：同一棵树里还有别的库。换哪份由用户决定（设置 → 数据目录）
+        // 仅报告：同一棵树里还有其他库，切换由设置页决定（设置 → 数据目录）
         _log(
           '还发现别的库：${info.otherCandidates.map((c) => '${c.path}'
               '（${sizeText(c.bytes)}）').join('、')}',
@@ -395,15 +391,14 @@ class BackendLauncher extends ChangeNotifier {
     _cancelled = false;
     lastError = null;
 
-    // ⚠ **先翻成"忙"，再做第一个 await**（2026-10-12）：首屏各页的 postFrame 回调与
-    // 我们在**同一帧**里跑，而这里第一件事（读端口文件）是异步的 —— 中间那段空窗
-    // 会被 [settled] 的调用方当成"没人起后端、可以发请求了"，于是它们拿着 8080 那个
-    // 兜底地址发出去，冷启动**必然**报一次"连接后端失败"（用户贴的那个
-    // `ClientException … 127.0.0.1:8080/api/ai/providers`）。
+    // ⚠ **先置为"忙"，再执行第一个 await**：首屏各页的 postFrame 回调与这里在同一帧
+    // 运行，而第一步（读端口文件）是异步的 —— 中间空窗会被 [settled] 的调用方视为
+    // "没有后端启动、可以发请求"，于是使用 8080 兜底地址发出请求，冷启动**必然**
+    // 出现一次"连接后端失败"（`ClientException … 127.0.0.1:8080/api/ai/providers`）。
     _set(StartupPhase.probing, '正在检查本地服务…');
 
-    // 后端端口是自动挑的：App 开着的时候后端可能重启到**新端口**，
-    // 探活前先按 .run\api.json 重新发现一次（用户手填过地址时它什么也不做）。
+    // 后端端口自动分配：App 运行期间后端可能重启到**新端口**，
+    // 探活前按 .run\api.json 重新发现一次（手动填写远程地址时不改动）。
     await _settings.refreshBaseUrlFromPortFile();
     _set(StartupPhase.probing, '正在检查本地服务 ${_settings.baseUrl} …');
     final health = await probe();
@@ -474,10 +469,10 @@ class BackendLauncher extends ChangeNotifier {
     final data = info.dataDir;
     final exe = serverExe!;
 
-    // 产物目录按**磁盘上的实际布局**认：标准是 `<数据目录>\storage`，
-    // 但也可能是旧版套出来的 `storage\storage`，或用户手动挪成的扁平布局
-    // （产物直接在数据目录里）。别在这里硬拼 `storage`，否则界面能看到库、
-    // 却读不到任何一张图（2026-11-09 用户报的"软件不认这个目录的内容"）。
+    // 产物目录按**磁盘实际布局**识别：标准为 `<数据目录>\storage`，
+    // 也可能是旧版双层 `storage\storage`，或手动移动后的扁平布局
+    // （产物直接位于数据目录）。不在此硬拼 `storage`，否则界面能看到库、
+    // 却读不到任何图片。
     final storage = info.storageDir;
 
     // 目录先备好：后端会自己建库目录，但 `.run` / 产物目录缺失会让它多打几句警告
@@ -491,13 +486,13 @@ class BackendLauncher extends ChangeNotifier {
 
     final dbFile = info.dbFile;
     final bindHost = _settings.allowRemoteBackend ? '0.0.0.0' : '127.0.0.1';
-    // **先要回上一次那个端口**（2026-10-13）：`--port 0` 让系统挑，代价是重启就换
-    // 端口，而**手机存的是 `http://<局域网IP>:<端口>`** —— 端口一变那条地址就废了，
-    // 用户得重新扫一次配对二维码。要回旧端口之后，"端口变了"就只剩
-    // "它确实被别人占了"这一种情况（那时后端自己回落到随机端口并记 `fellBack`）。
+    // **优先请求上一次使用的端口**：`--port 0` 由系统分配，重启会更换端口，
+    // 而**手机保存的地址是 `http://<局域网IP>:<端口>`**，端口变化会使地址失效，
+    // 需要重新扫描配对二维码。请求旧端口后，"端口变化"只剩"端口确实被占用"
+    // 这一种情况（此时后端回落到随机端口并记录 `fellBack`）。
     //
-    // ⚠ 要回失败**不影响启动**：`main.rs` 绑不上就自动回落（且不会退出），
-    // 所以这条优化不会把"起不来"引进来（那正是当初选 `--port 0` 的理由）。
+    // ⚠ 请求失败**不影响启动**：`main.rs` 绑定失败会自动回落且不会退出，
+    // 因此该优化不会引入"起不来"的问题。
     final preferredPort = _settings.lastApiPort;
     final args = <String>[
       '--db', dbFile,
@@ -562,7 +557,7 @@ class BackendLauncher extends ChangeNotifier {
     while (DateTime.now().isBefore(deadline)) {
       attempt++;
       // ⚠️ 每轮都重读端口文件：后端绑好端口后自己写它，而我们探活用的地址
-      // 可能还是启动时读到的那个（用户手填过地址时这一步什么也不做）。
+      // 可能仍是启动时读取的地址（手动填写远程地址时该步骤不执行）。
       if (await _settings.refreshBaseUrlFromPortFile()) {
         _log('后端换了端口，改探 ${_settings.baseUrl}（读自 .run\\api.json）');
       }
@@ -617,11 +612,10 @@ class BackendLauncher extends ChangeNotifier {
     return killed;
   }
 
-  /// 停止本地服务（用户点「停止」/「重启」时走这条）。
+  /// 停止本地服务（点「停止」/「重启」时调用）。
   ///
-  /// 与退出收尾的区别：这里是**明确的用户意图**，所以除了认领过的那个，
-  /// 还会把端口文件里记着的、以及按映像名找到的后端一起收掉
-  /// （`server.ps1 stop` 以前就是这么干的）。
+  /// 与退出收尾的区别：这是**明确的停止指令**，因此除已认领的进程外，
+  /// 还会停止端口文件记录的、以及按映像名找到的后端。
   Future<bool> stopBackend() async {
     if (busy) return false;
     _set(StartupPhase.starting, '正在停止后端…');
@@ -713,10 +707,10 @@ class BackendLauncher extends ChangeNotifier {
     return stopped;
   }
 
-  /// 用户把「关闭 App 时一并停止本地服务」**关掉**时调用：撤销认领。
+  /// 将「关闭 App 时一并停止本地服务」**关闭**时调用：撤销认领。
   ///
-  /// 不需要像以前那样再去撤一个 `watch-owner` 守护进程 —— 那份守护已经由
-  /// `--watch-stdin`（后端自己盯着这根管道）取代了。
+  /// 不再需要撤销 `watch-owner` 守护进程：该职责已由 `--watch-stdin`
+  /// （后端监视标准输入管道）取代。
   Future<bool> disarm() async {
     if (!servicesClaimed) return false;
     servicesClaimed = false;
@@ -801,7 +795,7 @@ class BackendLauncher extends ChangeNotifier {
     }
   }
 
-  /// 按映像名收后端（用户点「停止」时的兜底：端口文件可能缺 pid 或指向了旧进程）。
+  /// 按映像名终止后端（点「停止」时的兜底：端口文件可能缺 pid 或指向旧进程）。
   Future<bool> _taskkillByName() async {
     _log('按映像名收一遍 $kServerExeName …');
     final result = await _runTool('taskkill', ['/F', '/IM', kServerExeName]);
@@ -827,20 +821,20 @@ class BackendLauncher extends ChangeNotifier {
 
   /// 把后端 exe 的**完整性标签**设回 `Medium`（best-effort，失败只记日志）。
   ///
-  /// # 为什么要这一步（2026-09-30 用户实测的两条事实）
+  /// # 判据
   ///
-  /// 1. **写限制是"完整性级别（IL）"判的，不是路径 / 用户 / 会话**：清掉 exe 上的
-  ///    `Low` 标签，后端立刻就能写 ComfyUI 目录（`%TEMP%`、用户自己的安装目录同理）。
-  /// 2. **Windows 取 `min(父进程, 映像)`**：链路上**任何一环**是 Low，子进程照样掉回 Low
-  ///    —— 而"在工作区里构建出来的产物普遍带着 Low 标签"，`viewer.exe` 也不例外。
+  /// 1. **写限制由"完整性级别（IL）"决定**，与路径 / 账户 / 会话无关：清掉 exe 上的
+  ///    `Low` 标签后，后端即可写入 ComfyUI 目录（`%TEMP%`、安装目录同理）。
+  /// 2. **Windows 取 `min(父进程, 映像)`**：链路上**任何一环**是 Low，子进程同样为 Low
+  ///    —— 在工作区内构建的产物普遍带 Low 标签，`viewer.exe` 也不例外。
   ///
-  /// 所以这一步只能救一半，而且救的正是常见的那一半：**App 自己是 Medium
-  /// （用户双击、从普通终端起），只是后端的 exe 上还留着构建时带的 Low 标签**。
-  /// 两种情况下它一定救不了，也只能如实记一句：
-  ///   · App 自己就是 Low（`viewer.exe` 也带着 Low 标签）—— Low 改不动向上的标签；
-  ///   · 没有 `icacls`（非 Windows / 精简系统）。
-  /// 真正的判断在**后端自己**的写探针上（`GET /api/system/confinement`，界面上有横幅），
-  /// 这里只做"顺手把标签归一"。
+  /// 该步骤只能覆盖一种情况：**App 自身是 Medium**（正常启动），仅后端 exe 保留
+  /// 构建时的 Low 标签。以下两种情况无法修复，只记录日志：
+  ///   · App 自身为 Low（`viewer.exe` 也带 Low 标签）—— Low 不能修改更高完整性级别；
+  ///   · 缺少 `icacls`（非 Windows / 精简系统）。
+  ///
+  /// 最终判定在后端自身的写探针上（`GET /api/system/confinement`，界面有横幅），
+  /// 这里只做标签归一。
   Future<void> _normalizeIntegrity(String exe) async {
     if (kIsWeb || !Platform.isWindows) return;
     final result = await _tool('icacls', [exe, '/setintegritylevel', 'Medium']);
@@ -866,7 +860,7 @@ class BackendLauncher extends ChangeNotifier {
 
   // -------------------------------------------------------------------------
 
-  /// 用户在启动页点「先跳过」——不阻塞使用（离线只看本地缓存/稍后再连）
+  /// 启动页点「先跳过」：不阻塞使用（离线仅查看本地缓存，稍后重连）。
   void skip() {
     _cancelled = true;
     _set(StartupPhase.skipped, '已跳过自动启动');
