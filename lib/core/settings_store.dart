@@ -13,9 +13,8 @@ import 'theme.dart';
 /// 画廊「集合详情」的两种形态（真源：`SettingsStore.collectionDetailWide` /
 /// `collectionDetailNarrow`）。
 ///
-/// 用户 2026-10-18："能不能让我自由选择在电脑/手机排版的画廊的集合详情行为？"
-/// —— 以前是**代码**按宽度档替他定（宽屏停靠、窄屏弹窗），现在两个宽度档
-/// **各自一条偏好**，选哪边由用户自己说。
+/// 两个宽度档**各自一条偏好**：宽屏默认停靠、窄屏默认弹窗，形态由偏好决定，
+/// 不再由代码按宽度写死。
 ///
 /// 落盘取 [name]（`'dock'` / `'popup'`），不用 int 魔法数：偏好里躺着 `0/1`
 /// 的排查成本远高于一个能直接读懂的字符串。
@@ -31,8 +30,8 @@ enum CollectionDetailStyle {
 
   const CollectionDetailStyle(this.label);
 
-  /// 读偏好。认不出来的（老版本写的 / 用户手改过的）回 [fallback]，**绝不抛** ——
-  /// 它在界面构建路径上，抛了就是白屏（与 `AppThemeMode.parse` 同一条纪律）。
+  /// 读偏好。无法识别的值（旧版本写入或手动修改）返回 [fallback]，**不抛异常** ——
+  /// 它在界面构建路径上，抛异常会导致白屏（与 `AppThemeMode.parse` 约束一致）。
   static CollectionDetailStyle parse(
     String? raw, {
     required CollectionDetailStyle fallback,
@@ -50,10 +49,10 @@ class SettingsStore extends ChangeNotifier {
   static const _kBaseUrlHistory = 'comfyhub.baseUrlHistory';
   static const _kPageSize = 'comfyhub.pageSize';
 
-  /// 筛选栏折叠状态（**整体一个**，用户 2026-10-11 定的：不是每个分区各自折叠）。
+  /// 筛选栏折叠状态（**整体一个**，不按分区分别折叠）。
   ///
-  /// 默认**展开**（别一上来就把功能藏起来）；用户收起过就记住 —— 按页面各自记，
-  /// 因为画廊和预设页的筛选栏内容不同，收了一个不代表想收另一个。
+  /// 默认**展开**；折叠状态按页面分别记录 —— 画廊与预设页的筛选栏内容不同，
+  /// 收起一个不代表收起另一个。
   static const _kGalleryFiltersCollapsed = 'comfyhub.galleryFiltersCollapsed';
   static const _kPromptFiltersCollapsed = 'comfyhub.promptFiltersCollapsed';
   static const _kAutoStartBackend = 'comfyhub.autoStartBackend';
@@ -63,11 +62,10 @@ class SettingsStore extends ChangeNotifier {
 
   /// 画廊「集合详情」在**宽屏**（`lib/app.dart` 的 `kWideLayoutMinWidth`，900）下的形态。
   ///
-  /// 用户 2026-10-18："能不能让我自由选择在电脑/手机排版的画廊的集合详情行为？"
-  /// —— 两个宽度档各自一条偏好，形态由用户定，代码不再替他选。
+  /// 两个宽度档各自一条偏好，形态由偏好决定，代码不按宽度写死。
   ///
-  /// ⚠ 默认 `'dock'` / `'popup'` **必须等于改之前写死在代码里的行为**
-  /// （宽屏停靠、窄屏居中弹窗），否则没动过设置的人看到的东西就变了。
+  /// ⚠ 默认 `'dock'` / `'popup'` **必须等于原来的固定行为**（宽屏停靠、窄屏居中弹窗），
+  /// 否则未修改设置时界面表现会变化。
   static const _kCollectionDetailWide = 'comfyhub.galleryCollectionDetailWide';
 
   /// 画廊「集合详情」在**窄屏**（`< kWideLayoutMinWidth`）下的形态。默认 `'popup'`。
@@ -76,40 +74,34 @@ class SettingsStore extends ChangeNotifier {
 
   /// 界面外观（深色 / 浅色 / 跟随系统）。见 [AppThemeMode]。
   ///
-  /// ⚠ 默认**深色**：这是 2026-10-13 之前唯一存在过的外观（`MaterialApp.themeMode`
-  /// 写死 dark），换成别的默认值等于给所有存量用户换一套配色。
+  /// ⚠ 默认**深色**：此前 `MaterialApp.themeMode` 固定为 dark，修改默认值会改变
+  /// 已安装环境的配色。
   static const _kThemeMode = 'comfyhub.themeMode';
 
-  /// **Material You 取色档位**（默认 `full` = 整份配色都由系统强调色派生，
-  /// 2026-11-05 用户拍板"尺度做到 A"）。
+  /// **Material You 取色档位**（默认 `full`，整份配色由系统强调色派生）。
   ///
-  /// 老版本只存了布尔 `comfyhub.followSystemAccent`：读不到新键时按它迁移
-  /// （true → full，false → off），用户已有的选择不丢。
+  /// 旧版本只存布尔 `comfyhub.followSystemAccent`：读不到新键时按它迁移
+  /// （true → full，false → off），保留已有选择。
   static const _kAccentMode = 'comfyhub.accentMode';
   static const _kLegacyFollowSystemAccent = 'comfyhub.followSystemAccent';
 
   /// 手机端**产物缓存**的原件预算（MB）。见 `media_cache.dart` 的
-  /// [kOriginalCacheBudgetChoicesMb] —— 档位就那几项，别让用户填任意数字
-  /// （填 1MB 等于关掉缓存，填 99999 等于没有上限，两头都不是"设上限"的本意）。
+  /// [kOriginalCacheBudgetChoicesMb] —— 只提供固定档位，不接受任意数字
+  /// （1MB 等同于关闭缓存，99999 等同于无上限）。
   static const _kMediaCacheOrigBudgetMb = 'comfyhub.mediaCacheOrigBudgetMb';
 
-  /// 上次后端**实际**监听的端口（0 / 缺省 = 还没记录过）。
+  /// 上次后端**实际**监听的端口（0 / 缺省 = 尚未记录）。
   ///
-  /// # 为什么必须记住它（2026-10-13 用户提的问题）
+  /// 后端默认 `--port 0`（由操作系统选择空闲端口，避免被占用或落在 Windows
+  /// 保留段），重启后端口会变化。手机保存的地址是 `http://<局域网IP>:<端口>`，
+  /// 端口变化会使该地址失效，需要重新扫描配对二维码。
   ///
-  /// 后端默认 `--port 0`（让操作系统挑空闲端口，避免"被占 / 落在 Windows 保留段"
-  /// 起不来），**代价是重启就换端口**。而**手机那边存的是
-  /// `http://<局域网IP>:<端口>`** —— 端口一变那条地址就废了，用户得跑到桌面上
-  /// 重新扫一次配对二维码（用户原话："怎么保证手机稳定连接电脑，而不用每次
-  /// 重新配置"）。
+  /// 下次启动**优先请求该端口**；仅当端口已被其他进程占用时才更换
+  /// （后端回落到随机端口，并在 `.run\api.json` 记录 `fellBack: true`，
+  /// 随后记录新端口并在界面提示，见 `BackendLauncher.portFallbackFrom`）。
   ///
-  /// 所以下次启动**先要回这个端口**；只有"它确实被别人占了"这一种情况才换
-  /// （那时由后端自己回落到随机端口，并在 `.run\api.json` 里记 `fellBack: true`，
-  /// 我们再把新端口记下来 + 在界面上如实说一声，见 `BackendLauncher.portFallbackFrom`）。
-  ///
-  /// ⚠ 这条偏好**不是**"用户手填的端口"：它是"上次实际用的那个"。
-  /// 想改端口没有任何界面入口 —— 真源永远只有一个：后端绑好之后写的
-  /// `.run\api.json`（见 [refreshBaseUrlFromPortFile]）。
+  /// ⚠ 这条偏好表示"上次实际使用的端口"，不是手动填写的端口。修改端口没有界面
+  /// 入口 —— 唯一真源是后端绑定后写入的 `.run\api.json`（见 [refreshBaseUrlFromPortFile]）。
   static const _kLastApiPort = 'comfyhub.lastApiPort';
 
   String _baseUrl = defaultBaseUrl();
@@ -135,21 +127,19 @@ class SettingsStore extends ChangeNotifier {
   bool _loaded = false;
 
   /// 手机端产物缓存的原件预算（MB）。默认取 `media_cache.dart` 的常量，
-  /// 老用户不吃"默认值漂移"的亏 —— 与 `kOriginalCacheBudgetBytes` 同一个数。
+  /// 与 `kOriginalCacheBudgetBytes` 保持同一个数值，避免默认值漂移。
   int _mediaCacheOrigBudgetMb = kOriginalCacheBudgetBytes ~/ (1024 * 1024);
 
-  /// 用过哪些地址（最近用的在前，最多 [maxBaseUrlHistory] 条）。
+  /// 用过哪些地址（最近使用的在前，最多 [maxBaseUrlHistory] 条）。
   ///
-  /// 为什么要有它：跨端用户至少有两条路要来回切 —— 模拟器/同机（回环）与
-  /// 真机（局域网 IP / Tailscale）。以前设置页只有**一个文本框**，
-  /// 换一次就得**手抄一遍 IP**，抄错一个数字就是"连不上"，而上一轮用过的地址
-  /// 明明就在几分钟前。所以历史是"选择"这件事的**事实来源**（不是猜的候选）。
+  /// 跨端场景需要在回环（模拟器 / 同机）与局域网 IP / Tailscale 之间切换。
+  /// 历史记录是地址选择的**事实来源**，不是推测出的候选。
   List<String> _baseUrlHistory = const [];
 
-  /// 地址是用户手填的（true）还是我们自动发现的（false，见 [baseUrlIsAuto]）。
+  /// 地址来自手动填写（true）或自动发现（false，见 [baseUrlIsAuto]）。
   ///
-  /// ⚠ 它**不再单独决定"要不要听端口文件的"** —— 回环地址（[isLocalBackendUrl] 为真）
-  /// 一律按自动处理，不管这里是什么。判据只有一条，见 [refreshBaseUrlFromPortFile]。
+  /// ⚠ 该标志**不单独决定是否采用端口文件**：回环地址（[isLocalBackendUrl] 为真）
+  /// 一律按自动处理。判据只有一条，见 [refreshBaseUrlFromPortFile]。
   bool _baseUrlFromUser = false;
 
   String get baseUrl => _baseUrl;
@@ -167,25 +157,23 @@ class SettingsStore extends ChangeNotifier {
   /// 历史最多留几条（再多就成了"翻半天找不到"，而不是"顺手点一下"）。
   static const int maxBaseUrlHistory = 6;
 
-  /// 当前地址是不是"用户手填的"（false = 我们按本机 `.run\api.json` 自动定的）。
+  /// 当前地址是否来自手动填写（false 表示按本机 `.run\api.json` 自动确定）。
   ///
-  /// 用途有两个：后端重启后要不要**改口**（见 [refreshBaseUrlFromPortFile]），
-  /// 以及手机端启动时要不要**自己挑一台桌面**（见 `app.dart` 的
-  /// `_pickDesktopAutomatically`）—— 用户手填过就不许替他改。
+  /// 两个用途：后端重启后是否**改写地址**（见 [refreshBaseUrlFromPortFile]），
+  /// 以及手机端启动时是否**自动选择一台桌面**（见 `app.dart` 的
+  /// `_pickDesktopAutomatically`）—— 手动填写的地址不得改写。
   ///
-  /// ⚠ **本机（回环）地址一律算"自动"**：它说的是"这台机器上的后端"，
-  /// 而本机后端端口是 `--port 0` 自动挑的。把它当用户配置存下来，等于把
-  /// "当前这个随机端口"抄了一遍 —— 下次后端一重启，界面就永远连不上
-  /// （2026-10-12 用户报的"直接启动软件连接不上后端"，根因就在这）。
+  /// ⚠ **本机（回环）地址一律视为自动**：它指向本机后端，而本机后端端口由
+  /// `--port 0` 自动分配。把随机端口当作配置保存后，后端重启会使界面无法连接。
   bool get baseUrlIsAuto => !_baseUrlFromUser || isLocalBackendUrl(_baseUrl);
 
-  /// **"这个地址说的是本机后端吗"** —— 回环地址判据。
+  /// **该地址是否指向本机后端** —— 回环地址判据。
   ///
-  /// 端口这件事**只有这一条判据**，别在别处再写一遍"要不要听用户的"：
-  ///   · 真 —— 本机后端。端口是自动挑的、真源只有 `.run\api.json`，
-  ///     所以地址**永远跟着它走**（哪怕这个值先前被写进过偏好）；
-  ///   · 假 —— 别的机器（局域网 IP / Tailscale / 域名）。那是用户的远程配置，
-  ///     端口文件与它无关，一个字都不许改。
+  /// 端口判定只使用这一条判据，不在其他地方重复判断"是否采用手动配置"：
+  ///   · 真 —— 本机后端。端口由系统分配，唯一真源是 `.run\api.json`，
+  ///     地址**始终跟随端口文件**（即使该值曾被写入偏好）；
+  ///   · 假 —— 其他机器（局域网 IP / Tailscale / 域名），属于远程配置，
+  ///     与端口文件无关，不得改写。
   ///
   /// `0.0.0.0` 也算"本机"：后端开了局域网监听时它写在端口文件里，
   /// 而客户端连通配地址是连不上的（读侧会回落回环，见 [_baseUrlFromPortFile]）。
@@ -220,9 +208,9 @@ class SettingsStore extends ChangeNotifier {
 
   /// 允许手机 / 局域网设备连接本机后端（`COMFYHUB_ALLOW_REMOTE`）。
   ///
-  /// 默认关：后端只听回环。开着时后端听所有网卡 —— 真机连桌面才有得连
-  /// （2026-09-28 用户 bug「手机连接桌面端失败，报 timed out」的根因就是后端
-  /// 只听 127.0.0.1）。远程请求由配对闸门把关（回环放行，局域网要配对令牌）。
+  /// 默认关闭：后端只监听回环地址。开启后后端监听所有网卡，真机才能连接桌面
+  /// （后端仅监听 127.0.0.1 时，手机连接会超时）。远程请求由配对闸门校验
+  /// （回环放行，局域网需要配对令牌）。
   bool get allowRemoteBackend => _allowRemoteBackend;
 
   /// 运行根目录（放 `.db\` / `storage\` / `.run\` 的那个目录）。为空表示自动探测。
@@ -248,7 +236,7 @@ class SettingsStore extends ChangeNotifier {
 
   /// 上次后端实际监听的端口（null = 还没记录过 → 这一轮还是让系统挑）。
   ///
-  /// 只用来**要回**同一个端口，不是"用户配置"：真源永远是后端写的 `.run\api.json`。
+  /// 只用于**请求**同一端口，不是配置项：唯一真源是后端写入的 `.run\api.json`。
   int? get lastApiPort => _lastApiPort;
 
   /// 上次用的是哪一份库（null = 还没记录过 / 记录坏了）。
@@ -293,15 +281,14 @@ class SettingsStore extends ChangeNotifier {
     try {
       // Android 模拟器访问宿主机需要用 10.0.2.2。
       // 刻意**不**去读本机的 `.run\api.json`：那台机器上的后端跟手机是两台设备，
-      // 手机连的是"宿主机的某个端口"，由用户在设置页里填（远程场景见
+      // 手机连接的是宿主机端口，由设置页填写（远程场景见
       // docs/inbound-auth-design.md）。
       if (Platform.isAndroid) return 'http://10.0.2.2:8080';
     } catch (_) {
       // 平台判断在个别环境下会抛异常，忽略即可
     }
-    // 桌面端：后端端口现在是**自动挑的**（2026-09-22，用户要求"不再显式指定端口"），
-    // 真实端口记在 `<项目根>\.run\api.json` 里，前端必须去读它 —— 否则每次启动
-    // 都在猜一个固定端口，而后端可能正跑在别的端口上。
+    // 桌面端：后端端口由系统**自动分配**，真实端口记录在 `<项目根>\.run\api.json`，
+    // 前端必须读取该文件，否则会连接到一个固定端口，而后端可能运行在其他端口。
     return _baseUrlFromPortFile() ?? 'http://127.0.0.1:8080';
   }
 
@@ -310,11 +297,11 @@ class SettingsStore extends ChangeNotifier {
   /// 这是端口这件事在 Dart 侧的唯一入口，与后端 `api_port_file.rs`、
   /// `comfyui\comfyhub_capture\capture_core.py` 读的是**同一个文件**。
   ///
-  /// 三条纪律：
-  ///  · **读不到就用默认值**，绝不抛异常 —— 它在 App 启动路径上，崩了就是白屏；
-  ///  · **只在"这个地址说的是本机"时才收下它**（判据只有一条：[isLocalBackendUrl]。
-  ///    用户填了别的机器就永远优先用他的，否则远程 / 局域网场景会被拽回本机）；
-  ///  · 用完**不缓存**：端口会随重启变，每次冷启动都重新读一次。
+  /// 三条约束：
+  ///  · **读取失败时返回默认值**，不抛异常 —— 它在 App 启动路径上，异常会导致白屏；
+  ///  · **仅当地址指向本机时才采用**（判据只有一条：[isLocalBackendUrl]；
+  ///    手动填写的远程地址优先，否则远程 / 局域网场景会被强制切回本机）；
+  ///  · **不缓存**：端口随重启变化，每次冷启动重新读取。
   static String? _baseUrlFromPortFile({String? projectRoot}) {
     for (final root in _projectRootCandidates(projectRoot)) {
       final state = readPortFile(root);
@@ -354,20 +341,18 @@ class SettingsStore extends ChangeNotifier {
   Future<void> load() async {
     final prefs = await SharedPreferences.getInstance();
     final stored = prefs.getString(_kBaseUrl);
-    // 存量清洗（2026-10-12）：老版本会把**自动发现来的回环地址**当"用户手填"存进
-    // `_kBaseUrl`（设置页那个「保存并测试连接」把框里的值原样写回），而那份值
-    // 下次启动就是死地址 —— 界面的表现是"后端明明起来了、App 却连不上"。
-    // 回环 = 本机 = 自动，所以这里直接当没填过，并顺手把那条偏好删掉：
-    // 留着它只会让下一个排查的人以为"用户手填过"。
+    // 存量清洗：旧版本会把**自动发现的回环地址**当作手动填写值存入 `_kBaseUrl`
+    // （设置页「保存并测试连接」原样写回输入框）。该值在下次启动时成为失效地址，
+    // 表现为"后端已启动、App 无法连接"。回环地址一律视为自动，因此按未填写处理，
+    // 并删除该偏好，避免后续排查误判为手动配置。
     final storedIsLocal =
         stored != null && stored.isNotEmpty && isLocalBackendUrl(stored);
     if (storedIsLocal) await prefs.remove(_kBaseUrl);
     _baseUrlFromUser = stored != null && stored.isNotEmpty && !storedIsLocal;
     _baseUrl = _baseUrlFromUser ? stored! : defaultBaseUrl();
     _pageSize = prefs.getInt(_kPageSize) ?? 24;
-    // 手机上筛选区默认**收起**：360dp 宽度里它一展开就占掉半屏，画廊 / 预设先看到的
-    // 应该是内容而不是一排筛选 chip（用户 2026-10-31）。桌面端仍默认展开。
-    // 只作为"没有偏好时"的默认值：用户自己点过展开 / 收起之后，偏好说了算。
+    // 手机上筛选区默认**收起**：360dp 宽度下展开会占用半屏，画廊 / 预设应优先
+    // 显示内容。桌面端仍默认展开。仅在无偏好时使用；设置后以偏好为准。
     //
     // ⚠ 判据用 `Platform.isAndroid`（真实运行平台），**不是** `defaultTargetPlatform`：
     // Flutter 测试进程里后者默认就是 android，用它会让所有 Windows 用例的筛选栏
@@ -410,8 +395,8 @@ class SettingsStore extends ChangeNotifier {
         _lastLibrary = null;
       }
     }
-    // 缓存预算：只认档位表里的值（老版本 / 手改的野值回默认），并**立刻应用到缓存**
-    // —— 用户上次把 2GB 调到 512MB，下次冷启动就该按 512MB 淘汰，不能等下一次下载。
+    // 缓存预算：只认档位表里的值（旧版本或手动修改的异常值回默认），并**立刻应用到缓存**
+    // —— 上次把 2GB 调整为 512MB 后，下次冷启动应按 512MB 淘汰，不等待下一次下载。
     final rawBudgetMb = prefs.getInt(_kMediaCacheOrigBudgetMb);
     _mediaCacheOrigBudgetMb =
         kOriginalCacheBudgetChoicesMb.contains(rawBudgetMb)
@@ -433,12 +418,12 @@ class SettingsStore extends ChangeNotifier {
 
   /// 去重（保序）、丢掉空串与非 http 的脏值、截到上限。
   ///
-  /// 为什么在**读**的时候也要洗一遍：这份表是上一版程序写进去的（或者用户
-  /// 手改过 SharedPreferences），界面直接渲染脏值就会出现一个点不动的候选。
+  /// 读取时清洗：该表由上一版本程序写入，也可能被手动修改；直接渲染脏值
+  /// 会出现无法点击的候选。
   ///
-  /// ⚠ **回环地址不进历史**（2026-10-12）：历史是"联**别的机器**的候选"，
-  /// 而本机地址是自动的、端口每次启动都换 —— 把 `127.0.0.1:2175` 这种留在里面，
-  /// 只会在界面上摆一串**永远点不通**的候选（它们正是那个 bug 留下的渣）。
+  /// ⚠ **回环地址不进入历史**：历史保存的是连接**其他机器**的候选；本机地址由
+  /// 系统自动确定，端口每次启动都会变化。保留 `127.0.0.1:2175` 这类地址会在界面上
+  /// 产生**无法连接**的候选。
   static List<String> _sanitizeHistory(List<String>? raw) {
     if (raw == null) return const [];
     final out = <String>[];
@@ -462,7 +447,7 @@ class SettingsStore extends ChangeNotifier {
     return -1;
   }
 
-  /// 从历史里去掉一条（用户点「忘记」）。
+  /// 从历史中移除一条（点「忘记」时调用）。
   Future<void> forgetBaseUrl(String url) async {
     final v = url.trim();
     if (!_baseUrlHistory.contains(v)) return;
@@ -472,22 +457,20 @@ class SettingsStore extends ChangeNotifier {
     await prefs.setStringList(_kBaseUrlHistory, _baseUrlHistory);
   }
 
-  /// 重新发现本机后端地址（后端重启换了端口时用）。
+  /// 重新发现本机后端地址（后端重启更换端口时调用）。
   ///
-  /// 返回 true = 地址变了（调用方要重建 api client）。
+  /// 返回 true 表示地址已变化（调用方需要重建 api client）。
   ///
-  /// **判据只有一条**（2026-10-12 定案，别再拆成两半）：地址指向**本机**（回环，
-  /// [isLocalBackendUrl]）→ 永远跟着 `.run\api.json` 走，**哪怕它先前被写进过偏好**；
-  /// 指向**别的机器** → 那是用户的远程配置，什么也不做。
+  /// **判据只有一条**：地址指向**本机**（回环，[isLocalBackendUrl]）→ 始终跟随
+  /// `.run\api.json`，即使该值曾被写入偏好；指向**其他机器** → 属于远程配置，不做改动。
   ///
-  /// 为什么必须这样：后端端口是 `--port 0` 自动挑的（重启就换），"把当前这个端口
-  /// 存下来"等于存了一个下次启动必然失效的死地址。2026-10-12 之前这里写的是
-  /// `if (_baseUrlFromUser) return false`，而设置页会把框里**自动发现来的**地址
-  /// 原样存回去（`setBaseUrl`），于是 `_baseUrlFromUser` 一旦为真就再也不读端口文件 ——
-  /// 后端在新端口上跑得好好的，App 却对着旧端口等满 60 秒超时。
+  /// 当前端口不能当作配置保存：后端端口由 `--port 0` 自动分配，重启即变化，
+  /// 保存的端口在下次启动时必然失效。早期实现使用 `if (_baseUrlFromUser) return false`，
+  /// 而设置页会把自动发现的地址原样存回（`setBaseUrl`），导致 `_baseUrlFromUser`
+  /// 为真后不再读取端口文件，App 对旧端口等待 60 秒超时。
   ///
-  /// 调用时机：后端启动完成之后（`BackendLauncher.ensureRunning` / 重启动作收尾处）。
-  /// 端口文件读不到（还没起来 / 已停止）时保持原样，绝不猜。
+  /// 调用时机：后端启动完成后（`BackendLauncher.ensureRunning` / 重启动作收尾）。
+  /// 端口文件不可读（未启动 / 已停止）时保持原值，不做推测。
   Future<bool> refreshBaseUrlFromPortFile() async {
     if (_baseUrlFromUser && !isLocalBackendUrl(_baseUrl)) return false;
     final discovered = _baseUrlFromPortFile(projectRoot: _projectRoot);
@@ -500,10 +483,9 @@ class SettingsStore extends ChangeNotifier {
   Future<void> setBaseUrl(String value) async {
     var v = value.trim();
     final prefs = await SharedPreferences.getInstance();
-    // ⚠ **本机地址不是"用户配置"**（2026-10-12）：本机后端端口由它自己挑，真源只有
-    // `.run\api.json`。所以回环地址与"清空"走同一条路 —— 回到自动。
-    // 否则存下来的就是"当前这个随机端口"，下次后端一重启界面就永远连不上
-    // （而且这条偏好还会让 [refreshBaseUrlFromPortFile] 一直提前返回）。
+    // ⚠ **本机地址不属于手动配置**：本机后端端口由系统分配，唯一真源是 `.run\api.json`。
+    // 回环地址与"清空"走同一分支 —— 恢复自动。否则会保存当前随机端口，后端重启后
+    // 界面无法连接，且该偏好会使 [refreshBaseUrlFromPortFile] 提前返回。
     if (v.isEmpty || isLocalBackendUrl(v)) {
       _baseUrlFromUser = false;
       _baseUrl = defaultBaseUrl();
@@ -524,11 +506,11 @@ class SettingsStore extends ChangeNotifier {
     await prefs.setStringList(_kBaseUrlHistory, _baseUrlHistory);
   }
 
-  /// **自动挑到的地址**：只在本进程生效。
+  /// **自动选择的地址**：只在本进程生效。
   ///
-  /// 与 [setBaseUrl] 的区别就是"算不算用户手填"：这一条**不写 `_kBaseUrl`、也不置
-  /// `_baseUrlFromUser`** —— 下次冷启动重新挑一次才是"自动"（跨端地址本来就会变：
-  /// 换了 Wi-Fi、换到 Tailscale、模拟器换真机）。但它**进历史**，下次优先试它。
+  /// 与 [setBaseUrl] 的区别是**是否计为手动填写**：该方法**不写 `_kBaseUrl`、不置
+  /// `_baseUrlFromUser`** —— 下次冷启动重新选择才属于"自动"（跨端地址会变化：
+  /// 切换 Wi-Fi、切换到 Tailscale、模拟器换真机）。该地址**进入历史**，下次优先尝试。
   ///
   /// 返回 true = 地址真的变了（调用方要重建 api client）。
   Future<bool> adoptAutoBaseUrl(String value) async {
@@ -657,7 +639,7 @@ class SettingsStore extends ChangeNotifier {
   }
 
   /// 选产物缓存的原件预算（MB）。**当场生效**：缓存那边顺手淘汰一次，
-  /// 用户把 2GB 调到 512MB 之后占用必须马上降下来（见 `MediaCache.setOriginalBudget`）。
+  /// 把 2GB 调整为 512MB 后，占用必须立即下降（见 `MediaCache.setOriginalBudget`）。
   Future<void> setMediaCacheOrigBudgetMb(int mb) async {
     if (!kOriginalCacheBudgetChoicesMb.contains(mb)) return;
     if (_mediaCacheOrigBudgetMb == mb) return;

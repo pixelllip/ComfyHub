@@ -147,9 +147,8 @@ class InboundAuthApi {
   /// `POST /api/auth/devices/{id}/credentials` `{allow, allowUpload?}` ——
   /// 这台设备能不能**下行**密钥 / 能不能**上行**（改桌面上的）密钥。
   ///
-  /// 两个开关**分开**（`docs/pairing-design.md` §14.1）：读和写不是同一种权力，
-  /// 合成一个的后果是用户为了图方便把读打开、顺手也把写打开了 ——
-  /// 而写能让"下一次桌面自己发请求"用上别人塞进来的 key。
+  /// 两个开关**分开**（`docs/pairing-design.md` §14.1）：读与写是两种独立的权限；
+  /// 合并后开启读权限会一并开启写权限，而写权限允许后续桌面请求使用外部注入的 key。
   ///
   /// [allowUpload] 传 `null` 表示"这次只动下行那个开关"（**不发这个键**）：
   /// 旧后端不认识它，多发一个键不会报错但也不会生效，界面若要据此提示"旧版本"，
@@ -173,8 +172,8 @@ class InboundAuthApi {
   /// `POST /api/auth/devices/{id}/auto-approve` `{enabled}` ——
   /// 这台手机排队提交是否**免桌面批准**（默认 `false`）。
   ///
-  /// ⚠ 打开后，拿到这台手机（或它的配对令牌）的人可以**不经过桌面确认就消耗 GPU**。
-  /// 这是用户显式放权的一次动作：按设备生效、随时能关，界面上必须写明代价。
+  /// ⚠ 打开后，持有这台手机（或它的配对令牌）的一方可以**不经过桌面确认就消耗 GPU**。
+  /// 这是显式授权动作：按设备生效、可随时关闭，界面必须写明代价。
   Future<PairedDevice> setAutoApproveSubmits(
     String deviceId,
     bool enabled, {
@@ -196,7 +195,7 @@ class InboundAuthApi {
   ///  · 走的是**已配对设备**令牌 + 设备上的 `allowCredentialsUpload`（默认关）；
   ///  · 值只在请求体里出现一次，**不写日志、不回显**；
   ///  · [rev] 是"我读到的那一版"（`ai.credentials.rev`）：落后于桌面就回
-  ///    `STALE_IGNORED`（**宁可让用户重试一次，也不许悄悄覆盖**）。
+  ///    `STALE_IGNORED`（**只允许重试，不得静默覆盖**）。
   Future<CredentialUploadResult> uploadCredentials(
     Map<String, String> values, {
     int? rev,
@@ -401,15 +400,15 @@ class PairedDevice {
 
   /// 是否允许**这台设备改桌面上的 API Key**（上行，默认 `false`，§14.1）。
   ///
-  /// 旧后端没有这个字段 → 恒 `false`。界面据此如实说"这台后端还不支持上行密钥"，
-  /// **别**把它当成"用户没开"（两者的处置完全不同）。
+  /// 旧后端没有这个字段 → 恒 `false`。界面据此显示"这台后端还不支持上行密钥"，
+  /// **不要**当作"未开启"（两者处置不同）。
   final bool allowCredentialsUpload;
 
   /// 这台设备排队提交时是否**免桌面批准**（默认 `false`）。
   ///
   /// 打开后 `comfy_queue_submit` 推上来的提交会直接以 `approval='auto'` 进队列，
-  /// 不再等桌面点批准。代价是：拿到这台手机或它的配对令牌的人可以不经过桌面
-  /// 确认就消耗 GPU —— 所以这个开关必须由桌面用户显式打开、按设备、可随时撤销。
+  /// 不再等桌面点批准。代价：持有这台手机或它的配对令牌的一方可以不经过桌面确认
+  /// 就消耗 GPU。该开关只在桌面端显式开启、按设备生效、可随时撤销。
   final bool autoApproveSubmits;
 
   factory PairedDevice.fromJson(Map<String, dynamic> json) => PairedDevice(

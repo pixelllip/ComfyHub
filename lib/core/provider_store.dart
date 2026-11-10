@@ -9,11 +9,11 @@ import 'run_event_source.dart' show LocalHarnessRunEventSource;
 
 /// Provider 与模型目录的**读写来源**（M6 的另一半）。
 ///
-/// 用户拍板的第 4 条原话是"**手机完全可以独立配置 provider，有密钥的也同步到手机端**"：
-/// 密钥那一半（Keystore + 下行 `GET /api/ai/credentials` + 上行 `PUT`）早就做完了，
-/// 但**清单这一半一直不成立** —— 这一页的 provider / 模型 CRUD 清一色打 `AiApiClient`
-/// （桌面 HTTP），桌面不在线时手机上连"新建一个 provider / 改个 baseURL"都做不到，
-/// 而 `android/harness` 的本地库里 `ai_providers` / `ai_models` **本来就是本机表**
+/// 手机端支持**独立配置 provider**，密钥也可同步到手机端：
+/// 密钥部分（Keystore + 下行 `GET /api/ai/credentials` + 上行 `PUT`）已实现，
+/// 但**清单部分此前不成立** —— 这一页的 provider / 模型 CRUD 全部走 `AiApiClient`
+/// （桌面 HTTP），桌面不在线时手机上无法新建 provider 或修改 baseURL，
+/// 而 `android/harness` 本地库中的 `ai_providers` / `ai_models` **本来就是本机表**
 /// （`MobileSchema` 的同步范围之外）。
 ///
 /// | | 真源 | 说明 |
@@ -21,9 +21,9 @@ import 'run_event_source.dart' show LocalHarnessRunEventSource;
 /// | 桌面 | 后端库（`/api/ai/providers`） | 唯一真源：清单与模型目录都在那儿 |
 /// | 手机 | **本机库**（Kotlin `HarnessStore` 的 `ai_providers` / `ai_models`） | 桌面不在线也能建、能改；**这些 provider 只在这台手机上** |
 ///
-/// ⚠ **两条清单不自动合并**（`docs/pairing-design.md` §14.4）：同步的只有**密钥的明文**
-/// （用户显式点「推给桌面」那一个动作），清单各归各 —— 所以界面上必须**如实说一句**
-/// "这些 provider 只在这台手机上，桌面看不到它"，否则用户会以为建完桌面也能用。
+/// ⚠ **两条清单不自动合并**（`docs/pairing-design.md` §14.4）：只同步**密钥明文**
+/// （点「推给桌面」时），清单各自维护。界面必须**明确说明**"这些 provider 只在这台
+/// 手机上，桌面看不到"，避免被理解为桌面端同样可用。
 ///
 /// 三条纪律与 `CredentialStore` 同一套：
 ///  1. **手机上一条网络请求都不打**：走桥 → 本机库（`dart:io` 的网络栈在测试里也不会被碰）；
@@ -39,8 +39,8 @@ abstract class ProviderStore {
   ///
   /// 手机侧暂时**不能**：那两步要**由这一端自己**向上游发请求（还要用本机密钥 + 端点信任档
   /// 那套），而手机侧还没有 `provider_probe` 那一份实现。界面据此把这两个按钮**禁用并说明** ——
-  /// 不这么做的话用户点下去会拿到"Provider 不存在: x"（桌面根本不认识手机上这条 id），
-  /// 那是最难解释的一种失败。
+  /// 不这么做的话点击后会得到"Provider 不存在: x"（桌面不认识手机上的这条 id），
+  /// 这是最难解释的一类失败。
   bool get supportsProbe;
 
   Future<List<AiProvider>> listProviders();
@@ -50,7 +50,7 @@ abstract class ProviderStore {
   /// 与页面里已经拼好的那份 draft 逐字一致，两端实现都不翻译。
   ///
   /// id 已存在时**报错**（"Provider ID 已存在: x（ID 创建后不可修改）"，桌面同句），
-  /// 不静默覆盖 —— 覆盖会把用户正在用的那条的地址一起改掉。
+  /// 不静默覆盖 —— 覆盖会同时改掉正在使用的那条地址。
   Future<AiProvider> createProvider(Map<String, dynamic> draft);
 
   /// 更新一条已有的。**乐观锁**（AIH-007）：`value.revision` 必须与库里那一行相等，
@@ -88,12 +88,11 @@ class RemoteProviderStore implements ProviderStore {
   /// ⚠ 传 `toJson()`（**带 revision**）：后端靠它做乐观锁，少了它后端会拒
   /// （"缺少 revision，请刷新后重试"）。
   ///
-  /// ⚠ 但**刻意去掉 `endpointTrust`**（2026-10 用户要求：端点信任级别由软件自动决定，
-  /// 表单里不再让用户选）：这个键不传，后端就按**这次提交的新 baseURL** 重新推断
-  /// （`endpoint_guard::infer_trust`，见 `routes::update_provider`）。
-  /// 不这么做的话，"把一条公网 Provider 的地址改成本机"会带着旧的 `public` 档去校验，
-  /// 当场被拒（"端点信任级别 public 不允许访问主机 127.0.0.1"），而界面上**已经没有任何
-  /// 地方**能改这个档位了 —— 用户会卡在一个改不动的错误上。
+  /// ⚠ 但**刻意去掉 `endpointTrust`**（端点信任级别由软件自动推断，表单不提供该选项）：
+  /// 不传这个键时，后端按**本次提交的新 baseURL** 重新推断
+  /// （`endpoint_guard::infer_trust`，见 `routes::update_provider`）。否则把公网
+  /// Provider 的地址改成本机时会带着旧的 `public` 档校验，被拒
+  /// （"端点信任级别 public 不允许访问主机 127.0.0.1"），而界面上已无入口修改该档位。
   ///
   /// 手机侧是另一回事（[DeviceProviderStore] 照旧把这一行整份写回本机库）：
   /// 它的 `ai_providers.endpoint_trust` **没有任何地方读**，`HarnessStore.saveProvider`

@@ -101,7 +101,7 @@ class PairingPayload {
     final uri = Uri.tryParse(text);
     if (uri == null) return const PairingParse(error: '这不是一个能解析的二维码内容');
     if (uri.scheme != scheme || uri.host != host) {
-      // 如实把"扫到的是什么"说出来：用户往往是扫错了码（Wi-Fi 分享码、别的 App 的码）
+      // 错误文案带上扫到的实际内容（可能是 Wi-Fi 分享码或其他应用的码）
       final what = uri.scheme.isEmpty
           ? '一段普通文本'
           : '${uri.scheme}://${uri.host} 的码';
@@ -113,7 +113,7 @@ class PairingPayload {
       return const PairingParse(error: '这个配对码没有版本号 —— 多半不是 ComfyHub 生成的');
     }
     if (v != '$version') {
-      // ★ 版本不认识 ≠ 不是我们的码：如实让用户去更新 App
+      // 版本不认识不等于不是本应用的码：提示先更新 App。
       return PairingParse(
         error: '这个配对码是 v$v 格式，比这台 App 认识的新（v$version）—— 请先更新手机上的 ComfyHub',
       );

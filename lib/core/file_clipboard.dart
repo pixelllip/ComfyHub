@@ -32,14 +32,13 @@ class FileClipboard {
 
   static const MethodChannel _channel = MethodChannel('comfyhub/clipboard');
 
-  /// 通道**是不是真的接上了**。
+  /// 通道**是否已接通**。
   ///
-  /// ⚠ 这一条是 2026-10-18 补出来的，起因是我自己埋的一个坑：这个类里所有失败都是
-  /// **静默降级**的，于是"原生通道根本没注册 / 没编进产物"与"剪贴板里确实没有文件"
-  /// 表现**完全一样** —— 用户报"Ctrl+V 粘不上附件"时，连该查哪一半都不知道。
+  /// ⚠ 这个类的所有失败都是**静默降级**："原生通道未注册 / 未编进产物"与
+  /// "剪贴板里确实没有文件"表现**完全一样**，出现"Ctrl+V 粘不上附件"时无法区分原因。
   ///
-  /// 判据只有一条：**方法调用成功过一次**就算接上了；报 `MissingPluginException`
-  /// 就是没接上。别拿 `supported` 当判据 —— 那只是"平台对不对"。
+  /// 判据：**方法调用成功过一次**即视为接通；抛 `MissingPluginException` 即未接通。
+  /// 不要拿 `supported` 当判据 —— 它只表示"平台是否匹配"。
   static bool? _channelAlive;
 
   /// 通道见过没有（`null` = 还没问过）。界面据此给一次提示，别再让它静默下去。
@@ -115,10 +114,10 @@ class FileClipboard {
     );
   }
 
-  /// 把一批文件放进剪贴板（资源管理器里 Ctrl+V 能粘出文件）。失败回 `false`。
+  /// 把一批文件放进剪贴板（资源管理器里 Ctrl+V 能粘出文件）。失败返回 `false`。
   ///
-  /// 失败必须**如实**告诉用户（回 `false`），不能假装成功 —— 与 `_openFolder`
-  /// 那条既有纪律一致（"不能假装打开了"）。
+  /// 失败必须**如实**返回 `false`，不得返回成功；与 `_openFolder` 的约束一致
+  /// （"不能假装打开成功"）。
   static Future<bool> writeFiles(List<String> paths) async {
     if (!supported || paths.isEmpty) return false;
     return await _invoke<bool>('writeFiles', paths) ?? false;

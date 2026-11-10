@@ -1,38 +1,27 @@
 //! Windows：把 shared_preferences 的落盘位置固定在项目内（`<项目根>\app-support`）。
 //!
-//! ## 为什么（2026-09-28 用户报的现场，2026-09-29 改了方向）
+//! ## 约束
 //!
-//! ```text
-//! Error saving preferences to disk: PathAccessException: Cannot open file,
-//! path = 'C:\Users\Administrator\AppData\Roaming\com.example\viewer\shared_preferences.json'
-//! (OS Error: 拒绝访问。, errno = 5)
-//! ```
+//! 受限会话中，映像位于工作区内的进程只能写工作区（判据见 AGENTS §12）；
+//! debug / Release 的 viewer.exe 都在工作区内。写入 `%APPDATA%` 会返回
+//! `PathAccessException`（errno 5）。
 //!
-//! 根因**不是 ACL**：受限会话把"映像在工作区内"的进程整个关在工作区里，工作区之外写不了
-//! （判据与实测见 AGENTS §12）。而 debug / Release 的 viewer.exe 都在工作区内。
+//! 偏好属于 ComfyHub 自身产生的内容，按"自身产生的内容存在自身文件夹内"的约束，
+//! 默认落在项目内，不写入 `%APPDATA%`。首次运行会把 `%APPDATA%` 中已有的偏好
+//! 一次性导入（保留草稿与已选 provider-model）。设置不再跨安装共享。
 //!
-//! 原来的修法是"**默认位置写得进就一切照旧，写不进才重定向**"。方向错了：
-//! ① 判据是"探针能不能建文件"，而那取决于进程映像位置，于是同一条逻辑在源码树/发布包
-//!    给出相反结论；② 更根本的是 —— 偏好是 **ComfyHub 自己产生的内容**，
-//!    按"自己产生的内容存在自身文件夹内"这条，它默认就该在项目内，不该散在 `%APPDATA%`。
+//! ## 落点变更（2026-11-06）
 //!
-//! **现在：默认就落在项目内，并一次性把 `%APPDATA%` 里已有的那份导入过来**
-//! （用户上次的草稿 / 选中的 provider-model 不丢）。代价是设置不再跨安装共享 ——
-//! 但 db 与 storage 本来就在各自文件夹里，这与"发布包是便携的"本来就是一致的。
+//! 数据目录（库 + `storage`）可由 `data-dir.json` 指向其他磁盘。偏好不随之移动：
+//! 读取偏好时数据目录尚不可知，且数据目录被删除后设置不应消失。偏好因此位于
+//! **运行根目录下**，与数据分离；旧位置的文件一次性复制，不删除旧文件。
 //!
-//! ## 2026-11-06：从 `<根>\storage\app-support` 搬到 `<根>\app-support`
+//! ## 实现
 //!
-//! 数据目录（库 + `storage`）现在可以被用户搬到别的盘（`data-dir.json`）。
-//! 偏好**不能跟着走**：它必须在"数据目录还不知道在哪"的时候就能读，
-//! 而且用户删掉旧数据目录之后设置不该一起消失。所以它挪到**运行根目录下**、
-//! 与数据分开；旧位置的文件一次性拷过来（拷完不删旧文件，回退时还在）。
-//!
-//! ## 怎么实现
-//!
-//! `shared_preferences_windows` 把 `pathProvider` 挂成**公开实例字段**
-//! （`SharedPreferencesWindows.pathProvider`）—— 在第一次碰 SharedPreferences 之前
-//! 把它换成"指向项目内"的实现即可（`pathProvider` 是这个包给的**唯一注入缝**，
-//! 标了 `@visibleForTesting`，但没有官方替代 —— 不接它就没有别的办法改落盘位置）。
+//! `shared_preferences_windows` 把 `pathProvider` 作为公开实例字段
+//! （`SharedPreferencesWindows.pathProvider`）。在首次访问 SharedPreferences 之前
+//! 将其替换为指向项目内的实现（`pathProvider` 是该包**唯一注入点**，标记为
+//! `@visibleForTesting`，没有官方替代）。
 //!
 //! VM service 的 DevFS 走 `%TEMP%`，代码里改不了（`Directory.systemTemp` 取自本进程 TMP/TEMP），
 //! 由 `windows\runner\main.cpp` 在引擎起来之前处理。

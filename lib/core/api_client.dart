@@ -210,7 +210,7 @@ class ApiClient {
   ///
   /// [probe] 为真时后端会真的向 Civitai / Danbooru 各发一次请求
   /// （目标是后端写死的，界面不能传 URL）—— 只有它能把"配置写对了"
-  /// 和"配置写对了但这条链路其实不通"分开。所以只在用户点「测试出网」时用。
+  /// 和"配置写对了但这条链路其实不通"分开。只在点「测试出网」时使用。
   Future<OutboundInfo> outbound({bool probe = false}) async =>
       OutboundInfo.fromJson(
         Map<String, dynamic>.from(
@@ -370,7 +370,7 @@ class ApiClient {
   ///
   /// 与 [promptMedia]（只认 `prompt_id` 直连）的区别：自动捕获的产物指向的是
   /// **另一条**提示词行，所以直连会漏掉它们 —— 而"用这套预设同款提示词的产物"
-  /// 正是用户要看到的那些。
+  /// 正是需要展示的那些。
   Future<List<MediaAsset>> presetMedia(int id) async {
     final json = await _get('/api/presets/$id/media') as List;
     return json
@@ -522,7 +522,7 @@ class ApiClient {
     bool? favorite,
     String? source,
 
-    /// 标记 / 取消标记成人内容（用户 bug 2026-09-20：模糊只作用于标记过的条目）
+    /// 标记 / 取消标记成人内容（模糊只作用于标记过的条目）
     bool? nsfw,
     int? collectionId,
     bool clearCollection = false,
@@ -550,7 +550,7 @@ class ApiClient {
 
   /// 给库里已有的提示词与产物补一遍自动标签（标签页的「补标签」按钮）。
   ///
-  /// 后端只追加、不删用户标签；返回的三个数字都是**新增**条数。
+  /// 后端只追加、不删除已有标签；返回的三个数字都是**新增**条数。
   Future<AutoTagReport> autoApplyTags() async => AutoTagReport.fromJson(
     Map<String, dynamic>.from(
       await _send('POST', '/api/tags/auto-apply', const <String, dynamic>{})
@@ -603,8 +603,8 @@ class ApiClient {
 
   /// **重新自动整理**：把库里已存的产物按当前规则重算一遍分组。
   ///
-  /// ⚠ 后端**只重算算法分出来的组**（`origin='auto'`）：用户新建的 / 被用户改过的集合、
-  /// 以及"用户已移出"的产物一个都不动。这条纪律在前端**不许绕**（别在本地先拆再合）。
+  /// ⚠ 后端**只重算算法分出来的组**（`origin='auto'`）：手动新建或修改过的集合、
+  /// 以及已移出的产物都不改动。前端不得绕开（不在本地先拆再合）。
   ///
   /// 返回这次重算了多少张。
   Future<int> regroupCollections() async {
@@ -630,7 +630,7 @@ class ApiClient {
 
   /// **新建一个手动集合**，并把 [mediaIds] 一起移进去。
   ///
-  /// 400 的两种情形都要如实显示给用户（后端的原话）：
+  /// 400 的两种情形都要如实显示（后端原文）：
   /// ① 选中的产物 kind 不一致；② 一条都没选。
   Future<MediaCollection> createCollection(
     List<int> mediaIds, {
@@ -645,7 +645,7 @@ class ApiClient {
 
   /// **给集合改名**（集合详情里的「重命名」）。
   ///
-  /// 后端会顺手把这一组转成手动（`origin = manual`）：用户起了名字，它就归用户，
+  /// 后端会顺手把这一组转成手动（`origin = manual`）：命名后即归为手动，
   /// 下次「重新自动整理」不会把组连同名字一起解散。
   Future<MediaCollection> renameCollection(int id, String title) async {
     final json = await _send('PATCH', '/api/media/collections/$id', {
@@ -707,12 +707,12 @@ class ApiClient {
     Map<String, dynamic>.from(await _get('/api/capture/status') as Map),
   );
 
-  /// 探测 ComfyUI 装在哪（用户"其他建议"第 3 条）。**只读**：不会自动改配置。
+  /// 探测 ComfyUI 安装位置。**只读**：不会自动修改配置。
   Future<ComfyLocation> locateComfy() async => ComfyLocation.fromJson(
     Map<String, dynamic>.from(await _get('/api/capture/locate') as Map),
   );
 
-  /// 把探测到的输出目录写进配置（用户点了「使用这个目录」）。
+  /// 把探测到的输出目录写进配置（点「使用这个目录」时调用）。
   Future<CaptureConfig> applyComfyLocation(String outputDir) async =>
       CaptureConfig.fromJson(
         Map<String, dynamic>.from(
@@ -748,11 +748,11 @@ class ApiClient {
     ),
   );
 
-  /// 把**本机 ComfyUI 里已经保存的工作流文件**批量读进库（用户 bug ⑤）。
+  /// 把**本机 ComfyUI 里已经保存的工作流文件**批量读进库。
   ///
-  /// `dir` 不传就自动发现本机 ComfyUI 的 `user\<用户>\workflows` 目录 ——
-  /// 过去这些工作流只有"在 ComfyUI 里跑过一次被捕获"或"AI 手动按路径读"才会进库，
-  /// 首次使用时库里是空的。
+  /// `dir` 不传就自动发现本机 ComfyUI 的 `user\<账号>\workflows` 目录 ——
+  /// 这些工作流只有在 ComfyUI 里运行过一次被捕获、或按路径手动读取时才会进库，
+  /// 首次使用时库为空。
   Future<ImportWorkflowsResult> importWorkflowFiles({
     String? dir,
     int limit = 200,
@@ -767,7 +767,7 @@ class ApiClient {
 
   /// 本机 ComfyUI 里已经保存的工作流文件（**只读**，`GET /api/capture/workflows`）。
   ///
-  /// 「选择现有工作流」用：给用户一个能点、能看蓝图、能让 AI 照着跑的清单。
+  /// 「选择现有工作流」使用：提供可点选、可查看蓝图、可由 AI 照着运行的清单。
   /// `q` 按文件名过滤；不传就按最近修改排序。
   Future<ComfyWorkflowList> listWorkflowFiles({
     String? q,

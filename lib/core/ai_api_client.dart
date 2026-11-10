@@ -123,7 +123,7 @@ class AiApiClient {
         ),
       );
 
-  /// 模型发现：返回候选，**不落库**；用户勾选后再由 [saveModels] 保存（AIH-009）。
+  /// 模型发现：返回候选，**不落库**；勾选后由 [saveModels] 保存（AIH-009）。
   Future<AiDiscoverResult> discoverModels(String id) async =>
       AiDiscoverResult.fromJson(
         Map<String, dynamic>.from(
@@ -161,7 +161,7 @@ class AiApiClient {
   // --- 联网搜索（Keenable）的可选密钥 -------------------------------------
   //
   // 与 Provider 凭据同一套纪律（AIH-012）：只写不读、状态里没有值、
-  // env 来源只读。出厂免密钥就能用，这里只是给想提额的用户一个入口。
+  // env 来源只读。出厂配置免密钥即可使用；此入口用于配置额度更高的密钥。
 
   Future<AiCredentialStatus> webSearchCredentialStatus() async =>
       AiCredentialStatus.fromJson(
@@ -227,7 +227,7 @@ class AiApiClient {
         ),
       );
 
-  /// 注册（或覆盖）用户 skill；后端 201 + SkillDto。
+  /// 注册（或覆盖）自定义 skill；后端 201 + SkillDto。
   Future<AiSkill> createSkill({
     required String name,
     required String description,
@@ -244,7 +244,7 @@ class AiApiClient {
     ),
   );
 
-  /// 删除用户 skill。内置 skill 会被后端拒绝（错误消息原样展示给用户）。
+  /// 删除自定义 skill。内置 skill 会被后端拒绝（错误消息原样展示）。
   ///
   /// 返回**真的删掉了没有**：后端对"名字不存在"回 200 + `{deleted:false}`，
   /// 只按 2xx 判成功会让界面弹一句"已删除"而文件还在。
@@ -257,7 +257,7 @@ class AiApiClient {
     return true;
   }
 
-  /// 停用 / 启用一个 skill（内置与用户都允许；只影响对话，不动文件）。
+  /// 停用 / 启用一个 skill（内置与自定义 skill 都允许；只影响对话，不改动文件）。
   Future<AiSkill> setSkillEnabled(String name, bool enabled) async =>
       AiSkill.fromJson(
         Map<String, dynamic>.from(
@@ -270,7 +270,7 @@ class AiApiClient {
         ),
       );
 
-  /// skills 投放口在哪（界面显示绝对路径，让用户知道往哪个文件夹拷）。
+  /// skills 投放口位置（界面显示绝对路径，用于说明应复制到哪个文件夹）。
   Future<AiSkillRoots> skillRoots() async => AiSkillRoots.fromJson(
     Map<String, dynamic>.from(await _get('/api/ai/skills/roots') as Map),
   );
@@ -515,9 +515,9 @@ class AiApiClient {
     Map<String, dynamic>.from(await _get('/api/ai/pending') as Map),
   );
 
-  // --- 提问（用户建议 ⑥）------------------------------------------------
+  // --- 提问 -------------------------------------------------------------
 
-  /// 这个 Run 现在还在等用户回答什么（没有就返回 null）。
+  /// 当前 Run 等待回答的问题（没有则返回 null）。
   ///
   /// 给"界面重开 / 断线重连"用：SSE 里那条 `user.question` 事件可能是在界面
   /// 没挂着的时候发出的，靠这个接口把那张卡片补回来。
@@ -533,7 +533,7 @@ class AiApiClient {
   /// 回答一条提问。[optionIndex] 与 [answer] 至少给一个。
   ///
   /// 返回 `accepted`：false 表示这条提问已经结束了（超时 / Run 已停），
-  /// 界面要如实告诉用户"这次回答没被采纳"，不能假装成功。
+  /// 界面需显示"这次回答未被采纳"，不得显示成功。
   Future<bool> answerQuestion(
     String questionId, {
     int? optionIndex,
@@ -547,7 +547,7 @@ class AiApiClient {
     return raw is Map && raw['accepted'] == true;
   }
 
-  /// 跳过一条提问：当作"用户没有回答"放行（模型据此基于已有信息继续）。
+  /// 跳过一条提问：按"未回答"放行（模型据此基于已有信息继续）。
   Future<bool> skipQuestion(String questionId) async {
     final raw = await _send(
       'POST',
@@ -579,11 +579,10 @@ class AiApiClient {
 
   // --- 模型能力目录（在线更新 / 实测校准，2026-09-23） ----------------------
   //
-  // ⚠ **内置模型目录（`/api/ai/builtin/*`）的客户端已删**（2026-10 用户要求：
-  // 「模型能力不再依赖内置目录」）。那份冻结副本抄自 `%USERPROFILE%\.dsh\settings.yaml`，
-  // 而 AGENTS §10 已经定了"运行期不许依赖 `.dsh`"。后端那两条端点还在
-  // （`server-rs/src/builtin.rs`），但界面上**不再有任何一个入口**去调它们 ——
-  // 能力预填的来源是**在线目录 models.dev**（下面这三条）。
+  // ⚠ **内置模型目录（`/api/ai/builtin/*`）的客户端已删除**：能力预填不再依赖内置目录。
+  // 那份冻结副本抄自 `%USERPROFILE%\.dsh\settings.yaml`，而 AGENTS §10 规定
+  // "运行期不许依赖 `.dsh`"。后端那两条端点仍在（`server-rs/src/builtin.rs`），
+  // 但界面上**没有任何入口**调用它们 —— 能力预填来源是**在线目录 models.dev**（下面三条）。
 
   /// 能力目录状态（在线目录的新鲜度 + 手工目录条数 + 校准开关）。
   Future<AiCapabilityStatus> capabilityStatus() async =>
@@ -672,9 +671,9 @@ class AiApiClient {
 
   /// 上传**内存里的字节**（剪贴板里的截图走这条）。
   ///
-  /// 为什么不先落成临时文件再走 [uploadAttachments]：剪贴板图片没有"用户选中的
-  /// 那个文件"，为它造一个临时路径既多一处清理责任，也把 AGENTS §13 的落盘约定
-  /// （内容只存在自身文件夹里）搞复杂。字节直接进 multipart，落盘由后端负责。
+  /// 剪贴板图片没有对应的已选文件；构造临时路径会多一处清理责任，并违反
+  /// AGENTS §13 的落盘约定（内容只存在自身文件夹里）。字节直接进入 multipart，
+  /// 落盘由后端负责。
   ///
   /// ⚠ **不传 contentType**：后端以文件签名判定类型（`file_kind`），前端声明的
   /// MIME 只是线索；声明错了反而会撞上"签名与声明不符"那条拒绝。
@@ -703,8 +702,7 @@ class AiApiClient {
   /// **画廊产物**（不是附件）的缩略图 / 封面地址。
   ///
   /// 这两个必须走画廊的 `/api/media/{id}/...`：附件那两条接口的 id 空间完全不同，
-  /// 把媒体 id 塞进附件接口只会 404 —— 界面上就是"生成的产物预览图不可用"
-  /// （用户报的 bug）。图片走 `thumb`，视频走 `poster`（后端抽第一帧）。
+  /// 把媒体 id 塞进附件接口只会 404 —— 界面上就是"生成的产物预览图不可用"。图片走 `thumb`，视频走 `poster`（后端抽第一帧）。
   String mediaThumbUrl(int mediaId) => '$baseUrl/api/media/$mediaId/thumb';
   String mediaPosterUrl(int mediaId) => '$baseUrl/api/media/$mediaId/poster';
 
@@ -720,7 +718,7 @@ class AiApiClient {
     return {if (token != null && token.isNotEmpty) 'X-ComfyHub-Token': token};
   }
 
-  /// 本次生成真正入库的那份提示词 / 工作流原文（用户建议 ①："生成的产物"包括生成的工作流）。
+  /// 本次生成真正入库的提示词 / 工作流原文（"生成的产物"包括生成的工作流）。
   ///
   /// 后端没存过工作流时返回 null（HTTP 204），界面据此说"这次没有工作流"。
   /// 走画廊的 `/api/prompts/{id}/workflow`：与上面那两个媒体地址同一个道理，
@@ -944,7 +942,7 @@ class AiApiClient {
   Future<void> cancelRun(String runId) async =>
       _send('POST', '/api/ai/runs/$runId/cancel');
 
-  /// ComfyUI 实时进度（用户"其他建议"第 1 条）：队列状态 + 最近提交的任务。
+  /// ComfyUI 实时进度：队列状态与最近提交的任务。
   ///
   /// 走的是同一个后端的 `/api/capture/jobs`（不是 `/api/ai/*`），所以用同一个客户端实例、
   /// 同一套错误处理；**不接受任意 URL**，和工具层一样只认应用配置里的 ComfyUI 地址。

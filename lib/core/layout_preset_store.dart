@@ -28,10 +28,10 @@ class LayoutPreset {
     'spec': spec.toJson(),
   };
 
-  /// 读一份存下来的布局；**坏数据返回 null，绝不抛**。
+  /// 读一份存下来的布局；**坏数据返回 null，不抛异常**。
   ///
-  /// 这个文件用户可能手改，也可能被老版本写坏。读的时候崩掉的表现是
-  /// "整个布局库打不开"，比丢一条严重得多。
+  /// 文件可能被手动修改，也可能被旧版本写坏。读取时抛异常的表现是
+  /// "整个布局库打不开"，影响大于丢失一条记录。
   static LayoutPreset? fromJson(Object? raw) {
     if (raw is! Map) return null;
     final map = Map<String, Object?>.from(raw);
@@ -52,16 +52,15 @@ class LayoutPreset {
   }
 }
 
-/// 布局库。落在 `SharedPreferences`（Windows 上就是
-/// `<根>\storage\app-support\shared_preferences.json`，见 `portable_paths.dart`）。
+/// 布局库。存放在 `SharedPreferences`（Windows 上为
+/// `<根>\app-support\shared_preferences.json`，见 `portable_paths.dart`）。
 ///
-/// 为什么不是新开一张表：一份布局只有几 KB，没有跨设备同步与查询需求，
-/// 而 `SharedPreferences` 在两端都已经接好了落盘位置与迁移。等它真的要
-/// 在手机和桌面之间同步时，再搬到 `server-rs` 的库里 —— 那时形状已经稳定了。
+/// 一份布局只有几 KB，没有跨设备同步与查询需求；`SharedPreferences` 在两端已接入
+/// 落盘位置与迁移。需要跨设备同步时再迁移到 `server-rs` 的库。
 class LayoutPresetStore {
   LayoutPresetStore({SharedPreferences? prefs}) : _injected = prefs;
 
-  /// 偏好键。**改名等于清空用户的布局库**，别动。
+  /// 偏好键。**改名等同于清空布局库**，不要修改。
   static const String prefsKey = 'comfyhub.layoutPresets';
 
   final SharedPreferences? _injected;

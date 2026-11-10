@@ -5,16 +5,14 @@ import 'package:flutter/foundation.dart'
 
 /// 「这台机器是不是 Windows 桌面端」。
 ///
-/// 设置首页有几项**只有 Windows 桌面端才有**：本地服务（后端 + 数据库）、
-/// 数据目录、导出全部产物。手机连的是桌面的后端，本机既没有 Rust 后端可拉，
-/// 也没有盘符与资源管理器 —— 这些入口在手机上一条都不该出现
-/// （用户 2026-09-28 与 2026-11-08 两次报的都是同一件事：设置页出现了
-/// 只有电脑才能用的功能）。
+/// 设置首页有几项只在 Windows 桌面端存在：本地服务（后端 + 数据库）、数据目录、
+/// 导出全部产物。手机连接的是桌面后端，本机没有 Rust 后端可启动，也没有盘符与
+/// 资源管理器，这些入口在手机上不显示。
 ///
-/// ⚠ 单测跑在 Windows 上，`Platform.isWindows` 永远是 true；所以先用
-/// `debugDefaultTargetPlatformOverride` 兜住"模拟手机"的用例
-/// （与 `scroll_linked_title.dart` 的 `useCollapsingPageTitle` 同一套做法）。
-/// 正式运行时它是 null，判据仍然只有真实平台。
+/// ⚠ 单测在 Windows 上运行，`Platform.isWindows` 恒为 true；因此先用
+/// `debugDefaultTargetPlatformOverride` 覆盖"模拟手机"的用例
+/// （与 `scroll_linked_title.dart` 的 `useCollapsingPageTitle` 同一做法）。
+/// 正式运行时该值为 null，判据只取真实平台。
 bool get isWindowsDesktopHost {
   if (kIsWeb) return false;
   final override = debugDefaultTargetPlatformOverride;

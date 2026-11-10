@@ -7,30 +7,29 @@ import 'package:flutter/services.dart';
 
 /// **平台主题色（系统强调色）检测**。
 ///
-/// 用户 2026-10-24 问："能检测用户所在平台的主题色（如果可用），并自动套用吗？"
-/// —— 能读到的平台就把它当 `ColorScheme.fromSeed` 的种子色，读不到就回退到
-/// [AppTheme.defaultSeed]（以前那套深紫）。
+/// 能读到强调色的平台用它作为 `ColorScheme.fromSeed` 的种子色，读不到时回退到
+/// [AppTheme.defaultSeed]。
 ///
-/// ## 为什么不是 Flutter 自带的 API
+/// ## 数据来源
 ///
-/// Flutter 只有 `MediaQuery.platformBrightness`（明 / 暗），**没有**"系统强调色"
-/// 这一项。各平台得自己取：
+/// Flutter 只提供 `MediaQuery.platformBrightness`（明 / 暗），不提供系统强调色，
+/// 各平台分别读取：
 ///
-/// | 平台 | 来源 | 能不能取到 |
+/// | 平台 | 来源 | 可用性 |
 /// | --- | --- | --- |
-/// | Windows 10/11 | `HKCU\…\Explorer\Accent\AccentColorMenu`（ABGR）；取不到再退 `DWM\ColorizationColor`（ARGB） | ✅ |
-/// | Android 12+ | 系统资源 `android:color/system_accent1_500`（Material You 的壁纸取色） | ✅ |
-/// | 其他 | — | ❌ 回退默认 |
+/// | Windows 10/11 | `HKCU\…\Explorer\Accent\AccentColorMenu`（ABGR）；取不到再退 `DWM\ColorizationColor`（ARGB） | 可用 |
+/// | Android 12+ | 系统资源 `android:color/system_accent1_500`（Material You 的壁纸取色） | 可用 |
+/// | 其他 | — | 回退默认 |
 ///
-/// Windows 走 **`dart:ffi` 直接读注册表**，刻意不引入 `dynamic_color` 之类的
-/// 插件，也不改 `windows/` 原生代码：后端 / 原生侧一个字都不用动，也不需要为了
-/// 这一项重编 release 产物。⚠ FFI 的库句柄**只在 Windows 分支里开**（顶层
-/// `DynamicLibrary.open('msvcrt.dll')` 在 Android 上会当场炸）。
+/// Windows 通过 **`dart:ffi` 直接读注册表**，不引入 `dynamic_color` 等插件，
+/// 也不修改 `windows/` 原生代码：后端与原生侧无需改动，也不需要重编 release 产物。
+/// ⚠ FFI 库句柄只在 Windows 分支打开（顶层 `DynamicLibrary.open('msvcrt.dll')`
+/// 在 Android 上会直接报错）。
 ///
 /// ## 检测时机
 ///
-/// `main()` 在 `runApp` 之前 `await SystemAccent.detect()`：主题是**首帧就要用**的，
-/// 晚一步就会先闪一下默认紫再换色。用户在设置页点「重新检测」时会再跑一次
+/// `main()` 在 `runApp` 之前 `await SystemAccent.detect()`：主题首帧就要使用，
+/// 延迟会导致先显示默认色再切换。设置页点「重新检测」时会再执行一次
 /// （`SettingsStore.refreshSystemAccent()`），随后由 `SettingsStore` 通知重建
 /// `MaterialApp`。
 class SystemAccent {

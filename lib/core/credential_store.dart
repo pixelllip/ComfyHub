@@ -13,7 +13,7 @@ import 'run_event_source.dart';
 /// | | 真源 | 说明 |
 /// | --- | --- | --- |
 /// | 桌面 | 后端托管文件 / 环境变量（`CredentialService`） | 值不回读（AIH-012） |
-/// | 手机 | **本机 Android Keystore** | 桌面的 key 要么用户在手机上单独填，要么显式点「从桌面同步密钥」拉下来（§11.2），要么反过来把自己这把推上去（§14） |
+/// | 手机 | **本机 Android Keystore** | 桌面的 key 需要在手机上单独填写，或经「从桌面同步密钥」拉取（§11.2），或从手机反向推送（§14） |
 ///
 /// 这条分叉以前没有：界面清一色打 `PUT /api/ai/providers/{id}/credentials`，
 /// 于是手机上**根本没有任何入口**把 key 放进 Keystore —— 手机 harness 再完整也永远发不出
@@ -25,7 +25,7 @@ import 'run_event_source.dart';
 ///    "有没有 / 从哪来 / 能不能改"（`statusOf`）；
 /// 2. **空 ref 是合法状态**（不是错误）：它表示"这条 provider 压根不需要密钥"，
 ///    与"配了但没有值"是两回事（桌面 `describe` 的三分支之一）；
-/// 3. **上行是显式动作**：没有任何"自动互推"（那是静默改用户凭据）。
+/// 3. **上行是显式动作**：不存在自动互推（自动互推会静默修改凭据）。
 abstract class CredentialStore {
   /// 手机（本机密钥库）还是桌面（后端托管）。
   bool get isLocal;
@@ -44,7 +44,7 @@ abstract class CredentialStore {
 
   /// ⚠ **全仓唯一一处允许把密钥明文读出来的地方**（`docs/pairing-design.md` §14.4）。
   ///
-  /// 它存在的唯一理由：用户显式点「把本机密钥推给桌面」时，值必须离开本机。
+  /// 用途：点「把本机密钥推给桌面」时，值必须离开本机（唯一出口）。
   /// 名字刻意**不叫** `read` / `get` —— 一出现就说明"有东西要出本机"，评审时能一眼看见。
   ///
   /// 三条不许破：
@@ -78,7 +78,7 @@ class RemoteCredentialStore implements CredentialStore {
   /// 桌面自己就是密钥的真源 —— 没有"把桌面上的密钥推给桌面"这回事。
   ///
   /// 抛而不是回 `null`：回 null 会让调用方以为"这条没有值"，
-  /// 于是静默少推一把 key（而用户点的明明是"全推上去"）。
+  /// 于是静默漏推一条 key（与"全推上去"的预期不符）。
   @override
   Future<String?> reveal(AiProvider provider) =>
       throw StateError('桌面自己就是密钥的真源（reveal 只在手机上、且只在"推给桌面"那一个动作里用）');
@@ -116,8 +116,8 @@ class DeviceCredentialStore implements CredentialStore {
         false;
     return AiCredentialStatus(
       configured: has,
-      // `keystore` 是**手机侧专有**的来源名：它绝不能与 `managed` 混在一起 ——
-      // 混了用户就会以为"桌面上配过、手机也能用"，而实际上手机上一把都没有。
+      // `keystore` 是**手机侧专有**的来源名：不得与 `managed` 混用 ——
+      // 混用会让"桌面上配过、手机也能用"的假设成立，而手机上实际没有任何密钥。
       source: has ? 'keystore' : 'none',
       // 本机密钥库永远可写（要能改、也要能清掉一把配错的）
       writable: true,
