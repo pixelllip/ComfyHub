@@ -3,11 +3,11 @@
 //!
 //! # 两件工具解决的是同一类现场：**模型不看清楚就硬提交**
 //!
-//!  - [`tool_check_inputs`]（用户建议 ⑤，2026-09-20）：用户的原话是
-//!    "用户没有提供参考图，但是他引导的工作流的节点用到参考图"。图里那个 `LoadImage`
+//!  - [`tool_check_inputs`]：典型场景是
+//!    "未提供参考图，但引导的工作流节点需要参考图"。图里那个 `LoadImage`
 //!    要么绑着上次捕获时的某个 jpg（跟本次请求无关的文件），要么压根没连 ——
-//!    模型不看清楚就提交，ComfyUI 只回一句缺输入，**用户看到的是"AI 说生成了、其实没跑起来"**。
-//!  - [`tool_fit_workflow`]（用户建议 ①，2026-09-21）：即"可以使用 civitai 等网站查找符合
+//!    模型未核对就提交时，ComfyUI 只返回缺输入，**表现为"AI 报告已生成、实际未执行"**。
+//!  - [`tool_fit_workflow`]：即"可以使用 civitai 等网站查找符合
 //!    要求的工作流，**优先根据本机已有的模型修改该工作流**"。中间缺的那一步是
 //!    "图里点名的这个 `.safetensors`，本机上哪个文件能顶"；现场（`b5233fb4` seq6）里
 //!    模型只能手读 safetensors 头部去判断"那个 13.49 GB 的 checkpoint 是裸 DiT"。
@@ -16,7 +16,7 @@
 //!
 //! 1. **只报不改**：两件工具都不生成图、不写文件、不提交。`comfy_fit_workflow` 吐出来的是一份
 //!    报告 + 一份可以直接贴进 `comfy_submit(overrides=…)` 的建议 —— 要真生效必须由模型
-//!    明明白白写进调用参数（还会过审批闸门），"AI 悄悄把用户的模型换掉了"因此不可能发生。
+//!    显式写入调用参数（还会经过审批闸门），"AI 擅自替换模型"因此不会发生。
 //! 2. **不猜也不编**：认不出来的一律如实说（`kind=unknown` 走
 //!    [`InputKind::Parameter`]、模型配不上就报 `missing`），
 //!    **绝不**为了好看硬塞一个"最接近的"上去（配对判据见 [`crate::comfy::comfy_models`]）。
@@ -36,7 +36,7 @@
 //! `comfyModels ?: throw COMFY_DISABLED`（本机模型清单能力没启用时拒掉）——
 //! 那个能力在 Kotlin 里是**可注入的**，而 Rust 这边（与 `comfy_env_report` 一样）
 //! 直接调 [`crate::comfy::comfy_models::inventory`]，没有"没启用"这一档，所以这条分支**没有对应物**。
-//! 它不影响任何用户可见行为：两种实现里清单都拿得到。
+//! 它不影响界面行为：两种实现都能获取清单。
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -74,13 +74,13 @@ const VIRTUAL_NODES: &[&str] = &[
 /// 待补输入的种类 —— 决定"下一步该干什么"，所以单独列出来（`InputKind.wire` 逐字对照）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InputKind {
-    /// 等一张图（附件投放 / 问用户要）
+    /// 等待一张图（附件投放 / 请求提供）
     Image,
     /// 等一段视频（本机没有投放通道）
     Video,
     /// 连线型输入空着（照 openInputs 补线，别猜）
     Connection,
-    /// 控件型输入没值（覆盖参数或问用户）
+    /// 控件型输入无值（覆盖参数或请求提供）
     Parameter,
 }
 
@@ -111,7 +111,7 @@ pub struct MissingInput {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkflowInputReport {
     pub missing: Vec<MissingInput>,
-    /// 本次附件就能解决的位置（**不列进"要用户补"**）。
+    /// 本次附件即可解决的位置（**不列入"需补充"**）。
     pub supplied_by_attachment: Vec<String>,
     pub node_count: usize,
 }
@@ -121,7 +121,7 @@ impl WorkflowInputReport {
         self.missing.is_empty()
     }
 
-    /// 有没有"必须用户出手"的（图 / 视频）：这两类硬提交必然失败。
+    /// 是否存在"必须人工处理"的（图 / 视频）：这两类硬提交必然失败。
     pub fn has_external_asset_gap(&self) -> bool {
         self.missing
             .iter()
@@ -175,7 +175,7 @@ impl WorkflowInputReport {
     /// 给模型看的一小段：**每条一行**，带头部结论。
     ///
     /// 结论先行（"这份工作流还等着外部给输入"）是有意的：模型最容易漏掉的正是这一句，
-    /// 而它决定了后面该问用户还是该直接提交。
+    /// 它决定后续是请求补充还是直接提交。
     pub fn render(&self) -> String {
         let mut text = String::new();
         if self.missing.is_empty() {
@@ -231,7 +231,7 @@ fn append_attachment_note(sb: &mut String, supplied: &[String]) {
 /// 扫一份 **API 格式**节点图（`{"1": {"class_type": "...", "inputs": {...}}, ...}`）。
 ///
 /// `has_image_attachment` = 本次请求是否带了图片附件。带了的话，图片类缺口不算"缺"——
-/// 模型手里就有图，下一步是 `comfy_use_attachment` 投放，不该被报成"要用户补"。
+/// 模型已持有图片，下一步是 `comfy_use_attachment` 投放，不应报为"需补充"。
 pub fn scan(graph: &Map<String, Value>, has_image_attachment: bool) -> WorkflowInputReport {
     let mut missing: Vec<MissingInput> = Vec::new();
     let mut known: Vec<String> = Vec::new();
@@ -262,7 +262,7 @@ pub fn scan(graph: &Map<String, Value>, has_image_attachment: bool) -> WorkflowI
             };
             if gap == InputKind::Image && has_image_attachment {
                 // 本次带了图：图片缺口由 `comfy_use_attachment` 投放解决，
-                // 记成"已知道"而不是"要用户补" —— 两条混在一起模型就会去问用户要图。
+                // 记为"已知"而不是"需补充" —— 两者混淆会导致模型请求提供图片。
                 known.push(format!("{node_id}.{name}（本次附件可以投放）"));
                 continue;
             }
@@ -299,7 +299,7 @@ fn gap_of(class_type: &str, name: &str, value: &Value) -> Option<InputKind> {
         matches!(value, Value::Null) || matches!(value, Value::String(s) if s.trim().is_empty());
 
     // LoadImage 的 image：就算绑着上次捕获的那个 jpg 也是一条"你要自己决定用哪张"的缺口。
-    // 这是用户建议 ⑤ 那个现场的核心一条 —— 不报出来，模型就会硬提交一个不存在的文件。
+    // 这是该场景的核心一条 —— 不报出时，模型会提交一个不存在的文件。
     if class_type == "LoadImage" && name == "image" {
         return Some(InputKind::Image);
     }
@@ -441,16 +441,16 @@ pub fn tool_check_inputs(
 pub enum FitStatus {
     /// 本机有一模一样的（归一化后同名）**且当前实例能加载** —— 唯一能自动替换的一档。
     Exact,
-    /// 本机有更接近的（分数 ≥ 阈值）：候选给出来，用不用由模型 / 用户定。
+    /// 本机存在更接近的（分数 ≥ 阈值）：给出候选，是否使用由模型 / 界面决定。
     Substitute,
     /// **硬盘上有同名的，但当前跑着的那个实例枚举不到它**（2026-09-22 新加，那次事故的直接产物）。
     ///
     /// 机制：`launch_comfyui` 直接跑 `main.py`，ComfyUI Desktop 那套"模型在共享目录 / 别的盘"
     /// 的配置一个都没传 → `/object_info` 里没有这些文件 → 只报"本机没有"会让模型
-    /// **让用户去下载一个本来就在硬盘上的文件**（现场：`anima-base-v1.0` 4.18 GB）。
+    /// **要求下载一个已在硬盘上的文件**（现场：`anima-base-v1.0` 4.18 GB）。
     /// 这一档的正确动作是**修挂载 / 重启**，不是下载。
     OnDiskOnly,
-    /// 本机没有像样的替代品：该去装 / 该让用户选，**不许编名字**。
+    /// 本机没有可用替代：需安装或由界面选择，**不得编造名称**。
     Missing,
 }
 
@@ -473,13 +473,13 @@ pub struct FitItem {
     pub candidates: Vec<Scored>,
     /// 本机那几个"名字沾点边、但不够像"的文件（分数低于阈值的）。
     ///
-    /// 只在 [`FitStatus::Missing`] 时说给用户听：他看到"要装它"时，盘上那个像的名字
-    /// 很容易让他以为已经有了（用户建议 ② 要的"本机已有替代品"这一栏）。
+    /// 只在 [`FitStatus::Missing`] 时显示：提示"需要安装"时，盘上相近的名称
+    /// 容易被理解为已具备（即"本机已有替代品"这一栏）。
     pub near_misses: Vec<String>,
 }
 
 impl FitItem {
-    /// 唯一可以"不问用户就直接换"的情形：同名（归一化后一致）。
+    /// 唯一可以"无需确认直接替换"的情形：同名（归一化后一致）。
     pub fn safe_to_auto_apply(&self) -> bool {
         self.status == FitStatus::Exact
     }
@@ -520,7 +520,7 @@ impl FitItem {
 ///
 /// ## 它只报不改
 ///
-/// 这是用户建议 ① 的原话（"**只报不改**，改由 `comfy_submit` 的 overrides 做"）。
+/// 约束："**只报不改**，修改由 `comfy_submit` 的 overrides 执行"。
 /// 结构上就这么保证：这个对象**不生成图、也不写任何文件**。
 #[derive(Debug, Clone)]
 pub struct FitReport {
@@ -555,7 +555,7 @@ impl FitReport {
     /// 可以**直接**贴进 `comfy_submit(overrides=…)` 的那几个键（保序、同键只留一条）。
     ///
     /// 只收 [`FitStatus::Exact`]（同名，换上去一定对）—— 替代品**不进这里**：
-    /// 那是"看着像"，该由模型判断 + 用户点头，不该由代码替它们决定。
+    /// 那属于"看似匹配"，应由模型判断并确认，不应由代码决定。
     pub fn suggested_overrides(&self) -> Vec<(String, String)> {
         let mut out: Vec<(String, String)> = Vec::new();
         for item in self.items.iter().filter(|i| i.status == FitStatus::Exact) {
@@ -596,7 +596,7 @@ impl FitReport {
             json!(self.count(FitStatus::Substitute)),
         );
         // 盘上有、但这个实例枚举不到（2026-09-22）：单列一档，别混进 missing ——
-        // 混进去的后果是模型让用户去下载一个本来就在硬盘上的文件
+        // 混入的后果是模型要求下载一个已在硬盘上的文件
         o.insert(
             "onDiskOnly".into(),
             json!(self.count(FitStatus::OnDiskOnly)),
@@ -894,7 +894,7 @@ fn item_json(item: &FitItem) -> Value {
     if let Some(s) = item.suggested_override() {
         o.insert("suggestedOverride".into(), json!(s));
     }
-    // 缺模型时给"这个缺口该怎么补"的可执行事实（用户建议 ②）：
+    // 缺模型时给出"缺口如何补充"的可执行事实：
     // 查什么词、装到哪个目录、以及**本机有多少看起来沾边的替代品**
     if item.status == FitStatus::Missing {
         let mut p = Map::new();
@@ -974,8 +974,8 @@ pub fn fit(
                 near_misses: Vec::new(),
             },
             (None, None) => {
-                // 缺模型时把"沾边但不够像"的也报出来：用户盘上那个像的名字最容易
-                // 让他以为"我明明有这个模型"（用户建议 ② 的"本机已有替代品"那一栏）
+                // 缺模型时把"相近但不够匹配"的也报出：盘上相近的名称最容易
+                // 被理解为"已有该模型"（即"本机已有替代品"这一栏）
                 let near = inventory
                     .near_misses_for(&req.file_name, 3)
                     .into_iter()

@@ -1,16 +1,16 @@
-//! 本机 ComfyUI 里**已经保存的工作流文件**（`user\<用户>\workflows\*.json`）—— 用户 bug ⑤。
+//! 本机 ComfyUI 中**已保存的工作流文件**（`user\<账号>\workflows\*.json`）。
 //!
 //! Rust 版逐条对照 Kotlin `ComfyWorkflowFiles.kt` + `ComfyLocator.kt` + `ComfyRoots.kt`
 //! （总纲 §9 ②）。**三个目录来源一条都不能少** —— 少搬任何一条，接口都会
-//! "正常返回、只是少了几个目录"，表现就是"用户机器上明明有工作流，界面却说没找到"。
+//! "正常返回、但缺少几个目录"，表现为"本机存在工作流，界面返回未找到"。
 //!
 //! | 来源 | Kotlin | 为什么非有不可 |
 //! | --- | --- | --- |
 //! | 配置里生效的输出目录的**父目录** | `ComfyWorkflowFiles.comfyHomes` ① | `<ComfyUI>\output` 的父目录就是 ComfyUI 根 |
-//! | `ComfyLocator.find()` 探到的 home | 同上 ② | 用户没配过输出目录时的兜底 |
+//! | `ComfyLocator.find()` 探到的 home | 同上 ② | 未配置输出目录时的兜底 |
 //! | `ComfyRoots.autoReadRoots()` | 同上 ③ | ComfyUI **Desktop 把程序与共享数据分家**时，工作流在安装目录下 |
 //!
-//! 两条纪律照抄：**只读**（扫描不改用户文件、不写库）；**有界 + 认特征**
+//! 两条约束沿用：**只读**（扫描不改动文件、不写库）；**有界 + 认特征**
 //! （只在认出来的 ComfyUI 根底下找 `user\*\workflows`，一眼看完，不递归、不扫全盘）。
 //!
 //! ⚠ `looks_like_comfy` 的判据现在有**三份实现**（`ComfyLocator.kt`、
@@ -25,10 +25,10 @@ use sha2::{Digest, Sha256};
 /// 一份工作流文件最大认多大（与 Kotlin `ComfyWorkflowFiles.MAX_FILE_BYTES` 一致）。
 pub const MAX_FILE_BYTES: u64 = 32 * 1024 * 1024;
 
-/// 一次最多列几份（用户的工作流目录通常几十份；上万份一定是认错目录了）。
+/// 一次最多列出几份（工作流目录通常几十份；上万份说明目录识别错误）。
 pub const MAX_FILES: usize = 200;
 
-/// 一个 ComfyUI 根下面最多看几个用户目录（`user\` 里正常只有 default / __manager）。
+/// 一个 ComfyUI 根下最多查看几个账号目录（`user\` 中通常只有 default / __manager）。
 const MAX_USERS: usize = 20;
 
 /// 兄弟目录里最多往下翻几层（`ComfyRoots.MAX_DEPTH`）。
@@ -68,7 +68,7 @@ pub struct WorkflowFile {
 ///
 /// 判据刻意严一点：`main.py` + `comfy/` 是**源码形态**，`output/` + `input/`/`models/`
 /// 是**任何形态**（含 Desktop / 整合包）都有的。只有一个空 `output` 不算 ——
-/// 用户随便建个 output 目录就会被误判，然后"捕获一条也收不到"。
+/// 任意建立 output 目录就会被误判，之后"捕获一条也收不到"。
 pub fn looks_like_comfy(dir: &Path) -> (bool, String) {
     let has_main = dir.join("main.py").is_file();
     let has_pkg = dir.join("comfy").is_dir();
@@ -98,12 +98,12 @@ pub fn looks_like_comfy(dir: &Path) -> (bool, String) {
 //  目录发现
 // ---------------------------------------------------------------------------
 
-/// 本机所有**实际存在**的 `user\<用户>\workflows`（去重、保持"最可能命中"的顺序）。
+/// 本机所有**实际存在**的 `user\<账号>\workflows`（去重、保持"最可能命中"的顺序）。
 pub fn workflow_dirs(project_root: &Path, configured_output: Option<&str>) -> Vec<PathBuf> {
     dirs_from_homes(&comfy_homes(project_root, configured_output))
 }
 
-/// 一组 ComfyUI 根目录 → 它们底下实际存在的 `user\<用户>\workflows`。
+/// 一组 ComfyUI 根目录 → 其下实际存在的 `user\<账号>\workflows`。
 ///
 /// 与 [`comfy_homes`] 分开是为了能单测：这一半是纯文件系统逻辑（临时目录就能验）。
 pub fn dirs_from_homes(homes: &[PathBuf]) -> Vec<PathBuf> {
@@ -160,9 +160,9 @@ pub fn comfy_homes(project_root: &Path, configured_output: Option<&str>) -> Vec<
     homes
 }
 
-/// 一个 ComfyUI 根底下的 `user\<用户>\workflows`。
+/// 一个 ComfyUI 根下的 `user\<账号>\workflows`。
 ///
-/// 看的是 `user\` 的**直接子目录**（正常只有 `default`，多个用户时每个一份），
+/// 查看的是 `user\` 的**直接子目录**（通常只有 `default`，多账号时各一份），
 /// 不递归、不跟随符号链接 —— 这一层很浅，而 `models\` 那种几百 GB 的目录根本不在路径上。
 fn user_workflow_dirs(home: &Path, out: &mut Vec<PathBuf>) {
     let user = home.join("user");
@@ -216,7 +216,7 @@ fn real_dir(p: &Path) -> Option<PathBuf> {
 ///
 /// 为什么非要这一步：`std::fs::canonicalize()` 在 Windows 上返回的是
 /// `\\?\D:\Comfy-Desktop\…`，而 Kotlin 的 `Path.toRealPath()` 返回 `D:\Comfy-Desktop\…`。
-/// 这个前缀会**原样出现在接口返回里**（`dirs` / 每个文件的 `path`），用户和 AI 都会看到；
+/// 该前缀**原样出现在接口返回中**（`dirs` / 每个文件的 `path`），界面与 AI 均可见；
 /// 它还会被贴进对话里当参数用 —— 那是"同一个目录、两种写法"，最难查的那类不一致。
 /// 实测这条：真库副本上第一次跑出来就是 `\\?\D:\Comfy-Desktop\…\workflows`。
 ///
@@ -249,7 +249,7 @@ pub(crate) fn env_path(name: &str) -> Option<PathBuf> {
 /// 探测结果（与 Kotlin `ComfyLocation` 逐字同形）。
 ///
 /// 探测是**只读**的，结果**不会自动生效**：`find` 只回答"在哪"，
-/// 是否用它由用户点「使用这个目录」决定（`POST /api/capture/locate/apply`）。
+/// 是否采用由「使用这个目录」决定（`POST /api/capture/locate/apply`）。
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ComfyLocation {
@@ -259,7 +259,7 @@ pub struct ComfyLocation {
     /// 大概率能直接读产物的输出目录（`<home>\output`）。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub output_dir: Option<String>,
-    /// 从哪里找到的（给用户看的一句话）。
+    /// 来源（界面显示的一句说明）。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
     /// 当前设置里**已经**生效的输出目录（没设置时为 null）。
@@ -287,7 +287,7 @@ pub struct ComfyCandidate {
 pub fn locate(project_root: &Path, configured_output: Option<&str>) -> ComfyLocation {
     let mut candidates: Vec<ComfyCandidate> = Vec::new();
 
-    // 1) 用户已经配过：尊重它，不再探（配错了由用户自己改）
+    // 1) 已配置：直接使用，不再探测（配置错误时由界面修改）
     if let Some(configured) = configured_output.map(str::trim).filter(|s| !s.is_empty()) {
         let dir = Path::new(configured);
         let home = if dir
@@ -309,7 +309,7 @@ pub fn locate(project_root: &Path, configured_output: Option<&str>) -> ComfyLoca
         };
     }
 
-    // `consider`：目录存在才记候选，过不过特征判定都记（被否决的原因正是给用户看的）
+    // `consider`：目录存在才记录候选，无论是否通过特征判定都记录（否决原因需在界面显示）
     let consider = |path: Option<PathBuf>, kind: &str, candidates: &mut Vec<ComfyCandidate>| {
         let path = path?;
         if !path.is_dir() {
@@ -329,7 +329,7 @@ pub fn locate(project_root: &Path, configured_output: Option<&str>) -> ComfyLoca
         }
     };
 
-    // 2) 显式环境变量（脚本 / 高级用户）
+    // 2) 显式环境变量（脚本 / 高级用法）
     let env_home = [
         ("COMFYHUB_COMFY_HOME", "环境变量 COMFYHUB_COMFY_HOME"),
         ("COMFYUI_HOME", "环境变量 COMFYUI_HOME"),
@@ -372,7 +372,7 @@ pub fn locate(project_root: &Path, configured_output: Option<&str>) -> ComfyLoca
         };
     };
 
-    // 输出目录：有就用真的，没有也照样把 `<home>\output` 写出去（用户可能还没跑过 ComfyUI）
+    // 输出目录：存在则使用实际值，不存在也写出 `<home>\output`（可能尚未运行过 ComfyUI）
     let output = located.join("output");
     let source = candidates
         .iter()
@@ -396,7 +396,7 @@ pub fn locate(project_root: &Path, configured_output: Option<&str>) -> ComfyLoca
 /// 以前这里写死了 `D:\ComfyUI`、`D:\ComfyUI_windows_portable\ComfyUI`、
 /// `D:\Comfy-Desktop`、甚至整个 `D:\` 顶层 —— 那是**开发机**的布局。换台机器
 /// （ComfyUI 装在 `C:\` 或 `E:\`，或者根本没有 D 盘）就永远"找不到 ComfyUI"，
-/// 而界面只会说没找到。这不是某个人的特例，是**任何用户**都可能撞上的。
+/// 而界面只显示未找到。这不是个别情况，**任何环境**都可能出现。
 ///
 /// 用 `GetDriveTypeW` 只留 `DRIVE_FIXED`：网络映射盘 / 光驱不去碰
 /// （`is_dir()` 在断开的网络盘上会卡住几秒到几十秒），也免得把别人的共享盘
@@ -483,7 +483,7 @@ pub(crate) fn search_user_profile() -> Option<PathBuf> {
 /// ComfyUI **Desktop**（新版 Electron 启动器）的嵌套布局。
 ///
 /// 它把源码检出放在 `<应用目录>\ComfyUI-Installs\<实例名>\ComfyUI` 下，
-/// 而不是 `Documents\ComfyUI` —— 只在顶层翻一层永远找不到它（用户机器实测就是这种）。
+/// 而不是 `Documents\ComfyUI` —— 仅查找顶层时无法找到（实测为该布局）。
 /// 探测**有界**：固定几个应用目录 → 每个目录下的 `ComfyUI-Installs\*` 再拼一层 `ComfyUI`。
 pub(crate) fn search_desktop_installs() -> Option<PathBuf> {
     let mut roots: Vec<PathBuf> = Vec::new();
@@ -571,7 +571,7 @@ pub(crate) fn search_desktop_packages() -> Option<PathBuf> {
 /// 除了出厂默认（`<根>\comfyui` + `<根>\storage`）之外，**还要放行只读**的本机 ComfyUI 目录。
 ///
 /// 返回的都是真实路径、去重、按"最可能命中"排序。找不到就是空列表（不是错误：
-/// 用户可能根本没装 ComfyUI）。
+/// 可能根本没有安装 ComfyUI）。
 pub fn auto_read_roots(project_root: &Path, configured_output: Option<&str>) -> Vec<PathBuf> {
     let mut out: Vec<PathBuf> = Vec::new();
     let push = |p: PathBuf, out: &mut Vec<PathBuf>| {
@@ -593,7 +593,7 @@ pub fn auto_read_roots(project_root: &Path, configured_output: Option<&str>) -> 
             }
         }
     }
-    // 用户 2026-09-22 拍板：**放行"已知 ComfyUI 根的上一级"（只读）** ——
+    // 约束：**放行"已知 ComfyUI 根的上一级"（只读）** ——
     // "往上走一层看看旁边还有什么"正是发现 Shared 目录的唯一路径。
     // 只放**一级**，而且**绝不放盘根**（放了就等于整盘只读，那是另一档权限）。
     let snapshot = out.clone();
@@ -611,7 +611,7 @@ pub fn auto_read_roots(project_root: &Path, configured_output: Option<&str>) -> 
     out
 }
 
-/// 已知的 ComfyUI 根目录：环境变量 → 用户配置的输出目录 → 项目内的 `comfyui`。
+/// 已知的 ComfyUI 根目录：环境变量 → 配置的输出目录 → 项目内的 `comfyui`。
 fn seed_roots(project_root: &Path, configured_output: Option<&str>) -> Vec<PathBuf> {
     let mut out: Vec<PathBuf> = Vec::new();
     for key in ENV_KEYS {
@@ -716,7 +716,7 @@ fn scan_nearby(start: &Path, out: &mut Vec<PathBuf>, depth: usize, budget: &mut 
 
 /// 列出这些目录里的工作流文件（按修改时间倒序，最多 `limit` 份）。
 ///
-/// `query` 是**文件名**的子串匹配（大小写不敏感）—— 用户说"krea2 那条"，AI 就能直接命中。
+/// `query` 是**文件名**的子串匹配（大小写不敏感）—— 例如"krea2 那条"可直接命中。
 /// 只列**真的能用**的：非 `.json` / 空文件 / 坏 JSON / 既不是界面格式也不是 API 格式的
 /// 全部跳过（列出来只会让 AI 白跑一趟 `comfy_load_workflow`）。
 pub fn scan(dirs: &[PathBuf], query: Option<&str>, limit: usize) -> Vec<WorkflowFile> {
