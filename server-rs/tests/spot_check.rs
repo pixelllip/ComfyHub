@@ -167,7 +167,7 @@ async fn real_db_spot_check_replay_ingest() {
     let outcome =
         comfyhub_server_rs::comfy::capture_ingest::ingest_claimed(&state, &request, &config).await;
     println!("结果：{}", outcome.to_json());
-    // 产物文件可能早被用户删了 —— 那是**如实**的 failed，不是错误；但提示词一定要建出来
+    // 产物文件可能已被删除 —— 那是**如实**的 failed，不是错误；但提示词必须创建
     assert!(
         outcome.created || outcome.message.is_some(),
         "要么建了提示词、要么如实说为什么没建"
@@ -193,7 +193,7 @@ async fn real_db_spot_check_replay_ingest() {
 /// **读真机上那些工作流文件**（第 44 步）：API 格式的应当零转换直接入库；
 /// 界面格式的要问 ComfyUI 的 `/object_info`，此刻它没在跑 → **如实**报 `COMFY_UNREACHABLE`。
 ///
-/// 这条抽查的价值在"**格式识别**"这一半：真实文件里两种格式混着（用户目录里既有
+/// 这条抽查的价值在"**格式识别**"这一部分：真实文件中两种格式混用（目录中既有
 /// ComfyUI 保存的界面格式，也有「导出（API）」的节点图），认错了会走到完全不同的分支。
 #[tokio::test]
 #[ignore = "真库副本抽查：需要 COMFYHUB_SPOT_DB / COMFYHUB_SPOT_STORAGE"]
@@ -214,7 +214,7 @@ async fn real_db_spot_check_load_workflow_files() {
     let mut api_loaded = 0;
     let mut ui_refused = 0;
     for file in &files {
-        // 路径准入：真实 ComfyUI 目录应当被自动放行（用户 bug ④）
+        // 路径准入：真实 ComfyUI 目录应被自动放行
         let resolved = match policy.resolve_read(&file.path) {
             Ok(path) => path,
             Err(e) => {
@@ -266,7 +266,7 @@ async fn real_db_spot_check_comfy_queries() {
     };
     println!("项目根={}（库=COMFYHUB_SPOT_DB）", root.display());
 
-    // ① 列本机工作流：真机上应当能探到用户 ComfyUI 的 workflows 目录
+    // ① 列本机工作流：真机上应能探测到本机 ComfyUI 的 workflows 目录
     let listed = call(
         &state,
         "comfy_list_workflows",
@@ -417,7 +417,7 @@ async fn real_db_spot_check_comfy_queries() {
         println!("  ✗ {line}");
     }
     println!("  不一致 {} 处", mismatches.len());
-    // ⚠ 用户改过提示词的行**本来就会不一致**（`prompts` 是用户可编辑的），
+    // ⚠ 已修改过提示词的行**本来就会不一致**（`prompts` 可编辑），
     // 所以这里只报数、不把"有不一致"当失败；真正要盯的是"解析器整个崩掉"或
     // "positive 大面积空掉"这种系统性偏差。
     assert!(compared > 0, "一条可比对的记录都没有 —— 抽查没生效");
@@ -619,7 +619,7 @@ async fn comfy_env_report_reads_the_real_machine() {
         serde_json::to_string_pretty(&payload).unwrap_or_default()
     );
 
-    // 形状（这些键是模型据以判断"要不要让用户重启"的全部依据）
+    // 结构（这些键是模型判断"是否需要重启"的全部依据）
     for key in [
         "instanceLoadable",
         "onDisk",
@@ -671,7 +671,7 @@ async fn comfy_env_report_reads_the_real_machine() {
 }
 
 // ===========================================================================
-//  投放的目录 = 实例在读的那一份（2026-09-30 用户 bug 的活体验收）
+//  投放的目录 = 实例读取的那一份（该问题的活体验收）
 //
 //  现场：起实例时挂的是 ComfyUI Desktop 配的**共享** input，而投放工具按"配置里
 //  outputDir 的兄弟目录"推、落到了**安装目录**那份 input（发布包的 `capture.config`

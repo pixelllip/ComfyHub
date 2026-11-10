@@ -43,7 +43,7 @@ async fn desktop_file_tools_stay_inside_the_whitelist() {
         "越界写被拒了却落了盘"
     );
 
-    // ③ 禁写段：即使用户把白名单放宽到项目根也不行
+    // ③ 禁写段：即使白名单放宽到项目根也不允许
     let mut config: comfyhub_server_rs::tools::policy::ToolPolicyConfig =
         serde_json::from_str(r#"{"writeRoots":["."]}"#).unwrap();
     config.write_roots = vec![".".to_string()];
@@ -480,7 +480,7 @@ async fn desktop_tools_are_declared_for_desktop_but_never_sent_to_the_phone() {
     std::fs::remove_dir_all(state.project_root()).ok();
 }
 
-/// `comfy_diagnose_workflow`（2026-10-17 用户"对于错误接线要能向用户指出"）：
+/// `comfy_diagnose_workflow`（错误接线需在界面指出）：
 /// **接线体检**要真的从工具层走得通，并且把"哪根线坏了"说到点上。
 ///
 /// 这条用例**故意不依赖 ComfyUI**（夹具库里没有 `comfyUrl`）：拿不到 `/object_info` 时
@@ -547,9 +547,9 @@ async fn diagnose_workflow_respects_the_read_whitelist() {
     assert_eq!(empty.code, "INVALID_ARGUMENT", "{}", empty.message);
 }
 
-/// `comfy_view_outputs`（2026-10-29 用户"能不能让 AI 看我直接在 comfy 运行的产物"）：
+/// `comfy_view_outputs`（"能否让 AI 查看直接在 ComfyUI 中运行的产物"）：
 /// 读画廊最近的图片 → 返回 `referenceImages`（执行器据此自动附图），并且在正文里给出
-/// id / 尺寸 / 关联提示词 —— **不用用户再把图发一遍**。
+/// id / 尺寸 / 关联提示词 —— **无需再次发送图片**。
 ///
 /// 这里只验工具层；"图真的挂进下一轮"由执行器的 `reference_attach` 那一份负责
 /// （能力判据 / 预算 / 去重都在它那里，工具不重复实现）。
@@ -612,7 +612,7 @@ async fn view_outputs_returns_recent_media_as_reference_images() {
     assert_eq!(none.payload["count"], 0);
     assert!(none.content.contains("没有"), "{}", none.content);
 
-    // 翻页（2026-11-09 用户："不能只看前 x 张"）：列表必须能沿 `offset` 看到更早的，
+    // 翻页（"不能只看前 x 张"）：列表必须能沿 `offset` 查看更早的，
     // 并且结果里带 `total` / `hasMore` —— 否则模型只能"看完第一页就说就这些"。
     state
         .with(|conn| {

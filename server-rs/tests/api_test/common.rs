@@ -600,7 +600,7 @@ fn content_length_of(head: &[u8]) -> Option<usize> {
 /// * `upstream=ok`：正常流（思考 → 三段正文 → finish_reason → usage → `[DONE]`）；
 /// * `upstream=http429`：直接 429（测"上游明确拒绝"那一档）；
 /// * `upstream=usage-then-die`：第一轮**正常跑完**（但 finish_reason=length，触发"接着写"），
-///   第二轮直接 429 —— 测"未完成的对话也要统计已烧掉的 token"（用户 bug 2026-09-28）；
+///   第二轮直接 429 —— 测"未完成的对话也要统计已消耗的 token"；
 /// * `upstream=partial`：**先正常吐出两段正文，然后把连接掐掉** ——
 ///   R6"已经说出去的话一个字都不能丢"的现场（真·中途断流，而不是事后报错）。
 pub(crate) async fn fake_gateway() -> (String, tokio::task::JoinHandle<()>) {
@@ -857,7 +857,7 @@ pub(crate) async fn scripted_tool_gateway(
 }
 
 /// 脚本化假网关（`openai-responses`，思考模式）：**第 2 轮起必须看见 `reasoning` 项**，
-/// 看不见就照那家上游的原话回 400 —— 这正是 2026-10 用户撞上的那条：
+/// 不可见时按该上游原文返回 400 —— 这正是此前遇到的情形：
 /// `The reasoning_text in the thinking mode must be passed back to the API.`
 ///
 /// 返回 `(base_url, 记录到的每一轮请求体)`：第 2 份就是"工具结果回填"那次，
@@ -1419,7 +1419,7 @@ pub(crate) fn history_with_image(filename: &str, run_key: &str) -> String {
 // ===========================================================================
 //  comfy_load_workflow（P4 第 44 步）：把一份本机工作流文件读进库
 //
-//  这条路是用户 bug ③ 的正面解法：用户甩过来一个 .json 路径，别再回答
+//  该问题的解法：收到一个 .json 路径时，不再返回
 //  "我只能提交库里的 promptId"。幂等靠 `file:<sha256>`（与 /api/capture/workflows
 //  的 inLibrary 判定同一把钥匙）。
 // ===========================================================================
@@ -1479,7 +1479,7 @@ pub(crate) fn object_info_json() -> String {
 
 /// 一份带**广播型纯前端节点**、并且**一个输出节点都没有**的界面格式工作流。
 ///
-/// 两件事都只有开了「模拟用户行为」才会发生：`14 Anything Everywhere` 把上游那一路
+/// 两件事都只在开启「模拟前端行为」时才会发生：`14 Anything Everywhere` 把上游那一路
 /// 填进空着的同类型输入、前端会自己挂一个 `SaveImage`。
 pub(crate) fn ui_workflow_broadcast_file() -> String {
     serde_json::json!({
@@ -1534,7 +1534,7 @@ pub(crate) fn object_info_for_broadcast() -> String {
 // ===========================================================================
 //  体检两件（P4 第 62 步）：comfy_check_inputs / comfy_fit_workflow//
 //  两件都是"只报不改"的诊断工具，判据全在**如实**两个字上：`check_inputs` 漏报一条，
-//  模型就以为图齐了；`fit_workflow` 报错一档，用户就被引去下载一个本来就在硬盘上的文件。
+//  模型会误认为图已齐；`fit_workflow` 报错时，会被引导去下载一个已在硬盘上的文件。
 //  所以这里断言到**具体字段**，不是"整串包含"。
 // ===========================================================================
 
@@ -1557,7 +1557,7 @@ pub(crate) async fn call_tool_with_session(
 }
 
 /// 一份只有"缺一张参考图"的工作流：`LoadImage.image` 绑着上次捕获的旧文件名
-/// （用户建议 ⑤ 那个现场 —— 模型不看清楚就会硬提交一个不存在的文件）。
+/// （该情形下模型若不确认就会提交一个不存在的文件）。
 pub(crate) fn graph_with_image_gap() -> Value {
     serde_json::json!({
         "1": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "sdxl.safetensors"}},
