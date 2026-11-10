@@ -534,7 +534,7 @@ void main() {
     await tester.pumpWidget(await _homePage(rec));
     await tester.pumpAndSettle();
 
-    // 用户"其他建议"第 2 条：列表**默认折叠**（十几个 skill 不该把右侧栏占满）
+    // **列表默认折叠**（skill 数量较多时不应占满右侧栏）
     expect(find.text('anima-prompt'), findsNothing);
     expect(find.textContaining('列表已折叠（3 个）'), findsOneWidget);
 
@@ -561,7 +561,7 @@ void main() {
     await tester.enterText(find.byType(TextField).last, '');
     await tester.pumpAndSettle();
 
-    // 内置的没有删除按钮，用户来源的才有
+    // 内置条目没有删除按钮，仅自定义来源有
     expect(find.byTooltip('删除 Skill'), findsNWidgets(2));
 
     await tester.tap(find.byTooltip('删除 Skill').last);
@@ -590,11 +590,11 @@ void main() {
     await tester.pumpWidget(await _homePage(rec));
     await tester.pumpAndSettle();
 
-    // 用户明确要求去掉那个按钮
+    // 该按钮已移除
     expect(find.text('从 DSH 导入'), findsNothing);
     expect(rec.calls.any((c) => c.contains('import-dsh')), isFalse);
 
-    // 投放口路径要能看见（用户得知道往哪儿拷），并有打开 / 复制两个入口
+    // 投放口路径需可见（说明复制位置），并提供打开 / 复制两个入口
     expect(find.textContaining(r'D:\ComfyHub\storage\ai\skills'), findsWidgets);
     expect(find.text('打开文件夹'), findsOneWidget);
     expect(find.text('复制路径'), findsOneWidget);
@@ -622,8 +622,8 @@ void main() {
 
     expect(find.text('长期记忆'), findsOneWidget);
     expect(find.text('2 条'), findsOneWidget);
-    // 用户建议（2026-09-20）：「右边栏长期记忆，不显示记忆内容的预览」——
-    // 右侧栏一直摊在屏幕上，记忆正文（私下的偏好与上下文）不该印在上面
+    // 右侧栏长期记忆不显示内容预览 ——
+    // 右侧栏常驻屏幕，记忆正文（偏好与上下文）不应显示在其上
     expect(
       find.textContaining('用户偏好 4:3 画幅'),
       findsNothing,
@@ -670,7 +670,7 @@ void main() {
     expect(rec.memoryAdded, ['交付 16:9']);
     expect(rec.memory, contains('交付 16:9'));
 
-    // 列表里要跟着出现（不然用户会以为没加上）
+    // 列表中需同时出现（否则会显示为未添加）
     expect(find.textContaining('交付 16:9'), findsWidgets);
 
     // 清空要先确认
@@ -828,7 +828,7 @@ void main() {
     await tester.tap(find.byTooltip('展开 先读一下 a.md 的结果'));
     await tester.pumpAndSettle();
     expect(find.textContaining('# 标题'), findsWidgets);
-    // 参数 / 结果 各占一块（用户 2026-10-25）；成功调用没有第三块「说明」
+    // 参数 / 结果各占一块；成功调用没有第三块「说明」
     expect(find.text('调用参数'), findsOneWidget);
     expect(find.text('调用结果'), findsOneWidget);
     expect(find.text('说明'), findsNothing);
@@ -976,7 +976,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('生成的产物（7）'), findsOneWidget);
-    // 以前是 `take(6)`：第 7 张在卡上根本不存在（用户："不能只看前 x 张"）
+    // 此前为 `take(6)`：第 7 张不会出现在卡片上
     for (final id in ids) {
       expect(
         find.byKey(ValueKey('produced-media-$id')),
@@ -986,12 +986,12 @@ void main() {
     }
   });
 
-  // 用户 bug（2026-09-20）:"更新长期记忆之后，侧边栏没有立即刷新状态"。
+  // 现象："更新长期记忆之后，侧边栏没有立即刷新状态"。
   //
-  // 后端 `remember` 工具是**直接写 memory.md** 的，前端右侧栏读的是 `store.memory`
-  // （启动时拉一次）。Run 期间既没有 `memory` 事件、也没有任何地方重新拉 ——
-  // 所以 AI 记完一条，面板上的条数/预览一直停在旧值，要切走再切回来才变。
-  // 修复：`tool.completed` 里认出 remember 就静默重拉一次。
+  // 后端 `remember` 工具**直接写 memory.md**，前端右侧栏读取 `store.memory`
+  // （启动时拉取一次）。Run 期间没有 `memory` 事件，也没有其他位置重新拉取 ——
+  // 因此记录一条后，面板上的条数/预览保持旧值，需切换页面才更新。
+  // 处理：`tool.completed` 中识别 remember 后静默重拉一次。
   testWidgets('(e5) AI 用 remember 写完长期记忆，右侧栏当场刷新（用户 bug）', (tester) async {
     tester.view.physicalSize = const Size(1400, 1000);
     tester.view.devicePixelRatio = 1.0;
@@ -1108,7 +1108,7 @@ void main() {
     expect(find.text('实时进度'), findsOneWidget);
     expect(find.textContaining('正在生成「雨夜霓虹」'), findsOneWidget);
     expect(find.textContaining('赛博朋克少女'), findsWidgets);
-    // ★ 用户要的"不只显示进行中"：**当前步骤 + 百分比**都得看得见
+    // ★ **当前步骤 + 百分比**均需可见，不只显示进行中
     expect(find.textContaining('正在执行 KSampler（12/30）'), findsOneWidget);
     expect(find.textContaining('40%'), findsOneWidget);
     final bar = tester.widget<LinearProgressIndicator>(
@@ -1318,11 +1318,11 @@ void main() {
     await tester.pump(const Duration(milliseconds: 40));
 
     expect(find.text('思考中…'), findsOneWidget, reason: '流式中要有明确的进行中标记');
-    // 用户 2026-10-21：流式生成中摘要显示**当前思考的末尾一行**（不是开头）。
+    // 流式生成中摘要显示**当前思考的末尾一行**（不是开头）。
     expect(find.textContaining('尾巴结论'), findsWidgets, reason: '生成中要看"现在想到哪了"');
     // 但仍然只显示摘要、没有自动展开整段（展开后会出现完整正文的分块）。
     expect(find.text('思考过程'), findsOneWidget);
-    // 但用户点一下还是能看到全文
+    // 点击后仍可查看全文
     await tester.tap(find.text('思考过程'));
     await tester.pumpAndSettle();
     expect(find.textContaining('尾巴结论。'), findsOneWidget);
@@ -1336,9 +1336,9 @@ void main() {
     final rec = _Recorder();
     // 停在流式生成中，而且思考的**最后一行很短**（"好。"）。
     //
-    // 用户报的现象：气泡宽度跟着折叠摘要那最后一行一抽一抽地变 ——
-    // 因为收起时气泡是"按内容收缩"的，思考一行一行写下来，每换一行
-    // 气泡右边缘就跳一次。气泡宽度是版面的一部分，不能是"这行字有多长"的函数。
+    // 现象：气泡宽度随折叠摘要的最后一行变化 ——
+    // 收起时气泡"按内容收缩"，思考逐行写入，每换一行
+    // 气泡右边缘跳动一次。气泡宽度属于版面，不应取决于当前行长度。
     final sse =
         _sse(1, 'run.started', '{"runId":"r1"}') +
         _sse(2, 'message.started', '{"messageId":"a1"}') +
@@ -1574,7 +1574,7 @@ void main() {
       rec.policyPuts.last['overrides'],
       containsPair('write_file', 'allow'),
     );
-    // 关键（用户报的「点了允许，实际还是询问」）：界面上要如实显示生效后的档位
+    // 关键：界面需如实显示生效后的档位（此前「点允许后仍显示询问」）
     expect(find.text('允许'), findsWidgets);
     expect(find.text('询问'), findsWidgets, reason: 'read_file 还是询问，别的行不受影响');
   });
@@ -1629,7 +1629,7 @@ void main() {
     await tester.pumpAndSettle();
 
     // 没选中 Provider 时**不许**出现：它是这一条的详情，不是页顶的一张常驻卡
-    // （2026-10 用户原话："模型能力目录区域占用窗口区域太大"）。
+    // （模型能力目录区域占用窗口空间过大）。
     expect(find.text('模型能力目录'), findsNothing);
 
     await tester.tap(find.text('内置网关'));
@@ -1752,7 +1752,7 @@ void main() {
 
     // 刻意**不给任何 SSE 事件**，而且只推进一帧：Run 请求已经发出、整轮还没回来，
     // 正好用来证明"清空发生在等待之前"——以前 `await store.send()` 之后才 clear，
-    // 用户会在整个生成过程里看到自己的话还留在输入框（看起来像点了没反应）。
+    // 否则整个生成过程中输入内容仍留在输入框，显示为点击无反应。
     final rec = _Recorder();
     await tester.pumpWidget(await _homePage(rec, sse: ''));
     await tester.pumpAndSettle();
@@ -1793,7 +1793,7 @@ void main() {
     expect(runsAfterFirst, 1);
 
     // 生成中又打了一句、又按了回车：以前这一下会**先清空再拒绝**，
-    // 用户打的字被静默吃掉，只能自己把上一条复制一遍再发（用户报的 bug）。
+    // 输入文字被静默丢弃，只能手动复制上一条重发。
     await tester.enterText(find.byType(TextField).first, '生成中打的第二句');
     await tester.pump();
     await tester.sendKeyEvent(LogicalKeyboardKey.enter);
@@ -1917,7 +1917,7 @@ void main() {
         _sse(6, 'run.completed', '{"runId":"r1"}');
     final store = await _store(rec, sse: sse, assistantText: '你好呀');
 
-    // 流式期间每一帧的用户消息实例：之前 `messages.map().toList()` 会每帧重造一个
+    // 流式期间每一帧的请求消息实例：此前 `messages.map().toList()` 每帧重建一个
     final userInstances = <AiMessage>{};
     store.addListener(() {
       if (store.sending && store.messages.length >= 2) {
@@ -1937,7 +1937,7 @@ void main() {
     );
   });
 
-  // --- 用户建议 ⑤ / bug：产物预览 ------------------------------------------
+  // --- 产物预览 ------------------------------------------
 
   testWidgets('AppBar 的消息数跟着对话实时变（不用切走再切回来）', (tester) async {
     tester.view.physicalSize = const Size(1200, 1000);
@@ -1966,9 +1966,9 @@ void main() {
     await tester.tap(find.text('发送'));
     await tester.pumpAndSettle();
 
-    // 用户报的 bug：这个数字只有拉会话列表时后端才会给，本机乐观插入的消息不更新它，
-    // 于是标题栏一直停在"打开这条会话时"的值，要切走再切回来才变。
-    // 现在发了 1 问 + 1 答 = 2 条，必须当场显示 2。
+    // 现象：该数字仅在拉取会话列表时由后端返回，本机乐观插入的消息不更新它，
+    // 标题栏保持"打开会话时"的值，需切换页面才更新。
+    // 当前已发送 1 问 + 1 答 = 2 条，需立即显示 2。
     expect(find.textContaining('2 条消息'), findsOneWidget);
   });
 
@@ -2000,7 +2000,7 @@ void main() {
     await tester.tap(find.text('发送'));
     await tester.pumpAndSettle();
 
-    // 每个块各是一个 SelectableText 时，鼠标拖到当前块末尾就拉不动了（用户报的"仅能选择 3 行"）。
+    // 每个块各为一个 SelectableText 时，拖选到当前块末尾无法继续（"仅能选择 3 行"）。
     // 现在正文一律是 `Text`，整条气泡包在**一个** SelectionArea 里 —— 选择可以跨段落连续拉下去。
     final inBubble = find.descendant(
       of: find.byType(SelectionArea),
@@ -2046,7 +2046,7 @@ void main() {
 
     expect(find.text('生成的产物（1）'), findsOneWidget);
 
-    // 两套 id 空间不同：媒体 id 塞进附件接口一定 404，界面就是"预览图不可用"（用户报的 bug）
+    // 两套 id 空间不同：媒体 id 传入附件接口必然 404，界面显示"预览图不可用"
     final urls = tester
         .widgetList<Image>(find.byType(Image))
         .map((w) => w.image)
@@ -2096,7 +2096,7 @@ void main() {
     await tester.tap(find.text('发送'));
     await tester.pumpAndSettle();
 
-    // 标题要同时说清"几张图 + 几份工作流"（用户建议 ①："生成的产物"包括生成的工作流）
+    // 标题需说明"几张图 + 几份工作流"（"生成的产物"包括生成的工作流）
     expect(find.text('生成的产物（1 个 · 含 1 份工作流）'), findsOneWidget);
 
     await tester.tap(find.text('查看工作流'));
@@ -2131,7 +2131,7 @@ void main() {
     expect(rec.policyPuts.length, 1, reason: '切档必须真的写回后端');
     expect(rec.policyPuts.last['permissionMode'], 'full');
     // 界面上要如实显示新档位（而且给出"目录范围没放宽"的说明）
-    // 档位名来自用户建议：以前叫「完全权限」，容易被理解成"什么都能干"。
+    // 档位名称：原为「完全权限」，易被理解为"任何操作均可执行"。
     expect(AiToolPolicy.modeFullLabel, '自动允许（无需批准）');
     // ⚠ 2026-10-11 起底行控件有**三档文字密度**（见 `_ComposerLabel`）：
     // 1200 窗口下操作组只有 674 宽，**放不下全称**（全称四枚要约 690），
@@ -2156,7 +2156,7 @@ void main() {
 
     final rec = _Recorder();
     // 一轮里：思考 → 正文 → 工具 → 正文。
-    // 界面上工具卡必须夹在两段正文**中间**（用户要求：完全按照消息获取顺序来）。
+    // 工具卡必须位于两段正文**之间**（严格按消息到达顺序）。
     final parts = [
       {'type': 'reasoning', 'text': '先想一想'},
       {'type': 'text', 'text': '前半句正文'},
@@ -2267,7 +2267,7 @@ void main() {
     expect(controller.offset, closeTo(controller.position.maxScrollExtent, 1));
   });
   // -------------------------------------------------------------------------
-  //  关键步骤（环节）折叠（用户建议 2026-09-28）
+  //  关键步骤（环节）折叠
   //  「关键步骤之间 AI 的操作可以再折叠（关键步骤名显示这是哪个粗略环节）」：
   //  环节名由后端从 `[步骤]…[/步骤]` 里摘出来（只可能是那六个），界面把它画成
   //  一个可折叠的组头，把这一环节里的工具卡收进去。
@@ -2349,8 +2349,8 @@ void main() {
     expect(find.text('danbooru_lookup'), findsOneWidget);
   });
 
-  /// (f) 环节中间夹了正文：**正文不许被挪到工具卡后面**（用户 bug⑥ 的纪律），
-  /// 第二个组标「续」让人看出这是同一个环节的第二段操作。
+  /// (f) 环节中间夹有正文：**正文不得移到工具卡之后**，
+  /// 第二组标记「续」以表示属于同一环节的第二段操作。
   testWidgets('(f) 环节中间夹了正文：正文留在原位，第二组标「续」', (tester) async {
     tester.view.physicalSize = const Size(1200, 1600);
     tester.view.devicePixelRatio = 1.0;
@@ -2417,8 +2417,8 @@ void main() {
     expect(textY, lessThan(contY), reason: '正文夹在两组之间 —— 不许被挪到工具卡后面');
   });
 
-  /// (g) 组里有**等批准**的调用：不许折叠 —— 批准按钮躲进收起的分组里，
-  /// 用户就永远不知道该点哪里（"AI 卡住了"的观感）。
+  /// (g) 组内存在**待批准**调用：不得折叠 —— 批准按钮位于收起的分组中时，
+  /// 无法确定点击位置（呈现为"AI 卡住"）。
   testWidgets('(g) 环节组里有等批准的调用：不许折叠，批准按钮当场看得见', (tester) async {
     tester.view.physicalSize = const Size(1200, 1200);
     tester.view.devicePixelRatio = 1.0;

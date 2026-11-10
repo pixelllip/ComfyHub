@@ -1,12 +1,12 @@
-// 画廊"整组"语义的回归（用户 bug 2026-10-18）：
+// 画廊"整组"语义的回归：
 //
-//   "我右键删除画廊选中的图片的时候，一次只能删一张，应当区分删一张和删集合内所有照片的行为。"
+// 现象：右键删除画廊选中图片时一次只能删除一张，未区分"删除单张"与"删除集合内全部"。
 //
-// 成因：多选态只存**代表那条**的 media id，集合格子和单图在 `Set<int>` 里长得一模一样，
-// 于是批量删/收藏/关联都只动了封面那一张。
+// 原因：多选态只保存**代表那条**的 media id，集合格子与单图在 `Set<int>` 中无区别，
+// 因此批量删除/收藏/关联只作用于封面那一张。
 //
-// 这里钉的是最便宜、也最容易再退回去的那一半：**长按集合格子要按整组计入**。
-// （"删一张 / 删整组"的菜单分支需要 dialog + 假后端联动，另见 gallery_archive 的说明。）
+// 这里验证最易回归的部分：**长按集合格子按整组计入**。
+// （"删一张 / 删整组"的菜单分支需要 dialog + 假后端联动，见 gallery_archive 的说明。）
 
 import 'dart:convert';
 
@@ -93,7 +93,7 @@ http.Client _client() => MockClient((request) async {
       'size': (sent['mediaIds'] as List).length,
     };
   } else if (path == '/api/media/collections') {
-    // 展开详情时读这一组的名字（用户 2026-11-07：别再显示"这一组"）
+    // 展开详情时读取该组的名称（不显示"这一组"）
     body = [
       {'id': 9, 'kind': 'IMAGE', 'origin': 'manual', 'title': '样片', 'size': 3},
     ];
@@ -246,8 +246,8 @@ void main() {
   });
 
   testWidgets('点集合格子 = **展开列出成员**，不是直接跳封面详情', (tester) async {
-    // 用户 2026-10-18："手机系统管理图标的逻辑是：点进文件夹（在弹窗展开文件夹列出
-    // 所有图片，再选择其一进入它的详情。"（并要求能把成员拖出去）
+    // 点进文件夹后在弹窗中展开并列出所有图片，再选择其一进入详情，
+    // 且支持将成员拖出。
     final (store, settings) = await _seed();
     await tester.pumpWidget(_app(store, settings));
     await tester.pumpAndSettle();
@@ -277,8 +277,7 @@ void main() {
   });
 
   testWidgets('展开详情显示集合自己的名字，并且能当场改名', (tester) async {
-    // 用户 2026-11-07："新建集合展开详情时都显示『这一组』—— 应该有个默认编组名，
-    // 然后允许用户自行更改名字。"
+    // 新建集合展开详情时显示默认编组名，且名称可修改。
     final (store, settings) = await _seed();
     await tester.pumpWidget(_app(store, settings));
     await tester.pumpAndSettle();
@@ -313,8 +312,8 @@ void main() {
   });
 
   testWidgets('桌面：**直接左键拖**一格到另一格 = 并进它所在的集合（不用先进模式）', (tester) async {
-    // 用户 2026-10-18："电脑端画廊并不支持拖动行为。"（真因是以前只做了长按拖，
-    // 而长按拖在鼠标上既不直观、又会被父级的长按"进模式"抢走手势）
+    // 现象："电脑端画廊不支持拖动"（此前只实现长按拖，
+    // 长按拖在鼠标上不直观，且会被父级的长按"进模式"抢占手势）。
     debugMouseFirstOverride = true;
     final (store, settings) = await _seed();
     await tester.pumpWidget(_app(store, settings));
@@ -375,8 +374,8 @@ void main() {
   });
 
   testWidgets('弹窗里把成员**拖出弹窗外**：弹窗让开，松手落到底部条 = 移出集合', (tester) async {
-    // 用户 2026-10-18："打开集合应该是出一个弹窗，我把内容移出到弹窗外、弹窗关闭，
-    // 再移动到某个元素上，松手完成移动操作。"
+    // 打开集合显示弹窗；将内容拖出弹窗外后弹窗关闭，
+    // 再移动到目标元素上松手完成移动。
     debugMouseFirstOverride = true;
     final (store, settings) = await _seed();
     await tester.pumpWidget(_app(store, settings));
@@ -422,7 +421,7 @@ void main() {
   });
 
   testWidgets('弹窗里多选之后拖其中一张 = **整批一起走**', (tester) async {
-    // 用户 2026-10-18："全选、移出集合、删除。同时要做到可以多选拖拽。"
+    // 支持全选、移出集合、删除，并支持多选拖拽。
     // ⚠ 弹窗里的多选与画廊主界面那个是**两套**状态，只认后者的话这里只会搬走一张。
     debugMouseFirstOverride = true;
     final (store, settings) = await _seed();
@@ -461,9 +460,9 @@ void main() {
   });
 
   testWidgets('宽屏：停靠面板**不会让开**；拖到空地上松手 = 直接移出集合', (tester) async {
-    // 用户 2026-10-18："停靠面板适合电脑 UI，弹窗适合手机 UI" + "我还希望…拖动到弹窗外，
-    // 能够直接解除移出集合，而不再只能拖动到屏幕底"。
-    // 宽屏是**停靠**形态：面板占真实布局空间、根本不需要"让开"，拖出去随便松手就算移出。
+    // 停靠面板适用于电脑端，弹窗适用于手机端；拖到弹窗外即移出集合，
+    // 不需要拖到屏幕底部。
+    // 宽屏为**停靠**形态：面板占据布局空间，无需让开，在外部松手即移出。
     debugMouseFirstOverride = true;
     tester.view.physicalSize = const Size(1600, 1000);
     tester.view.devicePixelRatio = 1.0;
@@ -505,7 +504,7 @@ void main() {
 
   testWidgets('窄屏：居中弹窗，拖出弹窗外它就彻底让开（不再回来挡住）', (tester) async {
     // 窄屏才是弹窗形态。⚠ 让开之后**不许**再"拖回来就重新挡住" ——
-    // 那会让窗口中间那一片格子永远落不到（用户 2026-10-18 报的正是这个）。
+    // 否则窗口中间的格子始终无法接收落点。
     debugMouseFirstOverride = true;
     tester.view.physicalSize = const Size(820, 900);
     tester.view.devicePixelRatio = 1.0;
@@ -546,7 +545,7 @@ void main() {
   });
 
   testWidgets('把**外面的**一张拖进面板里 = 加进这一组（面板整体都是落点）', (tester) async {
-    // 用户 2026-10-18："B 有个 bug：我不能把目标拖进停靠面板内，实现集合加入操作。"
+    // 现象：无法将目标拖入停靠面板以加入集合。
     // 真因：只把**成员格子**做成了落点，面板的标题 / 空白 / 成员之间的缝都是死的。
     debugMouseFirstOverride = true;
     tester.view.physicalSize = const Size(1600, 1000);
@@ -611,11 +610,10 @@ void main() {
   });
 
   // ---------------------------------------------------------------------------
-  //  集合详情的**形态由用户选**（用户 2026-10-18："能不能让我自由选择在电脑/手机
-  //  排版的画廊的集合详情行为？"）
+  //  集合详情的**形态由设置决定**。
   //
-  //  以前是**代码**按宽度档替他定：宽屏且"扣掉面板后网格还剩得下 420"才停靠，
-  //  否则一律居中弹窗。现在两个宽度档各自一条偏好，代码**严格照办**。
+  //  此前由代码按宽度判定：宽屏且"扣除面板后网格仍有 420"才停靠，
+  //  否则使用居中弹窗。现在两个宽度档各有一条偏好，代码按偏好执行。
   //
   //  判据（读完 `gallery_page.dart` 后定的，写在文件末尾的 `_isPopupForm` 上）：
   //  两种形态在 widget 树上各有**独有**节点，不看"能跑就行"。
@@ -664,7 +662,7 @@ void main() {
   });
 
   testWidgets('窄屏选「停靠面板」→ 真的停靠（不再有"空间不够就回退弹窗"）', (tester) async {
-    // 用户 2026-10-18 要的正是这个"我自己定"：窄窗口上选停靠就该停靠，
+    // 选择停靠即停靠：窄窗口上同样适用，
     // 代码不许偷偷加一层"剩余空间不足 → 回退弹窗"（上一版就是那样）。
     tester.view.physicalSize = const Size(820, 900);
     tester.view.devicePixelRatio = 1.0;
@@ -688,11 +686,11 @@ void main() {
   });
 
   testWidgets('窗口最窄（360）+ 选停靠：不抛异常；网格被挤成细条 = 这个选择的既定代价', (tester) async {
-    // 用户 2026-10-18 要求"严格照用户意愿"：选了停靠就停靠，**不加**"空间不够就回退弹窗"。
+    // 选择停靠即停靠，**不添加**"空间不够就回退弹窗"逻辑。
     // 这条把这个选择的边界钉成"已知"而不是"以后才炸"：
     // 窗口最小宽度是 360（`windows\runner\win32_window.cpp` 的 `kMinWindowWidthLogical`），
     // 面板宽度被算式夹在下限 300（`kCollectionPanelMinWidth`）→ 网格只剩几十像素。
-    // 不许崩、不许 RenderFlex overflow；挤成细条是用户自己选的那一半代价。
+    // 不得崩溃、不得 RenderFlex overflow；空间拥挤是该选择的预期结果。
     tester.view.physicalSize = const Size(360, 800);
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
@@ -802,8 +800,8 @@ void main() {
 
 /// 集合面板的标题（**两种形态都有**这一行，所以它只当"面板在不在"的锚点）。
 ///
-/// 用 key 而不是标题文字：标题现在是**集合自己的名字**（用户起的 / 后端给的默认名 /
-/// 「算法分组」），拿文字当锚点的话改个名用例就会红。
+/// 用 key 而不是标题文字：标题为**集合自身的名称**（手动填写 / 后端默认名 /
+/// 「算法分组」），以文字作锚点时改名会导致用例失败。
 Finder _folderTitle() => find.byKey(const Key('collection-panel-title'));
 
 /// ★ 凭什么判"停靠 vs 弹窗"（读完 `gallery_page.dart` 后定的判据，不是"能跑就行"）：
