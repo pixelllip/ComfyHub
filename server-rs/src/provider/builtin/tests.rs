@@ -1,4 +1,4 @@
-//! `builtin` 的单元测试（主体代码在 [`builtin`](super) —— 2026-09-30 按用户要求与主体分离）。
+//! `builtin` 的单元测试（主体代码在 [`builtin`](super) —— 与主体分离）。
 //!
 //! `use super::*;` 照旧：子模块能看见父模块的私有项，所以用例一行都不用改。
 
@@ -66,7 +66,7 @@ fn 对照结论把缺的_一致的_不一致的分开() {
     let mut c_row = row_of(&catalog[2], "p");
     c_row.reasoning = false;
     existing.insert("c".to_string(), c_row);
-    // 用户自己加的：不属于任何一类
+    // 自定义添加的：不属于任何一类
     existing.insert(
         "user-only".to_string(),
         row_of(&builtin("user-only", &["text"], true, false), "p"),
@@ -90,7 +90,7 @@ fn 只比能力不比用户的地盘() {
     let base = row_of(&model, "p");
     assert!(!capability_differs(&model, &base), "同一条不算不同");
 
-    // 用户改过的：显示名 / 启用 / 附件上限 —— 都不该判成"能力不同"
+    // 已修改的：显示名 / 启用 / 附件上限 —— 都不应判成"能力不同"
     let mut renamed = base.clone();
     renamed.display_name = "用户改的名字".into();
     renamed.enabled = false;

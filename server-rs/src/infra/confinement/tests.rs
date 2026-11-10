@@ -1,4 +1,4 @@
-//! `confinement` 的单元测试（主体代码在 [`confinement`](super) —— 2026-09-30 按用户要求与主体分离）。
+//! `confinement` 的单元测试（主体代码在 [`confinement`](super) —— 与主体分离）。
 //!
 //! `use super::*;` 照旧：子模块能看见父模块的私有项，所以用例一行都不用改。
 
@@ -66,7 +66,7 @@ fn 留证与清证_并且只认当前后端() {
     assert!(belongs_to(&root, 999).is_none());
     assert!(belongs_to(&root, 4242).unwrap().restricted);
 
-    // 探到正常 → 立刻清掉（不能让过期标记一直亮着吓用户）
+    // 探到正常 → 立即清除（不能让过期标记持续显示）
     assert!(apply(&root, &Report::default(), 4242).is_none());
     assert!(!path(&root).exists());
     assert!(read(&root).is_none());
@@ -124,7 +124,7 @@ fn 真探一次_项目内的临时目录一定写得进() {
 
 /// 界面上那份 JSON（`GET /api/system/confinement`）：**判据与结论一起给**。
 ///
-/// 只说"受限"用户没法自查，说清"因为后端映像在工作区内"他就能自己核对 ——
+/// 只说明"受限"无法自查，说明"后端映像位于工作区内"即可自行核对 ——
 /// 2026-09-28 那批现场描述就是这么被写歪的（现象对、结论错）。
 #[test]
 fn 界面那份结论要带判据与修法() {
