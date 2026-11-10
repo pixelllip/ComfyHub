@@ -200,6 +200,28 @@ pub fn remove_prompt_tag(conn: &Connection, prompt_id: i64, tag_id: i64) -> Resu
     Ok(())
 }
 
+/// 追加**带分类**的自动标签到提示词（已存在的标签保留用户改过的分类 / 颜色）。
+///
+/// 返回真正新增的关联条数（`INSERT OR IGNORE` 命中的不算），界面用它说
+/// "这次补了多少"，而不是把"扫过多少条"冒充成"新增多少条"。
+pub fn append_prompt_auto_tags(
+    conn: &Connection,
+    prompt_id: i64,
+    tags: &[crate::library::auto_tag::AutoTag],
+) -> Result<usize, WriteError> {
+    let mut added = 0usize;
+    for tag in tags {
+        let Some(tag_id) = ensure_tag(conn, &tag.name, Some(tag.category), None)? else {
+            continue;
+        };
+        added += conn.execute(
+            "INSERT OR IGNORE INTO prompt_tags (prompt_id, tag_id) VALUES (?1, ?2)",
+            params![prompt_id, tag_id],
+        )?;
+    }
+    Ok(added)
+}
+
 // ---------------------------------------------------------------------------
 //  提示词
 // ---------------------------------------------------------------------------
@@ -422,6 +444,15 @@ pub fn add_media_tags(
         "DELETE FROM media_tags WHERE media_id = ?1",
         params![media_id],
     )?;
+    append_media_tags(conn, media_id, names)
+}
+
+/// **追加**产物标签（不删已有）。`POST /api/media/{id}/tags` 用它。
+pub fn append_media_tags(
+    conn: &Connection,
+    media_id: i64,
+    names: &[String],
+) -> Result<(), WriteError> {
     let mut seen: Vec<i64> = Vec::new();
     for name in names {
         if let Some(id) = ensure_tag(conn, name, None, None)? {
@@ -436,5 +467,33 @@ pub fn add_media_tags(
             params![media_id, tag_id],
         )?;
     }
+    Ok(())
+}
+
+/// 追加**带分类**的自动标签到产物（与 [`append_prompt_auto_tags`] 同一套语义）。
+pub fn append_media_auto_tags(
+    conn: &Connection,
+    media_id: i64,
+    tags: &[crate::library::auto_tag::AutoTag],
+) -> Result<usize, WriteError> {
+    let mut added = 0usize;
+    for tag in tags {
+        let Some(tag_id) = ensure_tag(conn, &tag.name, Some(tag.category), None)? else {
+            continue;
+        };
+        added += conn.execute(
+            "INSERT OR IGNORE INTO media_tags (media_id, tag_id) VALUES (?1, ?2)",
+            params![media_id, tag_id],
+        )?;
+    }
+    Ok(added)
+}
+
+/// 解除产物与某个标签的关联（标签本身保留在词表里）。
+pub fn remove_media_tag(conn: &Connection, media_id: i64, tag_id: i64) -> Result<(), WriteError> {
+    conn.execute(
+        "DELETE FROM media_tags WHERE media_id = ?1 AND tag_id = ?2",
+        params![media_id, tag_id],
+    )?;
     Ok(())
 }

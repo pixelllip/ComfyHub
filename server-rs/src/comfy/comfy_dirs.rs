@@ -345,22 +345,13 @@ pub fn locate(project_root: &Path, configured_output: Option<&str>) -> ComfyLoca
         &mut candidates,
     );
 
-    // 4) 常见安装位置
+    // 4) 常见安装位置（**每个固定盘的盘根**，不写死盘符 —— 见 `fixed_drive_roots`）
     let located = env_home
         .or(local)
         .or_else(|| {
-            consider(
-                Some(PathBuf::from("D:\\ComfyUI")),
-                "常见位置 D:\\ComfyUI",
-                &mut candidates,
-            )
-        })
-        .or_else(|| {
-            consider(
-                Some(PathBuf::from("D:\\ComfyUI_windows_portable\\ComfyUI")),
-                "免安装包 D:\\ComfyUI_windows_portable",
-                &mut candidates,
-            )
+            drive_install_candidates()
+                .into_iter()
+                .find_map(|(path, kind)| consider(Some(path), &kind, &mut candidates))
         })
         .or_else(search_user_profile)
         .or_else(search_desktop_installs)
@@ -396,6 +387,71 @@ pub fn locate(project_root: &Path, configured_output: Option<&str>) -> ComfyLoca
         candidates,
         note: None,
     }
+}
+
+/// 这台机器上**真正存在**的固定盘根（`C:\`、`D:\`、`E:\` …，按盘符排序）。
+///
+/// # 为什么要有它（2026-11-10 复查）
+///
+/// 以前这里写死了 `D:\ComfyUI`、`D:\ComfyUI_windows_portable\ComfyUI`、
+/// `D:\Comfy-Desktop`、甚至整个 `D:\` 顶层 —— 那是**开发机**的布局。换台机器
+/// （ComfyUI 装在 `C:\` 或 `E:\`，或者根本没有 D 盘）就永远"找不到 ComfyUI"，
+/// 而界面只会说没找到。这不是某个人的特例，是**任何用户**都可能撞上的。
+///
+/// 用 `GetDriveTypeW` 只留 `DRIVE_FIXED`：网络映射盘 / 光驱不去碰
+/// （`is_dir()` 在断开的网络盘上会卡住几秒到几十秒），也免得把别人的共享盘
+/// 当成"本机 ComfyUI"。
+#[cfg(windows)]
+pub(crate) fn fixed_drive_roots() -> Vec<PathBuf> {
+    use windows_sys::Win32::Storage::FileSystem::{GetDriveTypeW, GetLogicalDrives};
+
+    // winbase.h 的 `DRIVE_FIXED`。windows-sys 把它放在 `Win32::System::WindowsProgramming`
+    // 里，为一个整数去开那一整个 API 集不值当。
+    const DRIVE_FIXED: u32 = 3;
+
+    let mask = unsafe { GetLogicalDrives() };
+    if mask == 0 {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    for bit in 0..26u32 {
+        if mask & (1 << bit) == 0 {
+            continue;
+        }
+        let letter = (b'A' + bit as u8) as char;
+        let root = format!("{letter}:\\");
+        let wide: Vec<u16> = root.encode_utf16().chain(std::iter::once(0)).collect();
+        // SAFETY: `wide` 是以 NUL 结尾的 UTF-16 串，生命周期覆盖这次调用
+        if unsafe { GetDriveTypeW(wide.as_ptr()) } == DRIVE_FIXED {
+            out.push(PathBuf::from(root));
+        }
+    }
+    out
+}
+
+#[cfg(not(windows))]
+pub(crate) fn fixed_drive_roots() -> Vec<PathBuf> {
+    Vec::new()
+}
+
+/// 常见安装位置：**每个固定盘的盘根**（`X:\ComfyUI`、`X:\ComfyUI_windows_portable\ComfyUI`）。
+///
+/// 返回 `(路径, 给人看的说明)`，由调用方逐个 `consider` 记进候选 —— 这样"找到没找到、
+/// 哪几个不像"都能如实列出来，而不是只报一句"没找到"。
+pub(crate) fn drive_install_candidates() -> Vec<(PathBuf, String)> {
+    let mut out = Vec::new();
+    for drive in fixed_drive_roots() {
+        let letter = drive.to_string_lossy().trim_end_matches('\\').to_string();
+        out.push((
+            drive.join("ComfyUI"),
+            format!("常见位置 {letter}\\ComfyUI"),
+        ));
+        out.push((
+            drive.join("ComfyUI_windows_portable").join("ComfyUI"),
+            format!("免安装包 {letter}\\ComfyUI_windows_portable"),
+        ));
+    }
+    out
 }
 
 /// 按"最可能命中"的顺序找 ComfyUI 的**根目录**（[`locate`] 只要 home 那一半）。
@@ -439,7 +495,11 @@ pub(crate) fn search_desktop_installs() -> Option<PathBuf> {
     if let Ok(home) = std::env::var("USERPROFILE") {
         roots.push(PathBuf::from(home).join("Documents").join("comfy"));
     }
-    roots.push(PathBuf::from("D:\\Comfy-Desktop"));
+    // 有人把 ComfyUI Desktop 装在别的盘（`E:\Comfy-Desktop` 之类）：每个固定盘都看
+    // 一眼，别只认开发机的 `D:\Comfy-Desktop`（2026-11-10）。
+    for drive in fixed_drive_roots() {
+        roots.push(drive.join("Comfy-Desktop"));
+    }
 
     for root in roots {
         if !root.is_dir() {
@@ -475,7 +535,9 @@ pub(crate) fn search_desktop_packages() -> Option<PathBuf> {
         roots.push(base.join("Documents"));
         roots.push(base.join("Downloads"));
     }
-    roots.push(PathBuf::from("D:\\"));
+    // 整合包常被解压到"某个盘的盘根"（`D:\ComfyUI-aki-v1.6` 这种）。以前只扫 `D:\`，
+    // 换台机器（解压在 C: / E:）就找不到 —— 现在每个固定盘都扫一层（2026-11-10）。
+    roots.extend(fixed_drive_roots());
 
     for root in roots {
         if !root.is_dir() {

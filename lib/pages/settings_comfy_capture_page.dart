@@ -408,7 +408,7 @@ class _ComfyCaptureSettingsPageState extends State<ComfyCaptureSettingsPage> {
                     controller: _comfyOutputController,
                     decoration: const InputDecoration(
                       labelText: 'ComfyUI 输出目录（可选）',
-                      hintText: r'例如 D:\Comfy-Desktop\ComfyUI-Shared\output',
+                      hintText: r'例如 D:\ComfyUI\output（按你自己装的位置填）',
                       helperText: '填了就直接读本地文件，快且不占带宽。留空则通过 HTTP 下载。',
                     ),
                   ),

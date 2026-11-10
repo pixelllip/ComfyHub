@@ -6,6 +6,7 @@ pub mod backup;
 pub mod confinement;
 pub mod db;
 pub mod iso_time;
+pub mod library_merge;
 pub mod outbound;
 pub mod storage;
 pub mod testpaths;

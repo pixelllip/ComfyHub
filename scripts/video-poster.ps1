@@ -16,7 +16,7 @@
     · 已经存在的缓存直接复用（除非 -Force）。
 
 .EXAMPLE
-    pwsh -File scripts\video-poster.ps1 -Source D:\a.mp4 -Dest .run\a.png
+    pwsh -File scripts\video-poster.ps1 -Source .\a.mp4 -Dest .run\a.png
 #>
 [CmdletBinding()]
 param(

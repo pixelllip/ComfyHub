@@ -53,6 +53,12 @@ pub fn write_router() -> Router<AppState> {
         .route("/api/prompts/{id}/tags", post(add_tags))
         .route("/api/prompts/{id}/tags/{tag_id}", delete(remove_tag))
         .route("/api/media/{id}", patch(patch_media).delete(delete_media))
+        // 产物标签（2026-11-10）：用户手动加 / 删。整体替换走 `PATCH /api/media/{id}`
+        // 的 `tags`；这两条是"只加一条 / 只删一条"的细粒度入口。
+        .route("/api/media/{id}/tags", post(add_media_tags))
+        .route("/api/media/{id}/tags/{tag_id}", delete(remove_media_tag))
+        // 给库里已有的提示词与产物补自动标签（标签页的「补标签」按钮）。
+        .route("/api/tags/auto-apply", post(auto_apply_tags))
         // 手动集合（2026-10-18）：建一个集合并把选中的产物一起移进去。
         // 读那一半（`GET /api/media/collections`）在读端点表里。
         .route("/api/media/collections", post(create_collection))
@@ -162,6 +168,58 @@ async fn delete_media(
 ) -> Result<Json<Deleted>, ApiError> {
     crate::media::media_write::delete(&state, id)?;
     Ok(Json(Deleted { deleted: id }))
+}
+
+/// 产物是否存在（标签子路由用它把"不存在"翻成 404，而不是让外键炸成 500）。
+fn media_exists(state: &AppState, id: i64) -> Result<bool, ApiError> {
+    state.with(|conn| {
+        Ok(conn
+            .query_row(
+                "SELECT id FROM media_assets WHERE id = ?1",
+                params![id],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()?
+            .is_some())
+    })
+}
+
+/// `POST /api/media/{id}/tags`：给产物**追加**标签（不删已有的）。
+async fn add_media_tags(
+    State(state): State<AppState>,
+    Id(id): Id,
+    Json(body): Json<TagNamesInput>,
+) -> Result<Json<crate::web::models::MediaDto>, ApiError> {
+    if !media_exists(&state, id)? {
+        return Err(ApiError::not_found(format!("产物 {id} 不存在")));
+    }
+    state.write(|tx| {
+        repo::append_media_tags(tx, id, &body.tags)?;
+        repo::refresh_use_counts(tx)
+    })?;
+    Ok(Json(crate::media::media::get(&state, id)?))
+}
+
+/// `DELETE /api/media/{id}/tags/{tag_id}`：只解除这一条关联，标签本身留在词表里。
+async fn remove_media_tag(
+    State(state): State<AppState>,
+    IdPair(id, tag_id): IdPair,
+) -> Result<Json<crate::web::models::MediaDto>, ApiError> {
+    if !media_exists(&state, id)? {
+        return Err(ApiError::not_found(format!("产物 {id} 不存在")));
+    }
+    state.write(|tx| {
+        repo::remove_media_tag(tx, id, tag_id)?;
+        repo::refresh_use_counts(tx)
+    })?;
+    Ok(Json(crate::media::media::get(&state, id)?))
+}
+
+/// `POST /api/tags/auto-apply`：给库里已有的提示词与产物补一遍自动标签。
+async fn auto_apply_tags(
+    State(state): State<AppState>,
+) -> Result<Json<crate::library::auto_tag::AutoTagReport>, ApiError> {
+    Ok(Json(crate::library::auto_tag::apply_existing(&state)?))
 }
 
 impl From<WriteError> for ApiError {

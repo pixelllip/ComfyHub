@@ -39,6 +39,7 @@ library;
 import 'dart:io';
 
 import 'backend_paths.dart';
+import 'library_identity.dart';
 
 /// 一份数据目录的规模。
 class DataDirUsage {
@@ -167,7 +168,12 @@ Future<List<_Entry>> _collectEntries(String dataDir) async {
     for (final entity in dbDir.listSync(followLinks: false)) {
       if (entity is! File) continue;
       final name = entity.uri.pathSegments.last;
-      if (name != dbName && name != '$dbName-wal' && name != '$dbName-shm') {
+      // 库的身份文件（`library.json`）跟着库一起走：搬完还是"同一份库"，
+      // 不然下一次启动会以为换了一份（2026-11-10 的身份机制）。
+      if (name != dbName &&
+          name != '$dbName-wal' &&
+          name != '$dbName-shm' &&
+          name != kLibraryIdFileName) {
         continue;
       }
       final stat = entity.statSync();
@@ -311,7 +317,7 @@ Future<DataDirCheck> checkDataDirTarget({
   if (_isInside(trimmed, current)) {
     return DataDirCheck(
       ok: false,
-      message: '新目录不能放在当前数据目录里面，会一边搬一边把新文件也搬进去。',
+      message: '新的位置不能位于当前位置的内部，否则搬运时会把刚复制过去的文件再次复制。',
       source: source,
     );
   }
@@ -338,8 +344,7 @@ Future<DataDirCheck> checkDataDirTarget({
       return DataDirCheck(
         ok: false,
         message:
-            '新目录不能是当前数据目录的更上一级。要往上搬就选它的上一级，'
-            '或者换一个别的目录。',
+            '只能向上移动一级。如需向上移动，请选择当前位置的上一级文件夹。',
         source: source,
       );
     }
@@ -347,8 +352,7 @@ Future<DataDirCheck> checkDataDirTarget({
       return DataDirCheck(
         ok: false,
         message:
-            '上一级里已经有一份别的数据，搬过去会和它混在一起。'
-            '先把那份数据移走再搬。',
+            '上一级文件夹中已经存在另一份数据，搬运后会与它混在一起。请先将那份数据移走。',
         source: source,
       );
     }
@@ -366,7 +370,7 @@ Future<DataDirCheck> checkDataDirTarget({
   } catch (e) {
     return DataDirCheck(
       ok: false,
-      message: '这个目录写不进去（$e）。换一个能写的目录，或先处理磁盘权限。',
+      message: '这个文件夹无法写入（$e）。请选择其他可写入的文件夹。',
       source: source,
     );
   }
@@ -376,12 +380,12 @@ Future<DataDirCheck> checkDataDirTarget({
   final String message;
   if (targetDb) {
     message =
-        '这个目录里已经有一份库。它那份库会先备份到 backups，'
-        '然后换成现在的；同名产物会被覆盖。';
+        '这个位置已经存在一份数据。该数据会先保存到 backups，'
+        '然后替换为当前这一份；同名文件会被覆盖。';
   } else if (targetHasStorage) {
     message =
-        '这个目录里已经有一份产物。搬过去会覆盖同名文件，'
-        '多出来的旧文件会留着。';
+        '这个位置已经存在图片和视频。搬运时会覆盖同名文件，'
+        '多余的原文件会保留。';
   } else {
     message = '';
   }
@@ -414,13 +418,13 @@ Future<MigrationResult> migrateDataDir({
   bool Function()? isCancelled,
 }) async {
   if (_samePath(source, target)) {
-    return const MigrationResult(ok: false, message: '新目录就是当前目录，不用搬。');
+    return const MigrationResult(ok: false, message: '这就是当前的存放位置，无需搬运。');
   }
   if (isCancelled?.call() == true) {
     return const MigrationResult(
       ok: false,
       cancelled: true,
-      message: '已取消。旧数据没动。',
+      message: '已取消。原来的内容没有被修改。',
     );
   }
 
@@ -428,7 +432,10 @@ Future<MigrationResult> migrateDataDir({
   try {
     entries = await _collectEntries(source);
   } catch (e) {
-    return MigrationResult(ok: false, message: '读当前数据目录失败（$e）。旧数据没动。');
+    return MigrationResult(
+      ok: false,
+      message: '无法读取当前的存放位置（$e）。原来的内容没有被修改。',
+    );
   }
 
   // 有未完成的库恢复：那份标记里写的是**旧路径**，搬走之后重启会找不到 tmp。
@@ -437,7 +444,7 @@ Future<MigrationResult> migrateDataDir({
   if (pendingRestore.existsSync()) {
     return const MigrationResult(
       ok: false,
-      message: '还有一次库恢复没完成。先重启一次本地服务让它做完，再来改数据目录。',
+      message: '上一次恢复尚未完成。请先重新启动程序，让它完成后再搬运。',
     );
   }
 
@@ -450,7 +457,7 @@ Future<MigrationResult> migrateDataDir({
     } catch (e) {
       return MigrationResult(
         ok: false,
-        message: '目标目录里有一份库，但备份它失败了（$e）。旧数据没动。',
+        message: '新的位置中存在一份数据，但保存备份失败（$e）。原来的内容没有被修改。',
       );
     }
     // 备份已经落盘、还没删目标那份库：这时取消仍然算"什么都没动"。
@@ -458,7 +465,7 @@ Future<MigrationResult> migrateDataDir({
       return MigrationResult(
         ok: false,
         cancelled: true,
-        message: '已取消。旧数据没动；目标里原来的库已经备份到 $backupPath。',
+        message: '已取消。原来的内容没有被修改。新位置原有的数据已保存到 $backupPath。',
         backupPath: backupPath,
       );
     }
@@ -477,8 +484,8 @@ Future<MigrationResult> migrateDataDir({
       return MigrationResult(
         ok: false,
         message:
-            '目标里那份库已经备份到 $backupPath，但没能把它从原处移开（$e）。'
-            '旧数据没动，可以重试一次。',
+            '新位置原有的数据已保存到 $backupPath，但无法把它从原处移除（$e）。'
+            '原来的内容没有被修改，可以重试。',
       );
     }
   }
@@ -516,7 +523,7 @@ Future<MigrationResult> migrateDataDir({
           ok: false,
           cancelled: true,
           message:
-              '已取消。旧数据没动；新目录里留着一部分拷完的文件，可以整个删掉重来。'
+              '已取消。原来的内容没有被修改。新位置中保留了部分已复制的文件，可以整体删除后重试。'
               '${_backupNote(backupPath)}',
           backupPath: backupPath,
         );
@@ -544,7 +551,7 @@ Future<MigrationResult> migrateDataDir({
     return MigrationResult(
       ok: false,
       message:
-          '复制到一半失败了（$e）。旧数据没动；新目录里的副本不完整，可以删掉重来。'
+          '复制过程中失败（$e）。原来的内容没有被修改。新位置中的副本不完整，可以删除后重试。'
           '${_backupNote(backupPath)}',
       backupPath: backupPath,
     );
@@ -561,7 +568,7 @@ Future<MigrationResult> migrateDataDir({
       return MigrationResult(
         ok: false,
         message:
-            '校验没通过：${entry.relative.join('\\')} 没拷过去。旧数据没动。'
+            '核对未通过：${entry.relative.join('\\')} 没有被复制过去。原来的内容没有被修改。'
             '${_backupNote(backupPath)}',
         backupPath: backupPath,
       );
@@ -571,8 +578,8 @@ Future<MigrationResult> migrateDataDir({
       return MigrationResult(
         ok: false,
         message:
-            '校验没通过：${entry.relative.join('\\')} 大小对不上'
-            '（应该是 ${entry.length} 字节，实际 $size）。旧数据没动。'
+            '核对未通过：${entry.relative.join('\\')} 的大小不一致'
+            '（应为 ${entry.length} 字节，实际为 $size）。原来的内容没有被修改。'
             '${_backupNote(backupPath)}',
         backupPath: backupPath,
       );
@@ -583,8 +590,8 @@ Future<MigrationResult> migrateDataDir({
     return MigrationResult(
       ok: false,
       message:
-          '数据已经复制并校验好了，但"记住新位置"没写成（<根>\\data-dir.json）。'
-          '旧目录还在用，可以重试一次。${_backupNote(backupPath)}',
+          '内容已复制并核对完成，但无法记录新的存放位置（<根>\\data-dir.json）。'
+          '当前仍使用原来的位置，可以重试。${_backupNote(backupPath)}',
       backupPath: backupPath,
     );
   }
@@ -602,14 +609,14 @@ Future<MigrationResult> migrateDataDir({
   return MigrationResult(
     ok: true,
     pointerWritten: true,
-    message: '搬完了，共 $totalFiles 个文件。${_backupNote(backupPath)}',
+    message: '搬运完成，共 $totalFiles 个文件。${_backupNote(backupPath)}',
     backupPath: backupPath,
   );
 }
 
 /// 覆盖旧库之后给用户的一句提醒（没覆盖时为空）。
 String _backupNote(String? backupPath) =>
-    backupPath == null ? '' : '目标里原来的库备份在 $backupPath。';
+    backupPath == null ? '' : '新位置原有的数据保存在 $backupPath。';
 
 /// 把目标目录里现成的库文件（含 `-wal` / `-shm`）备份到 `<根>\backups\`。
 String _backupTargetDb(String root, String target) {

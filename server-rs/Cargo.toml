@@ -63,6 +63,13 @@ tokio-tungstenite = { version = "0.24", default-features = false, features = ["c
 if-addrs = "0.13"
 socket2 = "0.6.5"
 
+# 枚举"本机有哪些**固定盘**"（ComfyUI 装在哪个盘是用户的自由，别写死 `D:\` —— 2026-11-10
+# 复查：以前 Rust 侧认死 `D:\ComfyUI` / `D:\Comfy-Desktop` / 整个 `D:\` 顶层，只有开发机
+# 的布局能被找到）。只开文件系统那一组 FFI：不引整个 `windows` crate，静态链接、不进发布包
+# 的额外文件，也不依赖任何系统 DLL 之外的运行时。
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_Storage_FileSystem"] }
+
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"

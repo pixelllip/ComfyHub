@@ -78,19 +78,13 @@ function Invoke-Api {
 }
 
 function Find-Python {
-    $cands = @($env:COMFYHUB_PYTHON)
-    $cmd = Get-Command python -ErrorAction SilentlyContinue
-    if ($cmd) { $cands += $cmd.Source }
-    $cands += @(
-        'D:\Comfy-Desktop\ComfyUI-Installs\ComfyUI\standalone-env\python.exe',
-        'D:\Comfy-Desktop\ComfyUI-Installs\ComfyUI\ComfyUI\.venv\Scripts\python.exe'
-    )
-    foreach ($c in $cands) {
-        if ($c -and (Test-Path $c)) { return $c }
+    # 不写死路径：交给 comfy-path.ps1 里那套"现探 ComfyUI 装在哪"的判据
+    # （以前这里列的是 D:\Comfy-Desktop\... —— 只有开发机能命中，2026-11-10 复查改掉）
+    if (-not (Get-Command Find-ComfyPython -ErrorAction SilentlyContinue)) {
+        . (Join-Path $PSScriptRoot 'comfy-path.ps1')
     }
-    return $null
+    return Find-ComfyPython -ProjectRoot $ProjectRoot
 }
-
 # ---------------------------------------------------------------------------
 #  直接查库
 #  P2（2026-09-23）起后端写的是 **SQLite 单文件** `<项目根>\.db\comfyhub.db`；

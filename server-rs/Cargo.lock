@@ -192,6 +192,7 @@ dependencies = [
  "tower",
  "tower-http 0.7.1",
  "url",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]

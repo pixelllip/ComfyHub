@@ -26,6 +26,7 @@ import 'state/ai_workspace_store.dart';
 import 'state/library_store.dart';
 import 'state/nsfw_store.dart';
 import 'widgets/confinement_banner.dart';
+import 'widgets/data_dir_notice_banner.dart';
 
 class ComfyHubApp extends StatelessWidget {
   final SettingsStore settings;
@@ -591,6 +592,12 @@ class _HomeShellState extends State<HomeShell> {
       children: [
         ConfinementBanner(
           info: _confinement,
+          onOpenSettings: () => _goToPage(4),
+        ),
+        // "库不在你以为的地方"（指针 ≠ 实际数据 / 产物目录没跟过来）：同样是常驻状态，
+        // 摆在内容之上。正常时它是 `SizedBox.shrink()`，不占高度（2026-11-10）。
+        DataDirNoticeBanner(
+          notice: context.watch<BackendLauncher>().dataDirNotice,
           onOpenSettings: () => _goToPage(4),
         ),
         // **页面常驻、只切可见性**（2026-10-11 用户要求："桌面端 UI 应该始终把主界面

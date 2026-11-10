@@ -160,4 +160,10 @@ pub struct MediaUpdate {
     /// `backfill` 会把这一条**静默吸回原组**。
     #[serde(default)]
     pub clear_collection: bool,
+    /// **整体替换**产物自身的标签（2026-11-10：用户要求能手动加 / 删标签）。
+    ///
+    /// `None` = 这次不动标签；空数组 = 把自身标签清空（关联提示词的标签仍会合并展示）。
+    /// 与 `promptId: null` / `clearPrompt` 的"缺省 ≠ 清空"是同一套语义。
+    #[serde(default)]
+    pub tags: Option<Vec<String>>,
 }

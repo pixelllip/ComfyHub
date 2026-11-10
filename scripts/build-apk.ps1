@@ -92,7 +92,7 @@ $jdk = if ($env:COMFYHUB_JDK_HOME) { $env:COMFYHUB_JDK_HOME } else { $env:JAVA_H
 if ($jdk) {
     if (-not (Test-Path (Join-Path $jdk 'bin\jlink.exe'))) {
         Say "✗ $jdk 不是完整 JDK（缺 bin\jlink.exe）。JBR jcef 只有运行时，编不了 Android。" 'Red'
-        Say '  用带 jlink 的 JDK（本机实测 C:\Program Files\Java\jdk-25 可以），或删掉环境变量让 Flutter 自己挑。' 'Yellow'
+        Say '  换一个**完整 JDK**（要有 bin\jlink.exe，比如 Temurin / Oracle / Microsoft OpenJDK 的 JDK 发行包），或删掉环境变量让 Flutter 自己挑。' 'Yellow'
         exit 2
     }
     $env:JAVA_HOME = $jdk

@@ -36,7 +36,7 @@
 .EXAMPLE
     pwsh -File scripts\e2e-credential-test.ps1
     pwsh -File scripts\e2e-credential-test.ps1 -KeepData       # 留着现场
-    pwsh -File scripts\e2e-credential-test.ps1 -JavaHome 'D:\Program Files\Android Studio\jbr'
+    pwsh -File scripts\e2e-credential-test.ps1 -JavaHome "$env:ProgramFiles\Android Studio\jbr"
 #>
 [CmdletBinding()]
 param(
@@ -106,7 +106,22 @@ function Resolve-Jdk21 {
     if ($env:COMFYHUB_JDK_HOME) { $candidates += $env:COMFYHUB_JDK_HOME }
     if ($env:JAVA_HOME) { $candidates += $env:JAVA_HOME }
     $candidates += (Join-Path $ProjectRoot 'jre')
-    $candidates += 'D:\Program Files\Android Studio\jbr'
+    # 本机常见位置（**不写死某个盘 / 某个版本目录**）：Android Studio 自带的 JBR + 各 JDK
+    # 发行包（Program Files / LocalAppData 下）。版本对不对由下面读 `release` 判。
+    $jdkRoots = @(
+        $env:ProgramFiles,
+        ${env:ProgramFiles(x86)},
+        (Join-Path $env:LOCALAPPDATA 'Programs'),
+        (Join-Path $env:ProgramFiles 'Java'),
+        (Join-Path $env:ProgramFiles 'Eclipse Adoptium'),
+        (Join-Path $env:LOCALAPPDATA 'Programs\Eclipse Adoptium')
+    )
+    foreach ($root in $jdkRoots) {
+        if (-not $root -or -not (Test-Path -LiteralPath $root -PathType Container)) { continue }
+        $candidates += (Join-Path $root 'Android Studio\jbr')
+        $candidates += (Get-ChildItem -LiteralPath $root -Directory -ErrorAction SilentlyContinue |
+            ForEach-Object { $_.FullName })
+    }
     # ⚠ 循环变量**不能叫 `$home`**：PowerShell 的自动变量大小写不敏感，
     # `$HOME` 是只读的 → 当场抛 "Cannot overwrite variable HOME"（AGENTS §8 记过这条）。
     foreach ($jdkHome in $candidates) {

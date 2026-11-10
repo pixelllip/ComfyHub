@@ -214,12 +214,12 @@ void main() {
       reason: '副标题写产物 / 附件 / AI 文件所在的那个目录',
     );
 
-    // 点进去是子页：看当前位置、打开、换位置
+    // 点进去是子页：看当前位置、两个一键搬家的按钮
     await tester.tap(find.text('数据目录'));
     await tester.pumpAndSettle();
     expect(find.text('当前位置'), findsOneWidget);
-    expect(find.text('更改位置…'), findsOneWidget);
-    expect(find.textContaining('旧目录不会自动删除'), findsOneWidget);
+    expect(find.text('搬到别处…'), findsOneWidget);
+    expect(find.textContaining('原来文件夹中的内容不会被删除'), findsOneWidget);
   });
 
   // 用户 2026-10-13：「主题（浅色/深色）那里排版奇怪，不应该一行搞定吗」。

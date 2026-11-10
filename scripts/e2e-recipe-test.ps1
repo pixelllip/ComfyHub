@@ -27,7 +27,7 @@
 .EXAMPLE
     pwsh -File scripts\e2e-recipe-test.ps1
     pwsh -File scripts\e2e-recipe-test.ps1 -KeepData          # 留着临时库看现场
-    pwsh -File scripts\e2e-recipe-test.ps1 -UiWorkflow 'D:\...\krea2ImageEditingAnd_v10.json'
+    pwsh -File scripts\e2e-recipe-test.ps1 -UiWorkflow '<某个目录>\krea2ImageEditingAnd_v10.json'
 #>
 [CmdletBinding()]
 param(
@@ -238,13 +238,20 @@ try {
     # --- 4. 界面格式 + 有缺口 → 默认拒学（要 ComfyUI 在场） -------------
     Write-Host "`n[4] 界面格式有缺口时默认拒学（真机上最常见的原因：实例没装那些自定义节点）" -ForegroundColor Cyan
     if (-not $UiWorkflow) {
-        $cand = Get-ChildItem 'D:\Comfy-Desktop\ComfyUI-Installs\ComfyUI\ComfyUI\user\default\workflows' -Filter '*ImageEdit*.json' -ErrorAction SilentlyContinue |
-            Select-Object -First 1
-        if (-not $cand) {
-            $cand = Get-ChildItem 'D:\Comfy-Desktop\ComfyUI-Installs\ComfyUI\ComfyUI\user\default\workflows' -Filter 'krea2*.json' -ErrorAction SilentlyContinue |
-                Select-Object -First 1
+        # 工作流目录从"**现探到的** ComfyUI 位置"推出来，不写死某个盘：
+        # 以前这里是 `D:\Comfy-Desktop\...\user\default\workflows`，换台机器就找不到。
+        if (-not (Get-Command Resolve-ComfyHome -ErrorAction SilentlyContinue)) {
+            . (Join-Path $PSScriptRoot 'comfy-path.ps1')
         }
-        if ($cand) { $UiWorkflow = $cand.FullName }
+        $comfyHomeForRecipe = Resolve-ComfyHome -ProjectRoot $ProjectRoot
+        if ($comfyHomeForRecipe) {
+            $wfDir = Join-Path $comfyHomeForRecipe 'user\default\workflows'
+            foreach ($pattern in @('*ImageEdit*.json', 'krea2*.json')) {
+                $cand = Get-ChildItem -LiteralPath $wfDir -Filter $pattern -ErrorAction SilentlyContinue |
+                    Select-Object -First 1
+                if ($cand) { $UiWorkflow = $cand.FullName; break }
+            }
+        }
     }
     $comfyUp = $false
     try { $comfyUp = (Invoke-Api -Method GET -Uri 'http://127.0.0.1:8188/system_stats').status -eq 200 } catch { $comfyUp = $false }

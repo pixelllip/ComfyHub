@@ -22,6 +22,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:viewer/core/backend_launcher.dart';
 import 'package:viewer/core/backend_paths.dart';
+import 'package:viewer/core/library_identity.dart';
 import 'package:viewer/core/settings_store.dart';
 
 /// 一次子进程调用（假 starter 记下来的）
@@ -319,6 +320,99 @@ void main() {
       isFalse,
       reason: '认了扁平布局就不该再建一个空的 storage 子目录',
     );
+    launcher.dispose();
+  });
+
+  test('启动：指针停在 storage 的上一级、记录里是 storage 那份 → 按记录用它', () async {
+    // 2026-11-10 真 bug：`data-dir.json` 写 `…\hub`，库却在 `…\hub\storage\.db`,
+    // 而 `…\hub\.db` 是上一份构建的残留。现在靠**身份记录**决定用哪份
+    // （不按大小猜）：记着 storage 那份，就打开 storage 那份。
+    writeApiJson(await deadPort());
+    final settings = await loadSettings();
+    final sep = Platform.pathSeparator;
+    final hub = Directory('${root.path}${sep}hub')..createSync(recursive: true);
+    void writeDb(Directory base, int bytes) {
+      final file = File('${base.path}$sep.db${sep}comfyhub.db');
+      file.parent.createSync(recursive: true);
+      file.writeAsBytesSync(List<int>.filled(bytes, 0));
+    }
+
+    writeDb(hub, 1024); // 上一级：残留的旧库
+    final real = Directory('${hub.path}${sep}storage')..createSync();
+    writeDb(real, 64 * 1024); // storage 里：正在用的那份
+    // 真库旁边就是产物（扁平布局）：现场 `D:\dist\ComfyHub\storage\media` 正是这样
+    final mediaDir = Directory('${real.path}${sep}media')..createSync();
+    File('${mediaDir.path}${sep}a.png').writeAsStringSync('x');
+    final id = ensureLibraryId(real.path);
+    expect(id, isNotEmpty);
+    await settings.setLastLibrary(
+      LibraryRef(id: id, path: real.path, seenAt: DateTime.now()),
+    );
+    expect(writeDataDirOverride(root.path, hub.path), isTrue);
+
+    final launcher = BackendLauncher(settings);
+    installStarter();
+    await launcher.ensureRunning();
+
+    expect(spawns.single.args, [
+      '--db',
+      '${real.path}$sep.db${sep}comfyhub.db',
+      '--storage',
+      real.path,
+      '--host',
+      '127.0.0.1',
+      '--port',
+      '0',
+      '--watch-stdin',
+    ]);
+    // 界面要能说清"为什么换了一份"
+    expect(launcher.dataDir, real.path);
+    expect(launcher.dataDirInfo?.pick, DataDirPick.remembered);
+    expect(launcher.dataDirNotice, contains('上次使用的那份'));
+    // `.run` 与工作目录的基准仍然是运行根目录（数据在哪不影响端口文件在哪）
+    expect(spawns.single.workDir, root.path);
+    launcher.dispose();
+  });
+
+  test('启动：程序被复制到别处时，按"上次用的库"的记录打开原来那份', () async {
+    // 2026-11-10 用户报的那次：把构建复制到别处打开，看到的是另一份旧库。
+    // 现在每个库都带身份，偏好里记着"上次用的是哪一份、在哪" —— 复制出去的构建
+    // 照样打开你的库（并且这件事在界面能看见）。
+    writeApiJson(await deadPort());
+    final settings = await loadSettings();
+    final sep = Platform.pathSeparator;
+    final lib = Directory('${root.path}${sep}library')
+      ..createSync(recursive: true);
+    final dbFile = File('${lib.path}$sep.db${sep}comfyhub.db');
+    dbFile.parent.createSync(recursive: true);
+    dbFile.writeAsBytesSync(List<int>.filled(4096, 0));
+    Directory('${lib.path}${sep}storage').createSync();
+    final id = ensureLibraryId(lib.path);
+    expect(id, isNotEmpty);
+    await settings.setLastLibrary(
+      LibraryRef(id: id, path: lib.path, seenAt: DateTime.now()),
+    );
+
+    // 这次从"另一个目录"启动（那里没有库、也没有指针）
+    final launcher = BackendLauncher(settings);
+    installStarter();
+
+    await launcher.ensureRunning();
+
+    expect(spawns.single.args, [
+      '--db',
+      '${lib.path}$sep.db${sep}comfyhub.db',
+      '--storage',
+      '${lib.path}${sep}storage',
+      '--host',
+      '127.0.0.1',
+      '--port',
+      '0',
+      '--watch-stdin',
+    ]);
+    expect(launcher.dataDir, lib.path);
+    expect(launcher.dataDirInfo?.pick, DataDirPick.remembered);
+    expect(launcher.dataDirNotice, contains('上次使用的那份'));
     launcher.dispose();
   });
 

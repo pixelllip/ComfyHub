@@ -225,8 +225,9 @@ pub fn remedy_text() -> String {
     "真因是本进程用了低完整性（Low IL）令牌。工作区里的产物带着 Low 标签，\
      Windows 取 min(父进程, 映像)，Low 写不了工作区外的 Medium 对象，所以一律是 os error 5。\n\
      修法有三种，内容照旧全在它自己的文件夹里：\n\
-     1. 把整套 ComfyHub 放到工作区外。运行 pwsh -File scripts\\pack-release.ps1 -OutDir D:\\dist\\ComfyHub，\
-     然后启动 D:\\dist\\ComfyHub\\viewer.exe，App 会自己把 backend\\ 里的后端拉起来。\n\
+     1. 把整套 ComfyHub 放到工作区外（放哪个盘、哪个目录由用户定，只要不在工作区里）。\
+     运行 pwsh -File scripts\\pack-release.ps1 -OutDir \"$env:USERPROFILE\\ComfyHub\"（目录换成用户自己的），\
+     然后启动那里的 viewer.exe，App 会自己把 backend\\ 里的后端拉起来。\n\
      2. 已有工作区外的构建产物时，设 $env:COMFYHUB_SERVER_EXE = \"<完整路径>\"。\n\
      3. 就地修标签。运行 pwsh -File scripts\\backend.ps1 start，它会在启动前把 Low 标签修回 Medium；\
      当前会话本身是 Low 时修不动，那就只剩前两条路。"

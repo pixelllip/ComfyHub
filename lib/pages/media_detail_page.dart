@@ -19,6 +19,7 @@ import '../widgets/common.dart';
 import '../widgets/export_dialog.dart';
 import '../widgets/paged_swipe.dart';
 import '../widgets/prompt_params.dart';
+import '../widgets/tag_editor.dart';
 import '../widgets/upload_sheet.dart';
 import '../widgets/video_view.dart';
 import '../widgets/workflow_viewer.dart';
@@ -389,6 +390,30 @@ class _MediaDetailPageState extends State<MediaDetailPage> {
     }
   }
 
+  /// 编辑产物**自身**的标签。关联提示词的标签由提示词那边维护，这里不改。
+  Future<void> _editTags(MediaAsset media) async {
+    if (!mounted) return;
+    final store = context.read<LibraryStore>();
+    final tags = await showTagEditorDialog(
+      context,
+      initial: media.ownTags,
+      title: '编辑产物标签',
+      label: '产物标签',
+    );
+    if (tags == null || !mounted) return;
+    try {
+      await store.api.updateMedia(media.id, tags: tags);
+      await _load();
+      if (mounted) store.refreshAll();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('保存标签失败: $e')));
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final store = context.read<LibraryStore>();
@@ -461,6 +486,19 @@ class _MediaDetailPageState extends State<MediaDetailPage> {
                         await _load();
                       }
                       break;
+                    case 'tags':
+                      final tags = await showTagEditorDialog(
+                        context,
+                        initial: m.ownTags,
+                        title: '编辑产物标签',
+                        label: '产物标签',
+                      );
+                      if (tags != null) {
+                        await store.api.updateMedia(m.id, tags: tags);
+                        await _load();
+                        if (mounted) store.refreshAll();
+                      }
+                      break;
                     case 'open':
                       final uri = Uri.parse(fileUrl);
                       if (await canLaunchUrl(uri)) {
@@ -525,6 +563,11 @@ class _MediaDetailPageState extends State<MediaDetailPage> {
                     value: 'notes',
                     icon: Icons.notes,
                     label: '编辑备注',
+                  ),
+                  const MenuOption(
+                    value: 'tags',
+                    icon: Icons.sell_outlined,
+                    label: '编辑标签',
                   ),
                   MenuOption(
                     value: 'nsfw',
@@ -629,6 +672,7 @@ class _MediaDetailPageState extends State<MediaDetailPage> {
                       prompt: _prompt,
                       onChanged: _load,
                       onSaveAsPreset: (p) => _saveAsPreset(context, p),
+                      onEditTags: () => _editTags(m),
                     );
                     // ⚠ **不要在这里包 `AnimatedSwitcher`**（2026-10-11 用户报的"切换时整个界面闪烁"）。
                     //
@@ -1158,11 +1202,15 @@ class _InfoPanel extends StatelessWidget {
   /// `null` = 不显示这个按钮（用例里直接起这个面板时）。
   final void Function(Prompt prompt)? onSaveAsPreset;
 
+  /// 打开标签编辑框（由页面状态实现：它要拿 LibraryStore 并重新加载）。
+  final Future<void> Function()? onEditTags;
+
   const _InfoPanel({
     required this.media,
     required this.prompt,
     required this.onChanged,
     this.onSaveAsPreset,
+    this.onEditTags,
   });
 
   @override
@@ -1170,6 +1218,11 @@ class _InfoPanel extends StatelessWidget {
     final theme = Theme.of(context);
     final store = context.read<LibraryStore>();
     final p = prompt;
+    // `promptTags` 是合并集合；这里把"只在提示词上"的那部分单独标出来，
+    // 免得用户以为它们也是产物的标签、删了却没反应。
+    final promptOnly = media.promptTags
+        .where((t) => !media.ownTags.contains(t))
+        .toList();
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -1321,29 +1374,77 @@ class _InfoPanel extends StatelessWidget {
         const SizedBox(height: 16),
 
         // ---------------- 标签 ----------------
-        Text('标签', style: theme.textTheme.titleSmall),
-        const SizedBox(height: 6),
-        if (media.promptTags.isEmpty)
+        Row(
+          children: [
+            Text('标签', style: theme.textTheme.titleSmall),
+            const Spacer(),
+            if (onEditTags != null)
+              TextButton.icon(
+                onPressed: onEditTags,
+                icon: const Icon(Icons.edit_outlined, size: 16),
+                label: const Text('编辑'),
+              ),
+          ],
+        ),
+        const SizedBox(height: 4),
+        if (media.ownTags.isEmpty && promptOnly.isEmpty)
           Text(
             '暂无标签',
             style: theme.textTheme.bodySmall?.copyWith(
               color: theme.colorScheme.outline,
             ),
           )
-        else
-          Wrap(
-            children: [
-              for (final t in media.promptTags)
-                TagChip(
-                  label: t,
-                  onTap: () {
-                    Navigator.of(context).push(
-                      MaterialPageRoute(builder: (_) => TagResultsPage(tag: t)),
-                    );
-                  },
-                ),
-            ],
-          ),
+        else ...[
+          if (media.ownTags.isNotEmpty) ...[
+            Text(
+              '产物标签',
+              style: theme.textTheme.labelSmall?.copyWith(
+                color: theme.colorScheme.outline,
+              ),
+            ),
+            const SizedBox(height: 4),
+            Wrap(
+              children: [
+                for (final t in media.ownTags)
+                  TagChip(
+                    label: t,
+                    onTap: () {
+                      Navigator.of(context).push(
+                        MaterialPageRoute(
+                          builder: (_) => TagResultsPage(tag: t),
+                        ),
+                      );
+                    },
+                  ),
+              ],
+            ),
+            const SizedBox(height: 4),
+          ],
+          if (promptOnly.isNotEmpty) ...[
+            Text(
+              '来自提示词',
+              style: theme.textTheme.labelSmall?.copyWith(
+                color: theme.colorScheme.outline,
+              ),
+            ),
+            const SizedBox(height: 4),
+            Wrap(
+              children: [
+                for (final t in promptOnly)
+                  TagChip(
+                    label: t,
+                    onTap: () {
+                      Navigator.of(context).push(
+                        MaterialPageRoute(
+                          builder: (_) => TagResultsPage(tag: t),
+                        ),
+                      );
+                    },
+                  ),
+              ],
+            ),
+          ],
+        ],
         const SizedBox(height: 6),
         Text(
           '点击标签可以查看该标签下的全部提示词与产物',

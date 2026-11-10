@@ -9,6 +9,7 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:viewer/core/backend_paths.dart';
+import 'package:viewer/core/library_identity.dart';
 
 void main() {
   late Directory root;
@@ -222,6 +223,9 @@ void main() {
 
     test('写了覆盖值就按它走，清了就回默认', () {
       final target = p([root.path, 'other-disk', 'ComfyHubData']);
+      // 目录得先在（2026-11-10 起：指针指的目录不在了会**回落到运行根目录**并说出来，
+      // 免得照着不存在的路径建一个空库、界面看起来像"数据全没了"）
+      Directory(p([target, 'storage', 'media'])).createSync(recursive: true);
       expect(writeDataDirOverride(root.path, target), isTrue);
       expect(readDataDirOverride(root.path), target);
       expect(dataDirOf(root.path), target);
@@ -333,6 +337,235 @@ void main() {
       expect(state, isNotNull);
       expect(state!['port'], 6023);
       expect(state['pid'], 8884);
+    });
+  });
+
+  group('数据目录：靠"库的身份"认，不靠路径猜（2026-11-10）', () {
+    // 现场：`data-dir.json` 写的是 `D:\dist\ComfyHub`，真正的库在
+    // `D:\dist\ComfyHub\storage\.db\comfyhub.db`（57 个会话）；指针那一级也有一份库，
+    // 但是上一份构建残留（3 个会话、2 张角色卡）。照着指针开 → "对话不见了、角色卡是
+    // 旧版"，而磁盘上一个字节都没丢。
+    //
+    // 修法不是"猜哪份更大"，而是让**库自己带身份**（`library_identity.dart`）：
+    //   · `<数据目录>\.db\library.json` 跟着库走（复制 / 搬家 / 迁移都带着它）；
+    //   · 偏好 `comfyhub.library.last` 记住"上次用的是哪一份、在哪"。
+    // 于是"这次打开的是不是你的库"变成能问出来的事实。大小只在**没有记录**的老库上
+    // 用一次（过渡），认完就写身份 + 记偏好，从此不再靠猜。
+
+    /// 造一份库（按字节数造大小，内容无所谓）。
+    void writeDb(String base, {required int bytes}) {
+      final file = File(p([base, '.db', 'comfyhub.db']));
+      file.parent.createSync(recursive: true);
+      file.writeAsBytesSync(List<int>.filled(bytes, 0));
+    }
+
+    /// 造一份**有身份**的库，返回它的 id。
+    String writeIdentifiedDb(String base, {required int bytes}) {
+      writeDb(base, bytes: bytes);
+      final id = ensureLibraryId(base);
+      expect(id, isNotEmpty, reason: '身份文件必须写得进去（否则用例的前提不成立）');
+      return id;
+    }
+
+    void pointAt(String dir) {
+      expect(writeDataDirOverride(root.path, dir), isTrue);
+    }
+
+    test('没指针、没记录 → 运行根目录，什么都不提示', () {
+      final info = resolveDataDir(root.path);
+      expect(info.dataDir, root.path);
+      expect(info.pointer, isNull);
+      expect(info.pointerMissing, isFalse);
+      expect(info.pick, DataDirPick.chosen);
+      expect(info.notice, isNull);
+    });
+
+    test('指针指的目录不在了 → 回运行根目录，并且说出来（绝不照着空路径建库）', () {
+      pointAt(p([root.path, '拔掉的移动盘']));
+      final info = resolveDataDir(root.path);
+      expect(info.dataDir, root.path);
+      expect(info.pointerMissing, isTrue);
+      expect(info.notice, contains('已不存在'));
+      // 一句人话，不提"移动盘"这种用户没说过的东西
+      expect(info.notice, contains('这次使用的是'));
+    });
+
+    test('没有记录时不猜：用指针这一级，把别的库列出来让用户选', () {
+      final hub = p([root.path, 'hub']);
+      writeDb(hub, bytes: 1024); // 上一级：上一份构建的残留
+      writeDb(p([hub, 'storage']), bytes: 64 * 1024); // storage 里：另一份库
+      final mediaDir = Directory(p([hub, 'storage', 'media']))
+        ..createSync(recursive: true);
+      File(p([mediaDir.path, 'a.png'])).writeAsStringSync('x');
+      pointAt(hub);
+
+      final info = resolveDataDir(root.path);
+      // ⚠ 这里**不许**按大小自动换（2026-11-10 复查）：用指针那一级，
+      // 另一份只在 `otherCandidates` 里报出来，换不换由用户点。
+      expect(info.pick, DataDirPick.chosen);
+      expect(info.dataDir, hub);
+      expect(
+        info.otherCandidates.map((c) => c.path),
+        contains(p([hub, 'storage'])),
+      );
+      // 这不是故障：横幅不该为它弹（用户 2026-11-10："每次启动都顶着一条黄条"）
+      expect(info.notice, isNull);
+    });
+
+    test('有记录：复制出去的构建里没有库 → 按记录打开上次那份（这就是一劳永逸）', () {
+      final lib = p([root.path, 'lib']);
+      final id = writeIdentifiedDb(lib, bytes: 4096);
+      // 程序被复制到别处：那个目录里既没有库，也没有指针
+      final copy = Directory(p([root.path, 'copy']))..createSync();
+
+      final info = resolveDataDir(
+        copy.path,
+        knownLibraryId: id,
+        knownLibraryPath: lib,
+      );
+      expect(info.dataDir, lib);
+      expect(info.pick, DataDirPick.remembered);
+      expect(info.matchesRemembered, isTrue);
+      expect(info.usedLibraryId, id);
+      expect(info.notice, contains('上次使用的那份'));
+    });
+
+    test('有库有身份、但还没有记录 → 信它，不按大小乱换', () {
+      final small = p([root.path, 'a']);
+      final id = writeIdentifiedDb(small, bytes: 1024);
+      Directory(p([small, 'storage'])).createSync(); // 产物目录在（不是"只复制了程序"）
+      writeDb(p([root.path, 'hub', 'storage']), bytes: 64 * 1024); // 旁边一份更大的
+      pointAt(small);
+
+      final info = resolveDataDir(root.path);
+      expect(info.dataDir, small);
+      expect(info.pick, DataDirPick.chosen);
+      expect(info.usedLibraryId, id);
+      expect(info.notice, isNull);
+    });
+
+    test('有记录：指针里是另一份有身份的库 → 尊重指针，但要说出来', () {
+      final a = p([root.path, 'a']);
+      writeIdentifiedDb(a, bytes: 2048);
+      final b = p([root.path, 'b']);
+      final bId = writeIdentifiedDb(b, bytes: 4096);
+      pointAt(a);
+
+      final info = resolveDataDir(
+        root.path,
+        knownLibraryId: bId,
+        knownLibraryPath: b,
+      );
+      expect(info.dataDir, a, reason: '用户显式选过的位置不能被静默覆盖');
+      expect(info.pick, DataDirPick.chosen);
+      expect(info.pointerHasOtherLibrary, isTrue);
+      expect(info.matchesRemembered, isFalse);
+      expect(info.notice, contains('不是上次使用的那一份'));
+    });
+
+    test('有记录但哪儿都找不到 → 用指针那份，并说出来', () {
+      final data = p([root.path, 'only']);
+      writeDb(data, bytes: 2048);
+      pointAt(data);
+
+      final info = resolveDataDir(
+        root.path,
+        knownLibraryId: 'gone-id',
+        knownLibraryPath: p([root.path, 'gone']),
+      );
+      expect(info.dataDir, data);
+      expect(info.rememberedMissing, isTrue);
+      expect(info.matchesRemembered, isFalse);
+      expect(info.notice, contains('已找不到'));
+    });
+
+    test('库在、产物目录整个不在 → 说出来（只复制了程序没复制 storage）', () {
+      final data = p([root.path, 'only-db']);
+      writeDb(data, bytes: 1024 * 1024);
+      pointAt(data);
+
+      final info = resolveDataDir(root.path);
+      expect(info.storageMissing, isTrue);
+      expect(info.notice, contains('图片'));
+    });
+
+    test('空库目录不算数据（刚装好不该报噪音）', () {
+      final data = p([root.path, 'fresh']);
+      Directory(p([data, 'storage'])).createSync(recursive: true);
+      pointAt(data);
+      final info = resolveDataDir(root.path);
+      expect(info.storageMissing, isFalse);
+      expect(info.notice, isNull);
+    });
+
+    test('身份文件坏了 → 当"这次没有身份"，不崩也不假装同一个库', () {
+      final data = p([root.path, 'broken']);
+      writeDb(data, bytes: 1024);
+      File(p([data, '.db', kLibraryIdFileName])).writeAsStringSync('{"id": ');
+      expect(readLibraryId(data), isNull);
+      // 有记录但那份库认不出来 → 不能声称"就是上次那份"
+      final info = resolveDataDir(
+        root.path,
+        knownLibraryId: 'some-id',
+        knownLibraryPath: data,
+      );
+      expect(info.usedLibraryId, isNull);
+      expect(info.matchesRemembered, isFalse);
+    });
+  });
+
+  group('库的身份：跟着库走，读写都宽容（library_identity.dart）', () {
+    test('同一个库读两次是同一个 id（幂等）', () {
+      final data = p([root.path, 'lib']);
+      final first = ensureLibraryId(data);
+      expect(first, isNotEmpty);
+      expect(ensureLibraryId(data), first);
+      expect(readLibraryId(data), first);
+    });
+
+    test('没有库就拍不出快照（不会给空目录发身份）', () {
+      final data = p([root.path, 'empty']);
+      Directory(data).createSync(recursive: true);
+      expect(snapshotLibrary(data), isNull);
+      expect(
+        File(p([data, '.db', kLibraryIdFileName])).existsSync(),
+        isFalse,
+        reason: '只在真的用到这份库时才写身份',
+      );
+    });
+
+    test('快照带位置、大小与时间', () {
+      final data = p([root.path, 'lib']);
+      final db = File(p([data, '.db', 'comfyhub.db']))
+        ..createSync(recursive: true)
+        ..writeAsBytesSync(List<int>.filled(2048, 0));
+      final ref = snapshotLibrary(data);
+      expect(ref, isNotNull);
+      expect(ref!.path, data);
+      expect(ref.sizeBytes, db.lengthSync());
+      expect(ref.usable, isTrue);
+      expect(ref.seenAt.year, greaterThanOrEqualTo(2026));
+    });
+
+    test('偏好里写的引用能被宽容解析（缺字段 / 脏值回 null）', () {
+      expect(LibraryRef.fromJson(null), isNull);
+      expect(LibraryRef.fromJson(<String, Object?>{}), isNull);
+      expect(LibraryRef.fromJson(<String, Object?>{'id': 'x'}), isNull);
+      final ref = LibraryRef.fromJson(<String, Object?>{
+        'id': 'x',
+        'path': r'D:\data',
+        'seenAt': '2026-11-10T08:00:00.000',
+        'sizeBytes': 42,
+      });
+      expect(ref, isNotNull);
+      expect(ref!.id, 'x');
+      expect(ref.sizeBytes, 42);
+      expect(
+        LibraryRef.fromJson(<String, Object?>{'id': 'x', 'path': 'p'})!
+            .seenAt
+            .year,
+        1970,
+      );
     });
   });
 }

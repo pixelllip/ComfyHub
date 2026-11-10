@@ -19,6 +19,7 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:viewer/core/backend_paths.dart';
 import 'package:viewer/core/data_dir_migration.dart';
+import 'package:viewer/core/library_identity.dart';
 
 void main() {
   late Directory base;
@@ -168,7 +169,7 @@ void main() {
         current: data.path,
       );
       expect(check.ok, isFalse);
-      expect(check.message, contains('更上一级'));
+      expect(check.message, contains('向上移动一级'));
     });
 
     test('目标里已经有一份数据 → 允许，但标明会备份+覆盖', () async {
@@ -181,7 +182,7 @@ void main() {
       );
       expect(check.ok, isTrue);
       expect(check.replacesTarget, isTrue);
-      expect(check.message, contains('备份'));
+      expect(check.message, contains('先保存到'));
       expect(check.message, contains('覆盖'));
     });
 
@@ -232,6 +233,23 @@ void main() {
       // 旧数据原样留着（用户确认后才删）
       expect(exists(oldData, ['.db', 'comfyhub.db']), isTrue);
       expect(exists(oldData, ['storage', 'media', 'a.png']), isTrue);
+    });
+
+    test('库的身份跟着库一起搬（搬完还是同一份库）', () async {
+      // 身份文件（`.db\library.json`）不搬的话，下一次启动会以为换了一份库 ——
+      // 2026-11-10 的身份机制就白做了。
+      write(oldData, ['.db', 'comfyhub.db'], 'db');
+      write(oldData, ['.db', kLibraryIdFileName], '{"id":"abc"}');
+
+      final result = await migrateDataDir(
+        source: oldData.path,
+        target: newData.path,
+        root: root.path,
+      );
+
+      expect(result.ok, isTrue, reason: result.message);
+      expect(exists(newData, ['.db', kLibraryIdFileName]), isTrue);
+      expect(readLibraryId(newData.path), 'abc');
     });
 
     test('扁平布局：产物搬进目标的 storage，不再跟着数据目录平铺', () async {
@@ -411,7 +429,7 @@ void main() {
 
       expect(result.ok, isFalse);
       expect(result.cancelled, isTrue);
-      expect(result.message, contains('旧数据没动'));
+      expect(result.message, contains('原来的内容没有被修改'));
       expect(readDataDirOverride(root.path), isNull);
       expect(dataDirOf(root.path), root.path);
     });
@@ -425,7 +443,7 @@ void main() {
         root: root.path,
       );
       expect(result.ok, isFalse);
-      expect(result.message, contains('库恢复'));
+      expect(result.message, contains('恢复尚未完成'));
       expect(readDataDirOverride(root.path), isNull);
     });
   });

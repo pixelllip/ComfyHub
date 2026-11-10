@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
 import 'backend_paths.dart';
+import 'library_identity.dart';
 import 'settings_store.dart';
 
 /// 启动阶段
@@ -89,12 +90,23 @@ class BackendLauncher extends ChangeNotifier {
 
   String? get projectRoot => layout?.root;
 
+  /// 上次解析出来的数据目录结论（指针 / 实际数据不一致、产物目录不见了都在里面）。
+  ///
+  /// 界面（启动横幅、设置 → 数据目录）**只读这一份** —— 别各自拿 `dataDirOf()`
+  /// 再判一遍，两边漂移的表现就是"设置里说 A、实际用的是 B"。
+  DataDirResolution? dataDirInfo;
+
   /// 这次真正用的数据目录（库 + `storage`；默认就是运行根目录，可被
-  /// `<根>\data-dir.json` 指到别的盘，见 `backend_paths.dart`）。
+  /// `<根>\data-dir.json` 指到别的盘，见 `backend_paths.dart` 的 `resolveDataDir`）。
   String? get dataDir {
+    final info = dataDirInfo;
+    if (info != null) return info.dataDir;
     final root = layout?.root;
     return root == null ? null : dataDirOf(root);
   }
+
+  /// 数据目录这件事上有异常时的一句人话（正常时 null，横幅不显示）。
+  String? get dataDirNotice => dataDirInfo?.notice;
 
   Process? _process;
   bool _cancelled = false;
@@ -264,6 +276,53 @@ class BackendLauncher extends ChangeNotifier {
   /// 保留这个静态入口：设置页的「项目根目录」输入框与提示都用它。
   static String? detectProjectRoot({String? from}) => detectRoot(from: from);
 
+  /// 算一次数据目录结论 —— **唯一入口**：启动、起后端、设置页都走它。
+  ///
+  /// 判据只有 `resolveDataDir` 一份，"上次用的是哪份库"从偏好里取（身份，不是路径）。
+  DataDirResolution _computeDataDir(String root) {
+    final known = _settings.lastLibrary;
+    return resolveDataDir(
+      root,
+      knownLibraryId: known?.id,
+      knownLibraryPath: known?.path,
+    );
+  }
+
+  /// 重新算一次并通知界面（改过指针 / 切换过库之后调）。
+  DataDirResolution? refreshDataDirInfo() {
+    final root = layout?.root;
+    if (root == null) return null;
+    final info = _computeDataDir(root);
+    dataDirInfo = info;
+    notifyListeners();
+    return info;
+  }
+
+  /// 把"这次真的用上了哪份库"记进偏好。
+  ///
+  /// 只认**真有库**的目录：`snapshotLibrary` 顺手给那份库补上身份文件
+  /// （2026-11-10：从此"这次打开的是不是你的库"是可以问出来的，不是猜的）。
+  Future<void> _rememberLibrary(DataDirResolution info) async {
+    final ref = snapshotLibrary(info.dataDir);
+    if (ref == null) return;
+    await _settings.setLastLibrary(ref);
+  }
+
+  /// 把数据目录切到 [dir] 并重启后端 —— **只改指针、一个文件都不搬**。
+  ///
+  /// 数据本来就在那儿，缺的只是"让程序下次打开它"。2026-11-09 那次"搬来搬去被挡
+  /// 回来"的死锁，就是因为以前只有"整份迁移"这一条路。
+  ///
+  /// 返回 false = 指针没写进去（目录只读之类），调用方要如实说。
+  Future<bool> switchDataDir(String dir) async {
+    final root = layout?.root;
+    if (root == null) return false;
+    if (!writeDataDirOverride(root, dir)) return false;
+    // 换了库就得重起后端（它拿着 --db 参数，不会自己换）
+    await ensureRunning(force: true);
+    return true;
+  }
+
   /// 解析一次布局并记进 [layout] / [serverExe]。
   bool _resolve({bool log = true}) {
     final resolved = resolveLayout(projectRoot: _settings.projectRoot);
@@ -274,12 +333,39 @@ class BackendLauncher extends ChangeNotifier {
     layout = resolved;
     serverExe = resolved.exe;
     serverExeSource = resolved.exeSource;
+    // 数据目录的结论只在这里算一次（**唯一入口**：设置页也读这份，别自己再算一遍）：
+    // 打开的是不是上次那份库、产物目录在不在，都记下来给界面用。
+    final info = _computeDataDir(resolved.root);
+    dataDirInfo = info;
+    unawaited(_rememberLibrary(info));
     if (log) {
       _log('运行根目录: ${resolved.root}');
-      final data = dataDirOf(resolved.root);
-      if (data != resolved.root) _log('数据目录:   $data');
-      final storage = resolvedStorageDirOf(data);
-      if (storage != dataStorageDirOf(data)) {
+      if (info.dataDir != resolved.root) _log('数据目录:   ${info.dataDir}');
+      if (info.pick == DataDirPick.remembered) {
+        _log('按"上次用的库"打开：${info.dataDir}（指针写的是 ${info.chosen}）');
+      }
+      if (info.otherCandidates.isNotEmpty) {
+        // 只是报告：同一棵树里还有别的库。换哪份由用户决定（设置 → 数据目录）
+        _log(
+          '还发现别的库：${info.otherCandidates.map((c) => '${c.path}'
+              '（${sizeText(c.bytes)}）').join('、')}',
+        );
+      }
+      if (info.pointerHasOtherLibrary) {
+        _log(
+          '指针那里是另一份库（${info.dataDir}），和你上次用的 '
+          '${info.knownLibraryPath} 不是同一份。',
+        );
+      }
+      if (info.usedLibraryId != null) _log('库身份:     ${info.usedLibraryId}');
+      if (info.pointerMissing) {
+        _log('data-dir.json 指的 ${info.pointer} 不在了，按运行根目录处理。');
+      }
+      if (info.storageMissing) {
+        _log('产物目录不在：${info.storageDir}（只复制了程序、没复制 storage？）');
+      }
+      final storage = info.storageDir;
+      if (storage != dataStorageDirOf(info.dataDir)) {
         _log('产物目录:   $storage（按实际布局识别，不是标准的 storage 子目录）');
       }
       if (resolved.exe != null) {
@@ -378,14 +464,21 @@ class BackendLauncher extends ChangeNotifier {
     final root = layout!.root;
     // 数据目录（库 + storage）可以搬出程序目录；`.run` / `backups` / `comfyui`
     // 仍按运行根目录算 —— 端口文件的位置不能跟着数据走，脚本与捕获扩展都读它。
-    final data = dataDirOf(root);
+    //
+    // `_resolve()` 就在起后端之前跑过，结论直接复用 —— 别在这里再算一遍：再算会把
+    // "第一次认下这份库"变成"按上次那份库打开"，提示文案就自相矛盾了。
+    final info = dataDirInfo ?? _computeDataDir(root);
+    dataDirInfo = info;
+    // 记下"这次用的是这份库"（后端起来之后库才存在，所以这里也要记一次）
+    unawaited(_rememberLibrary(info));
+    final data = info.dataDir;
     final exe = serverExe!;
 
     // 产物目录按**磁盘上的实际布局**认：标准是 `<数据目录>\storage`，
     // 但也可能是旧版套出来的 `storage\storage`，或用户手动挪成的扁平布局
     // （产物直接在数据目录里）。别在这里硬拼 `storage`，否则界面能看到库、
     // 却读不到任何一张图（2026-11-09 用户报的"软件不认这个目录的内容"）。
-    final storage = resolvedStorageDirOf(data);
+    final storage = info.storageDir;
 
     // 目录先备好：后端会自己建库目录，但 `.run` / 产物目录缺失会让它多打几句警告
     for (final dir in [runDirOf(root), storage, dataDbParentOf(data)]) {
@@ -396,7 +489,7 @@ class BackendLauncher extends ChangeNotifier {
 
     await _normalizeIntegrity(exe);
 
-    final dbFile = dataDbFileOf(data);
+    final dbFile = info.dbFile;
     final bindHost = _settings.allowRemoteBackend ? '0.0.0.0' : '127.0.0.1';
     // **先要回上一次那个端口**（2026-10-13）：`--port 0` 让系统挑，代价是重启就换
     // 端口，而**手机存的是 `http://<局域网IP>:<端口>`** —— 端口一变那条地址就废了，
@@ -737,7 +830,7 @@ class BackendLauncher extends ChangeNotifier {
   /// # 为什么要这一步（2026-09-30 用户实测的两条事实）
   ///
   /// 1. **写限制是"完整性级别（IL）"判的，不是路径 / 用户 / 会话**：清掉 exe 上的
-  ///    `Low` 标签，后端立刻就能写 ComfyUI 目录（`%TEMP%`、`D:\Comfy-Desktop\…` 同理）。
+  ///    `Low` 标签，后端立刻就能写 ComfyUI 目录（`%TEMP%`、用户自己的安装目录同理）。
   /// 2. **Windows 取 `min(父进程, 映像)`**：链路上**任何一环**是 Low，子进程照样掉回 Low
   ///    —— 而"在工作区里构建出来的产物普遍带着 Low 标签"，`viewer.exe` 也不例外。
   ///

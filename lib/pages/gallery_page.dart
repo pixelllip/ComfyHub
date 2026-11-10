@@ -16,6 +16,7 @@ import '../widgets/export_dialog.dart';
 import '../widgets/media_thumb.dart';
 import '../widgets/nsfw_blur.dart';
 import '../widgets/paged_swipe.dart';
+import '../widgets/tag_editor.dart';
 import '../widgets/upload_sheet.dart';
 import 'media_detail_page.dart';
 import 'prompts_page.dart' show confirmDialog;
@@ -791,6 +792,11 @@ class _GalleryPageState extends State<GalleryPage> {
           label: media.hasPrompt ? '更换关联提示词…' : '关联提示词…',
         ),
         MenuOption(
+          value: 'tags',
+          icon: Icons.sell_outlined,
+          label: '编辑标签…',
+        ),
+        MenuOption(
           value: 'favorite',
           icon: media.favorite ? Icons.star_border : Icons.star,
           label: media.favorite ? '取消收藏' : '收藏',
@@ -844,6 +850,17 @@ class _GalleryPageState extends State<GalleryPage> {
         messenger.showSnackBar(
           SnackBar(content: Text('已关联到「${picked.title}」')),
         );
+        break;
+      case 'tags':
+        final tags = await showTagEditorDialog(
+          context,
+          initial: media.ownTags,
+          title: '编辑产物标签',
+          label: '产物标签',
+        );
+        if (tags == null || !mounted) return;
+        await store.api.updateMedia(media.id, tags: tags);
+        await store.refreshAll();
         break;
       case 'favorite':
         await store.api.updateMedia(media.id, favorite: !media.favorite);

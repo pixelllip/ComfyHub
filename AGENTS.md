@@ -9,14 +9,24 @@
 
 ---
 
+## 0. 注释与界面用语：严谨、通俗，不口头化
+
+适用于代码注释与界面上会显示的文字（标题、按钮、提示、错误、空状态）；格式与渲染见 §6.2，本节管措辞。
+
+- **严谨**：一句只表达一个事实，条件、范围、数量、单位写全（"超过 200MB 不自动下载"，不写"大了就不下"）；不夸大、不绝对化，同一概念全篇用同一个词。
+- **通俗**：非本项目的读者也能读懂，短句优先，不省略主语和条件。
+- **禁止口头化**：不用语气词、网络用语与梗、夸张和比喻、反问句、颜文字；不写对话体、第一人称叙事和开发过程吐槽。
+- **注释只陈述现象和约束**：写清条件与边界，不写原因和归因，注释里不出现"用户"二字；不复述代码字面，不用"这里""上面那个"这类指代。
+
 ## 1. 改前端用 debug + 热重载；测试只留能抓回归的
 
 - 只动 `lib/` 下的 Dart → `pwsh -File scripts\dev-app.ps1`（保证后端二进制最新 + `flutter run -d windows --debug`），起来后按 `r` 热重载。
 - **别为了看一个前端改动跑 `flutter build windows --release`**：改 `windows/` 原生代码、改依赖、要出正式产物时才需要（它末段自己 `cargo build --release` 并把后端装进 `backend\`）。
 - 改完过 `flutter analyze` + `flutter test`（`PUB_HOSTED_URL=https://pub.dev`）。详情页大图 / 工作流弹窗这类交互改动跑对应用例（`test\zoomable_image_test.dart`、`test\workflow_viewer_test.dart`），别只跑 `widget_test.dart`。
-- **测试的唯一标准是"删了以后出错还能不能被抓住"**：同一事实写两遍、为用掉 import 的占位用例，该删就删；真正的防线（零上游请求、审批顺序、越界写被拒、内联预算、滚动条与懒构建）一条都不能删。本机实测（热构建）：`flutter test` / `cargo test` 都是几十秒，`e2e-ai-tools-test.ps1` ≈ 5~15s、`e2e-capture/submit-test.ps1` ≈ 20~35s。**用例数别抄进文档** —— 以前那句「lib 630 + 集成 150」现在已经是 844 + 171 了，写一次漂一次，要看数字直接看命令输出。
+- **测试的唯一标准是"删了以后出错还能不能被抓住"**：同一事实写两遍、为用掉 import 的占位用例，该删就删；真正的防线（零上游请求、审批顺序、越界写被拒、内联预算、滚动条与懒构建）一条都不能删。**耗时和用例数别抄进文档** —— 写一次漂一次，要看数字直接看命令输出。
 - **`catch (_)` 的判据只有一条：这次失败会不会被当成成功。** 会的那几条必须如实说出来（缓存写/清、路径探测、后台轮询、回滚指针 —— 2026-11-07 审过一轮，见 `media_cache.dart` 的 `lastScanError` / `lastClearFailures`、`backend_paths.dart` 的 `dataDir.json` 日志、`ai_workspace_store.dart` 的 `comfyJobsError`）；纯 best-effort 的（清残片、关客户端、删临时文件）才可以静默。**别为了"代码整洁"把前一类也吞成 `catch (_)`**。
 - **Rust 用例要落盘只许 `testpaths::scratch()`**（落点 `<crate>\target\.scratch\`，`tests/` 里是 `comfyhub_server_rs::infra::testpaths::scratch()`），**别用 `std::env::temp_dir()`** —— 工作区里编出来的测试二进制带 Low 标签（§12），受限会话里必然 `os error 5`。要造"写不进去"就用**同名目录占位**，别改 ACL。
+- **代码里不许出现"某台机器专属"的路径或盘符**：`D:\ComfyUI`、`D:\Comfy-Desktop`、`C:\Program Files\Java\jdk-25` 这类写法只允许出现在**注释 / 用例夹具**里；运行期要找东西就"现探"——盘符来自 `fixed_drive_roots()`（Rust）/ `Get-FixedDriveRoots`（PS），目录来自环境变量 / 用户目录 / 项目根。**"在我这台机器上调通了"不是完成标准**：换台机器（ComfyUI 装 C:、没有 D 盘、数据目录在别的盘）也得能用，否则就是只给开发机写的代码。
 - 产物：debug / release 在 `build\windows\...\runner\{Debug,Release}\`。**debug 产物里没有 `backend\`**，用的是 `server-rs\target\{release,debug}\` 那份 —— 改了 Rust 只要 `cargo build`，不用重建 App。
 - **"我改了但界面没变"先查构建新鲜度**，别怀疑代码：跑的可能还是旧产物（Release 看 `data\app.so`、debug 看 `data\flutter_assets\kernel_blob.bin`）。界面类修复必须 `flutter build windows --debug`（或 `dev-app.ps1`）重启一次再截图确认；后端看 `scripts\backend.ps1 status`。
 
@@ -37,7 +47,7 @@
 
 | 约束 | 说明 |
 | --- | --- |
-| **不需要 JVM** | 后端是静态链接的 Rust 单文件 exe、库是 SQLite 单文件。**只有跑 `android/` / Gradle 时才要完整 JDK（带 `jlink.exe`）**（用 `COMFYHUB_JDK_HOME` 指定；本机实测 JDK 25 可用，JBR jcef 21 只有运行时、缺 jlink 会失败）。MySQL / JRE / Kotlin jar 都已退役 —— 别去找 `mysql.ps1`、老库搬迁或 `.mysql\` |
+| **不需要 JVM** | 后端是静态链接的 Rust 单文件 exe、库是 SQLite 单文件。**只有跑 `android/` / Gradle 时才要完整 JDK（带 `jlink.exe`）**，用 `COMFYHUB_JDK_HOME` 指定；JDK 25 可用，JBR jcef 21 缺 jlink 会失败。MySQL / JRE / Kotlin jar 已退役，别去找 `mysql.ps1` 或 `.mysql\` |
 | pub 源 | 必须 `https://pub.dev`（国内镜像对个别包返回 424） |
 | 脚本 | 一律 `pwsh`。**App 与后端的起停不走任何脚本**，脚本只剩构建 / 测试 / 可选能力 |
 | 端口 | 后端 `--port 0` 让系统挑，真实端口只从 `.run\api.json` 读；ComfyUI `8188` |
@@ -46,7 +56,7 @@
 
 ## 5. 改脚本时的约定
 
-- **App 的启动逻辑只有一份，在 Dart 里**（`lib\core\backend_launcher.dart` + `backend_paths.dart`）。起停后端不经过脚本，所以别在 `.ps1` 里另写一份"怎么起后端"。
+- **App 的启动逻辑只有一份，在 Dart 里**（`lib\core\backend_launcher.dart` + `backend_paths.dart`），所以别在 `.ps1` 里另写一份"怎么起后端"（§4）。
 - 新增脚本前先问一句"这件事能不能不进 `scripts\`"；真要加就用 `pwsh -File scripts\xxx.ps1 <动作>` 的形式，并在 README「脚本速查」里登记。
 - **`scripts\backend.ps1` 是唯一允许碰后端的脚本**（给 e2e / dev），它是 `lib\core\backend_paths.dart` 的**镜像** —— 改一边必须改另一边（§7）。
 - PowerShell：`& script.ps1` 的 **stdout 会成为表达式的返回值**，在 `$ok = & other.ps1 …` 这种地方必须 `| Out-Null`，否则返回值被输出数组污染、判断永远为真。
@@ -82,16 +92,14 @@
 - **手机「从电脑同步 Provider」是"用户显式点的一次导入"，不是自动合并**（`lib/core/provider_sync.dart`，契约 [`docs/pairing-design.md`](docs/pairing-design.md) §14.6）：桌面有 / 手机没有 → 新建；同 id → 桌面覆盖（提交的是**本机** `revision`，两端的库各算各的）；只在手机上的 → **保留不删**；模型目录**只在真的拿到时才写**（拉取失败绝不许回落到空目录）；`api` 不在手机那三种协议里的**跳过并如实说**。按钮**只在手机上渲染**。⚠ 这一页**不要自己去读配对令牌**（`PairingTokenStore`）—— `AiApiClient` 默认取进程内缓存即可；硬读法在真机之外的宿主上会悬着不返回（表现是"点了同步永远转圈"，2026-11-01 踩过）。回归 `test\provider_sync_test.dart`。
 - **手机端的落盘缓存必须有上限，而且必须看得见、清得掉**（用户 2026-11-01 问"要不要设缓存上限" → 要）。现在唯一一个是 `lib/core/media_cache.dart`：缩略图 150MB、原件默认 1.5GB（设置页「产物缓存」可调 512MB~4GB），超过按**最久未用**淘汰到 80%（不是"到顶就不缓存"，那会变成随机看不了图）；打开详情时**超过 200MB 的视频 / 音频不自动下**，要存到手机是显式动作；保存进相册后大文件在离开页面时回收缓存副本。设置页那一节用 `lib/widgets/media_cache_card.dart`（独立 widget 才测得到 —— 它只在手机上渲染，`flutter test` 跑在 Windows 上），320 / 384dp 两个宽度都有用例。⚠ 落点在 `files/`（不是 `cacheDir`）：系统不会替你清，所以**预算 + 淘汰 + 清空入口**三件缺一不可；`android/app/src/main/res/xml/data_extraction_rules.xml` 把 `media-cache/` 排除出 Auto Backup（25MB 配额，注定失败）。回归 `test\media_cache_test.dart` + `test\media_cache_card_test.dart`。
 
-### 6.2 文案：像人说话，不要像模型在列提纲
+### 6.2 文案：句子完整、语气平实，不列提纲
 
-**2026-11-05 定下的硬约束**，界面文案（标题 / 副标题 / 空状态 / tooltip / SnackBar / 错误提示，以及后端回给界面的那一句人话）都按这个来：
+**2026-11-05 定下的硬约束**，界面文案（标题 / 副标题 / 空状态 / tooltip / SnackBar / 错误提示，以及后端回给界面的那一句）都按这个来；措辞按 §0（通俗不等于口语化）。
 
-- **不许出现 `a:b` / `c;d` 这种话术**：`集合详情：宽屏`、`当前模型：X`、`允许 = 直接执行`、`A；B` 都不行。能一句话说完就一句话；一句话装不下就拆成两句，别拿分号硬连。
-- **能用一句人话说完的，不加从句、不套括号**：先给结论，再给条件；别写"当……时，如果……则……"。
+- **一句话说完，不加从句、不套括号**：先给结论再给条件，别写"当……时，如果……则……"；也不许出现 `a:b` / `c;d` 这种话术（`集合详情：宽屏`、`当前模型：X`、`允许 = 直接执行`、`A；B` 都不行）。一句话装不下就拆成两句，别拿分号硬连。
 - **用用户熟悉的名词，少用专有名词**：模型、图片、画廊、设置、服务、缓存；别把类名、字段名、内部代号（`run-kit`、`WidgetsBinding`、`AiWorkspaceStore`）直接甩到界面上。必须提的时候，先用一句人话解释它是什么。
 - **错误提示同样说人话**：`保存失败，磁盘空间不够。`，不要 `保存失败：ENOSPC`；不要把异常栈 / 内部错误码当正文。
-- **不支持 Markdown 的地方不许写 Markdown**：`Text` / `SelectableText` / `SnackBar` / `InputDecoration` 的 label / hint / helper 都不解析 Markdown，`**粗体**`、反引号、`# 标题`、`- 列表` 会原样显示。要强调就用 `Text.rich` / `TextSpan`（`fontWeight: FontWeight.bold`），要排版就用本来就会渲染 Markdown 的 `MarkdownText`；不要指望纯文本控件自己变粗。
-- **先确认渲染器再写格式**：一个字符串会进 `MarkdownText`（聊天正文、蓝图详情）才可以用 Markdown；进 `Text` 的按纯文本写 —— 工具卡的结果区也是 `Text`，后端别往里塞 Markdown。后端回给界面的字符串同理，前端用 `Text` 接，它就不该带 Markdown。
+- **先确认渲染器再写格式**：只有会进 `MarkdownText`（聊天正文、蓝图详情）的字符串才能用 Markdown；进 `Text` 的按纯文本写 —— `Text` / `SelectableText` / `SnackBar` / `InputDecoration` 的 label / hint / helper 都不解析 Markdown，`**粗体**`、反引号、`# 标题`、`- 列表` 会原样显示，工具卡结果区与后端回给界面的字符串同理。要强调就用 `Text.rich` / `TextSpan`（`fontWeight: FontWeight.bold`），要排版就用 `MarkdownText`。
 - **例外只有字面量**：URL、比例（`16:9`）、代码 / 路径 / 键名，按原样写。
 - **改文案要同步改测试断言**（不少用例直接 `find.text('……')`），改完跑 `flutter analyze` + `flutter test`；后端回给界面的那句也要一起改，别只改前半句。
 
@@ -99,10 +107,7 @@
 
 **2026-11-05 定下的硬约束**：页面顶部有**大标题**时（设置家族、画廊、预设、标签……），
 这个标题属于**主体内容**；它随内容滚出可视区时，**同名标题要在顶栏里逐渐出现**，
-滚回顶部时再退回去。两种做法都不允许：
-
-1. 大标题滚走了、顶栏什么都不显示（用户不知道自己在哪一页）；
-2. 顶栏标题一直挂着、主体里再放一个同名大标题（同一个标题出现两次）。
+滚回顶部时再退回去。大标题滚走而顶栏什么都不显示、或顶栏标题与正文大标题同时出现，都不允许。
 
 **按平台分两套**（用户 2026-11-05："手机端 UI 维持现状，电脑端的标题恢复原状
 （始终在 appbar 里）"）：
@@ -171,15 +176,15 @@
 
 - **后端 exe 的候选顺序只有一个真源**：`serverExeCandidates()` = `$env:COMFYHUB_SERVER_EXE` > `<exe 同级>\backend\` > `<根>\backend\` > `<根>\server\`（旧布局） > `server-rs\target\{release,debug}\`。`COMFYHUB_SERVER_EXE` **永远最高优先**，它是"把后端映像挪出受限区"的唯一开关（§12）。
 - **根目录判据必须同时认两种布局**（三种判据任一命中即可），否则发布包里会出现"文件明明在，它却说找不到"。
-- **数据目录可以被用户搬走（2026-11-06）**：库（`.db\comfyhub.db`）与 `storage\` 的落点由 `<根>\data-dir.json`（`{"dataDir":"D:\..."}`）决定，没有它就是运行根目录。`--db` / `--storage` 跟着它走，而 **`.run\` / `backups\` / `comfyui\` / `app-support\` 永远按运行根目录算**（端口文件的位置不能跟着数据走，脚本与捕获扩展都读它）。判据只有一份：`lib\core\backend_paths.dart` 的 `dataDirOf()`，`scripts\backend.ps1` 的 `Resolve-DataDir` 是它的镜像；e2e 脚本读库也要过它。**产物层**别硬拼 `storage`：`resolvedStorageDirOf()` 按磁盘实际布局认（标准 `<数据目录>\storage` / 旧版双层 `storage\storage` / 用户手挪的扁平布局），迁移 `lib\core\data_dir_migration.dart` 再统一写回标准布局（**先停后端 → 备份目标旧库 → 复制 → 逐文件校验 → 最后才落指针**，旧目录默认保留、搬完问一次）。界面上是「设置 → 数据目录」。
-- **端口只有一个真源**：后端绑好之后自己写 `<根>\.run\api.json`（写者是 `api_port_file.rs`）；App（`settings_store.dart`）、脚本（`api-port.ps1`）、捕获扩展（`capture_core.py`）**都只读它**，谁也不许自己编端口。
+- **数据目录可以被用户搬走（2026-11-06）**：库（`.db\comfyhub.db`）与 `storage\` 的落点由 `<根>\data-dir.json`（`{"dataDir":"<目录>"}`）决定，没有它就是运行根目录。`--db` / `--storage` 跟着它走，而 **`.run\` / `backups\` / `comfyui\` / `app-support\` 永远按运行根目录算**（端口文件的位置不能跟着数据走，脚本与捕获扩展都读它）。判据只有一份：`lib\core\backend_paths.dart` 的 `dataDirOf()`，`scripts\backend.ps1` 的 `Resolve-DataDir` 是它的镜像；e2e 脚本读库也要过它。**产物层**别硬拼 `storage`：`resolvedStorageDirOf()` 按磁盘实际布局认（标准 `<数据目录>\storage` / 旧版双层 `storage\storage` / 用户手挪的扁平布局），迁移 `lib\core\data_dir_migration.dart` 再统一写回标准布局（**先停后端 → 备份目标旧库 → 复制 → 逐文件校验 → 最后才落指针**，旧目录默认保留、搬完问一次）。界面上是「设置 → 数据目录」。
+- **数据目录的"实际在哪"要先校正再信（2026-11-10）**：`dataDirOf()` 背后是 `resolveDataDir()`，判定顺序**先认身份、再谈路径** —— ① 库自己带身份（`<数据目录>\.db\library.json` 的 `id`），偏好里记着"上次用的是哪一份、在哪"（`SettingsStore.lastLibrary`）；指针那一级不是那份库时，按记录打开（**复制出去的构建因此照样打开你的库**）；② 指针里是另一份**有身份**的库 → 尊重用户显式指定，但界面上要提醒（`pointerHasOtherLibrary`）；③ 指针目录不在了 → 回运行根目录，**绝不**照着空路径建空库；④ 没有记录时就用指针（或运行根目录）那一份，同一棵树里发现的别的库只**列出来**（`DataDirResolution.otherCandidates` → 设置页「用这一份」），**绝不按大小 / 修改时间 / 层级去猜** —— 那等于拿某台机器的情况当通用规则（2026-11-10 复查）。校正结果与"为什么"一起交给界面（`BackendLauncher.dataDirInfo` → 启动横幅 `DataDirNoticeBanner` + 设置页），别在别处再判一遍。设置页按用户 2026-11-10 的要求**只剩两个动作**：「搬到别处…」与「搬回默认位置」——选完目录立即开搬（不再追加确认弹窗，进度弹窗里说清从哪到哪、多少文件、可取消），**「整理成标准布局」「把指针改到这里」这类技术按钮一律不要加回来**（用户："用户不可能看得懂"）。文案按 §6.2 的纪律：**严谨、完整、可核对**，但不出现实现术语（不写 `storage` / `产物` / `指针` / `库`，说"对话、图片和角色卡"）。横幅只报真异常（换了一份 / 上次那份找不到 / 位置失效 / 缺图片文件夹）；"还发现一份数据"**不进横幅**，只放在设置页让用户自己决定（2026-11-10 用户截图：每次启动都顶着一条黄条）。**产物目录里不许有运行期数据**：`bundle_backend.cmake` 会把 `.db` / `storage` / `.run` / `app-support` 挪进 `_leftover-data\`（**只挪不删** —— 2026-11-10 实测那份残留里有 30 张图是用户唯一的副本），`pack-release` 打包时跳过它们，并把 `data-dir.json` 带进产物 —— 否则复制出去的构建会拿构建残留的旧库当"用户的库"（2026-11-10 的那次事故，见 `docs/pitfalls.md`）。
+- **两份库可以合并（2026-11-10）**：`comfyhub-server-rs.exe --merge-library <源数据目录> [--merge-library …] [--media-from <目录>] [--db <目标库>] [--storage <目标 storage>] [--dry-run]`（实现 `server-rs\src\infra\library_merge.rs`）。纪律：① **只增不减** —— 源库只读打开，目标库先 `VACUUM INTO <库文件>\backups\pre-merge-<时间>.db`，所有写入一个事务，`PRAGMA foreign_key_check` 不干净就整体回滚；② **判重靠内容不靠 id**（`tags.normalized` / `media_assets.sha256+original_name` / `prompts.source+source_ref` / `capture_runs.run_key` / 会话与运行的 UUID），整数 id 被占就改号并跟着重写外键（`tags.id = 1` 在两份库里是不同标签）；③ **文件只补缺不覆盖**（同名不同内容时保留目标那份并如实报出来；缩略图是派生数据，缺了就补）；④ **配置不搬**（`app_settings` / `ai_providers` / `ai_models` / `_sync_log` / `sync_clients` 一律不动）；⑤ 源库自己就有悬空引用时（老数据把 `fc_...` 塞进 `ai_message_parts.tool_call_id`）**保留行、置空引用**并报出来 —— 行里的正文 / 结果 JSON 不能丢。合完用 `--dry-run` 再跑一遍应当"新增 0"（幂等）。
+- **端口只有一个真源**：后端绑好之后自己写 `<根>\.run\api.json`（写者是 `api_port_file.rs`）；App（`settings_store.dart`）、脚本（`api-port.ps1`）、捕获扩展（`capture_core.py`）**都只读它**，谁也不许自己编端口。`--port 0` 是刻意的：写死端口会撞"被占 / 落在 Windows 保留段"，真实端口要从 listener 读回来（那个 0 不是端口）。
 - ⚠ **"要不要听用户的"只有一条判据**：`SettingsStore.isLocalBackendUrl()` —— **回环地址永远跟着端口文件走**（哪怕它先前被写进过偏好），只有**指向别的机器**的地址才算用户覆盖。**别退回"偏好里有值 = 用户手填过"**：端口是 `--port 0` 自动挑的（重启就换），那条判据会把自动发现的地址存成"用户配置"，从此界面对着死端口等满 60 秒超时。回归 `test\settings_base_url_test.dart`。
-- **`--port 0` 是刻意的**：写死端口会撞"被占 / 落在 Windows 保留段"，而且真实端口要从 listener 读回来（`--port 0` 时那个 0 不是端口）。
 - **`infra::db::open_or_create` 是"第一次运行能起来"的关键**：库缺就自己建（DDL 编译期 `include_str!` 嵌在二进制里）。别再退回"缺库就退出"。
 - **发布包是便携式的**：可写数据（`.db` / `storage` / `.run`）都在包内，`packaging\manifest.json` 的 `runtimeLayout` 记着这份约定；改存放位置要先改它。
 - **Release 产物默认"就地装配"**（`windows\CMakeLists.txt` + `windows\cmake\bundle_backend.cmake`），三个连带后果别踩：① `flutter clean` 会把它整个清空，重跑一次 release 构建即可；② `pack-release.ps1 -Clean` **不能**整个 `Remove-Item $OutDir`（会把 `viewer.exe` 一起删了），只清清单里的 target + 老组件（`server` / `jre` / `mysql`），运行期数据（`.db` / `storage` / `.run`）**不要动**；③ `flutter_release` 组件此时**源和目标是同一个目录**，必须跳过拷贝。
 - **`cargo build --release` 在后端正在跑时必失败**（Windows 锁着运行中的 exe，报"拒绝访问 os error 5"）：先 `pwsh -File scripts\backend.ps1 stop`。
-- 想要一份不随 `build\` 消失、又在**工作区外**的长期副本：`pwsh -File scripts\pack-release.ps1 -OutDir D:\dist\ComfyHub`（也是绕开写限制的正解，§12）。
 - 旧 Kotlin 后端（`legacy/`）**已整体删除**，要对照行为只能从 git 历史取：`git log --diff-filter=D -- legacy` → `git show <那次>^:legacy/server/...`。
 
 ## 8. MCP 运行时：可选能力，检测优先
@@ -210,9 +215,9 @@
 - 根因在 `flutter_inappwebview_windows 0.6.0` 的 `InAppWebViewManager` **构造函数**（= 插件注册时，哪怕一个 WebView 都没创建）：它 `RoInitialize` 后创建 `DispatcherQueueController` + `Windows.UI.Composition.Compositor`（`graphics_context.cc`），进程收尾时按错误顺序释放 → csrss 报硬错误（事件日志 `Application Popup` ID 26；WER 里模块 `dcomp.dll`、异常码 `0xe0464645`）。上游 [issue #2512](https://github.com/pichillilorenzo/flutter_inappwebview/issues/2512) 关了没修。
 - **判据**（别凭手感）：不注册 webview 插件 → 关窗 0 条事件；只注册它 → 关窗必现（当时的逐插件开关 `COMFYHUB_PLUGINS` 已随修复删除；改回来只需在 `FlutterWindow::OnCreate` 里按名字挑一条 `RegisterWithRegistrar`）。
 - `webview_all` 是 `webview_flutter` 的跨平台实现（Windows/Android/iOS/macOS/Linux/Web），1.4.1 修过同类"退出即崩"（[#37](https://github.com/abandoft/webview_all/issues/37) / [#38](https://github.com/abandoft/webview_all/pull/38)）；Android 端支持 AGP 9 内建 Kotlin，所以换过来删掉了 Android 的 `third_party\flutter_inappwebview_android` + `dependency_overrides`。⚠ Windows 的 `<experimental/coroutine>` 逃生宏**仍然要留**（1.4.12 的 C++/WinRT 也没躲开 MSVC 14.51 的 C2338），见 `windows/CMakeLists.txt` 的注释。
-- **版本钉死**：`pubspec.yaml` 写 `webview_all: 1.4.12`（2026-11-05 从 1.4.5 升上来，关窗回归已过：WM_CLOSE 后 System 日志 0 条 ID 26）。升级前必须重跑关窗回归 —— 1.4.0 就出现过"应用退出即崩"，这类问题只在**关窗那一秒**出现，`flutter test` 抓不到。
-- **关窗回归**（Windows）：`flutter build windows --debug` → 启动 `build\windows\x64\runner\Debug\viewer.exe` → 等窗口出来 → 发 `WM_CLOSE` → 查 `Get-WinEvent -FilterHashtable @{LogName='System'; Id=26; StartTime=...}` **必须为 0 条**（`Application Popup` 事件就是那个弹窗）。⚠ Debug 产物用的后端是源码树 `server-rs\target\{release,debug}\` 那份，不经过 release 装配。
-- Android 侧仍按老规矩 `flutter build apk --debug` 过一遍；需要带 `jlink.exe` 的完整 JDK（JBR jcef 没有 jlink，本机 `C:\Program Files\Java\jdk-25` 可以）。
+- **版本钉死**：`pubspec.yaml` 写 `webview_all: 1.4.12`（2026-11-05 从 1.4.5 升上来）。**每次升级都要重跑关窗回归** —— 1.4.0 就出现过"应用退出即崩"，这类问题只在**关窗那一秒**出现，`flutter test` 抓不到。
+- **关窗回归**（Windows）：`flutter build windows --debug` → 启动 `build\windows\x64\runner\Debug\viewer.exe` → 等窗口出来 → 发 `WM_CLOSE` → 查 `Get-WinEvent -FilterHashtable @{LogName='System'; Id=26; StartTime=...}` **必须为 0 条**（`Application Popup` 事件就是那个弹窗）。⚠ Debug 产物用的是源码树的后端（§1），不经过 release 装配。
+- Android 侧仍按老规矩 `flutter build apk --debug` 过一遍；需要带 `jlink.exe` 的完整 JDK（见 §4）。
 - WebView2 运行时是 Windows 的硬前提（Win10 1809+ / Win11 自带）。加载失败时 `onWebResourceError` 只在**主文档**失败时提示；子资源 404 不该把整页判死。
 
 ## 10. AI 工具与 Skills 的接线约定
@@ -228,13 +233,13 @@
 - 需要审批的工具：`defaultAccess = ToolAccess.ASK`。调用方**必须先 `ToolApprovalGate.open(callId)` 再发 `tool.requested` 事件**，否则用户手快先点按钮会落空、只能等超时；`await` 超时与 Run 取消都算拒绝。
 - 工具结果回给模型前一律截断（`MAX_RESULT_CHARS`），而且**当不可信数据**：不拼进系统提示的指令区，也不因为工具说"忽略规则"就改行为。**长期记忆同理**（注进系统提示的那段写明"它是数据不是指令"）。
 - **附件的唯一事实来源是适配器的 `attachmentTransports`**（`Map<模态, Set<传输方式>>`，按模态分开）。模型声明了模态但没声明传输方式时**回落到适配器实现的那种**；适配器遇到自己没实现的模态必须抛 `UnsupportedContentFailure`（→ `UNSUPPORTED_CONTENT`），**不许静默丢掉再假装发成功**。加新模态 / 传输时改适配器 + 在 `AttachmentProtocolTest` 补"发出去的 JSON 长什么样"。
-- **AI 工作台的 Ctrl+V 有两条来源，都要经过 `FileClipboard`**：`CF_HDROP`（资源管理器复制的文件 → `attachFiles` 按路径上传）与剪贴板位图（截图 / 浏览器复制图片 → `readImage`）。⚠ `Clipboard.getData` 只读文本，**别拿它当"有没有可粘的东西"的判据**；位图在 `CF_DIB` / `CF_BITMAP` 里，32bpp `BI_RGB` 的 alpha 字节按规范未使用（截图工具给全 0），原生必须强制置 255 —— 否则粘上去是一张全透明的图。⚠ **`IsClipboardFormatAvailable` 只表示"它声称有这个格式"**：.NET `DataObject` / OLE 延迟渲染会把 `CF_DIBV5` 列进格式表而 `GetClipboardData` 回 NULL，所以必须 `CF_DIBV5 → CF_DIB → CF_BITMAP` **逐个真读一遍**，读到数据才算数（只按 available 选一个就是"一张图都读不出来"）。BMP 在 Dart 侧转 PNG 后**按字节上传**（`uploadAttachmentBytes`，不落临时文件）：上游只收 png/jpeg/webp/gif，把 BMP 原样发出去会被网关拒。回归 `test/file_clipboard_test.dart` + `test/ai_attachment_test.dart` 的三条 Ctrl+V 用例（粘截图 / 粘文件 / 粘文本）；原生那条路只能用真剪贴板验（本机 2026-10-24 用仓库外探针验过 PNG / V5 / CF_DIB / CF_BITMAP 四种来源）。
+- **AI 工作台的 Ctrl+V 有两条来源，都要经过 `FileClipboard`**：`CF_HDROP`（资源管理器复制的文件 → `attachFiles` 按路径上传）与剪贴板位图（截图 / 浏览器复制图片 → `readImage`）。⚠ `Clipboard.getData` 只读文本，**别拿它当"有没有可粘的东西"的判据**；位图在 `CF_DIB` / `CF_BITMAP` 里，32bpp `BI_RGB` 的 alpha 字节按规范未使用（截图工具给全 0），原生必须强制置 255 —— 否则粘上去是一张全透明的图。⚠ **`IsClipboardFormatAvailable` 只表示"它声称有这个格式"**：.NET `DataObject` / OLE 延迟渲染会把 `CF_DIBV5` 列进格式表而 `GetClipboardData` 回 NULL，所以必须 `CF_DIBV5 → CF_DIB → CF_BITMAP` **逐个真读一遍**，读到数据才算数（只按 available 选一个就是"一张图都读不出来"）。BMP 在 Dart 侧转 PNG 后**按字节上传**（`uploadAttachmentBytes`，不落临时文件）：上游只收 png/jpeg/webp/gif，把 BMP 原样发出去会被网关拒。回归 `test/file_clipboard_test.dart` + `test/ai_attachment_test.dart` 的三条 Ctrl+V 用例（粘截图 / 粘文件 / 粘文本）；原生那条路只能用真剪贴板验（仓库外探针验过四种来源）。
 - **附件三层准入一条都不能少**：选完预检 → 发送前前端禁用按钮 → **创建 Run 之前后端用库里的附件事实再验一次**（`POST /runs` 里、append 用户消息之前）。失败必须是 `400 UNSUPPORTED_CONTENT` 且**上游请求数为 0**；防线是 `scripts\e2e-ai-tools-test.ps1` 第 9 幕。
 - **历史里的图片也属于上下文**：`turnsFromHistory` 会把带 `attachment` 块的图内联，但当前模型 / 协议发不了或超预算（单图 8MB / 合计 20MB，见 `InlineBudget`）时，必须在那一轮正文后附一句"（以下附件未随本次请求发送：…）" —— 既不静默丢弃，也不因为历史里有张图就把请求打成 400。原件在 `storage/ai-attachments`、缩略图在 `storage/ai-thumbs`，**与画廊产物分开存**。
 - Skills 正文真源是磁盘（`<storage>\ai\skills` 与 `<项目根>\skills\builtin`），**刻意不做缓存**（"注册完下一次回复就能用、删掉立刻消失"是需求）。
 - **装 skill 只有一条路：投放口**。后端启动与 `POST /api/ai/skills/rescan` 都跑 `SkillStore.autoRegister()`：给**没有 frontmatter** 的文件补 `name` / `description`（正文不动），已有 frontmatter 的**一个字节都不许改**。路径真源是后端（`GET /api/ai/skills/roots`），**别在前端拼这个路径**。`description: |` 这类块标量必须能读。frontmatter 非法**不静默忽略**：照样列进界面并带 `validationError`，但**不进系统提示、不能被 `load_skill` 加载**。
 - 改系统提示词**必须 bump `SystemPrompt.VERSION`**（= `ai/nsfw_prompt.rs` 的 `PROMPT_VERSION`；Run 里记 `promptVersion`）。⚠ bump 的判据是"**模型看到的规则变没变**"，不是"改的是哪个文件" —— 改 `system_prompt.rs` 的拼装同样要 bump（它进 `run_kit` 的签名，手机因此才拿得到新 kit）。
-- **系统提示是前缀缓存的地基，前部不许有"每次请求都变"的东西**。它后面紧跟整段对话历史，任何抖动都会把历史缓存一起作废：一个 Run 之内没事（`render` 每 Run 只调一次），**跨 Run 全废**（用户再发一条就是新毫秒串）。所以那一行只写**本地日期**（`- 当前日期: YYYY-MM-DD`，用 `run_kit::local_date` 取，别用 UTC），且**一个 Run 里只取一次**。头部剩下会抖的几处（有无图片附件、自动允许档、装 / 删 Skill、改记忆或白名单）都是"用户刚做了某动作"才变，频率与用户动作同阶，可以接受；分界线是**"每次请求都会变"的东西一个都不许进来**。防线：`system_prompt/tests.rs` 的"同一个日期渲染两次逐字节相同"。同理 `usage` 的**缓存命中**（`cachedTokens`）不许在归一化时丢掉（`provider/upstream.rs` 的 `TokenUsage`）。⚠ **Anthropic 的前缀缓存是显式的**：不发 `cache_control` 一次都不命中，断点只打两处（`protocol.rs` 的 `mark_for_cache` / `mark_last_block_for_cache`）—— **最后一个工具** + **最后一条消息的最后一个内容块**；`system` 刻意仍是字符串（改成块数组是线上形状变更，第三方兼容网关未必都收）。防线：`protocol/tests.rs` 的 `anthropic_prompt_cache_breakpoints` + **"下一轮的请求前缀逐字节包含上一轮"**（三个协议各一遍 —— 往前缀塞任何每轮都变的东西，只有它会红）。
+- **系统提示是前缀缓存的地基，前部不许有"每次请求都变"的东西**。它后面紧跟整段对话历史，任何抖动都会把历史缓存一起作废：一个 Run 之内没事（`render` 每 Run 只调一次），**跨 Run 全废**（再发一条就是新毫秒串）。所以那一行只写**本地日期**（`- 当前日期: YYYY-MM-DD`，用 `run_kit::local_date` 取，别用 UTC），且**一个 Run 里只取一次**。其余几处只在动作后才变，可以接受；分界线是**"每次请求都会变"的东西一个都不许进来**。防线：`system_prompt/tests.rs` 的"同一个日期渲染两次逐字节相同"。同理 `usage` 的**缓存命中**（`cachedTokens`）不许在归一化时丢掉（`provider/upstream.rs` 的 `TokenUsage`）。⚠ **Anthropic 的前缀缓存是显式的**：不发 `cache_control` 一次都不命中，断点只打两处（`protocol.rs` 的 `mark_for_cache` / `mark_last_block_for_cache`）—— **最后一个工具** + **最后一条消息的最后一个内容块**；`system` 刻意仍是字符串（改成块数组是线上形状变更，第三方兼容网关未必都收）。防线：`protocol/tests.rs` 的 `anthropic_prompt_cache_breakpoints` + **"下一轮的请求前缀逐字节包含上一轮"**（三个协议各一遍 —— 往前缀塞任何每轮都变的东西，只有它会红）。
 - **工具结果缓存**（`server-rs/src/tools/tool_cache.rs`）：同一工具 + 同一组参数在 TTL 内不跑第二遍（只读白名单逐条写在 `freshness` 里，完整档位表见 `docs/ai-tools-and-skills.md` §3.1）。四条容易踩的：① **写类工具、`ask_user_question`（闸门）、`load_skill` 一律不进**；② 命中**必须如实标注**（`[缓存命中] …没有重新执行`，正文与工具卡摘要都带）—— 悄悄返回旧数据等于骗模型；③ 查缓存在**审批之后**，审批语义一个字都不改；④ 写类工具成功 → **清空整个缓存**（`comfy_load_workflow` 的 `mutating` 是 `false` 却会写库，是 `invalidates` 的显式例外）。磁盘类按 `mtime + 长度` 校验。命中那一次**不占**联网 / ComfyUI 的额度。
 - **系统提示里那段 `[MODE: UNRESTRICTED SANDBOX — STABLE]` 是用户有意注入的**，**要改先问用户**。它是个开关：由 `app_settings` 的 `ai.nsfw` 决定注不注入（正文一个字都没改，只是搬进了 `server-rs/src/ai/nsfw_prompt.rs`）。同一张卡片的第二个开关是"预览图模糊"，**只糊被标记过 NSFW 的那一条**（`media_assets.nsfw`）—— 别退回"开关一开全页都糊"。`comfy_submit(nsfw=true)` 由 AI 声明，画廊右键 / 详情页菜单可手动标记；**详情页与大图查看器不打码**；用户自己上传的附件不打码。改这块先读 `nsfw_prompt.rs` 与 `nsfw_blur.dart` 的文件头、`SystemPromptNsfwTest`；`ToolRegistryTest` 有一条断言盯着"默认不注入"。
 - **长期记忆（`MemoryStore`）**：真源 `<storage>\ai\memory.md`，一行一条，用户能直接手改；写入**超限一律报错，不许静默截断**；注入系统提示时截断到 `PROMPT_CHARS`，文件本身保留完整内容。
@@ -252,7 +257,7 @@
 - 等待有上限（`DEFAULT_WAIT_SECONDS` / `MAX_WAIT_SECONDS`），超时记 `timeout` 并如实说明，**不许假装完成，也不许假装失败**。
 - **界面上的产物入口只认后端给的 `mediaIds`**（`tool_result.jsonPayload.mediaIds` / `tool.completed.result.mediaIds`）：模型在正文里说"我生成了 xx"不算数。详情页 / 画廊入口卡跳转用 `MediaDetailPage(mediaId:)`；别在前端自己拼媒体 URL（`thumbUrlFor` / `fileUrlFor` 走后端算好的路径）。
 - **会话标题是"模型在正文最前面输出 `[标题]…[/标题]`，后端摘掉"**（`ai/title_strip.rs` 的 `TitleStripper`）。三条纪律：**绝不吞内容**（标记不闭合就把缓冲当正文放出去）、**绝不重复内容**、**摘到标题之后还要继续盯回声**（后面的轮次会再吐一遍，同样摘掉，但**不许改**已定下的会话名）。`ConversationTitleTest` 盯这三条。另外那条"起标题"指令**只能按轮带**（`runRound(askTitle=…)`），**绝不能塞进常驻 `turns`**；**位置必须在系统提示之后、历史之前（第 2 条），不能挂末尾** —— 挂末尾会挡住"最后一条消息是工具结果"这个事实（模型靠它收口、假网关靠它分流），`e2e-submit-test.ps1` 会一直重复调 `comfy_submit` 最后卡在审批闸门上。**改了 `HarnessRunner` 的上下文拼装，三条 e2e 全跑一遍。**
-- **ComfyUI 位置解析有两份实现**（`comfy_dirs.rs` 与 `scripts\comfy-path.ps1`），判据必须一致（源码形态 = `main.py` + `comfy/`；任何形态 = `output/` + `models/` 或 `input/`），改一边必须改另一边。探测**只读**，写配置必须由用户点「使用这个目录」（`POST /api/capture/locate/apply`）。
+- **ComfyUI 位置解析有两份实现**（`comfy_dirs.rs` 与 `scripts\comfy-path.ps1`），判据必须一致（源码形态 = `main.py` + `comfy/`；任何形态 = `output/` + `models/` 或 `input/`），改一边必须改另一边。**搜索顺序与"盘符怎么来"也要一致**：只认**本机真实存在的固定盘**（Rust `fixed_drive_roots()` / PS `Get-FixedDriveRoots`），**别写死 `D:\`** —— 那样只有开发机的布局能被找到（2026-11-10 复查）。探测**只读**，写配置必须由用户点「使用这个目录」（`POST /api/capture/locate/apply`）。
 - **`capture_runs` 的 `empty` / `error` 是可重试状态**（`capture_ingest::can_reclaim`）：`/history` 先出现记录、产物文件晚到是常态，把 `empty` 当终态就会出现"AI 说生成了、画廊里却没有"。只有 `success` 才是终态；改这段前先看 `CaptureRunRetryTest`。
 - **失败 / 取消时"已经说出去的话"一个字都不能丢**。三条纪律：① **`message.text` 里有的内容，parts 里也必须有** —— 前端 `_orderedBody` 在 parts 非空时**只渲染 parts**，只写正文不落块 = 用户看不见；被 429 / 断流打断的那一轮必须由失败分支补落（`ai/executor.rs` 的失败尾巴与正文落块是同一条路）；② **标题摘取缓冲**（`TitleStripper` 压住的开头，最多 ~200 字符）失败 / 取消时也要 `flush()` 放出来；③ **"就地重置"只能用在空壳上**：`POST /runs` 重试的判据是"正文空 **且** `assistant_has_parts` 为假"（`ai/run_lifecycle.rs`），有内容的失败回复**原样留着**、重试另起一条助手气泡。**别退回"只要 failed 就重置"** —— 那会把工具卡和图片入口卡一起删掉。防线：`e2e-ai-tools-test.ps1` 第 13 幕 + `test/ai_retry_keep_content_test.dart`。写假网关场景时先给会话定好标题，把"起标题"链路从断言里摘出去。
 - 改完这块跑两条端到端（都不出网、不花钱）：`pwsh -File scripts\e2e-submit-test.ps1`（6 幕）、`pwsh -File scripts\e2e-capture-test.ps1`。它们会临时改自动捕获配置、建 loopback Provider，跑完自己还原清理；`-KeepData` 可留数据。**别在跑完前 Ctrl+C**：清理在 `finally` 里，中断会留下 `e2e-submit-*` 记录，把下一次捕获 e2e 的 SHA-256 判重弄乱（表现为"新导入 0 个"）。`e2e-submit-test.ps1` 会自己把权限档临时钉成 `ask` 再还原。
@@ -268,7 +273,7 @@
 1. **桌面后端只改 `server-rs/`（Rust）**：旧 Kotlin 已不在仓库里，要参照旧行为从 git 历史取。
 2. **不要引入 KMP**（`kotlin.multiplatform`）—— 与 AGP 9 内建 Kotlin 这个刻意设计正面冲突（理由见 `docs/mobile-harness-design.md` §2.1）。
 3. **移动端 harness 用 Android Kotlin**（Flutter 通过 platform channel 调用），不是 Dart、不是 Rust。**手机端不许硬编码系统提示 / 工具描述 / 安全文案** —— 由桌面 `/api/ai/run-kit` 版本化下发（R13）。
-4. **发布包**：`mysql/`（304MB）、`jre/`（~40MB）、Kotlin jar（~20MB）都已去掉，装配实测约 **14MB**。改 `packaging\manifest.json` 与 §7 的布局前**先看总纲**；`runtimeRequirements` 的 `required` 决定"缺了算不算问题"。
+4. **发布包**：装配实测约 **14MB**（MySQL / JRE / Kotlin jar 已退役，见 §4）。改 `packaging\manifest.json` 与 §7 的布局前**先看总纲**；`runtimeRequirements` 的 `required` 决定"缺了算不算问题"。
 
 ---
 
@@ -278,37 +283,38 @@
 
 **机理**：① 代码沙箱给**工作区目录树**打 `Mandatory Label\Low Mandatory Level:(OI)(CI)(NW)`；② 在工作区里构建出来的 exe（`comfyhub-server-rs.exe`、`viewer.exe`、测试二进制…）**继承了 Low 标签**；③ Windows 创建进程取 **`min(父进程令牌, 映像标签)`**；④ **Low 写不了 Medium 对象**（工作区外默认无标签 = Medium）⇒ `拒绝访问 (os error 5)`。
 
-两条推论：**只把 exe 的标签清回 Medium（位置不动）→ 后端立刻哪儿都能写**；**链路上任何一环是 Low，子进程照样掉回 Low** —— 所以 `viewer.exe` 也是 Low 时，App 自己就是 Low，它起的后端一定是 Low，**连"修标签"这一步都做不动**。
+两条推论：**只把 exe 的标签清回 Medium（位置不动），后端立刻哪儿都能写**；但链路上任何一环是 Low，子进程照样掉回 Low —— `viewer.exe` 也是 Low 时，它起的后端一定是 Low，**连"修标签"都做不动**。
 
-（已排除的怀疑对象：目录 ACL、路径配错、用户身份、Defender、从哪个会话 / 终端起、spawn 档位 —— 决定权只在**映像标签**。）
+（已排除 ACL、路径、用户身份、Defender、启动方式 —— 只看**映像标签**。）
 
 **三条处方**：
 
 1. **构建时归一标签**：`windows\cmake\bundle_backend.cmake` 在 release 装配末尾对 `viewer.exe` 与 `backend\comfyhub-server-rs.exe` 各跑一次 `icacls <exe> /setintegritylevel Medium`（失败只警告、不中断构建）。
-2. **把整套 ComfyHub 放到工作区外**（终解）：`pwsh -File scripts\pack-release.ps1 -OutDir D:\dist\ComfyHub`，然后运行 `D:\dist\ComfyHub\viewer.exe`。那边的文件没有 Low 标签可继承 —— 既不受限，内容也仍全在它自己的文件夹里（§13）。
+2. **把整套 ComfyHub 放到工作区外**（终解）：`pwsh -File scripts\pack-release.ps1 -OutDir "$env:USERPROFILE\ComfyHub"`（目录随便挑，只要在工作区外），然后运行那里的 `viewer.exe`。那边的文件没有 Low 标签可继承 —— 既不受限，内容也仍全在它自己的文件夹里（§13）。
 3. **运行时就地修**：App 起后端前 best-effort 修一次（`backend_launcher.dart` 的 `_normalizeIntegrity`），`scripts\backend.ps1 start` 也会先修（`Repair-LaunchImages`）。这条**只能救"App 是 Medium、只有后端 exe 还带 Low 标签"那一半**。
 
-⚠ 两条边界：**"换个终端重起"没用**（映像标签没变）；**别建议往 `%LOCALAPPDATA%` / `%TEMP%` 拷后端**（违反 §13，而且只是碰巧绕开标签）。
+⚠ 两条边界：**"换个终端重起"没用**（映像标签没变）；**别建议往 `%LOCALAPPDATA%` / `%TEMP%` 拷后端**（§13）。
 
 **四条纪律**：
 
 1. **闸门留着**（`comfy::comfy_launch::ensure_writable`）：白起一个 100% CPU 卡死的实例，比如实拒绝糟得多。但**文案必须说对** —— 先讲真因，再给上面三条处方；**不许出现"权限 / ACL / 换个终端 / 双击 ComfyUI Desktop"**（`infra::confinement::remedy_text()`、`comfy_launch`、`image_edit` 三处同一纪律，用例 `修法文案指向发布包而不是让用户改_acl` 盯着）。
-2. **别把探针的 `Err` 吞成 `bool`**（`infra::confinement::probe_dir` 返回 `io::Result` 就是为此）：只报"哪个目录"不报"报什么错"，就会重演"现象对、处方错"。用例里也不许拿"这台机器哪个目录不可写"当判据 —— 用**同名目录占位**造确定性的 `os error 5`。
+2. **别把探针的 `Err` 吞成 `bool`**（`infra::confinement::probe_dir` 返回 `io::Result` 就是为此）：只报"哪个目录"不报"报什么错"，就会重演"现象对、处方错"。用例夹具按 §1 造确定性的 `os error 5`，不拿"这台机器哪个目录不可写"当判据。
 3. **看得见**（`server-rs\src\infra\confinement.rs`）：后端启动自查 → 受限才写 `.run\confinement.json`、**正常就删**（免得过期标记一直亮着），标记带 `pid`。`GET /api/system/confinement` 把结论**连判据一起**交给界面（`serverImage` / `imageInsideProjectRoot` / `blockedPaths` / `remedy`），受限时 App 顶部常驻横幅（`lib\widgets\confinement_banner.dart`）。⚠ 字段名只能说"**落在运行根目录里**"，别说"在工作区内"（发布包里根目录就是包目录，那里 `restricted=false`）。**界面上看不见的现象，用户和模型就只能靠猜。**
 4. **写 input 的地方必须共用同一个入口**（`comfy::image_edit::write_or_defer`）：投放原图 / 遮罩 / 摆好的人物图三处曾经只有两处有 HTTP 退路，于是"摆好的那份没落地"。直写被拒一律改让 **ComfyUI 自己写**（`/upload/image`），并按它回的名字回填结果字段。逐条清点见 [`docs/permission-audit.md`](docs/permission-audit.md)。**"写哪个 input"也只有一个真源**：起实例的 argv 由 `comfy::comfy_launch::start` 落档（`.run\comfyui-<port>.launch.json`），投放走 `comfy::image_edit::target_input_dir` —— **先问实例**（`/object_info/LoadImage` 的名单 × 候选目录），问不到才按"留档 → 配置 output 兄弟 → Desktop `settings.json` 的 `inputDir` → 盘探"回落。⚠ 别拿**全名**判"调用方写过哪些参数"：`--input` 是 `--input-directory` 的 argparse 缩写、同一个 `dest`、**后写的赢**（用 `tools::mcp::specified_flag`，并认 `--flag=value`）。两个环境变量名也别漂：`COMFYHUB_COMFY_OUTPUT`（脚本与老版本）与 `COMFYHUB_COMFY_OUTPUT_DIR` 都要认（`comfy::capture::comfy_output_env`）。
 
-**连带影响**：受限会话里 `cargo test` 会红一片（测试二进制就在工作区里），所以用例只许用 `testpaths::scratch()`（§1）。
+**连带影响**：受限会话里 `cargo test` 会红一片（测试二进制就在工作区里）；落盘与夹具要求见 §1。
 
 ## 13. ⚠ 内容一律存在自身文件夹内
 
 > **ComfyHub 自己产生的内容，不许散到 `%APPDATA%` / `%LOCALAPPDATA%` / `%TEMP%`。**
 
-它同时是落盘布局的总原则，也是 §12 那条不变式的解法：把整套 ComfyHub 放到工作区外（发布包），既不受限、布局又与源码树一致。
+它同时是落盘布局的总原则，也是 §12 那条不变式的解法：把整套 ComfyHub 放到工作区外（发布包），既不受限、布局又与源码树一致。代价是这些内容不再跨安装 / 跨机器共享，但 db 与 storage 本来就在各自文件夹里，别当回归。
 
 | 内容 | 落点 | 一次性导入 |
 | --- | --- | --- |
 | 数据目录覆盖（库 + `storage` 被搬走时） | `<根>\data-dir.json` | 无 |
 | 数据库 | `<数据目录>\.db\comfyhub.db`（默认 `<根>\.db\`） | 无 |
+| 库的身份 | `<数据目录>\.db\library.json`（`{"id":"<uuid>"}`，跟着库走；"上次用哪份库"记在偏好里） | 无 |
 | 库备份（`VACUUM INTO` 出来的 .db） | `<根>\backups\` | 无 |
 | 产物 / 缩略图 / 附件 | `<数据目录>\storage\`（默认 `<根>\storage\`） | 无 |
 | 偏好 | `<根>\app-support` | `<根>\storage\app-support`（旧版）与 `%APPDATA%\…\shared_preferences.json` |
@@ -316,8 +322,7 @@
 | comfy-cli 凭据 / 缓存 | `<数据目录>\storage\ai\mcp\comfy-cli-home` | `%LOCALAPPDATA%\comfy-cli\{secrets.json,config.ini}` |
 | 临时文件 / DevFS | `<根>\.run\tmp` | 无 |
 
-1. **别再用"探系统位置 → 写不进才退回"这个模式**：判据不可靠（能不能写取决于进程映像位置，§12），方向本身也错 —— 静默换地方正是"哪份才是真的要看机器上装过什么"的来源。真写不进去就**如实报错**，让用户把包 / 项目放到可写的地方。
+1. **别再用"探系统位置 → 写不进才退回"这个模式**：判据不可靠（取决于进程映像位置，§12），方向也错 —— 静默换地方会让"哪份才是真的"取决于机器上装过什么。写不进去就**如实报错**，让用户把包 / 项目放到可写的地方。
 2. **导入是只读复制、且只做一次**（目标已存在就不动，否则会用旧文件盖掉用户新存的值）。受限进程**读**项目外是允许的，所以 errno 5 的现场导入也做得成。
-3. **代价要如实说**：这些不再跨安装 / 跨机器共享 —— 但 db 与 storage 本来就在各自文件夹里，这与"发布包是便携的"一致，别当回归。
 
-改落盘位置时，`server-rs\src\tools\mcp.rs` 与 `scripts\mcp-runtime.ps1` **必须一起改**（`discover_runtime` 与 `Get-McpRuntimeDir` 是同一真源的两份实现）。判据：装完发布包后从包内启动一次 App（或 `scripts\backend.ps1 start`），比对 `%APPDATA%\com.example`、`%LOCALAPPDATA%\comfy-cli`、`%LOCALAPPDATA%\ComfyHub` 的文件数 —— **跑前后都不变**才算过。
+改落盘位置时，`server-rs\src\tools\mcp.rs` 与 `scripts\mcp-runtime.ps1` **必须一起改**（`discover_runtime` 与 `Get-McpRuntimeDir` 是同一真源的两份实现）。判据：从包内启动一次 App，比对 `%APPDATA%\com.example`、`%LOCALAPPDATA%\comfy-cli`、`%LOCALAPPDATA%\ComfyHub` 的文件数，跑前后都不变才算过。

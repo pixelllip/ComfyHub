@@ -526,6 +526,9 @@ class ApiClient {
     bool? nsfw,
     int? collectionId,
     bool clearCollection = false,
+
+    /// **整体替换**产物自身的标签。`null` = 这次不动；空数组 = 清空自身标签。
+    List<String>? tags,
   }) async => MediaAsset.fromJson(
     Map<String, dynamic>.from(
       await _send('PATCH', '/api/media/$id', {
@@ -540,7 +543,18 @@ class ApiClient {
         'favorite': ?favorite,
         'source': ?source,
         'nsfw': ?nsfw,
+        'tags': ?tags,
       }) as Map,
+    ),
+  );
+
+  /// 给库里已有的提示词与产物补一遍自动标签（标签页的「补标签」按钮）。
+  ///
+  /// 后端只追加、不删用户标签；返回的三个数字都是**新增**条数。
+  Future<AutoTagReport> autoApplyTags() async => AutoTagReport.fromJson(
+    Map<String, dynamic>.from(
+      await _send('POST', '/api/tags/auto-apply', const <String, dynamic>{})
+          as Map,
     ),
   );
 

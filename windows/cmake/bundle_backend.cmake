@@ -1,12 +1,16 @@
 # 由 `windows\CMakeLists.txt` 在 **release 装配阶段** install(SCRIPT) 进来。
 #
-# 干三件事（做完之后 `build\windows\x64\runner\Release\` 本身就是完整发布包）：
+# 干五件事（做完之后 `build\windows\x64\runner\Release\` 本身就是完整发布包）：
 #
 #   ① `cargo build --release`：**构建 release 时后端一起更新到最新**（用户要求）；
 #   ② 把后端 exe 装到 `<bundle>\backend\`（App 自己的资产，viewer.exe 同级），
 #      并把后端**运行期真的要用的**几样一起装上：`scripts\video-poster.ps1`
 #      （抽视频封面，`poster.rs` 会起它）、`db\`（DDL 副本，给人看）、`skills\builtin`；
-#   ③ 把 viewer.exe 与后端 exe 的**完整性标签**设回 Medium。
+#   ③ 把 viewer.exe 与后端 exe 的**完整性标签**设回 Medium；
+#   ④ 把上一份构建留在产物里的**运行期数据**（`.db` / `storage` / `.run` /
+#      `app-support`）挪进 `_leftover-data\` —— 不删，只是别让复制出去的构建把它
+#      当成"用户的库"；
+#   ⑤ 把源码树里的 `data-dir.json`（数据目录指针）带进产物，复制出去还是同一份数据。
 #
 # # 为什么必须有 ③（2026-09-30 用户实测的两条事实）
 #
@@ -77,3 +81,43 @@ foreach(_target "${_bundle}/viewer.exe" "${_bundle}/backend/comfyhub-server-rs.e
     endif()
   endif()
 endforeach()
+
+# ④ 产物目录里**不该有运行期数据**（2026-11-10）
+#
+# 用户 2026-11-10 报的 bug：把 Release 构建（除了 storage）复制到别处打开，对话只剩
+# 几条旧的、角色卡不是现在这版、画廊全是加载失败。真因是**上一份构建在这个目录里
+# 跑过**，于是 `.db\comfyhub.db`、`storage\`、`.run\`、`app-support\` 都被留在了产物
+# 里；复制到别处之后那个目录自己成了根，App 就照着这份旧库开了。
+#
+# ⚠ **不删**，只挪到 `_leftover-data\`：
+#   本机实测（2026-11-10）那份 `Release\storage\media` 里**有 30 张图在用户的数据目录
+#   里根本不存在** —— 它们是更早那版库的独有内容。构建步骤没有资格判断"这份数据还要
+#   不要"，删掉就真没了。挪到不叫 `.db` / `storage` 的目录之后，App 不会再把它当数据
+#   目录，复制出去的构建也就不会"变成另一份库"（这是这次事故的根）。
+foreach(_junk ".db" "storage" ".run" "app-support")
+  if(EXISTS "${_bundle}/${_junk}")
+    file(MAKE_DIRECTORY "${_bundle}/_leftover-data")
+    if(EXISTS "${_bundle}/_leftover-data/${_junk}")
+      # 上次已经挪过一份同名的：**不覆盖**（两份都是数据，谁都可能是唯一副本）
+      message(WARNING
+        "ComfyHub: 产物里又出现 ${_junk}，但 _leftover-data/${_junk} 已经有一份了 —— 留在原处不动。"
+        "复制这个目录之前先确认它是不是你要的数据。")
+    else()
+      file(RENAME "${_bundle}/${_junk}" "${_bundle}/_leftover-data/${_junk}")
+      message(STATUS "ComfyHub: 产物里的运行期残留已挪到 _leftover-data/${_junk}（没删）")
+    endif()
+  endif()
+endforeach()
+
+# ⑤ 数据目录指针跟着走：`data-dir.json` 有就带进产物
+#
+# 复制出去的构建要还是**同一份数据**（用户就是这么用发布包的）。指针在别的机器上
+# 指不到东西时，App 会回落到运行根目录，并把这件事说出来（backend_paths.dart 的
+# `resolveDataDir`）。源码树里没设过指针时，产物里那份旧的也要清掉。
+if(EXISTS "${_root}/data-dir.json")
+  file(INSTALL "${_root}/data-dir.json" DESTINATION "${_bundle}")
+  message(STATUS "ComfyHub: 数据目录指针已带进产物（data-dir.json）")
+elseif(EXISTS "${_bundle}/data-dir.json")
+  file(REMOVE "${_bundle}/data-dir.json")
+  message(STATUS "ComfyHub: 源码树没设数据目录指针，清掉产物里那份旧的")
+endif()

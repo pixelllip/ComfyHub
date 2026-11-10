@@ -292,6 +292,9 @@ pub struct MediaDto {
     /// （一页 24 格就是 24 次）。成员数超过 3 时只给前 3 张，界面靠 `collectionSize` 显示总数。
     pub collection_preview: Vec<i64>,
     pub prompt_tags: Vec<String>,
+    /// 产物**自身**的标签（不含关联提示词的）。编辑弹窗要用它，避免把提示词标签
+    /// 复制成产物标签；`promptTags` 仍是两者合并后的集合（画廊筛选口径不变）。
+    pub own_tags: Vec<String>,
     pub file_url: String,
     /// Kotlin 是 `thumbUrl: String? = null`；这里**总是算得出来**，所以键总是在（值不会是 null）
     pub thumb_url: String,
@@ -338,6 +341,7 @@ pub fn media_from_row(row: &Row<'_>) -> rusqlite::Result<MediaDto> {
                 .as_deref(),
         ),
         prompt_tags: Vec::new(),
+        own_tags: Vec::new(),
         file_url: format!("/api/media/{id}/file"),
         thumb_url: format!("/api/media/{id}/thumb"),
     })

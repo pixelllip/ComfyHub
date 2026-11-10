@@ -25,7 +25,7 @@
 
     用法：
       pwsh -File scripts\train-engine.ps1 status
-      pwsh -File scripts\train-engine.ps1 start -Dir D:\dist\anima_lora
+      pwsh -File scripts\train-engine.ps1 start -Dir "$env:USERPROFILE\anima_lora"
       pwsh -File scripts\train-engine.ps1 open
       pwsh -File scripts\train-engine.ps1 stop
 #>

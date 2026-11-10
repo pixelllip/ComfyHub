@@ -74,6 +74,11 @@ class _TagsPageState extends State<TagsPage> {
             : const Text('标签'),
         actions: [
           IconButton(
+            tooltip: '为已有内容补标签',
+            icon: const Icon(Icons.auto_awesome_outlined),
+            onPressed: () => _autoTag(context, store),
+          ),
+          IconButton(
             tooltip: '刷新',
             icon: const Icon(Icons.refresh),
             onPressed: store.refreshTags,
@@ -331,6 +336,32 @@ class _TagsPageState extends State<TagsPage> {
         ],
       ),
     );
+  }
+
+  /// 给库里已有的提示词与产物补一遍自动标签。
+  ///
+  /// 只追加、不删除：用户自己加 / 删过的标签不会因为点这一下被覆盖。
+  Future<void> _autoTag(BuildContext context, LibraryStore store) async {
+    final ok = await confirmDialog(
+      context,
+      title: '为已有内容补标签',
+      message: '会根据提示词、底模和 LoRA 给已有内容补上标签。已有的标签不会删除。',
+    );
+    if (!ok || !context.mounted) return;
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      final report = await store.api.autoApplyTags();
+      await store.refreshAll();
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text(
+            '已为 ${report.media} 条产物和 ${report.prompts} 条提示词补上标签，新增 ${report.tags} 条关联',
+          ),
+        ),
+      );
+    } catch (e) {
+      messenger.showSnackBar(SnackBar(content: Text('补标签失败: $e')));
+    }
   }
 
   Future<void> _editTag(BuildContext context, Tag? tag) async {

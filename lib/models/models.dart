@@ -261,6 +261,23 @@ class Tag {
   };
 }
 
+/// 一次「给已有内容补标签」的结果（`POST /api/tags/auto-apply`）。
+///
+/// 三个数字都是**真正新增的**条数，不是扫过的条数：界面据此说"补了多少"。
+class AutoTagReport {
+  final int prompts;
+  final int media;
+  final int tags;
+
+  const AutoTagReport({this.prompts = 0, this.media = 0, this.tags = 0});
+
+  factory AutoTagReport.fromJson(Map<String, dynamic> j) => AutoTagReport(
+    prompts: (j['prompts'] as num?)?.toInt() ?? 0,
+    media: (j['media'] as num?)?.toInt() ?? 0,
+    tags: (j['tags'] as num?)?.toInt() ?? 0,
+  );
+}
+
 // ===========================================================================
 //  提示词
 // ===========================================================================
@@ -571,7 +588,11 @@ class MediaAsset {
   final String? promptNegative;
   final String? checkpoint;
   final int? seed;
+  /// 产物自身标签 ∪ 关联提示词标签（画廊筛选与展示用）。
   final List<String> promptTags;
+
+  /// 产物**自身**的标签（不含关联提示词的）。编辑弹窗只改这一组。
+  final List<String> ownTags;
 
   // 相对路径
   final String fileUrl;
@@ -607,6 +628,7 @@ class MediaAsset {
     this.checkpoint,
     this.seed,
     this.promptTags = const [],
+    this.ownTags = const [],
     required this.fileUrl,
     this.thumbUrl,
   });
@@ -638,6 +660,9 @@ class MediaAsset {
     checkpoint: j['checkpoint'] as String?,
     seed: (j['seed'] as num?)?.toInt(),
     promptTags: ((j['promptTags'] as List?) ?? const [])
+        .map((e) => e.toString())
+        .toList(),
+    ownTags: ((j['ownTags'] as List?) ?? const [])
         .map((e) => e.toString())
         .toList(),
     collectionId: (j['collectionId'] as num?)?.toInt(),

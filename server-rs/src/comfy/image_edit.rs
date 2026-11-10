@@ -245,8 +245,8 @@ impl Delivery {
                      进程自己写不进项目外**（真因是完整性标签：工作区产物带着 Low 标签，Windows 取 \
                      **min(父进程, 映像)** → 进程令牌是 Low，写不了工作区外的 Medium 对象 —— \
                      与路径、目录 ACL、用户身份、Defender 都无关）。修法三选一：\n\
-                     1. `pwsh -File scripts\\pack-release.ps1 -OutDir D:\\dist\\ComfyHub`，\
-                     然后运行 `D:\\dist\\ComfyHub\\viewer.exe`（App 自己拉起 backend\\ 里的后端）；\n\
+                     1. `pwsh -File scripts\\pack-release.ps1 -OutDir \"$env:USERPROFILE\\ComfyHub\"`（目录换成用户自己的），\
+                     然后运行那里的 `viewer.exe`（App 自己拉起 backend\\ 里的后端）；\n\
                      2. 已有工作区外的构建产物时，设 `$env:COMFYHUB_SERVER_EXE` 指向那个 exe；\n\
                      3. `pwsh -File scripts\\backend.ps1 start`（起之前把 Low 标签修回 Medium；\
                      **当前会话本身是 Low 时修不动**，只剩 1/2 两条路）。",

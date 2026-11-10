@@ -373,6 +373,8 @@ async fn import_one(
 
     let mut prompt_id: Option<i64> = None;
     let mut created_prompt = false;
+    // 从 PNG 内嵌的 API 图推断自动标签；没有工作流就没有可推断的依据。
+    let mut auto_tags: Vec<crate::library::auto_tag::AutoTag> = Vec::new();
     if link_workflow {
         if let Some(graph) = graph.as_ref() {
             // `force = true`：上面已经确认过文件不在库里，历史运行记录不该拦住重新导入
@@ -387,6 +389,7 @@ async fn import_one(
                 return Ok(Outcome::Duplicate);
             }
             let parsed = crate::workflow::graph_parse::parse(graph.as_object());
+            auto_tags = crate::library::auto_tag::infer(&parsed, false);
             let title = make_import_title(&parsed, name);
             let tags_owned = tags.to_vec();
             let workflow_ref = workflow.clone();
@@ -399,6 +402,7 @@ async fn import_one(
                     Some(&run_key),
                     workflow_ref.as_deref(),
                     &tags_owned,
+                    &auto_tags,
                     Some(&notes),
                 )
             });
@@ -430,6 +434,7 @@ async fn import_one(
         workflow.as_deref(),
         Some(&notes),
         tags,
+        &auto_tags,
         false,
         false,
     );

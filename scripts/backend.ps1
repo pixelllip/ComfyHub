@@ -71,22 +71,109 @@ function Resolve-ProjectRootForBackend {
 $ProjectRoot = Resolve-ProjectRootForBackend
 $ExeName = 'comfyhub-server-rs.exe'
 
-<#  数据目录（库 + storage）在哪。**与 lib\core\backend_paths.dart 同一份约定**：
+<#  数据目录（库 + storage）在哪。**与 lib\core\backend_paths.dart 的 `resolveDataDir` 同一份约定**：
     `<根>\data-dir.json`（`{"dataDir":"D:\..."}`）存在就用它，否则就是运行根目录。
-    `.run\` / `backups\` / `comfyui\` 永远按运行根目录算，不跟着数据走。 #>
+    `.run\` / `backups\` / `comfyui\` 永远按运行根目录算，不跟着数据走。
+
+    判定顺序（2026-11-10 起，与 Dart 侧逐字一致）：
+      ① 指针指的目录不在了 → 回运行根目录（**不许**照着不存在的路径建一个空库）；
+      ② 偏好里有"上次用的是哪一份库"的记录（`app-support\shared_preferences.json` 的
+         `flutter.comfyhub.library.last`）→ **先按身份认**：指针那一级就是它就用它；
+         指针那一级没有库 / 那份库没身份（老数据）→ 用记录里的路径，或在
+         `<指针>\storage` 那几层里按身份找回来；
+      ③ 还没有记录（老库没有身份）→ 一次性过渡：`<指针>\storage\` 里那份比指针
+         那一级**大 4 倍以上**时才换过去（残留那份通常只有几 MB）。
+    库的身份就在库旁边：`<数据目录>\.db\library.json` 的 `id`。 #>
+function Test-DataDb {
+    param([string]$Path)
+    if (-not $Path) { return $false }
+    return (Test-Path -LiteralPath (Join-Path $Path '.db\comfyhub.db') -PathType Leaf)
+}
+
+function Get-DataDbBytes {
+    param([string]$Path)
+    $file = Join-Path $Path '.db\comfyhub.db'
+    if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { return 0L }
+    try { return (Get-Item -LiteralPath $file).Length } catch { return 0L }
+}
+
+<#  读一份库的身份（`<数据目录>\.db\library.json` 的 id；没有 / 读不懂回 $null）。 #>
+function Get-LibraryId {
+    param([string]$DataDir)
+    if (-not $DataDir) { return $null }
+    $f = Join-Path $DataDir '.db\library.json'
+    if (-not (Test-Path -LiteralPath $f -PathType Leaf)) { return $null }
+    try {
+        $j = Get-Content -LiteralPath $f -Raw -Encoding UTF8 | ConvertFrom-Json
+        if ($j.id) { return "$($j.id)" }
+    } catch {
+        Write-Host "身份文件读不了（$f），这次当没有身份" -ForegroundColor Yellow
+    }
+    return $null
+}
+
+<#  读"上次用的是哪一份库"（偏好里的 `flutter.comfyhub.library.last`，JSON 字符串）。
+    返回 @{ id; path } 或 $null。这是"复制出去的构建照样打开你的库"的依据。 #>
+function Get-LastLibrary {
+    param([string]$ProjectRoot = $ProjectRoot)
+    $f = Join-Path $ProjectRoot 'app-support\shared_preferences.json'
+    if (-not (Test-Path -LiteralPath $f -PathType Leaf)) { return $null }
+    try {
+        $prefs = Get-Content -LiteralPath $f -Raw -Encoding UTF8 | ConvertFrom-Json
+        $raw = $prefs.'flutter.comfyhub.library.last'
+        if (-not $raw) { return $null }
+        $ref = "$raw" | ConvertFrom-Json
+        if ($ref.id -and $ref.path) { return $ref }
+    } catch {
+        Write-Host "上次用的库记录读不懂（$f），当没记录" -ForegroundColor Yellow
+    }
+    return $null
+}
+
 function Resolve-DataDir {
     param([string]$ProjectRoot = $ProjectRoot)
+    $chosen = $ProjectRoot
     $file = Join-Path $ProjectRoot 'data-dir.json'
     if (Test-Path -LiteralPath $file) {
         try {
             $raw = Get-Content -LiteralPath $file -Raw -Encoding UTF8 | ConvertFrom-Json
             $dir = if ($raw.dataDir) { "$($raw.dataDir)".Trim() } else { '' }
-            if ($dir) { return $dir }
+            if ($dir) {
+                if (Test-Path -LiteralPath $dir -PathType Container) {
+                    $chosen = $dir
+                } else {
+                    Write-Host "data-dir.json 指的 $dir 不在了，这次用运行根目录 $ProjectRoot" -ForegroundColor Yellow
+                }
+            }
         } catch {
             Write-Host "data-dir.json 读不了（$file），按运行根目录走" -ForegroundColor Yellow
         }
     }
-    return $ProjectRoot
+    # ① 先听"上次用的是哪一份库"的记录（与 Dart 侧 resolveDataDir 同一判据）
+    $known = Get-LastLibrary -ProjectRoot $ProjectRoot
+    if ($known) {
+        if ((Get-LibraryId $chosen) -eq $known.id) { return $chosen }
+        $chosenId = Get-LibraryId $chosen
+        if (-not $chosenId) {
+            # 指针这一级没有库、或者那份库没有身份（老数据）→ 听记录的
+            if ($known.path -and (Test-DataDb $known.path) -and ((Get-LibraryId $known.path) -eq $known.id)) {
+                Write-Host "按上次用的那份库打开：$($known.path)（指针写的是 $chosen）" -ForegroundColor DarkGray
+                return $known.path
+            }
+            foreach ($c in @((Join-Path $chosen 'storage'), (Join-Path $chosen 'storage\storage'))) {
+                if ((Test-DataDb $c) -and ((Get-LibraryId $c) -eq $known.id)) {
+                    Write-Host "在 $c 找到上次用的那份库（身份对得上）" -ForegroundColor DarkGray
+                    return $c
+                }
+            }
+        }
+        return $chosen
+    }
+    # ② 没有记录时**就用指针这一级**（或运行根目录）。
+    #    ⚠ 别在这里按大小 / 修改时间猜"哪份是用户的库"：那是拿某台机器的情况当通用
+    #    规则（2026-11-10 复查）。同一棵树里还发现别的库时，App 会把它们列出来让用户
+    #    自己选；脚本这边只认指针 + 记录，猜不到就不猜。
+    return $chosen
 }
 
 <#  产物目录**实际**在哪。**与 lib\core\backend_paths.dart 的 `resolvedStorageDirOf` 同一份约定**：

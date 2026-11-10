@@ -211,18 +211,10 @@ pub fn resolve_workspace(
             )
         })
         .or_else(|| {
-            consider(
-                Some(PathBuf::from("D:\\ComfyUI")),
-                "常见位置 D:\\ComfyUI",
-                &mut tried,
-            )
-        })
-        .or_else(|| {
-            consider(
-                Some(PathBuf::from("D:\\ComfyUI_windows_portable\\ComfyUI")),
-                "免安装包",
-                &mut tried,
-            )
+            // 常见安装位置：**每个固定盘的盘根**（以前写死 `D:\ComfyUI`，换台机器就找不到）
+            crate::comfy::comfy_dirs::drive_install_candidates()
+                .into_iter()
+                .find_map(|(path, kind)| consider(Some(path), &kind, &mut tried))
         })
         // ComfyUI Desktop 的几套布局（有界探测，与"找产物目录"共用同一批函数）
         .or_else(|| {
@@ -403,11 +395,11 @@ pub fn ensure_writable(
              硬起只会得到一个卡死的实例（实测：100% CPU 卡在扫自定义节点，日志停在 `No OpenGL_accelerate…`）。\n\
              \n\
              **修法（三选一，内容照旧全在它自己的文件夹里）**：\n\
-             1. 把整套 ComfyHub 放到工作区外（发布包），从那儿启动：\n\
+             1. 把整套 ComfyHub 放到工作区外（放哪个盘、哪个目录由用户定，只要不在工作区里），从那儿启动：\n\
              ```\n\
-             pwsh -File scripts\\pack-release.ps1 -OutDir D:\\dist\\ComfyHub\n\
+             pwsh -File scripts\\pack-release.ps1 -OutDir \"$env:USERPROFILE\\ComfyHub\"   # 目录换成用户自己的\n\
              ```\n\
-             然后运行 `D:\\dist\\ComfyHub\\viewer.exe` —— App 会自己把 `<包根>\\backend\\` 里的后端拉起来。\n\
+             然后运行 `<那个目录>\\viewer.exe` —— App 会自己把 `<包根>\\backend\\` 里的后端拉起来。\n\
              发布包的数据在 `<包根>\\.db\\` / `storage\\` / `.run\\` —— \n\
              **既不受限，内容也仍然全在它自己的文件夹内**（这正是我们要的，不要改成往 `%LOCALAPPDATA%` \n\
              之类的系统位置拷）。\n\
@@ -416,7 +408,7 @@ pub fn ensure_writable(
              ⚠ **当前会话本身是 Low 时修不动**（Low 写不了向上的标签）—— 那就只剩 1/2 两条路。\n\
              \n\
              **判据（2026-09-29/30 逐条量过，别再当成别的毛病）**：同一个二进制**逐字节相同**，\n\
-             映像放在工作区内 → 写 `%TEMP%`、`D:\\Comfy-Desktop\\…` 全部 `os error 5`，只写得进工作区；\n\
+             映像放在工作区内 → 写 `%TEMP%`、写 ComfyUI 目录**全部** `os error 5`，只写得进工作区；\n\
              `copy` 到 `%TEMP%` 再跑 → **哪儿都能写**（那里没有 Low 标签，拷出去的文件继承到的是 Medium）。\n\
              所以：\n\
              · 与**路径配错、目录 ACL、用户身份、Defender** 都无关（诊断脚本查这些目录的 ACL 是 `NOT_THIS_CLASS`，\n\

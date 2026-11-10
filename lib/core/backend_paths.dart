@@ -32,6 +32,8 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 
+import 'library_identity.dart';
+
 /// 后端可执行文件名（两边布局一致；`windows\CMakeLists.txt` 与 `packaging\manifest.json` 也按它找）
 const String kServerExeName = 'comfyhub-server-rs.exe';
 
@@ -283,7 +285,12 @@ String? readDataDirOverride(String root) {
 }
 
 /// 这次真正用的数据目录：覆盖值优先，否则就是运行根目录。
-String dataDirOf(String root) => readDataDirOverride(root) ?? root;
+///
+/// ⚠ 指针写的那个目录**未必真的是数据目录**：旧版允许把 `…\storage` 选成数据目录，
+/// 于是库落进了 `storage\.db`，指针却停在上一级 —— 照指针找就会读到另一份旧库
+/// （2026-11-10 用户报的"复制出去的构建对话不见了 / 角色卡是旧版"）。
+/// 校正规则只有一份，在 [resolveDataDir] 里。
+String dataDirOf(String root) => resolveDataDir(root).dataDir;
 
 /// 写 / 清数据目录覆盖。`dataDir` 为 null 或空 = 恢复默认（删掉覆盖文件）。
 ///
@@ -371,6 +378,369 @@ String resolvedStorageDirOf(String dataDir) {
 /// 产物是不是直接放在数据目录里（扁平布局）。
 bool isFlatStorageLayout(String dataDir) =>
     _samePath(resolvedStorageDirOf(dataDir), dataDir);
+
+// ---------------------------------------------------------------------------
+//  数据目录校正（2026-11-10）：指针写的那一级，未必真的是数据目录
+// ---------------------------------------------------------------------------
+//
+// 现场（用户报"复制出去的构建对话不见了、画廊加载不出来、角色卡是旧版"）：
+//
+//   · `data-dir.json` 写的是 `D:\dist\ComfyHub`；
+//   · 真正的库却在 `D:\dist\ComfyHub\storage\.db\comfyhub.db`（57 个会话）；
+//   · 指针那一级也有一份 `D:\dist\ComfyHub\.db\comfyhub.db`，但那是**上一份构建
+//     残留的旧库**（3 个会话、2 张角色卡）。
+//
+// 于是 App 照着指针打开旧库 —— 数据明明在，界面却"什么都没有"。这不是猜出来的：
+// `storage\` 里出现 `.db\comfyhub.db` 只有一种来历，就是**那个 `storage` 本身当过
+// 数据目录**（旧版允许把 `…\storage` 选成数据目录，见 pitfalls 第 188 条）。正常布局
+// 里 `storage` 只装产物，绝不会装库。
+//
+// 判据（都在这一处，界面 / 脚本 / 迁移共用）：
+//   · 指针指的目录不在了 → 回运行根目录，并说出来（别悄悄开一个空库）；
+//   · `<选中目录>\storage\` 本身是数据目录 → 以它为准；两边都有库时**更大的那份**
+//     才可能是正在用的那份（残留那份通常只有几百 KB 到几 MB）。
+
+/// 这个目录里有没有一份库（`<目录>\.db\comfyhub.db`）。
+bool hasDataDb(String dir) {
+  if (dir.isEmpty) return false;
+  try {
+    return File(dataDbFileOf(dir)).existsSync();
+  } catch (_) {
+    return false;
+  }
+}
+
+/// `…\storage` **本身**是不是一个数据目录；是就返回它的路径，否则 null。
+String? nestedDataDirOf(String dir) {
+  if (dir.isEmpty) return null;
+  final nested = dataStorageDirOf(dir);
+  return hasDataDb(nested) ? nested : null;
+}
+
+/// 库 / 文件大小的"人话"写法（界面与日志共用一份，别各处自己算）。
+String sizeText(int bytes) {
+  if (bytes <= 0) return '空的';
+  const kb = 1024;
+  if (bytes < kb * 10) return '$bytes 字节';
+  if (bytes < kb * kb) return '${(bytes / kb).round()} KB';
+  final mb = bytes / (kb * kb);
+  if (mb < 1024) return '${mb.toStringAsFixed(mb < 10 ? 1 : 0)} MB';
+  return '${(mb / 1024).toStringAsFixed(1)} GB';
+}
+
+int _fileBytes(String path) {
+  try {
+    final file = File(path);
+    return file.existsSync() ? file.lengthSync() : 0;
+  } catch (_) {
+    return 0;
+  }
+}
+
+bool _dirExists(String path) {
+  if (path.isEmpty) return false;
+  try {
+    return Directory(path).existsSync();
+  } catch (_) {
+    return false;
+  }
+}
+
+/// 这次的数据目录是**怎么定下来的**（界面上按它说人话，别各拼一份）。
+enum DataDirPick {
+  /// 指针（或运行根目录）指的那一份 —— 用户显式选的，或者有身份且就是它。
+  chosen,
+
+  /// 按"上次用的那份库"的记录切回来的（复制出去的构建 / 换盘 / 目录改名）。
+  remembered,
+}
+
+/// 一个"看着像数据目录"的候选（真的有一份库才算）。
+///
+/// ⚠ 候选只用来**报告**，不用来自动挑：哪份是"你的库"由身份（[DataDirResolution.usedLibraryId]）
+/// 说了算，判断不出来时交给用户点一下 —— **绝不按大小 / 时间 / 层级去猜**
+/// （2026-11-10 复查：写死盘符、"谁更大就选谁"这类规则只对某一台机器成立）。
+@immutable
+class DataDirCandidate {
+  const DataDirCandidate({required this.path, required this.bytes});
+
+  final String path;
+
+  /// 库文件有多少字节（给人看的量级；读不到就是 0）。
+  final int bytes;
+
+  @override
+  String toString() => 'DataDirCandidate($path, $bytes)';
+}
+
+/// 一次数据目录解析的完整结论（界面上的说明、启动日志都按它说，别各拼一份）。
+@immutable
+class DataDirResolution {
+  const DataDirResolution({
+    required this.root,
+    required this.chosen,
+    required this.dataDir,
+    required this.storageDir,
+    required this.dbFile,
+    required this.pick,
+    this.pointer,
+    this.pointerMissing = false,
+    this.storageMissing = false,
+    this.candidates = const <DataDirCandidate>[],
+    this.usedLibraryId,
+    this.chosenLibraryId,
+    this.knownLibraryId,
+    this.knownLibraryPath,
+    this.pointerHasOtherLibrary = false,
+    this.rememberedMissing = false,
+  });
+
+  /// 运行根目录（`.run` / `backups` / `comfyui` 仍按它算）。
+  final String root;
+
+  /// 按指针（或运行根目录）选的目录 —— **校正之前**的那个。
+  final String chosen;
+
+  /// 这次真正用的数据目录（库和产物都在这儿）。
+  final String dataDir;
+
+  /// 产物目录实际在哪（标准 / 双层 / 扁平，见 [resolvedStorageDirOf]）。
+  final String storageDir;
+
+  /// 库文件的完整路径。
+  final String dbFile;
+
+  /// 这次是怎么定的（见 [DataDirPick]）。
+  final DataDirPick pick;
+
+  /// `data-dir.json` 里写的那个（null = 没设过，用运行根目录）。
+  final String? pointer;
+
+  /// 指针指的目录不在了，这次回落到运行根目录。
+  final bool pointerMissing;
+
+  /// 库在，产物目录却不在 —— 典型是"只复制了程序，没复制 storage"。
+  final bool storageMissing;
+
+  /// 这次考虑过的所有"像数据目录"的候选（按优先级，**只留真有库的**）。
+  ///
+  /// 只用于**报告**（界面 / 日志：让用户知道机器上还有哪些库），不参与挑选。
+  final List<DataDirCandidate> candidates;
+
+  /// 除了这次用的那份之外，还有哪些库。
+  List<DataDirCandidate> get otherCandidates => candidates
+      .where((c) => !_samePath(c.path, dataDir))
+      .toList(growable: false);
+
+  /// 这次用的那份库的身份（null = 老库还没身份）。
+  final String? usedLibraryId;
+
+  /// 指针 / 运行根目录那一份库的身份（null = 那里没有库，或老库没身份）。
+  final String? chosenLibraryId;
+
+  /// 偏好里记着"上次用的是哪一份"（null = 还没有记录）。
+  final String? knownLibraryId;
+
+  /// 偏好里记着的那个位置。
+  final String? knownLibraryPath;
+
+  /// 指针那一级有**另一份有身份的库**（用户显式选过的），这次尊重指针但要说出来。
+  final bool pointerHasOtherLibrary;
+
+  /// 有记录，但那份库在这台机器上找不到了。
+  final bool rememberedMissing;
+
+  /// 指针写的和实际用的不是同一个目录。
+  bool get pointerDiffers => pointer != null && !_samePath(pointer!, dataDir);
+
+  /// 这次用的是不是"上次那份库"（没有记录时算 true —— 无从比较，不该吓人）。
+  bool get matchesRemembered =>
+      knownLibraryId == null || usedLibraryId == knownLibraryId;
+
+  /// 界面上要说的一句话（没有异常时是 null，横幅一个字都不占）。
+  ///
+  /// 顺序就是"用户最需要先知道什么"：打开的是另一份库 > 上次那份找不到 > 按记录
+  /// 切回来了 > 指针失效 > 产物不在。
+  ///
+  /// ⚠ 别把"同一棵树里还有别的库"写进这里：那不是故障，天天弹横幅只会变成噪音
+  /// （2026-11-10 用户截图：每次启动都顶着一条黄条）。它只出现在设置页的
+  /// 「还发现另一份库」一节，由用户自己决定要不要换。
+  String? get notice {
+    if (pointerHasOtherLibrary) {
+      return '这次打开的不是上次使用的那一份。上次使用的是 '
+          '${knownLibraryPath ?? '上一份'}。如需换回，请点「换回上次那份」。';
+    }
+    if (rememberedMissing) {
+      return '上次使用的那份数据已找不到，这次打开的是 $dataDir。';
+    }
+    if (pick == DataDirPick.remembered) {
+      return '这次打开的是上次使用的那份，位置是 $dataDir。';
+    }
+    if (pointerMissing) {
+      return '上次使用的存放位置已不存在，这次使用的是 $dataDir。';
+    }
+    if (storageMissing) {
+      return '这个位置中只有对话记录，没有图片和视频。请把原来的图片文件夹一并复制过来。';
+    }
+    return null;
+  }
+
+  @override
+  String toString() =>
+      'DataDirResolution(root=$root, chosen=$chosen, dataDir=$dataDir, '
+      'storage=$storageDir, pick=$pick, pointer=$pointer, '
+      'ids(used=$usedLibraryId, chosen=$chosenLibraryId, known=$knownLibraryId))';
+}
+
+/// 解析这次真正用的数据目录（**唯一真源**：App、设置页、`scripts\backend.ps1`）。
+///
+/// # 判定顺序（改之前先读完这段）
+///
+/// 1. **指针 / 运行根目录** 定"想用哪儿"（`chosen`）；
+/// 2. 如果偏好里记着"上次用的是哪一份库"（`knownLibraryId`）：
+///    · `chosen` 就是那一份 → 用它；
+///    · `chosen` 里是**另一份有身份的库** → 尊重用户显式指定的位置，但把
+///      `pointerHasOtherLibrary` 亮出来（界面提醒 + 一键换回去）；
+///    · `chosen` 里没有库、或者那份库**没有身份**（老数据）→ 听记录的：
+///      先看记录里的路径还在不在，再在候选里按身份找；找到就用它（`remembered`）。
+///      ⚠ 这一条就是"复制出去的构建照样打开你的库"「换盘 / 改名也不丢」的实现。
+/// 3. **没有记录时就用 `chosen`**，别的候选只在 `notice` / 设置页里**列出来**让用户自己选。
+///    ⚠ 这里**不许**按大小 / 修改时间 / 层级去猜"哪份是你的库"：那是拿某台机器的
+///    情况当通用规则（2026-11-10 复查）；判据只能是**身份**，判断不了就问用户。
+/// 4. 候选只包含**同一棵树里**的目录（`chosen` / 根目录 / 它们的 `storage` 层），
+///    不做全盘搜索 —— 搜盘既慢又容易把别人的库当成你的。
+DataDirResolution resolveDataDir(
+  String root, {
+  String? knownLibraryId,
+  String? knownLibraryPath,
+}) {
+  final pointer = readDataDirOverride(root);
+
+  var chosen = root;
+  var pointerMissing = false;
+  if (pointer != null) {
+    if (_dirExists(pointer)) {
+      chosen = pointer;
+    } else {
+      // 指针指向的目录不在了（换机器 / 拔了移动盘 / 手动删了）：回运行根目录。
+      // ⚠ **不能**照着不存在的路径建一个空库 —— 那正是"数据明明在，界面却空了"。
+      pointerMissing = true;
+      debugPrint('[paths] data-dir.json 指的 $pointer 不在了，这次用运行根目录 $root');
+    }
+  }
+
+  final chosenLibraryId = readLibraryId(chosen);
+  final candidates = _dataDirCandidates(root: root, chosen: chosen);
+  final known = (knownLibraryId ?? '').isEmpty ? null : knownLibraryId;
+
+  var dataDir = chosen;
+  var pick = DataDirPick.chosen;
+  var pointerHasOtherLibrary = false;
+  var rememberedMissing = false;
+
+  if (known != null) {
+    if (chosenLibraryId == known) {
+      // 指针这一级就是上次那份库 —— 最正常的一条路
+    } else if (chosenLibraryId != null && hasDataDb(chosen)) {
+      // 指针里是另一份**有身份**的库：那是用户显式选过的位置，尊重它，只提醒。
+      pointerHasOtherLibrary = true;
+    } else {
+      final remembered = _rememberedDataDir(
+        id: known,
+        path: knownLibraryPath,
+        candidates: candidates,
+      );
+      if (remembered != null) {
+        if (!_samePath(remembered, chosen)) {
+          dataDir = remembered;
+          pick = DataDirPick.remembered;
+          debugPrint('[paths] 按"上次用的库"($known) 打开：$remembered（指针是 $chosen）');
+        }
+      } else {
+        rememberedMissing = true;
+        debugPrint('[paths] 上次用的库($known)找不到了，这次用 $chosen');
+      }
+    }
+  }
+
+  final others = candidates
+      .where((c) => !_samePath(c.path, dataDir))
+      .map((c) => c.path)
+      .toList(growable: false);
+  if (others.isNotEmpty) {
+    // 只是报告，不换：换哪份由用户点（设置 → 数据目录）
+    debugPrint('[paths] 同一棵树里还发现别的库：${others.join('、')}');
+  }
+
+  final storage = resolvedStorageDirOf(dataDir);
+  final dbFile = dataDbFileOf(dataDir);
+  // 库在、产物目录却整个不在：典型是"只复制了程序，没复制 storage"。
+  // 只按"目录不存在"判 —— 刚装好的空 storage 是正常的，不该吓人。
+  final storageMissing = hasDataDb(dataDir) && !_dirExists(storage);
+
+  return DataDirResolution(
+    root: root,
+    chosen: chosen,
+    dataDir: dataDir,
+    storageDir: storage,
+    dbFile: dbFile,
+    pick: pick,
+    pointer: pointer,
+    pointerMissing: pointerMissing,
+    storageMissing: storageMissing,
+    candidates: candidates,
+    usedLibraryId: readLibraryId(dataDir),
+    chosenLibraryId: chosenLibraryId,
+    knownLibraryId: known,
+    knownLibraryPath: knownLibraryPath,
+    pointerHasOtherLibrary: pointerHasOtherLibrary,
+    rememberedMissing: rememberedMissing,
+  );
+}
+
+/// 同一棵树里"可能是我们的数据目录"的那些位置（**只留真有库的**，按优先级）。
+///
+/// 为什么要把 `storage` 层也算进来：旧版允许把 `…\storage` 选成数据目录，于是库落在
+/// `…\storage\.db`。它是不是你要的那一份，靠**身份**判，不靠层级。
+List<DataDirCandidate> _dataDirCandidates({
+  required String root,
+  required String chosen,
+}) {
+  final out = <DataDirCandidate>[];
+  void add(String dir) {
+    if (dir.isEmpty || !hasDataDb(dir)) return;
+    for (final existing in out) {
+      if (_samePath(existing.path, dir)) return;
+    }
+    out.add(DataDirCandidate(path: dir, bytes: _fileBytes(dataDbFileOf(dir))));
+  }
+
+  void addTree(String base) {
+    add(base);
+    final storage = dataStorageDirOf(base);
+    add(storage);
+    add([storage, 'storage'].join(Platform.pathSeparator));
+  }
+
+  addTree(chosen);
+  if (!_samePath(root, chosen)) addTree(root);
+  return out;
+}
+
+/// 按身份找"上次那份库"：先看记录里的路径，再在候选里找。
+String? _rememberedDataDir({
+  required String id,
+  required String? path,
+  required List<DataDirCandidate> candidates,
+}) {
+  if (path != null && path.isNotEmpty && hasDataDb(path)) {
+    if (readLibraryId(path) == id) return path;
+  }
+  for (final candidate in candidates) {
+    if (readLibraryId(candidate.path) == id) return candidate.path;
+  }
+  return null;
+}
 
 String _pathLower(String path) {
   var value = path.replaceAll('/', Platform.pathSeparator);

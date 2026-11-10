@@ -1,9 +1,11 @@
+import 'dart:convert';
 import 'dart:io' show Platform;
 
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'backend_paths.dart';
+import 'library_identity.dart';
 import 'media_cache.dart';
 import 'system_accent.dart';
 import 'theme.dart';
@@ -123,6 +125,13 @@ class SettingsStore extends ChangeNotifier {
   CollectionDetailStyle _collectionDetailWide = CollectionDetailStyle.dock;
   CollectionDetailStyle _collectionDetailNarrow = CollectionDetailStyle.popup;
   int? _lastApiPort;
+
+  /// 上次用的是**哪一份库**（身份 + 位置），见 `library_identity.dart`。
+  ///
+  /// 为什么记在偏好里：库可能被搬走 / 拔盘 / 复制出一份新的，目录字符串靠不住；
+  /// "上次用的是这一份"是判断"这次打开的是不是你的数据"的唯一事实来源。
+  LibraryRef? _lastLibrary;
+
   bool _loaded = false;
 
   /// 手机端产物缓存的原件预算（MB）。默认取 `media_cache.dart` 的常量，
@@ -241,6 +250,11 @@ class SettingsStore extends ChangeNotifier {
   ///
   /// 只用来**要回**同一个端口，不是"用户配置"：真源永远是后端写的 `.run\api.json`。
   int? get lastApiPort => _lastApiPort;
+
+  /// 上次用的是哪一份库（null = 还没记录过 / 记录坏了）。
+  ///
+  /// 判据点只有一个：**库自己的身份**（`<数据目录>\.db\library.json`），不是目录字符串。
+  LibraryRef? get lastLibrary => _lastLibrary;
 
   /// 手机端产物缓存的原件预算（MB，默认 1536 = 1.5GB）。
   ///
@@ -386,6 +400,16 @@ class SettingsStore extends ChangeNotifier {
       fallback: CollectionDetailStyle.popup,
     );
     _lastApiPort = _sanitizePort(prefs.getInt(_kLastApiPort));
+    // "上次用的是哪份库"：坏记录当没记录（`LibraryRef.fromJson` 是宽容解析）。
+    final rawLibrary = prefs.getString(kLastLibraryPrefsKey);
+    if (rawLibrary != null && rawLibrary.isNotEmpty) {
+      try {
+        _lastLibrary = LibraryRef.fromJson(jsonDecode(rawLibrary));
+      } catch (e) {
+        debugPrint('[settings] 上次用的库记录读不懂，当没记录：$e');
+        _lastLibrary = null;
+      }
+    }
     // 缓存预算：只认档位表里的值（老版本 / 手改的野值回默认），并**立刻应用到缓存**
     // —— 用户上次把 2GB 调到 512MB，下次冷启动就该按 512MB 淘汰，不能等下一次下载。
     final rawBudgetMb = prefs.getInt(_kMediaCacheOrigBudgetMb);
@@ -607,6 +631,28 @@ class SettingsStore extends ChangeNotifier {
       await prefs.remove(_kLastApiPort);
     } else {
       await prefs.setInt(_kLastApiPort, clean);
+    }
+  }
+
+  /// 记下"这次用的是哪一份库"。见 `library_identity.dart`。
+  ///
+  /// 只由启动流程（`BackendLauncher`）在**真的用上这份库**之后调用 —— 绝不因为
+  /// "扫到一个 `.db`"就写。坏了就当没记录，所以这里只写合法引用。
+  Future<void> setLastLibrary(LibraryRef? value) async {
+    final same =
+        (value == null && _lastLibrary == null) ||
+        (value != null &&
+            _lastLibrary != null &&
+            value.id == _lastLibrary!.id &&
+            value.path == _lastLibrary!.path);
+    if (same) return;
+    _lastLibrary = value;
+    notifyListeners();
+    final prefs = await SharedPreferences.getInstance();
+    if (value == null) {
+      await prefs.remove(kLastLibraryPrefsKey);
+    } else {
+      await prefs.setString(kLastLibraryPrefsKey, jsonEncode(value.toJson()));
     }
   }
 

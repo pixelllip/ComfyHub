@@ -2,6 +2,7 @@
 //!
 //! 标签 / 提示词 / 卡片（角色卡 + 画风卡）的仓储与端点（画面之外的那些"库"）。
 
+pub mod auto_tag;
 pub mod cards;
 pub mod character_cards;
 pub mod repo;

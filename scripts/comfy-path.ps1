@@ -23,6 +23,23 @@ function Test-ComfyHome([string]$Path) {
     return (($hasMain -and $hasPkg) -or ($hasOutput -and ($hasModels -or $hasInput)))
 }
 
+function Get-FixedDriveRoots {
+    <#  这台机器上**真正存在**的固定盘根（`C:\`、`D:\`、`E:\` …）。
+
+        ⚠ 别写死盘符：以前这里是 `D:\ComfyUI` / `D:\Comfy-Desktop` / 整个 `D:\` 顶层，
+        只有**开发机**的布局能被找到；换台机器（ComfyUI 装在 C: 或 E:）就永远"找不到"。
+        用 .NET 的 DriveInfo 只留 `Fixed`：网络映射盘 / 光驱不碰（断开的网络盘会卡）。 #>
+    try {
+        return @(
+            [System.IO.DriveInfo]::GetDrives() |
+                Where-Object { $_.DriveType -eq [System.IO.DriveType]::Fixed } |
+                ForEach-Object { $_.RootDirectory.FullName }
+        )
+    } catch {
+        return @()
+    }
+}
+
 function Resolve-ComfyHome {
     [CmdletBinding()]
     param([string]$ProjectRoot = $null)
@@ -38,10 +55,13 @@ function Resolve-ComfyHome {
         if (Test-ComfyHome $local) { return (Resolve-Path -LiteralPath $local).Path }
     }
 
-    # 3) 常见安装位置（固定路径优先，最后才在几个顶层目录里翻一层）
-    $fixed = @(
-        'D:\ComfyUI',
-        'D:\ComfyUI_windows_portable\ComfyUI',
+    # 3) 常见安装位置（**每个固定盘**的盘根 + 用户目录，最后才在几个顶层目录里翻一层）
+    $fixed = @()
+    foreach ($drive in (Get-FixedDriveRoots)) {
+        $fixed += (Join-Path $drive 'ComfyUI')
+        $fixed += (Join-Path $drive 'ComfyUI_windows_portable\ComfyUI')
+    }
+    $fixed += @(
         (Join-Path $env:USERPROFILE 'Documents\ComfyUI'),
         (Join-Path $env:USERPROFILE 'ComfyUI'),
         # ComfyUI Desktop（新版）常把源码检出放在 Documents\comfy\ComfyUI
@@ -55,12 +75,15 @@ function Resolve-ComfyHome {
     # 4) ComfyUI **Desktop** 的嵌套布局（2026-09-21 实测踩到）
     #    Desktop 把源码检出放在 <应用目录>\ComfyUI-Installs\<实例>\ComfyUI 下，
     #    只在顶层翻一层永远找不到它 —— 而用户的 ComfyUI 恰恰就是这么装的。
-    foreach ($root in @(
-            (Join-Path $env:USERPROFILE 'AppData\Local\Programs\@comfyorgcomfyui-electron'),
-            (Join-Path $env:USERPROFILE 'Documents\comfy'),
-            'D:\Comfy-Desktop',
-            (Join-Path $env:LOCALAPPDATA 'Comfy-Desktop')
-        )) {
+    $desktopRoots = @(
+        (Join-Path $env:USERPROFILE 'AppData\Local\Programs\@comfyorgcomfyui-electron'),
+        (Join-Path $env:USERPROFILE 'Documents\comfy'),
+        (Join-Path $env:LOCALAPPDATA 'Comfy-Desktop')
+    )
+    foreach ($drive in (Get-FixedDriveRoots)) {
+        $desktopRoots += (Join-Path $drive 'Comfy-Desktop')
+    }
+    foreach ($root in $desktopRoots) {
         if (-not (Test-Path -LiteralPath $root -PathType Container)) { continue }
         $installs = Join-Path $root 'ComfyUI-Installs'
         foreach ($base in @($installs, $root)) {
@@ -73,14 +96,50 @@ function Resolve-ComfyHome {
         }
     }
 
-    # 5) 秋叶整合包 / 便携包常见的 *comfy* 顶层目录（只翻一层）
-    foreach ($root in @((Join-Path $env:USERPROFILE 'Desktop'), (Join-Path $env:USERPROFILE 'Documents'), 'D:\')) {
+    # 5) 秋叶整合包 / 便携包常见的 *comfy* 顶层目录（只翻一层，且**每个固定盘的盘根**都看）
+    $topRoots = @(
+        (Join-Path $env:USERPROFILE 'Desktop'),
+        (Join-Path $env:USERPROFILE 'Documents')
+    ) + (Get-FixedDriveRoots)
+    foreach ($root in $topRoots) {
         if (-not (Test-Path -LiteralPath $root -PathType Container)) { continue }
         $hit = Get-ChildItem -LiteralPath $root -Directory -ErrorAction SilentlyContinue |
             Where-Object { $_.Name -match 'comfy' } |
             Where-Object { Test-ComfyHome $_.FullName } |
             Select-Object -First 1
         if ($hit) { return $hit.FullName }
+    }
+    return $null
+}
+
+function Find-ComfyPython {
+    <#  找一份能跑 ComfyUI 相关小脚本的 python.exe。
+
+        顺序：`$env:COMFYHUB_PYTHON` → PATH 里的 python → **ComfyUI 自己带的**那份
+        （ComfyUI 装在哪由 [`Resolve-ComfyHome`] 现探，**不写死盘符** —— 以前这里列的是
+        `D:\Comfy-Desktop\...`，换台机器就找不到，2026-11-10 复查改掉）。 #>
+    [CmdletBinding()]
+    param([string]$ProjectRoot = $null)
+
+    if ($env:COMFYHUB_PYTHON -and (Test-Path -LiteralPath $env:COMFYHUB_PYTHON -PathType Leaf)) {
+        return $env:COMFYHUB_PYTHON
+    }
+    $cmd = Get-Command python -ErrorAction SilentlyContinue
+    if ($cmd) { return $cmd.Source }
+
+    $comfy = Resolve-ComfyHome -ProjectRoot $ProjectRoot
+    if (-not $comfy) { return $null }
+    $parent = Split-Path -Parent $comfy
+    $cands = @(
+        (Join-Path $comfy 'python_embeded\python.exe'),          # 便携包（python 在根下）
+        (Join-Path $comfy 'python_embeded\python_embeded\python.exe'),
+        (Join-Path $comfy 'venv\Scripts\python.exe'),
+        (Join-Path $comfy '.venv\Scripts\python.exe'),
+        (Join-Path $comfy 'standalone-env\python.exe'),          # Desktop 的独立环境
+        (Join-Path $parent 'python_embeded\python.exe')
+    )
+    foreach ($c in $cands) {
+        if ($c -and (Test-Path -LiteralPath $c -PathType Leaf)) { return $c }
     }
     return $null
 }

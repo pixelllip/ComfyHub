@@ -305,6 +305,7 @@ pub async fn load_from_file(
             }
         );
         let tags = vec![SOURCE.to_string()];
+        let auto_tags = crate::library::auto_tag::infer(&parsed, false);
         let created = state
             .write(|tx| {
                 capture_ingest::create_captured_prompt(
@@ -315,6 +316,7 @@ pub async fn load_from_file(
                     Some(&run_key),
                     Some(&workflow_json),
                     &tags,
+                    &auto_tags,
                     Some(&notes),
                 )
             })

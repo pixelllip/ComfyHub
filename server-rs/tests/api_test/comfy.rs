@@ -1063,16 +1063,21 @@ async fn poll_captures_a_run_into_prompts_and_media() {
     );
     // 图片顺手写缩略图（画廊列表用它）
     assert!(comfyhub_server_rs::media::thumbs::thumb_path(state.media_dir(), asset.0).is_file());
-    let tag_count: i64 = state
+    let tags: Vec<String> = state
         .with(|conn| {
-            conn.query_row(
-                "SELECT COUNT(*) FROM media_tags WHERE media_id = ?1",
-                [asset.0],
-                |r| r.get(0),
-            )
+            let mut stmt = conn.prepare(
+                "SELECT t.name FROM media_tags mt JOIN tags t ON t.id = mt.tag_id
+                  WHERE mt.media_id = ?1 ORDER BY t.name",
+            )?;
+            let rows = stmt.query_map([asset.0], |row| row.get::<_, String>(0))?;
+            rows.collect::<rusqlite::Result<Vec<_>>>()
         })
         .unwrap();
-    assert_eq!(tag_count, 1, "autoTag（ComfyUI）要挂上");
+    assert!(tags.contains(&"ComfyUI".to_string()), "autoTag 要挂上：{tags:?}");
+    assert!(
+        tags.contains(&"少女".to_string()) && tags.contains(&"水墨".to_string()),
+        "提示词 1girl, ink painting 要推断出角色与风格标签：{tags:?}"
+    );
 
     // ⑥ 幂等：再轮询一次**什么都不该变**（success 是终态）
     let prompts_before: i64 = state

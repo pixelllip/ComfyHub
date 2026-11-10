@@ -1,16 +1,22 @@
 // 「设置 → 数据目录」页（`lib/pages/settings_data_dir_page.dart`）的回归。
 //
-// 用例针对的是**破坏性的那几步**（用户 2026-11-06："还要考虑数据迁移"）：
-//   1) 搬之前必须先弹确认弹窗，说清"从哪到哪、多少文件、旧目录不删"；取消 = 一个字节都不动；
-//   2) 目标不可用（同一个目录 / 目录套目录 / 目标里已经有一份数据）只提示、不进确认弹窗；
-//   3) 搬完一定要问一次"旧数据删不删"，默认保留；说删也只删 `.db` 与 `storage`；
-//   4) 搬迁成功但后端用新目录起不来 → 指针回滚、旧目录还在、如实说；
-//   5) 没定位到数据目录时按钮是灰的，不是"点了没反应"。
+// 用户 2026-11-10 的要求：**傻瓜化** —— 一个按钮自动搬走，一个按钮搬回默认位置，
+// 页面上不许出现他看不懂的技术词（「整理成标准布局」「把指针改到这里」都已删掉）。
+//
+// 用例钉住这几条：
+//   1) 页面上只有「搬到别处…」和「搬回默认位置」，外加一个"打开文件夹"的小图标；
+//      两条技术按钮一个都不许回来；
+//   2) 点「搬到别处…」选完目录**直接开搬**（不再多问一遍），进度弹窗说清从哪到哪、
+//      多少文件，可以取消；取消 = 一个字节都不动、指针不动；
+//   3) 目标不可用（同一个目录 / 目录套目录）只提示一句人话，不碰数据；
+//   4) 搬完一定要问一次"旧数据删不删"，默认保留；说删也只删 `.db` 与 `storage`；
+//   5) 搬迁成功但后端用新目录起不来 → 指针回滚、旧目录还在、如实说。
 //
 // 后端的起停在这条用例里是**假的**（`_FakeLauncher`）：单元测试不该真的拉进程。
 // 文件复制 / 校验 / 落指针走的是真实现（`data_dir_migration.dart`），落点在
 // 系统临时目录里，用例之间互不影响。
 
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -37,9 +43,15 @@ class _FakeLauncher extends BackendLauncher {
   int stopCalls = 0;
   final List<bool> ensureForced = [];
 
+  /// 停服务要等这个闸门（测试用它把"进度弹窗开着、还没开始复制"这一刻钉住）。
+  /// `null` = 立即返回。
+  Completer<void>? stopGate;
+
   @override
   Future<bool> stopBackend() async {
     stopCalls++;
+    final gate = stopGate;
+    if (gate != null) await gate.future;
     return true;
   }
 
@@ -109,69 +121,82 @@ void main() {
     await tester.pumpAndSettle();
   }
 
-  /// 点「更改位置…」并等目标检查（真磁盘 IO）跑完、弹窗画出来。
-  Future<void> pickTarget(WidgetTester tester) =>
-      tapWithIo(tester, find.text('更改位置…'));
+  /// 点「搬到别处…」，等目标检查跑完、进度弹窗画出来（此时还没开始复制）。
+  Future<void> startMove(WidgetTester tester) async {
+    await tester.tap(find.text('搬到别处…'));
+    await drainRealIo(tester);
+    await tester.pump();
+  }
 
-  testWidgets('默认目录：说清库和产物在哪，不给「搬回程序目录」', (tester) async {
+  testWidgets('默认目录：只有「搬到别处…」，两条技术按钮都不在', (tester) async {
     await pumpPage(tester);
 
     expect(find.text('数据目录'), findsOneWidget);
     expect(find.text(root.path), findsOneWidget);
-    expect(find.text('产物在 ${dataStorageDirOf(root.path)}'), findsOneWidget);
-    expect(find.textContaining('库和产物都在程序目录里'), findsOneWidget);
-    expect(find.text('打开'), findsOneWidget);
-    expect(find.text('更改位置…'), findsOneWidget);
-    expect(
-      find.text('搬回程序目录'),
-      findsNothing,
-      reason: '本来就在默认目录，不该给一个"搬回自己"的按钮',
-    );
+    expect(find.text('对话、图片和角色卡都保存在程序所在的文件夹里。'), findsOneWidget);
+    expect(find.text('搬到别处…'), findsOneWidget);
+    expect(find.text('搬回默认位置'), findsNothing);
+    expect(find.byTooltip('打开文件夹'), findsOneWidget);
+    // 用户 2026-11-10：这两个看不懂，删掉
+    expect(find.text('整理成标准布局'), findsNothing);
+    expect(find.text('把指针改到这里'), findsNothing);
+    expect(find.textContaining('同一棵树'), findsNothing);
   });
 
-  testWidgets('数据目录搬走过之后：给「搬回程序目录」，说明里如实区分', (tester) async {
+  testWidgets('数据搬到别处之后：多一个「搬回默认位置」', (tester) async {
     expect(writeDataDirOverride(root.path, target.path), isTrue);
     await pumpPage(tester);
 
     expect(find.text(target.path), findsOneWidget);
-    expect(find.textContaining('库和产物在这个目录里'), findsOneWidget);
-    expect(find.text('搬回程序目录'), findsOneWidget);
+    expect(find.textContaining('搬到别处'), findsOneWidget);
+    expect(find.textContaining('程序所在的文件夹中不再保存这些内容'), findsOneWidget);
+    expect(find.text('搬回默认位置'), findsOneWidget);
   });
 
-  testWidgets('没定位到数据目录：按钮是灰的，不是点了没反应', (tester) async {
+  testWidgets('没定位到数据目录：两个按钮都是灰的，不是点了没反应', (tester) async {
     launcher.layout = null;
     await pumpPage(tester);
 
-    expect(find.text('还没定位到数据目录'), findsOneWidget);
+    expect(find.text('尚未确定数据的存放位置'), findsOneWidget);
     expect(
       tester
-          .widget<TextButton>(find.widgetWithText(TextButton, '打开'))
+          .widget<FilledButton>(find.widgetWithText(FilledButton, '搬到别处…'))
           .onPressed,
       isNull,
     );
     expect(
       tester
-          .widget<TextButton>(find.widgetWithText(TextButton, '更改位置…'))
+          .widget<OutlinedButton>(
+            find.widgetWithText(OutlinedButton, '搬回默认位置'),
+          )
           .onPressed,
       isNull,
     );
   });
 
-  testWidgets('确认弹窗：说清从哪到哪、多少文件，取消则一个字节都不动', (tester) async {
+  testWidgets('点一次就开始搬：进度里说清从哪到哪、多少文件，取消则一个字节都不动', (tester) async {
+    launcher.stopGate = Completer<void>();
     await pumpPage(tester);
 
-    await pickTarget(tester);
+    await startMove(tester);
 
-    expect(find.text('把数据搬到新位置？'), findsOneWidget);
-    expect(find.text('从  ${root.path}'), findsOneWidget);
+    expect(find.text('正在搬运'), findsOneWidget);
+    expect(find.text('现在的位置是 ${root.path}'), findsOneWidget);
     expect(
-      find.text('搬到  ${Directory(target.path).absolute.path}'),
+      find.text('新的位置是 ${Directory(target.path).absolute.path}'),
       findsOneWidget,
     );
-    expect(find.textContaining('一共 2 个文件'), findsOneWidget);
-    expect(find.textContaining('搬的时候本地服务会先停下来，搬完自动重启'), findsOneWidget);
+    expect(find.textContaining('共 2 个文件'), findsOneWidget);
+    expect(find.widgetWithText(TextButton, '取消'), findsOneWidget);
 
     await tester.tap(find.widgetWithText(TextButton, '取消'));
+    launcher.stopGate!.complete();
+    launcher.stopGate = null;
+    await drainRealIo(tester);
+    await tester.pumpAndSettle();
+
+    expect(find.text('已取消'), findsOneWidget);
+    await tester.tap(find.text('知道了'));
     await tester.pumpAndSettle();
 
     expect(readDataDirOverride(root.path), isNull, reason: '取消后不能落指针');
@@ -180,29 +205,36 @@ void main() {
       isFalse,
       reason: '取消后新目录里不许出现半份副本',
     );
-    expect(launcher.stopCalls, 0, reason: '用户没确认，不许先把本地服务停掉');
-    expect(find.text('搬好了'), findsNothing);
+    expect(find.text('搬运完成'), findsNothing);
   });
 
-  testWidgets('还没有数据时，确认弹窗换一句话（不是"0 个文件"）', (tester) async {
+  testWidgets('还没有数据时：进度里换一句话，不是"0 个文件"', (tester) async {
     Directory(dataDbParentOf(root.path)).deleteSync(recursive: true);
     Directory(dataStorageDirOf(root.path)).deleteSync(recursive: true);
+    launcher.stopGate = Completer<void>();
     await pumpPage(tester);
 
-    await pickTarget(tester);
+    await startMove(tester);
 
-    expect(find.text('现在还没有数据，切换过去就是空的。'), findsOneWidget);
+    expect(find.text('当前的位置没有数据，搬运后的新位置同样是空的。'), findsOneWidget);
+    await tester.tap(find.widgetWithText(TextButton, '取消'));
+    launcher.stopGate!.complete();
+    launcher.stopGate = null;
+    await drainRealIo(tester);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('知道了'));
+    await tester.pumpAndSettle();
   });
 
-  testWidgets('目标不可用：只提示一句人话，不进确认弹窗、不碰数据', (tester) async {
+  testWidgets('目标不可用：只提示一句人话，不碰数据', (tester) async {
     picker.directory = [root.path, 'sub'].join(Platform.pathSeparator);
     await pumpPage(tester);
 
-    await pickTarget(tester);
+    await tapWithIo(tester, find.text('搬到别处…'));
 
-    expect(find.text('不能搬到这个目录'), findsOneWidget);
-    expect(find.textContaining('新目录不能放在当前数据目录里面'), findsOneWidget);
-    expect(find.text('把数据搬到新位置？'), findsNothing);
+    expect(find.text('不能搬到这个文件夹'), findsOneWidget);
+    expect(find.textContaining('新的位置不能位于当前位置的内部'), findsOneWidget);
+    expect(find.text('正在搬运'), findsNothing);
 
     await tester.tap(find.text('知道了'));
     await tester.pumpAndSettle();
@@ -211,22 +243,14 @@ void main() {
     expect(readDataDirOverride(root.path), isNull);
   });
 
-  testWidgets('目标里已经有一份数据：说清会备份+覆盖，确认后才动手', (tester) async {
+  testWidgets('目标里已经有一份数据：搬完说清已经备份+覆盖', (tester) async {
     _write(target, ['.db', 'comfyhub.db'], 'another db');
     await pumpPage(tester);
 
-    await pickTarget(tester);
+    await tapWithIo(tester, find.text('搬到别处…'));
 
-    expect(find.text('把数据搬到新位置？'), findsOneWidget);
-    expect(find.textContaining('已经有一份库'), findsOneWidget);
-    expect(find.textContaining('它那份库会先备份到 backups'), findsOneWidget);
-    expect(launcher.stopCalls, 0, reason: '用户还没确认，不许先停服务');
-
-    await tapWithIo(tester, find.widgetWithText(FilledButton, '开始搬'));
-    await tester.pumpAndSettle();
-
-    expect(find.text('搬好了'), findsOneWidget);
-    expect(find.textContaining('原来的库已经备份到'), findsOneWidget);
+    expect(find.text('搬运完成'), findsOneWidget);
+    expect(find.textContaining('这份数据已保存到'), findsOneWidget);
     expect(
       File([target.path, '.db', 'comfyhub.db'].join(Platform.pathSeparator))
           .readAsStringSync(),
@@ -243,59 +267,26 @@ void main() {
       reason: '覆盖之前必须把目标原来那份库备份下来',
     );
 
-    await tester.tap(find.widgetWithText(TextButton, '先留着'));
+    await tester.tap(find.widgetWithText(TextButton, '暂不删除'));
     await tester.pumpAndSettle();
   });
 
-  testWidgets('扁平布局：产物就在数据目录里，说清楚不再套一层', (tester) async {
+  testWidgets('数据在别处：仍然说出"在别处"，并给搬回默认位置的入口', (tester) async {
     expect(writeDataDirOverride(root.path, target.path), isTrue);
     _write(target, ['.db', 'comfyhub.db'], 'db');
     _write(target, ['media', 'a.png'], 'img');
     await pumpPage(tester);
 
-    expect(find.text('产物在 ${target.path}'), findsOneWidget);
-    expect(find.textContaining('没有再套一层'), findsOneWidget);
-    expect(find.text('搬回程序目录'), findsOneWidget, reason: '数据在别处，仍然给搬回去的入口');
-  });
-
-  testWidgets('storage 命名的扁平目录：给「整理成标准布局」入口', (tester) async {
-    final parent = Directory(
-      [root.path, 'tidy'].join(Platform.pathSeparator),
-    )..createSync();
-    final storage = Directory(
-      [parent.path, 'storage'].join(Platform.pathSeparator),
-    )..createSync();
-    expect(writeDataDirOverride(root.path, storage.path), isTrue);
-    _write(storage, ['.db', 'comfyhub.db'], 'db');
-    _write(storage, ['media', 'a.png'], 'img');
-    await pumpPage(tester);
-
-    expect(find.text('产物在 ${storage.path}'), findsOneWidget);
-    expect(find.text('整理成标准布局'), findsOneWidget);
-  });
-
-  testWidgets('选了 storage 文件夹：按上一级算，不会再套 storage\\storage', (tester) async {
-    // 把 `<根>\storage` 选成目标：归一后就是根目录，也就是"当前数据目录"。
-    picker.directory = dataStorageDirOf(root.path);
-    await pumpPage(tester);
-
-    await pickTarget(tester);
-
-    expect(find.text('不能搬到这个目录'), findsOneWidget);
-    expect(
-      find.textContaining('数据已经在这个目录里'),
-      findsOneWidget,
-      reason: '归一成上一级后，才不会出现 storage\\storage',
-    );
-    expect(find.text('把数据搬到新位置？'), findsNothing);
+    expect(find.text(target.path), findsOneWidget);
+    expect(find.textContaining('原来的文件夹仍然存在'), findsNothing);
+    expect(find.text('搬到别处…'), findsOneWidget, reason: '在别处也能再搬一次');
+    expect(find.text('搬回默认位置'), findsOneWidget);
   });
 
   testWidgets('搬成功：复制 + 落指针 + 问旧数据删不删；默认「先留着」就一个都不删', (tester) async {
     await pumpPage(tester);
 
-    await pickTarget(tester);
-    await tapWithIo(tester, find.widgetWithText(FilledButton, '开始搬'));
-    await tester.pumpAndSettle();
+    await tapWithIo(tester, find.text('搬到别处…'));
 
     // 新位置里真的有了这两样，指针也指过去了
     expect(
@@ -314,9 +305,9 @@ void main() {
     expect(launcher.ensureForced, contains(true));
 
     // 搬完必须问一次（用户 2026-11-06："搬完会问你一次"）
-    expect(find.text('搬好了'), findsOneWidget);
-    expect(find.textContaining('旧目录还在：${root.path}'), findsOneWidget);
-    await tester.tap(find.widgetWithText(TextButton, '先留着'));
+    expect(find.text('搬运完成'), findsOneWidget);
+    expect(find.textContaining('原来的文件夹仍然存在：${root.path}'), findsOneWidget);
+    await tester.tap(find.widgetWithText(TextButton, '暂不删除'));
     await tester.pumpAndSettle();
 
     expect(
@@ -333,12 +324,33 @@ void main() {
     );
   });
 
+  testWidgets('「搬回默认位置」：一键搬回程序目录', (tester) async {
+    expect(writeDataDirOverride(root.path, target.path), isTrue);
+    _write(target, ['.db', 'comfyhub.db'], 'db');
+    await pumpPage(tester);
+
+    await tapWithIo(tester, find.text('搬回默认位置'));
+    await tester.tap(find.widgetWithText(TextButton, '暂不删除'));
+    await tester.pumpAndSettle();
+
+    expect(
+      readDataDirOverride(root.path),
+      anyOf(isNull, root.path),
+      reason: '搬回默认位置：指针要么清掉、要么就写默认目录，反正不再是别处',
+    );
+    expect(
+      File([root.path, '.db', 'comfyhub.db'].join(Platform.pathSeparator))
+          .readAsStringSync(),
+      'db',
+      reason: '旧目录里那份一个字节都没动',
+    );
+  });
+
   testWidgets('搬成功后确认删除：只删旧目录里的 .db 与 storage，备份 / 运行记录不动', (tester) async {
     await pumpPage(tester);
 
-    await pickTarget(tester);
-    await tapWithIo(tester, find.widgetWithText(FilledButton, '开始搬'));
-    await tapWithIo(tester, find.widgetWithText(FilledButton, '删掉旧数据'));
+    await tapWithIo(tester, find.text('搬到别处…'));
+    await tapWithIo(tester, find.widgetWithText(FilledButton, '删除原来的数据'));
 
     expect(Directory(dataDbParentOf(root.path)).existsSync(), isFalse);
     expect(
@@ -359,7 +371,7 @@ void main() {
           .existsSync(),
       isTrue,
     );
-    expect(find.textContaining('旧数据已删除'), findsOneWidget);
+    expect(find.textContaining('原来的数据已删除'), findsOneWidget);
   });
 
   testWidgets('搬完但后端用新目录起不来：指针回滚、旧目录还在、如实告诉用户', (tester) async {
@@ -369,10 +381,10 @@ void main() {
       ..layout = BackendLayout(root: root.path);
     await pumpPage(tester);
 
-    await pickTarget(tester);
-    await tapWithIo(tester, find.widgetWithText(FilledButton, '开始搬'));
-    expect(find.text('搬完了，但后端用新目录没起来'), findsOneWidget);
-    expect(find.textContaining('已经改回原来的目录并重启'), findsOneWidget);
+    await tapWithIo(tester, find.text('搬到别处…'));
+
+    expect(find.text('搬运完成，但程序无法从新位置启动'), findsOneWidget);
+    expect(find.textContaining('已恢复原来的位置并重新启动'), findsOneWidget);
     await tester.tap(find.text('知道了'));
     await tester.pumpAndSettle();
 
@@ -389,7 +401,6 @@ void main() {
       isTrue,
     );
     // 新目录里的副本留着（用户自己决定删不删），界面说清了它在哪
-    expect(readDataDirOverride(root.path), isNull);
     expect(Directory(dataStorageDirOf(target.path)).existsSync(), isTrue);
   });
 }

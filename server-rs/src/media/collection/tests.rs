@@ -285,6 +285,7 @@ fn media_dto(kind: &str, pos: Option<&str>, neg: Option<&str>) -> MediaDto {
         collection_size: 1,
         collection_preview: Vec::new(),
         prompt_tags: Vec::new(),
+        own_tags: Vec::new(),
         file_url: String::new(),
         thumb_url: String::new(),
     }

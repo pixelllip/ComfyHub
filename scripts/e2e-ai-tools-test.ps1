@@ -164,19 +164,13 @@ function Invoke-Gateway {
 }
 
 function Find-Python {
-    $cands = @($env:COMFYHUB_PYTHON)
-    $cmd = Get-Command python -ErrorAction SilentlyContinue
-    if ($cmd) { $cands += $cmd.Source }
-    $cands += @(
-        'D:\Comfy-Desktop\ComfyUI-Installs\ComfyUI\standalone-env\python.exe',
-        'D:\Comfy-Desktop\ComfyUI-Installs\ComfyUI\ComfyUI\.venv\Scripts\python.exe'
-    )
-    foreach ($c in $cands) {
-        if ($c -and (Test-Path $c)) { return $c }
+    # 不写死路径：交给 comfy-path.ps1 里那套"现探 ComfyUI 装在哪"的判据
+    # （以前这里列的是 D:\Comfy-Desktop\... —— 只有开发机能命中，2026-11-10 复查改掉）
+    if (-not (Get-Command Find-ComfyPython -ErrorAction SilentlyContinue)) {
+        . (Join-Path $PSScriptRoot 'comfy-path.ps1')
     }
-    return $null
+    return Find-ComfyPython -ProjectRoot $ProjectRoot
 }
-
 # --- 假网关进程（静默启动 / 按命令行精确回收） ------------------------------
 
 function Get-GatewayPids {

@@ -113,12 +113,27 @@ struct Args {
     port: u16,
     /// **父进程（桌面 App）没了就自己退** —— 见 [`spawn_stdin_watchdog`]。
     watch_stdin: bool,
+    /// `--merge-library`：不是起服务，而是把别的库合并进 `--db` 指的这一份（见
+    /// [`library_merge`]）。给文档 / 脚本一个"只增不减"的合并入口。
+    merge: Option<MergeArgs>,
+}
+
+/// `--merge-library <源数据目录>` 那一组参数。
+struct MergeArgs {
+    sources: Vec<PathBuf>,
+    media_from: Vec<PathBuf>,
+    backup_dir: Option<PathBuf>,
+    dry_run: bool,
 }
 
 fn parse_args() -> Result<Args, String> {
     let mut db: Option<PathBuf> = None;
     let mut storage: Option<PathBuf> = None;
     let mut watch_stdin = false;
+    let mut merge_sources: Vec<PathBuf> = Vec::new();
+    let mut media_from: Vec<PathBuf> = Vec::new();
+    let mut backup_dir: Option<PathBuf> = None;
+    let mut dry_run = false;
     // 缺省监听回环。`COMFYHUB_ALLOW_REMOTE=1`（App 的「允许手机 / 局域网设备连接」
     // 开关就是走它）时听 `0.0.0.0`：手机在局域网里才有得连（用户 bug 2026-09-28
     // 「手机连接桌面端失败，报 timed out」—— `server.ps1` 以前硬编码 127.0.0.1，
@@ -140,6 +155,22 @@ fn parse_args() -> Result<Args, String> {
             // 我们这侧的 stdin 管道立刻回 0，于是优雅退出 —— 它取代了以前的
             // `scripts\watch-owner.ps1`（那个守护脚本随"App 直接起后端"一起删了）。
             "--watch-stdin" => watch_stdin = true,
+            // `--merge-library <源数据目录>`（可给多次）：把别的库里的用户内容合并进
+            // `--db` 那一份，合并完就退出（不起服务）。见 `infra::library_merge`。
+            "--merge-library" => {
+                let dir = it.next().ok_or("--merge-library 需要一个数据目录")?;
+                merge_sources.push(PathBuf::from(dir));
+            }
+            // 文件已经不在源库的 `storage/` 里（构建残留、备份盘）时，告诉合并器去哪儿找
+            "--media-from" => {
+                let dir = it.next().ok_or("--media-from 需要一个目录")?;
+                media_from.push(PathBuf::from(dir));
+            }
+            "--backup-dir" => {
+                let dir = it.next().ok_or("--backup-dir 需要一个目录")?;
+                backup_dir = Some(PathBuf::from(dir));
+            }
+            "--dry-run" => dry_run = true,
             "--port" => {
                 port = it
                     .next()
@@ -148,7 +179,11 @@ fn parse_args() -> Result<Args, String> {
             }
             "--help" | "-h" => {
                 println!(
-                    "用法: comfyhub-server-rs [--db <路径>] [--storage <目录>] [--host <地址>] [--port <端口>] [--watch-stdin]"
+                    "用法: comfyhub-server-rs [--db <路径>] [--storage <目录>] [--host <地址>] [--port <端口>] [--watch-stdin]\n\
+                     \x20      comfyhub-server-rs --merge-library <源数据目录> [--merge-library …] \\\n\
+                     \x20          [--media-from <目录>] [--db <目标库>] [--storage <目标 storage>] [--backup-dir <目录>] [--dry-run]\n\
+                     \n\
+                     合并只增不减：源库只读打开，目标库先备份，外键不自洽就整体回滚。"
                 );
                 std::process::exit(0);
             }
@@ -177,6 +212,16 @@ fn parse_args() -> Result<Args, String> {
         host,
         port,
         watch_stdin,
+        merge: if merge_sources.is_empty() {
+            None
+        } else {
+            Some(MergeArgs {
+                sources: merge_sources,
+                media_from,
+                backup_dir,
+                dry_run,
+            })
+        },
     })
 }
 
@@ -281,6 +326,36 @@ async fn main() {
             std::process::exit(2);
         }
     };
+
+    // `--merge-library`：合并不起服务（**先备份、再一个事务、外键不自洽整体回滚**）
+    if let Some(merge) = args.merge {
+        let request = comfyhub_server_rs::infra::library_merge::MergeRequest {
+            target_db: args.db.clone(),
+            target_storage: args.storage.clone(),
+            sources: merge.sources,
+            media_from: merge.media_from,
+            backup_dir: merge.backup_dir,
+            dry_run: merge.dry_run,
+        };
+        println!("目标库：{}", request.target_db.display());
+        println!("目标产物目录：{}", request.target_storage.display());
+        for source in &request.sources {
+            println!("源数据目录：{}", source.display());
+        }
+        if request.dry_run {
+            println!("演练模式（--dry-run）：只报告，不写库、不搬文件");
+        }
+        match comfyhub_server_rs::infra::library_merge::merge(&request) {
+            Ok(report) => {
+                print!("{}", report.render());
+                std::process::exit(0);
+            }
+            Err(e) => {
+                eprintln!("合并失败：{e}");
+                std::process::exit(2);
+            }
+        }
+    }
 
     // 开库（**必要时建库**）：切流之后 Rust 是唯一的后端，"第一次运行能自己建库"必须成立 ——
     // 以前的版本缺库直接 exit 3（"先让 Kotlin 起一次库"），那在发布包里等于永远起不来。

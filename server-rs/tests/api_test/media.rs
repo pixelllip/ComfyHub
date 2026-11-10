@@ -94,6 +94,7 @@ async fn media_list_uses_the_same_keys_and_filters() {
             "kind",
             "nsfw",
             "originalName",
+            "ownTags",
             "promptId",
             "promptNegative",
             "promptPositive",
@@ -601,7 +602,13 @@ async fn patch_media_updates_fields_and_rejects_empty_body() {
         router_for(state.clone()),
         "PATCH",
         "/api/media/100",
-        serde_json::json!({"title": "改过的标题", "favorite": true, "nsfw": true, "notes": "备注"}),
+        serde_json::json!({
+            "title": "改过的标题",
+            "favorite": true,
+            "nsfw": true,
+            "notes": "备注",
+            "tags": ["自定义"]
+        }),
     )
     .await;
     assert_eq!(patched.0, StatusCode::OK, "body={}", patched.1);
@@ -610,6 +617,31 @@ async fn patch_media_updates_fields_and_rejects_empty_body() {
     assert_eq!(patched.1["nsfw"], true, "手动标记 NSFW（只影响预览打码）");
     assert_eq!(patched.1["notes"], "备注");
     assert_eq!(patched.1["promptId"], 10, "没提这一列就不该动它");
+    assert_eq!(
+        patched.1["ownTags"],
+        serde_json::json!(["自定义"]),
+        "PATCH 的 tags 是**整体替换产物自身标签**"
+    );
+    assert_eq!(
+        patched.1["promptTags"],
+        serde_json::json!(["自定义", "赛博朋克"]),
+        "合并展示仍要带上关联提示词的标签"
+    );
+
+    // 空数组 = 清空自身标签（提示词的标签仍在合并集合里）
+    let cleared_tags = send_json(
+        router_for(state.clone()),
+        "PATCH",
+        "/api/media/100",
+        serde_json::json!({"tags": []}),
+    )
+    .await;
+    assert_eq!(cleared_tags.0, StatusCode::OK, "body={}", cleared_tags.1);
+    assert_eq!(cleared_tags.1["ownTags"], serde_json::json!([]));
+    assert_eq!(
+        cleared_tags.1["promptTags"],
+        serde_json::json!(["赛博朋克"])
+    );
 
     // clearPrompt：明确解除关联（与 promptId=null 不是一回事）
     let cleared = send_json(
@@ -652,7 +684,104 @@ async fn patch_media_updates_fields_and_rejects_empty_body() {
     assert_eq!(missing.0, StatusCode::NOT_FOUND);
 }
 
-/// 删产物：库、原件、缩略图一起清；标签计数跟着重算。
+/// 产物标签的细粒度入口：只加一条 / 只删一条，不影响提示词标签的合并展示。
+#[tokio::test]
+async fn media_tags_can_be_added_and_removed_individually() {
+    let state = state();
+    let added = send_json(
+        router_for(state.clone()),
+        "POST",
+        "/api/media/100/tags",
+        serde_json::json!({"tags": ["手写"]}),
+    )
+    .await;
+    assert_eq!(added.0, StatusCode::OK, "body={}", added.1);
+    assert_eq!(added.1["ownTags"], serde_json::json!(["手写"]));
+    assert_eq!(
+        added.1["promptTags"],
+        serde_json::json!(["手写", "赛博朋克"]),
+        "新增产物标签不该挤掉提示词的标签"
+    );
+
+    let tag_id: i64 = state
+        .with(|conn| {
+            conn.query_row(
+                "SELECT id FROM tags WHERE normalized = '手写'",
+                [],
+                |row| row.get(0),
+            )
+        })
+        .unwrap();
+    let removed = send_empty(
+        router_for(state.clone()),
+        "DELETE",
+        &format!("/api/media/100/tags/{tag_id}"),
+    )
+    .await;
+    assert_eq!(removed.0, StatusCode::OK, "body={}", removed.1);
+    assert_eq!(removed.1["ownTags"], serde_json::json!([]));
+    assert_eq!(removed.1["promptTags"], serde_json::json!(["赛博朋克"]));
+
+    // 产物不存在 → 404（不能让外键炸成 500）
+    let missing = send_json(
+        router_for(state.clone()),
+        "POST",
+        "/api/media/9999/tags",
+        serde_json::json!({"tags": ["x"]}),
+    )
+    .await;
+    assert_eq!(missing.0, StatusCode::NOT_FOUND, "body={}", missing.1);
+}
+
+/// 「给已有内容补标签」：从提示词 / 底模 / LoRA 推断，只追加、不删用户标签。
+#[tokio::test]
+async fn auto_apply_tags_backfills_prompts_and_media() {
+    let state = state();
+    let applied = send_json(
+        router_for(state.clone()),
+        "POST",
+        "/api/tags/auto-apply",
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(applied.0, StatusCode::OK, "body={}", applied.1);
+    assert_eq!(applied.1["prompts"], 2, "两条提示词都该补上标签：{}", applied.1);
+    assert_eq!(applied.1["media"], 1, "产物 100 也要补：{}", applied.1);
+    assert!(
+        applied.1["tags"].as_u64().unwrap_or(0) > 0,
+        "要有新增关联：{}",
+        applied.1
+    );
+
+    let (_, media) = get_json(router_for(state.clone()), "/api/media/100").await;
+    let own = media["ownTags"].as_array().unwrap();
+    let names: Vec<&str> = own.iter().map(|v| v.as_str().unwrap()).collect();
+    assert!(names.contains(&"少女"), "1girl 应推断出角色标签：{names:?}");
+    assert!(
+        names.contains(&"赛博朋克"),
+        "cyberpunk 应推断出风格标签：{names:?}"
+    );
+    assert!(names.contains(&"Krea"), "底模 krea2 应推断出模型标签：{names:?}");
+    assert!(
+        names.contains(&"anima"),
+        "LoRA 文件名应成为标签：{names:?}"
+    );
+
+    // 幂等：再补一遍不应再新增
+    let again = send_json(
+        router_for(state.clone()),
+        "POST",
+        "/api/tags/auto-apply",
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(again.0, StatusCode::OK);
+    assert_eq!(again.1["prompts"], 0, "{}", again.1);
+    assert_eq!(again.1["media"], 0, "{}", again.1);
+    assert_eq!(again.1["tags"], 0, "{}", again.1);
+}
+
+
 #[tokio::test]
 async fn delete_media_removes_row_file_and_thumb() {
     let state = state();

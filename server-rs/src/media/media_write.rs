@@ -54,6 +54,25 @@ pub fn update(state: &AppState, id: i64, input: &MediaUpdate) -> Result<MediaDto
         let mut sets: Vec<String> = Vec::new();
         let mut args: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
 
+        // 标签（2026-11-10）：整体替换产物**自身**的标签。先确认产物存在 ——
+        // 否则外键会在 `INSERT` 时炸成 500，而这里应当和别的字段一样回 404。
+        let mut tags_touched = false;
+        if let Some(tags) = input.tags.as_ref() {
+            let exists = tx
+                .query_row(
+                    "SELECT id FROM media_assets WHERE id = ?1",
+                    params![id],
+                    |row| row.get::<_, i64>(0),
+                )
+                .optional()?
+                .is_some();
+            if !exists {
+                return Ok(false);
+            }
+            repo::add_media_tags(tx, id, tags)?;
+            tags_touched = true;
+        }
+
         // 归属（2026-10-18）：这两个是**带副作用**的（要顺手收拾空集合、
         // 要在移出时打上 `collection_opt_out`），所以不拼进下面那条通用 UPDATE。
         let mut collection_touched = false;
@@ -93,9 +112,12 @@ pub fn update(state: &AppState, id: i64, input: &MediaUpdate) -> Result<MediaDto
             args.push(Box::new(if nsfw { 1_i64 } else { 0_i64 }));
         }
         if sets.is_empty() {
-            // 一个普通字段都没有：**但只改归属也算改过**（`detach` / `move_into`
-            // 已经在上面落库了），别把它当成"没找到"。
-            return Ok(collection_touched);
+            // 一个普通字段都没有：**但只改归属 / 只改标签也算改过**（已经在上面落库了），
+            // 别把它当成"没找到"。
+            if tags_touched {
+                repo::refresh_use_counts(tx)?;
+            }
+            return Ok(collection_touched || tags_touched);
         }
         args.push(Box::new(id));
         let sql = format!(
@@ -104,7 +126,11 @@ pub fn update(state: &AppState, id: i64, input: &MediaUpdate) -> Result<MediaDto
             args.len()
         );
         let refs: Vec<&dyn rusqlite::ToSql> = args.iter().map(|a| a.as_ref()).collect();
-        Ok(tx.execute(&sql, refs.as_slice())? > 0)
+        let changed = tx.execute(&sql, refs.as_slice())? > 0;
+        if changed && tags_touched {
+            repo::refresh_use_counts(tx)?;
+        }
+        Ok(changed)
     })?;
 
     if !ok {

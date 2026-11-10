@@ -293,7 +293,7 @@ pub fn search(state: &AppState, q: &MediaQuery) -> Result<Paged<MediaDto>, ApiEr
             let rows = stmt.query_map(all.as_slice(), media_from_row)?;
             let mut items = rows.collect::<rusqlite::Result<Vec<_>>>()?;
             for item in items.iter_mut() {
-                item.prompt_tags = merged_tags(conn, item)?;
+                fill_tags(conn, item)?;
             }
             Ok(Paged::new(items, total, page, size))
         }
@@ -312,7 +312,7 @@ pub fn get(state: &AppState, id: i64) -> Result<MediaDto, ApiError> {
                 .optional()?;
             match media {
                 Some(mut m) => {
-                    m.prompt_tags = merged_tags(conn, &m)?;
+                    fill_tags(conn, &mut m)?;
                     Ok(Some(m))
                 }
                 None => Ok(None),
@@ -321,10 +321,12 @@ pub fn get(state: &AppState, id: i64) -> Result<MediaDto, ApiError> {
         .ok_or_else(|| ApiError::not_found(format!("产物 {id} 不存在")))
 }
 
-/// 产物自身的标签 + 它关联提示词的标签（去重合并、按名字排序）——与 Kotlin
-/// `MediaRepo.attachOwnTags` 同义（画廊里点开/筛选时看到的标签集合要一致）。
-fn merged_tags(conn: &rusqlite::Connection, media: &MediaDto) -> rusqlite::Result<Vec<String>> {
-    let mut own: Vec<String> = {
+/// 填两组标签：`own_tags` = 产物自身的；`prompt_tags` = 自身 ∪ 关联提示词的。
+///
+/// 与 Kotlin `MediaRepo.attachOwnTags` 同义（画廊里点开/筛选时看到的标签集合要一致）。
+/// 编辑弹窗用 `own_tags`（只改产物自己的），筛选与展示仍用合并后的 `prompt_tags`。
+fn fill_tags(conn: &rusqlite::Connection, media: &mut MediaDto) -> rusqlite::Result<()> {
+    let mut merged: Vec<String> = {
         let mut stmt = conn.prepare(
             "SELECT t.name FROM media_tags mt JOIN tags t ON t.id = mt.tag_id
               WHERE mt.media_id = ?1 ORDER BY t.name",
@@ -333,6 +335,7 @@ fn merged_tags(conn: &rusqlite::Connection, media: &MediaDto) -> rusqlite::Resul
 
         rows.collect::<rusqlite::Result<Vec<_>>>()?
     };
+    media.own_tags = merged.clone();
     if let Some(prompt_id) = media.prompt_id {
         let mut stmt = conn.prepare(
             "SELECT t.name FROM prompt_tags pt JOIN tags t ON t.id = pt.tag_id
@@ -341,11 +344,12 @@ fn merged_tags(conn: &rusqlite::Connection, media: &MediaDto) -> rusqlite::Resul
         let from_prompt = stmt
             .query_map(params![prompt_id], |row| row.get::<_, String>(0))?
             .collect::<rusqlite::Result<Vec<_>>>()?;
-        own.extend(from_prompt);
+        merged.extend(from_prompt);
     }
-    own.sort();
-    own.dedup();
-    Ok(own)
+    merged.sort();
+    merged.dedup();
+    media.prompt_tags = merged;
+    Ok(())
 }
 
 /// 标签过滤参数：逗号分隔、统一小写去空格（与 Kotlin `TagRepo.parseTagParam` 同义）。
@@ -670,7 +674,7 @@ pub fn list_by_ids(state: &AppState, ids: &[i64]) -> Result<Vec<MediaDto>, ApiEr
         let rows = stmt.query_map(params.as_slice(), media_from_row)?;
         let mut found = rows.collect::<rusqlite::Result<Vec<_>>>()?;
         for item in found.iter_mut() {
-            item.prompt_tags = merged_tags(conn, item)?;
+            fill_tags(conn, item)?;
         }
         // 按调用方给的顺序重排（`IN` 出来的顺序是 SQLite 自己的）
         let mut out: Vec<MediaDto> = Vec::with_capacity(found.len());
@@ -695,7 +699,7 @@ pub fn list_by_prompt(state: &AppState, prompt_id: i64) -> Result<Vec<MediaDto>,
         let rows = stmt.query_map(params![prompt_id], media_from_row)?;
         let mut items = rows.collect::<rusqlite::Result<Vec<_>>>()?;
         for item in items.iter_mut() {
-            item.prompt_tags = merged_tags(conn, item)?;
+            fill_tags(conn, item)?;
         }
         Ok(items)
     })

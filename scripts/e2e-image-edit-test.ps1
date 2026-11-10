@@ -167,28 +167,34 @@ function Invoke-Api {
 }
 
 function Find-Python {
-    $cands = @($env:COMFYHUB_PYTHON)
-    $cmd = Get-Command python -ErrorAction SilentlyContinue
-    if ($cmd) { $cands += $cmd.Source }
-    $cands += @(
-        'D:\Comfy-Desktop\ComfyUI-Installs\ComfyUI\standalone-env\python.exe',
-        'D:\Comfy-Desktop\ComfyUI-Installs\ComfyUI\ComfyUI\.venv\Scripts\python.exe'
-    )
-    foreach ($c in $cands) { if ($c -and (Test-Path $c)) { return $c } }
-    return $null
+    # 不写死路径：交给 comfy-path.ps1 里那套"现探 ComfyUI 装在哪"的判据
+    # （以前这里列的是 D:\Comfy-Desktop\... —— 只有开发机能命中，2026-11-10 复查改掉）
+    if (-not (Get-Command Find-ComfyPython -ErrorAction SilentlyContinue)) {
+        . (Join-Path $PSScriptRoot 'comfy-path.ps1')
+    }
+    return Find-ComfyPython -ProjectRoot $ProjectRoot
 }
-
 # 锐度尺子要 numpy + PIL —— **不能**拿"第一个存在的 python"就上：
 # 本机 `standalone-env\python.exe` 就没有 numpy，届时尺子会以 ImportError 收场，
 # 而那是"判据没跑成"，不是"图有问题"。所以按"真能 import 到"来挑（与 matte-probe.ps1 同思路）。
 function Find-MeasurePython {
+    # 先按 comfy-path.ps1 那套"现探"拿候选（ComfyUI 自带的那几个 venv 都在里面），
+    # 再逐个试 import —— 不写死某个盘的安装目录（2026-11-10 复查）。
+    $comfy = $null
+    try { $comfy = Resolve-ComfyHome -ProjectRoot $ProjectRoot } catch { $comfy = $null }
     $cands = @($env:COMFYHUB_PYTHON, (Find-Python))
     $cmd = Get-Command python -ErrorAction SilentlyContinue
     if ($cmd) { $cands += $cmd.Source }
-    $cands += @(
-        'D:\Comfy-Desktop\ComfyUI-Installs\ComfyUI\ComfyUI\.venv\Scripts\python.exe',
-        'D:\Comfy-Desktop\ComfyUI-Installs\ComfyUI\standalone-env\python.exe'
-    )
+    if ($comfy) {
+        $parent = Split-Path -Parent $comfy
+        $cands += @(
+            (Join-Path $comfy '.venv\Scripts\python.exe'),
+            (Join-Path $comfy 'venv\Scripts\python.exe'),
+            (Join-Path $comfy 'standalone-env\python.exe'),
+            (Join-Path $comfy 'python_embeded\python.exe'),
+            (Join-Path $parent 'python_embeded\python.exe')
+        )
+    }
     foreach ($c in $cands) {
         if (-not $c -or -not (Test-Path $c)) { continue }
         & $c -c 'import numpy, PIL' 2>$null | Out-Null

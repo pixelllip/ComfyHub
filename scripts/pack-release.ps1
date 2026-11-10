@@ -40,7 +40,7 @@
     pwsh -File scripts\pack-release.ps1
     pwsh -File scripts\pack-release.ps1 -Zip
     pwsh -File scripts\pack-release.ps1 -SkipApp -Clean               # 只重装后端，快速迭代
-    pwsh -File scripts\pack-release.ps1 -OutDir 'D:\dist\ComfyHub'    # 另存一份干净的独立副本
+    pwsh -File scripts\pack-release.ps1 -OutDir "$env:USERPROFILE\ComfyHub"   # 另存一份干净的独立副本（目录随便挑）
 #>
 [CmdletBinding()]
 param(
@@ -308,11 +308,19 @@ foreach ($c in $manifest.components) {
                 # 不能自己往自己身上拷（会报 "Cannot copy item to itself"）。
                 $srcFull = [System.IO.Path]::GetFullPath($src).TrimEnd('\')
                 $dstFull = [System.IO.Path]::GetFullPath($target).TrimEnd('\')
+                # 发布包里只装程序：上一份构建残留的运行期数据（`.db` / `storage` /
+                # `.run` / `app-support`）**不许跟着进包** —— 2026-11-10 用户报的
+                # "复制出去的构建对话不见了、角色卡是旧版"就是它们引起的（那个目录一带
+                # 出去，它自己就成了运行时根，App 照着里面那份旧库开）。
+                # ⚠ 只是**不拷**：源目录里一个字节都不删（那份数据可能是用户唯一的旧库，
+                # 见 bundle_backend.cmake ④ 的实测）。
+                $runtimeJunk = @('.db/**', 'storage/**', '.run/**', 'app-support/**', '_leftover-data/**')
                 if ($srcFull -eq $dstFull) {
                     Say '    就地装配：Flutter 产物本来就在输出目录里，跳过拷贝' 'DarkGray'
+                    Say '    运行期数据在装配时已经挪进 _leftover-data\，不进包也不删' 'DarkGray'
                     $results += [pscustomobject]@{ id = $c.id; title = $c.title; size = (Get-DirSize $src); dropped = 0 }
                 } else {
-                    $r = Copy-Tree -Source $src -Dest $target
+                    $r = Copy-Tree -Source $src -Dest $target -Prune $runtimeJunk
                     $results += [pscustomobject]@{ id = $c.id; title = $c.title; size = $r.Bytes; dropped = $r.DroppedBytes }
                 }
             }

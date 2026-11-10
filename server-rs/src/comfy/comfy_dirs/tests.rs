@@ -22,6 +22,42 @@ fn write_workflow(dir: &Path, name: &str, body: &str) {
 }
 
 #[test]
+fn 固定盘列表只包含真的存在的盘根_而且不只认某一个盘() {
+    // 判据是"这台机器上有什么"，不是"开发机上是 D:\"：
+    // · 每一项都必须真的存在（网络盘 / 光驱被 GetDriveTypeW 过滤掉了）；
+    // · 至少包含系统盘（`SystemDrive`，任何 Windows 都有）—— 这样"ComfyUI 装在 C:"
+    //   的机器不会因为写死 D: 而找不到。
+    let roots = fixed_drive_roots();
+    for root in &roots {
+        assert!(root.is_dir(), "盘根不存在：{}", root.display());
+        assert_eq!(
+            root.to_string_lossy().chars().count(),
+            3,
+            "应当是 `X:\\`：{}",
+            root.display()
+        );
+    }
+    if let Ok(system) = std::env::var("SystemDrive") {
+        let expected = format!("{system}\\");
+        assert!(
+            roots.iter().any(|r| r.to_string_lossy().eq_ignore_ascii_case(&expected)),
+            "固定盘里必须有系统盘 {expected}，实际：{roots:?}"
+        );
+    }
+}
+
+#[test]
+fn 每个固定盘都会贡献_comfyui_候选位置() {
+    // 候选是"每个固定盘 × 两种常见布局"，盘符来自机器本身 —— 换台机器也是同一套规则。
+    let candidates = drive_install_candidates();
+    assert_eq!(candidates.len(), fixed_drive_roots().len() * 2);
+    for (path, kind) in &candidates {
+        assert!(path.is_absolute(), "{}", path.display());
+        assert!(kind.contains("ComfyUI"), "说明要能让人看懂：{kind}");
+    }
+}
+
+#[test]
 fn looks_like_comfy_两种形态都认_只有_output_不认() {
     let root = tmpdir("looks");
     let src = make_home(&root);

@@ -134,6 +134,48 @@ class _TagEditorState extends State<TagEditor> {
   }
 }
 
+/// 弹出标签编辑框；返回 `null` = 取消，返回列表 = 用户确认后的完整标签集合。
+///
+/// 产物详情 / 画廊右键都用它：编辑的是**产物自身的标签**（提示词的标签另算），
+/// 所以初始值必须是 `MediaAsset.ownTags`，不能传合并后的 `promptTags`。
+Future<List<String>?> showTagEditorDialog(
+  BuildContext context, {
+  required List<String> initial,
+  String title = '编辑标签',
+  String label = '标签',
+}) async {
+  var current = List<String>.from(initial);
+  final saved = await showDialog<bool>(
+    context: context,
+    builder: (ctx) => StatefulBuilder(
+      builder: (ctx, setState) => AlertDialog(
+        title: Text(title),
+        content: SizedBox(
+          width: 420,
+          child: SingleChildScrollView(
+            child: TagEditor(
+              value: current,
+              label: label,
+              onChanged: (next) => setState(() => current = next),
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('保存'),
+          ),
+        ],
+      ),
+    ),
+  );
+  return saved == true ? current : null;
+}
+
 /// 标签筛选面板：在画廊 / 提示词库侧边用
 class TagFilterPanel extends StatelessWidget {
   final Set<String> selected;

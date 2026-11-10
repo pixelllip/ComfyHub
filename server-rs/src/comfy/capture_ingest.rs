@@ -178,6 +178,7 @@ pub fn import_file(
     workflow_json: Option<&str>,
     notes: Option<&str>,
     tags: &[String],
+    auto_tags: &[crate::library::auto_tag::AutoTag],
     move_file: bool,
     nsfw: bool,
 ) -> Imported {
@@ -290,6 +291,9 @@ pub fn import_file(
         if !tags.is_empty() {
             crate::library::repo::add_media_tags(tx, id, tags)?;
         }
+        if !auto_tags.is_empty() {
+            crate::library::repo::append_media_auto_tags(tx, id, auto_tags)?;
+        }
         // 产物**集合**（2026-10-11）：判定只看提示词（kind + 正/负），
         // seed / steps / cfg 一概不影响 —— 详见 `media/collection.rs` 的文件头。
         // 放在同一个事务里：分组失败就让整条入库回滚，别留"产物在、分组没算"的中间态。
@@ -336,6 +340,7 @@ pub fn create_captured_prompt(
     source_ref: Option<&str>,
     workflow_json: Option<&str>,
     tags: &[String],
+    auto_tags: &[crate::library::auto_tag::AutoTag],
     notes: Option<&str>,
 ) -> Result<i64, crate::library::repo::WriteError> {
     let title = {
@@ -404,6 +409,9 @@ pub fn create_captured_prompt(
     let id = tx.last_insert_rowid();
     if !tags.is_empty() {
         crate::library::repo::add_prompt_tags(tx, id, tags)?;
+    }
+    if !auto_tags.is_empty() {
+        crate::library::repo::append_prompt_auto_tags(tx, id, auto_tags)?;
     }
     crate::library::repo::refresh_use_counts(tx)?;
     Ok(id)
@@ -892,6 +900,9 @@ async fn ingest_inner(
             push_unique(&mut tags, tag.trim());
         }
     }
+    // 自动标签：从**这次真正解析出来的**提示词 / 底模 / LoRA / 类型推断。
+    // 与「给存量补标签」共用同一个纯函数，两条路的标签集合不会分叉。
+    let auto_tags = crate::library::auto_tag::infer(&parsed, req.nsfw);
 
     // 只收真正的输出：文件名非空 + type 空或 output（大小写不敏感），并按三元组去重
     let mut files: Vec<&IngestOutput> = Vec::new();
@@ -957,6 +968,7 @@ async fn ingest_inner(
                 Some(&run_key),
                 workflow_json.as_deref(),
                 &tags,
+                &auto_tags,
                 req.notes.as_deref(),
             )
         })
@@ -999,6 +1011,7 @@ async fn ingest_inner(
             workflow_json.as_deref(),
             req.notes.as_deref(),
             &tags,
+            &auto_tags,
             is_temp,
             req.nsfw,
         ) {
