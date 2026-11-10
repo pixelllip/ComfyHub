@@ -22,7 +22,7 @@ Future<void> main() async {
   //
   // 以前它只在 `AiWorkspaceStore._doLoad()` 里读，而画廊 / 提示词 / NSFW 开关的数据
   // 在启动闸门放开后**同时**开跑 —— 那些请求读的是 `PairingTokenCache`，此刻还是空，
-  // 于是一进 App 就是一条 `需要配对令牌（X-ComfyHub-Token）`，非得用户手点刷新才恢复。
+  // 一进入 App 就出现一条 `需要配对令牌（X-ComfyHub-Token）`，需手动刷新才恢复。
   // 手机连的是电脑的后端，闸门开着时没有这个头一律 403，所以"谁先跑"必须由这里定。
   //
   // 桌面（以及 Web）没有密钥库：跳过，`PairingTokenCache` 保持 null（既有语义不变）。
@@ -30,7 +30,7 @@ Future<void> main() async {
     try {
       await PairingTokenStore().read();
     } catch (_) {
-      // 桥没起来 / 密钥库读不动：当作"还没配对"，页面会如实说，用户在设置里重配即可 ——
+      // 桥未启动 / 密钥库不可读：按"未配对"处理，页面会如实说明，在设置中重新配置即可 ——
       // 这一步绝不许拦住启动。
     }
   }
@@ -39,7 +39,7 @@ Future<void> main() async {
   await SystemAccent.detect();
   // 本地服务（后端）由 BackendLauncher 在首屏自动拉起：它直接执行
   // `<运行根>\backend\comfyhub-server-rs.exe`（见 lib\core\backend_paths.dart），
-  // 不需要用户先手动做什么，也不需要 PowerShell。
+  // 无需预先手动操作，也不依赖 PowerShell。
   final launcher = BackendLauncher(settings);
   runApp(ComfyHubApp(settings: settings, launcher: launcher));
 }
