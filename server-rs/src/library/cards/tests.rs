@@ -227,6 +227,44 @@ fn 搜索命中正文与负面() {
 }
 
 #[test]
+fn 搜索按空格切词并且命中多的排前面() {
+    let conn = conn();
+    create(
+        &conn,
+        CardKind::Style,
+        &CardInput {
+            name: "波普赛璐璐硬边平涂".into(),
+            prompt: Some("A screen-printed pop poster with hard edges.".into()),
+            negative: None,
+        },
+    )
+    .unwrap();
+    create(
+        &conn,
+        CardKind::Style,
+        &CardInput {
+            name: "波普拼贴".into(),
+            prompt: Some("Torn paper collage.".into()),
+            negative: None,
+        },
+    )
+    .unwrap();
+
+    // 旧实现把 "波普 平涂" 整串当一个子串，一个都查不到。
+    let hit = list(&conn, CardKind::Style, Some("波普 平涂"), MAX_SEARCH).unwrap();
+    assert_eq!(hit.len(), 2, "分词后至少有一张能命中");
+    assert_eq!(
+        hit[0].name, "波普赛璐璐硬边平涂",
+        "两段都命中的那张要排在最前"
+    );
+
+    // 两段都命中的排在只命中一段的前面。
+    let hit = list(&conn, CardKind::Style, Some("波普 硬边"), MAX_SEARCH).unwrap();
+    assert_eq!(hit.len(), 2);
+    assert_eq!(hit[0].name, "波普赛璐璐硬边平涂");
+}
+
+#[test]
 fn 角色卡与画风卡同名也是两条记录() {
     let conn = conn();
     let character = create(&conn, CardKind::Character, &input("月光")).unwrap();

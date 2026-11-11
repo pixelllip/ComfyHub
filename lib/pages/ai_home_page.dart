@@ -3142,7 +3142,7 @@ class _ComposerState extends State<_Composer> {
       // 手机：**底部弹层**。面板不参与输入区排版，键盘弹起也不会把
       // 元素挤压成一条（窗口高度不足时难以操作）。
       FocusManager.instance.primaryFocus?.unfocus();
-      await _ensureCards();
+      await _ensureCards(refresh: true);
       if (!mounted) return;
       var picked = false;
       await showModalBottomSheet<void>(
@@ -3208,12 +3208,17 @@ class _ComposerState extends State<_Composer> {
       _cardsStyled = style;
       _cardsError = null;
     });
-    await _ensureCards();
+    await _ensureCards(refresh: true);
   }
 
   /// 拉一次卡片库（两类一起）。失败把原因写进 [\_cardsError]，不抛。
-  Future<void> _ensureCards() async {
-    if (_characters.isNotEmpty || _styles.isNotEmpty || _cardsLoading) return;
+  ///
+  /// **每次打开面板都重拉**（[refresh]）：卡片可能在「预设库」里刚改过，
+  /// 也可能刚被 AI 的 `save_*_card` 覆盖过。只拉一次会让「`@` 面板里的卡」
+  /// 和「卡片库里的卡」不是同一版 —— 用户看到的正文与模型拿到的正文不一致。
+  Future<void> _ensureCards({bool refresh = false}) async {
+    if (_cardsLoading) return;
+    if (!refresh && (_characters.isNotEmpty || _styles.isNotEmpty)) return;
     setState(() => _cardsLoading = true);
     try {
       final characters = await widget.store.listCharacterCards();
@@ -3222,7 +3227,24 @@ class _ComposerState extends State<_Composer> {
       setState(() {
         _characters = characters;
         _styles = styles;
+        // 已选中的卡按 id 换成刚拉到的那一份：卡被改过时，下一次发送用新正文，
+        // 不再拿打开面板之前的旧对象（同一张卡的对象可能已经换了）。
+        final style = _styleCard;
+        if (style != null) {
+          _styleCard = styles.firstWhere(
+            (c) => c.id == style.id,
+            orElse: () => style,
+          );
+        }
+        for (var i = 0; i < _characterCards.length; i++) {
+          final card = _characterCards[i];
+          _characterCards[i] = characters.firstWhere(
+            (c) => c.id == card.id,
+            orElse: () => card,
+          );
+        }
         _cardsLoading = false;
+        _cardsError = null;
       });
     } catch (e) {
       if (!mounted) return;
@@ -3320,7 +3342,13 @@ class _ComposerState extends State<_Composer> {
     final mentions = <OutgoingMention>[];
     final style = _styleCard;
     if (style != null) {
-      final block = '[STYLE SPEC]\n${style.name}\n${style.prompt}';
+      final block = _cardBlock(
+        marker: '[STYLE SPEC]',
+        negativeMarker: '[STYLE NEGATIVE]',
+        name: style.name,
+        prompt: style.prompt,
+        negative: style.negative,
+      );
       blocks.add(block);
       mentions.add(
         OutgoingMention(
@@ -3332,7 +3360,13 @@ class _ComposerState extends State<_Composer> {
       );
     }
     for (final character in _characterCards) {
-      final block = '[CHARACTER CARD]\n${character.name}\n${character.prompt}';
+      final block = _cardBlock(
+        marker: '[CHARACTER CARD]',
+        negativeMarker: '[CHARACTER NEGATIVE]',
+        name: character.name,
+        prompt: character.prompt,
+        negative: character.negative,
+      );
       blocks.add(block);
       mentions.add(
         OutgoingMention(
@@ -3365,6 +3399,26 @@ class _ComposerState extends State<_Composer> {
       displayText: displayText,
       mentions: mentions,
     );
+  }
+
+  /// 一张卡投给模型的文本：正文逐字，负面单独一段。
+  ///
+  /// 负面**不拼进正文**：skill 要求 `[STYLE SPEC]` / `[CHARACTER CARD]` 的正文
+  /// 当固定规格逐字读，混进去会被当成规格的一部分。单独一段，模型才分得清
+  /// "要什么"和"不要什么"；空负面不写这一段（与没有负面时的旧文本逐字一致）。
+  String _cardBlock({
+    required String marker,
+    required String negativeMarker,
+    required String name,
+    required String? prompt,
+    required String? negative,
+  }) {
+    final buffer = StringBuffer('$marker\n$name\n${prompt ?? ''}');
+    final neg = (negative ?? '').trim();
+    if (neg.isNotEmpty) {
+      buffer.write('\n\n$negativeMarker\n$neg');
+    }
+    return buffer.toString();
   }
 
   /// 发送时把卡的可读字段抄一份（之后卡被改 / 删，弹窗里仍是当时那一版）。
@@ -3823,14 +3877,18 @@ class _ComposerState extends State<_Composer> {
   Widget _cardsPanel(ThemeData theme) {
     final cards = _cardsStyled ? _styles : _characters;
     final query = _cardQuery.trim().toLowerCase();
-    final shown = query.isEmpty
+    // 按空白分词：输入 "波普 平涂" 时两段都要命中，而不是拿整串去 contains
+    //（整串 contains 在词之间隔了空格时永远查不到）。
+    final tokens = query.isEmpty
+        ? const <String>[]
+        : query.split(RegExp(r'\s+')).where((t) => t.isNotEmpty).toList();
+    final shown = tokens.isEmpty
         ? cards
-        : cards
-              .where(
-                (c) =>
-                    '${c.name} ${c.prompt ?? ''}'.toLowerCase().contains(query),
-              )
-              .toList();
+        : cards.where((c) {
+            final haystack = '${c.name} ${c.prompt ?? ''} ${c.negative ?? ''}'
+                .toLowerCase();
+            return tokens.every((token) => haystack.contains(token));
+          }).toList();
     return Padding(
       padding: const EdgeInsets.only(bottom: 6),
       child: Material(
@@ -5452,21 +5510,27 @@ class _CardPickerSheetState extends State<_CardPickerSheet> {
     super.dispose();
   }
 
-  List<CharacterCard> get _characters {
-    final q = _query.trim().toLowerCase();
-    if (q.isEmpty) return widget.characters;
-    return widget.characters
-        .where((c) => '${c.name} ${c.prompt ?? ''}'.toLowerCase().contains(q))
+  /// 按空白分词；每段都要命中（与桌面 `@` 面板的过滤同一套规则）。
+  ///
+  /// 整串 `contains` 在词之间隔了空格时永远查不到（"波普 平涂" 就是一个例子）。
+  List<T> _filter<T extends CharacterCard>(List<T> cards) {
+    final tokens = _query
+        .trim()
+        .toLowerCase()
+        .split(RegExp(r'\s+'))
+        .where((t) => t.isNotEmpty)
         .toList();
+    if (tokens.isEmpty) return cards;
+    return cards.where((c) {
+      final haystack = '${c.name} ${c.prompt ?? ''} ${c.negative ?? ''}'
+          .toLowerCase();
+      return tokens.every((token) => haystack.contains(token));
+    }).toList();
   }
 
-  List<StyleCard> get _styles {
-    final q = _query.trim().toLowerCase();
-    if (q.isEmpty) return widget.styles;
-    return widget.styles
-        .where((c) => '${c.name} ${c.prompt ?? ''}'.toLowerCase().contains(q))
-        .toList();
-  }
+  List<CharacterCard> get _characters => _filter(widget.characters);
+
+  List<StyleCard> get _styles => _filter(widget.styles);
 
   @override
   Widget build(BuildContext context) {

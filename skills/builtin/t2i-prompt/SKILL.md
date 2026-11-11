@@ -18,6 +18,7 @@ version: 1
 |参考图|0\~N|可见事实：构图、姿势、服装、表情、光向|没有就按文字设计|
 |`\\\[CHARACTER CARD]`|0\~N|角色身份与外观；一张卡一个人|没有就按文字写|
 |`\\\[STYLE SPEC]`|0\~1|渲染规格（画风卡正文）|没有就不写风格句|
+|`\\\[STYLE NEGATIVE]`|0\~1|固定排除表（画风卡负面）|没有就跳过|
 |`\\\[PRESET]`|0\~N|提示词库里已保存的成品提示词|没有就不套|
 
 **优先级**：参考图决定**可见事实**（画面里长什么样、光从哪来）；角色卡补**身份与外观**；预设补**已定稿的设定与写法**；用户这一轮的文字决定**要改什么**。`\\\[STYLE SPEC]` 只决定**怎么渲染**，不决定主体、服装和露多少。
@@ -143,6 +144,7 @@ A finished prompt is at least B2. A close-up may be B1 only when the background 
 * The closing style clause is under 25 words and only summarises; it never repairs a region whose own clause left its medium unstated. Include it only when a STYLE SPEC is supplied.
 * Subject facts outrank style: the spec never adds, removes or replaces people, props or actions; the subject never overrides the spec's medium, palette or line treatment. Where a garment's local colour fights the spec's palette, keep the garment colour and let the spec govern everything around it.
 * The style clause is worded the same way for the same STYLE SPEC every time; only subject, pose and scene change between outputs.
+* A supplied STYLE NEGATIVE is a fixed exclusion list. It never enters the paragraph and is never reproduced: use it to pick the affirmative wording for the region it names (a `soft shading` entry becomes "one hard shadow shape with a drawn edge", not "no soft shading").
 
 ## 8\. Output contract
 
@@ -165,9 +167,15 @@ A finished prompt is at least B2. A close-up may be B1 only when the background 
 物理感动画
 <画风卡正文，逐字>
 
+\\\[STYLE NEGATIVE]
+<画风卡负面提示词，逐字>
+
 \\\[CHARACTER CARD]
 凛
 <角色卡正文，逐字>
+
+\\\[CHARACTER NEGATIVE]
+<角色卡负面提示词，逐字>
 
 \\\[PRESET]
 雨夜便利店
@@ -177,6 +185,7 @@ A finished prompt is at least B2. A close-up may be B1 only when the background 
 ```
 
 * 槽位里的名字只是给你认的标签，**不要写进成品提示词**。
+* `\\\[STYLE NEGATIVE]` / `\\\[CHARACTER NEGATIVE]` 是**固定排除表**：不要写进正文、不要改写成否定句；只用来选正面措辞，目标工作流有负向输入时才原样交给它。
 * 卡正文按 §7 处理：**卡本身留在槽位**，它的具体渲染行为写进对应部位（面部 / 身体 / 头发 / 衣物 / 其它物体），结尾只留 ≤25 词总括。
 * `\\\[CHARACTER CARD]` 可以多段，一段一个人；多角色同框时每张卡只描述它自己那个人，谁在左谁在右、姿势、服装、谁看谁由用户这一轮的要求定。
 * `\\\[PRESET]` 可以多段；第一段是基底，其余只取用户点名的部分。预设里的设定默认保留，用户说"改哪里"才动哪里。

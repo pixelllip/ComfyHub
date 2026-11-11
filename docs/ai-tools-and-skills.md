@@ -631,7 +631,7 @@ disable-model-invocation: false
   "text": "给模型看的完整正文（含卡正文块）",
   "displayText": "用户实际敲的那句话",
   "mentions": [
-    { "kind": "character_card", "name": "凛", "modelText": "[CHARACTER CARD]\n凛\n…",
+    { "kind": "character_card", "name": "凛", "modelText": "[CHARACTER CARD]\n凛\n…\n\n[CHARACTER NEGATIVE]\n…",
       "snapshot": { "prompt": "…", "negative": "…" } },
     { "kind": "skill", "name": "demo-skill" }
   ]
@@ -642,6 +642,8 @@ disable-model-invocation: false
   `text` 块只放 `displayText`；`ai_messages.text` 仍是完整正文，供审计 / 旧客户端兜底。
 - 模型侧由 `executor::turns_of` **按 ordinal 拼接**：`mention.modelText` + `text` 块。
   所以界面显示小卡片，模型拿到的仍是原来的 `[CHARACTER CARD] …` 顺序，不会丢卡。
+- 卡上有负面提示词时，`modelText` 末尾再带一段 `[CHARACTER NEGATIVE]` / `[STYLE NEGATIVE]`：
+  负面**不拼进正文**（正文是逐字规格），模型用它选正面措辞，不把排除表抄进成品。
 - 界面上一个 mention = 一个小卡片（`角色卡 · 名字` / `画风卡 · 名字` / `技能 · 名字`），
   点开是**发送时快照**（卡看正面 / 负面提示词，技能看当时的正文与版本）——
   之后卡或技能被改掉，历史里仍是当时那一版。

@@ -958,7 +958,12 @@ fn title_from_user_message(text: &str) -> Option<String> {
         .lines()
         .map(str::trim)
         .filter(|line| !line.is_empty())
-        .find(|line| !matches!(*line, "[STYLE SPEC]" | "[CHARACTER CARD]"))?;
+        .find(|line| {
+            !matches!(
+                *line,
+                "[STYLE SPEC]" | "[STYLE NEGATIVE]" | "[CHARACTER CARD]" | "[CHARACTER NEGATIVE]"
+            )
+        })?;
     let title: String = line.chars().take(20).collect();
     let title = title.trim();
     if title.is_empty() {

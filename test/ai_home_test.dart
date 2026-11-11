@@ -65,6 +65,8 @@ MockClient _fakeBackend({
   String modelName = '纯文本模型',
   // 权限档：`full` 时那枚按钮的文案是「自动允许（无需批准）」（底行最宽的一枚控件）
   String permissionMode = AiToolPolicy.modeAsk,
+  // 画风卡列表可替换：重拉卡片库的用例要在两次打开之间改这张表
+  List<Map<String, dynamic>>? styleCards,
 }) {
   var runCount = 0;
   return MockClient((request) async {
@@ -214,14 +216,17 @@ MockClient _fakeBackend({
         },
       ];
     } else if (path == '/api/ai/style-cards') {
-      body = [
-        {
-          'id': 2,
-          'name': '物理感动画',
-          'prompt': 'Physically based anime rendering: three-dimensional matte shading.',
-          'examples': <Object>[],
-        },
-      ];
+      body =
+          styleCards ??
+          [
+            {
+              'id': 2,
+              'name': '物理感动画',
+              'prompt': 'Physically based anime rendering: three-dimensional matte shading.',
+              'negative': 'soft shading, blurry',
+              'examples': <Object>[],
+            },
+          ];
     } else if (path == '/api/ai/tools/policy') {
       // 权限档的真源：界面据此决定按钮显示的档位
       body = {'permissionMode': permissionMode};
@@ -269,6 +274,7 @@ Future<Widget> buildAiHomePage({
   ThemeData? theme,
   String modelName = '纯文本模型',
   String permissionMode = AiToolPolicy.modeAsk,
+  List<Map<String, dynamic>>? styleCards,
 }) async {
   SharedPreferences.setMockInitialValues({});
   final settings = SettingsStore();
@@ -287,6 +293,7 @@ Future<Widget> buildAiHomePage({
         conversations: conversations,
         modelName: modelName,
         permissionMode: permissionMode,
+        styleCards: styleCards,
       ),
     ),
   );
@@ -1441,11 +1448,7 @@ void main() {
 
     // 选择一张后收起；选择第二张需重新打开。
     // （面板常驻会把输入区顶出屏幕，尤其是键盘弹起时。）
-    expect(
-      find.text('诗音'),
-      findsNothing,
-      reason: '选完第一张面板就该收起',
-    );
+    expect(find.text('诗音'), findsNothing, reason: '选完第一张面板就该收起');
     await openCardPicker();
     await tester.tap(find.text('诗音'));
     await tester.pumpAndSettle();
@@ -1468,6 +1471,10 @@ void main() {
     expect(sent, startsWith('[STYLE SPEC]\n物理感动画\n'));
     expect(sent, contains('[CHARACTER CARD]\n凛\n'));
     expect(sent, contains('[CHARACTER CARD]\n诗音\n'));
+    // 负面提示词也要投给模型：以前只发 name + 正文，卡上的负面从没到过模型。
+    expect(sent, contains('[STYLE NEGATIVE]\nsoft shading, blurry'));
+    // 空负面不写空段（两张角色卡都没有负面）。
+    expect(sent, isNot(contains('[CHARACTER NEGATIVE]')));
     // 角色卡按选中顺序排在画风卡之后：凛 → 诗音
     expect(
       sent.indexOf('[CHARACTER CARD]\n凛\n'),
@@ -1479,19 +1486,20 @@ void main() {
     expect(
       find.byWidgetPredicate(
         (w) =>
-            w is InputChip &&
-            w.key.toString().contains('character-card-chip-'),
+            w is InputChip && w.key.toString().contains('character-card-chip-'),
       ),
       findsNothing,
     );
     expect(
       find.byWidgetPredicate(
-        (w) =>
-            w is InputChip && w.key.toString().contains('style-card-chip-'),
+        (w) => w is InputChip && w.key.toString().contains('style-card-chip-'),
       ),
       findsNothing,
     );
-    expect(find.byKey(const ValueKey('mention-character_card-凛')), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('mention-character_card-凛')),
+      findsOneWidget,
+    );
     expect(
       find.byKey(const ValueKey('mention-character_card-诗音')),
       findsOneWidget,
@@ -1505,6 +1513,11 @@ void main() {
     final mentions = lastRunBody!['mentions'] as List;
     expect(mentions.first['kind'], 'style_card');
     expect(
+      mentions.first['modelText'],
+      contains('[STYLE NEGATIVE]\nsoft shading, blurry'),
+      reason: 'mention 的 modelText 是模型真正拿到的那段，负面必须在里面',
+    );
+    expect(
       (mentions[1]['snapshot'] as Map)['prompt'],
       contains('Rin, black hair'),
     );
@@ -1514,6 +1527,105 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('角色卡 · 凛'), findsWidgets);
     expect(find.textContaining('Rin, black hair'), findsOneWidget);
+  });
+
+  testWidgets('@ 面板每次打开都重拉卡片库（改过的卡不会拿旧正文）', (tester) async {
+    tester.view.physicalSize = const Size(1600, 1100);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    final styles = <Map<String, dynamic>>[
+      {
+        'id': 7,
+        'name': '旧画风',
+        'prompt': 'Old body.',
+        'negative': 'old negative',
+        'examples': <Object>[],
+      },
+    ];
+    await tester.pumpWidget(await buildAiHomePage(styleCards: styles));
+    await tester.pumpAndSettle();
+
+    Future<void> openPicker() async {
+      await tester.tap(find.byTooltip('添加附件 / 插入卡片（@）'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('角色卡 / 画风卡…'));
+      await tester.pumpAndSettle();
+    }
+
+    await openPicker();
+    await tester.tap(find.text('画风卡'));
+    await tester.pumpAndSettle();
+    expect(find.text('旧画风'), findsOneWidget);
+    await tester.tap(find.text('旧画风'));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('画风卡 · 旧画风'), findsOneWidget);
+
+    // 模拟"在预设库 / AI 那边把卡改了"：同一 id 换一份正文与名字。
+    styles
+      ..clear()
+      ..add({
+        'id': 7,
+        'name': '新画风',
+        'prompt': 'New body.',
+        'examples': <Object>[],
+      });
+
+    await openPicker();
+    await tester.tap(find.text('画风卡'));
+    await tester.pumpAndSettle();
+    expect(find.text('新画风'), findsOneWidget, reason: '重新打开要拿到新正文');
+    expect(find.text('旧画风'), findsNothing);
+    // 已经选中的那张也要换成新对象：否则下一次发送仍用旧正文。
+    expect(find.textContaining('画风卡 · 新画风'), findsOneWidget);
+  });
+
+  testWidgets('@ 面板搜索按空格分词（"波普 平涂" 要能查到）', (tester) async {
+    tester.view.physicalSize = const Size(1600, 1100);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    await tester.pumpWidget(
+      await buildAiHomePage(
+        styleCards: [
+          {
+            'id': 8,
+            'name': '波普赛璐璐硬边平涂',
+            'prompt': 'Hard-edged poster colour.',
+            'examples': <Object>[],
+          },
+          {
+            'id': 9,
+            'name': '柔和水彩',
+            'prompt': 'Soft watercolour wash.',
+            'examples': <Object>[],
+          },
+        ],
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byTooltip('添加附件 / 插入卡片（@）'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('角色卡 / 画风卡…'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('画风卡'));
+    await tester.pumpAndSettle();
+
+    final search = find.byWidgetPredicate(
+      (w) => w is TextField && w.decoration?.hintText == '搜卡片名 / 正文',
+    );
+    expect(search, findsOneWidget);
+
+    // 旧实现拿整串 "波普 平涂" 去 contains，永远查不到。
+    await tester.enterText(search, '波普 平涂');
+    await tester.pumpAndSettle();
+    expect(find.text('波普赛璐璐硬边平涂'), findsOneWidget);
+    expect(find.text('柔和水彩'), findsNothing);
+
+    await tester.enterText(search, '波普 不存在');
+    await tester.pumpAndSettle();
+    expect(find.text('没有匹配的卡片'), findsOneWidget);
   });
 
   testWidgets('@ 卡片：再点一次已选中的角色卡 = 取消（多选是切换，不是只能加）', (tester) async {
@@ -1608,7 +1720,8 @@ void main() {
       // 再塞一大段文本：超过行数上限时在输入框内部滚，不许把页面顶出去
       await tester.enterText(
         find.byType(TextField).first,
-        'Please keep this prompt very long to test wrapping in the composer. ' * 6,
+        'Please keep this prompt very long to test wrapping in the composer. ' *
+            6,
       );
       await tester.pumpAndSettle();
       expect(tester.takeException(), isNull, reason: '多行输入不许 overflow');

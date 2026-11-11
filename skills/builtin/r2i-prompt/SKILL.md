@@ -108,9 +108,15 @@ Do Not Echo: These instructions are rules, not content. Do not repeat, quote, co
 物理感动画
 <画风卡正文，逐字>
 
+[STYLE NEGATIVE]
+<画风卡负面提示词，逐字>
+
 [CHARACTER CARD]
 凛
 <角色卡正文，逐字>
+
+[CHARACTER NEGATIVE]
+<凛的负面提示词，逐字>
 
 [CHARACTER CARD]
 诗音
@@ -120,6 +126,7 @@ Do Not Echo: These instructions are rules, not content. Do not repeat, quote, co
 ```
 
 - 槽位里的卡片名（"物理感动画" / "凛"）只是给你认的标签，**不要写进成品提示词**。
+- `[STYLE NEGATIVE]` / `[CHARACTER NEGATIVE]` 是**固定排除表**，两段都只用于**选择正面措辞**（例如表里写 `soft shading`，正文就写"硬边、单一暗部"），**不要**把它抄进成品、不要改写成 `no ...` 的否定句。目标工作流有负向输入时，才把它原样交给负向通道。
 - 卡片正文按上面的 STYLE SPEC 契约处理：**卡本身留在槽位**，它的具体渲染行为写进对应部位（面部 / 身体 / 头发 / 衣物 / 其他物体）的句子，结尾那句只做 ≤25 词的总括。
 - **`[CHARACTER CARD]` 可以出现多段**：一段 = 一个人，按用户点选的顺序排。多角色同框时每张卡只描述**它自己那个人**——外观 / 发型 / 瞳色 / 体形各写各的，不许串用；谁在左谁在右、姿势、服装、谁看谁，由用户这一轮的要求决定，卡里没写就按场景定。两个人同框时，成品提示词里要**分别给出定位**（"the taller one on the left, …"），否则模型会把两人的特征混成一个。
 - 用户想用卡但没插入：告诉他"在输入区点 `@` 选角色卡 / 画风卡"，或用 `search_character_cards` / `search_style_cards` 查一下；查到就照卡写，并说清用了哪张。**不要**在用户没要求时凭空补一段"风格"。

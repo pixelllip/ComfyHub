@@ -469,6 +469,25 @@ fn card_exists(conn: &Connection, kind: CardKind, id: i64) -> rusqlite::Result<b
 //  读
 // ---------------------------------------------------------------------------
 
+/// 把搜索词按空白切成若干段（中英文都按空白切），去重，最多 8 段。
+///
+/// 单段时行为与旧的"整串子串匹配"完全一致；多段时每一段单独匹配、
+/// 按命中段数排序（见 [`list`]）。切词上限是防"把一整段提示词贴进搜索框"
+/// 时拼出几百个 OR 条件。
+fn search_tokens(q: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for part in q.split_whitespace() {
+        if part.is_empty() || out.iter().any(|token| token == part) {
+            continue;
+        }
+        out.push(part.to_string());
+        if out.len() == 8 {
+            break;
+        }
+    }
+    out
+}
+
 pub fn list(
     conn: &Connection,
     kind: CardKind,
@@ -480,16 +499,37 @@ pub fn list(
     let mut out = Vec::new();
     match keyword {
         Some(q) => {
-            let like = format!("%{q}%");
+            // 按空白切词。模型常把描述写成一句话（"二次元三次元混搭 物理渲染
+            // physically based anime"），整串 LIKE 一个都命中不了 —— 2026-10-31
+            // 的 `search_style_cards` 就是这样把库里明明有的 #1 卡判成
+            // NOT_FOUND 的。多词时按"命中几个词"排序，命中多的在前。
+            let tokens = search_tokens(q);
+            let mut score_parts = Vec::with_capacity(tokens.len());
+            let mut terms: Vec<rusqlite::types::Value> = Vec::with_capacity(tokens.len() * 4 + 1);
+            for (index, token) in tokens.iter().enumerate() {
+                let param = index * 4 + 1;
+                score_parts.push(format!(
+                    "(CASE WHEN name LIKE ?{param} OR normalized LIKE ?{param} \
+                              OR prompt LIKE ?{param} OR negative LIKE ?{param} \
+                         THEN 1 ELSE 0 END)"
+                ));
+                let like = format!("%{token}%");
+                for _ in 0..4 {
+                    terms.push(rusqlite::types::Value::Text(like.clone()));
+                }
+            }
+            let score = score_parts.join(" + ");
             let sql = format!(
-                "SELECT {BASE_COLUMNS} FROM {table} \
-                  WHERE (name LIKE ?1 OR normalized LIKE ?1 \
-                         OR prompt LIKE ?1 OR negative LIKE ?1) \
-                  ORDER BY updated_at DESC, id DESC LIMIT ?2",
+                "SELECT * FROM (SELECT {BASE_COLUMNS}, ({score}) AS match_score \
+                   FROM {table}) \
+                  WHERE match_score > 0 \
+                  ORDER BY match_score DESC, updated_at DESC, id DESC LIMIT ?{}",
+                terms.len() + 1,
                 table = kind.table()
             );
+            terms.push(rusqlite::types::Value::Integer(limit as i64));
             let mut stmt = conn.prepare(&sql)?;
-            let rows = stmt.query_map(params![like, limit as i64], row_to_card)?;
+            let rows = stmt.query_map(rusqlite::params_from_iter(terms.iter()), row_to_card)?;
             for row in rows {
                 out.push(with_examples(row?, conn, kind)?);
             }
