@@ -634,7 +634,7 @@ disable-model-invocation: false
   description 与正文非空）；`flutter build windows` 的 `comfyhub_skills_check` target
   （`windows\CMakeLists.txt`，debug / release 都跑）与 `pack-release.ps1` 的第一步都调它，
   修不好就让构建失败。⚠ MSBuild 在默认 verbosity 只报 `MSB8066`，详情用
-  `flutter build windows -v` 看。2026-11-11 的 `t2i-prompt` 就是首行 `\---`、正文整篇被转义，
+  `flutter build windows -v` 看。2026-11-11 的一份内置 skill 就是首行 `\---`、正文整篇被转义，
   列表里 `available: false`、模型读不到它的规则。
 
 ### 4.4.1 用户消息里的卡片 / 技能快照

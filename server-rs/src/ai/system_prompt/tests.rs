@@ -177,7 +177,7 @@ impl NsfwNote for String {
 
 #[test]
 fn 开工顺序先加载技能再动笔() {
-    let text = render_with_skills(&[skill("t2i-prompt", "写生图提示词")]);
+    let text = render_with_skills(&[skill("demo-skill", "写生图提示词")]);
     assert!(text.contains("开工顺序"), "{}", text);
     assert!(text.contains("命中就先 `load_skill` 取正文"));
     assert!(
