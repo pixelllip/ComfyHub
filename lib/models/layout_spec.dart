@@ -640,16 +640,31 @@ class LayoutSpec {
       );
     }
 
-    var overlaps = 0;
+    // 大面积重叠**本身不是损失**：前后遮挡就该重叠，用「挡在前面」把顺序说清即可。
+    // 2026-11-11 之前这里只要重叠就报警，等于把表达纵深的方式当成错误 ——
+    // 画布上给用户看到"重叠不好"，模型摆出来的就只剩互不重叠的三栏。
+    // 真正说不清的是"叠在一起、又没说谁挡谁"。
+    var unexplained = 0;
     for (var i = 0; i < active.length; i++) {
       for (var j = i + 1; j < active.length; j++) {
-        if (active[i].rect.iou(active[j].rect) > 0.35) overlaps++;
+        if (active[i].rect.iou(active[j].rect) <= 0.35) continue;
+        if (_occludes(active[i], active[j]) || _occludes(active[j], active[i])) {
+          continue;
+        }
+        unexplained++;
       }
     }
-    if (overlaps > 0) {
-      out.add('有 $overlaps 组区域大面积重叠，散文里说不清它们的前后遮挡关系。');
+    if (unexplained > 0) {
+      out.add(
+        '有 $unexplained 组区域大面积重叠，但没说谁挡谁；'
+        '给其中一个框设「挡在前面」，提示词才写得出前后关系。',
+      );
     }
 
     return out;
   }
+
+  /// [a] 是否声明了「挡在 [b] 前面」。
+  static bool _occludes(LayoutRegion a, LayoutRegion b) =>
+      a.relation == LayoutRelation.inFront && a.relationTo == b.id;
 }

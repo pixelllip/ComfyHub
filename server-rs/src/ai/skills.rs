@@ -502,7 +502,6 @@ pub fn effective_entry(
     }
 }
 
-
 /// 全量扫描（内置 + 自定义），同名冲突 **自定义优先**（AIH-037）。
 ///
 /// 返回 `(条目, conflict)`：`conflict` 非空 = 该条目是**覆盖同名内置版**的自定义版
@@ -627,7 +626,9 @@ pub fn list(state: &crate::web::routes::AppState) -> Vec<SkillDto> {
             // 自定义版覆盖同名内置版、但自身不合法时：对话回落到内置版。
             // 必须说明该情况，否则会表现为"已覆盖但未生效"且没有提示。
             let conflict = match (conflict, parsed.valid) {
-                (Some(_), false) => Some("覆盖了同名内置 skill；用户版不合法，对话仍用内置版".to_string()),
+                (Some(_), false) => {
+                    Some("覆盖了同名内置 skill；用户版不合法，对话仍用内置版".to_string())
+                }
                 (conflict, _) => conflict.clone(),
             };
             let mut dto = SkillDto::of(parsed, conflict);
@@ -690,9 +691,8 @@ pub fn set_enabled(
     } else {
         disabled.insert(name.to_string());
     }
-    write_disabled(&disabled_path(state), &disabled).map_err(|e| {
-        SkillFailure::new("IO_ERROR", format!("保存 skill 启停状态失败：{e}"))
-    })?;
+    write_disabled(&disabled_path(state), &disabled)
+        .map_err(|e| SkillFailure::new("IO_ERROR", format!("保存 skill 启停状态失败：{e}")))?;
     Ok(SkillDto { enabled, ..found })
 }
 
@@ -883,9 +883,8 @@ pub fn save(
     // 刚显式写入该名称 = 需要使用它；从停用名单中移除。
     let mut disabled = disabled_of(state);
     if disabled.remove(name) {
-        write_disabled(&disabled_path(state), &disabled).map_err(|e| {
-            SkillFailure::new("IO_ERROR", format!("保存 skill 启停状态失败：{e}"))
-        })?;
+        write_disabled(&disabled_path(state), &disabled)
+            .map_err(|e| SkillFailure::new("IO_ERROR", format!("保存 skill 启停状态失败：{e}")))?;
     }
 
     list(state)
@@ -1116,9 +1115,7 @@ pub fn catalog_with(
 ) -> Vec<SkillEntry> {
     effective_scan(builtin_root, user_root)
         .into_iter()
-        .filter(|s| {
-            s.valid && s.model_invocable && !disabled.contains(s.entry.name.as_str())
-        })
+        .filter(|s| s.valid && s.model_invocable && !disabled.contains(s.entry.name.as_str()))
         .map(|s| s.entry)
         .collect()
 }
@@ -1162,8 +1159,7 @@ pub fn file_of(
     user_root: &Path,
     name: &str,
 ) -> Option<(PathBuf, &'static str)> {
-    effective_entry(builtin_root, user_root, name)
-        .map(|(path, parsed)| (path, parsed.source))
+    effective_entry(builtin_root, user_root, name).map(|(path, parsed)| (path, parsed.source))
 }
 
 /// 一个 skill 的正文（**去掉 frontmatter**）—— `load_skill` 返回给模型的就是它。

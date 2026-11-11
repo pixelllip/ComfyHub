@@ -43,6 +43,37 @@ fn blocks_are_not_empty_and_trimmed() {
     assert!(TITLE_INSTRUCTION.contains("[标题]"));
 }
 
+/// 第 5 条：任务命中技能时，**先加载正文再动笔**；目录摘要不能当规则用。
+///
+/// 2026-11-11 用户报的现象："给 AI 发布任务之后，它的第一件事是臆测，而不是先加载
+/// skill 再根据其约束生成提示词"。这条钉住"第一件事 / 正文没到手 / 都算臆测"三个词，
+/// 免得下一次改文案时又退回"需要时……"。
+#[test]
+fn 第5条要求命中技能先加载正文() {
+    let persona = persona_block();
+    assert!(
+        persona.contains("Skill 是先手，不是参考读物"),
+        "{}",
+        persona
+    );
+    assert!(persona.contains("**第一件事**"));
+    assert!(persona.contains("正文没到手之前"));
+    assert!(persona.contains("都算臆测"));
+    assert!(persona.contains("排在查库、查工作流、问用户之前"));
+    assert!(persona.contains("目录里没有对应项时才自己写"));
+}
+
+/// 第 25 条 ⑧：出图后**必须**核对构图，不是"建议对照"。
+#[test]
+fn 第25条要求出图后必须核对构图() {
+    let persona = persona_block();
+    assert!(persona.contains("出图后必须核对，不是可选项"));
+    assert!(persona.contains("主体数量与身份"));
+    assert!(persona.contains("符合") && persona.contains("不符合（差在哪）"));
+    assert!(persona.contains("我看不到这张图"));
+    assert!(persona.contains("结果里会重复这段核对要求"));
+}
+
 /// 第 19 条（图像编辑）在 2026-09-27 改过一次，改的是**实测结论**，不是措辞：
 /// 这里把四件"少了就会退回错误行为"的话钉住。
 ///

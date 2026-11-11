@@ -182,7 +182,8 @@ fn access_wire(access: crate::tools::policy::ToolAccess) -> &'static str {
     }
 }
 
-/// `GET /api/ai/tools/policy`（Kotlin `ToolPolicyDto`，11 个键）。
+/// `GET /api/ai/tools/policy`（Kotlin `ToolPolicyDto` 的键，另加本版新增的
+/// `maxAutoSubmitsPerRun`）。
 pub fn policy_json(state: &AppState) -> Result<Value, ApiError> {
     let policy = ToolPolicy::load(state)?;
     let project_root = state.project_root();
@@ -216,6 +217,10 @@ fn policy_dto(policy: &ToolPolicy, auto_read: &[PathBuf]) -> Value {
     out.insert(
         "maxCallsPerRun".into(),
         Value::from(policy.config.max_calls_per_run),
+    );
+    out.insert(
+        "maxAutoSubmitsPerRun".into(),
+        Value::from(policy.config.max_auto_submits_per_run),
     );
     out.insert(
         "maxComfyQueriesPerRun".into(),
@@ -258,6 +263,7 @@ pub struct PolicyUpdate {
     overrides: Option<std::collections::BTreeMap<String, String>>,
     max_tool_steps: Option<i64>,
     max_calls_per_run: Option<i64>,
+    max_auto_submits_per_run: Option<i64>,
     permission_mode: Option<String>,
 }
 
@@ -309,6 +315,13 @@ pub fn save_policy(state: &AppState, body: PolicyUpdate) -> Result<Value, ApiErr
             .max_calls_per_run
             .unwrap_or(current.config.max_calls_per_run)
             .clamp(1, 100),
+        // 0 = 不限制（出厂值），其余夹在 1..硬上界。
+        // ⚠ 负数与超上界一律夹回去，而不是拒绝：设置页只发档位表里的值，
+        // 手改配置时给一个越界值也不该让整页保存失败。
+        max_auto_submits_per_run: body
+            .max_auto_submits_per_run
+            .unwrap_or(current.config.max_auto_submits_per_run)
+            .clamp(0, crate::tools::policy::MAX_AUTO_SUBMITS_PER_RUN_LIMIT),
     };
     save_config(state, &next)?;
     // 回读一次：界面显示的就是**库里真正生效**的那份（与 Kotlin 同）
@@ -355,6 +368,10 @@ fn save_config(state: &AppState, next: &ToolPolicyConfig) -> Result<(), ApiError
     map.insert(
         "maxCallsPerRun".into(),
         serde_json::json!(next.max_calls_per_run),
+    );
+    map.insert(
+        "maxAutoSubmitsPerRun".into(),
+        serde_json::json!(next.max_auto_submits_per_run),
     );
     let text = Value::Object(map).to_string();
     state.write(move |tx| {

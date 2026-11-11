@@ -15,8 +15,9 @@
 //!    并且 `ask` 的工具在渲染时**不再标「需要批准」**；
 //! 3. **逐工具覆盖**（`overrides`）—— 标「已被禁用」（`deny`）以及"可调用的工具"清单里
 //!    被策略剔除的那些；
-//! 4. **两条预算**（`maxToolSteps` / `maxCallsPerRun`）—— 工具循环的轮数与调用数上限
-//!    （P4 第 31 步起真的生效，见 `executor` 的 `step` / `calls`）。
+//! 4. **三条预算**（`maxToolSteps` / `maxCallsPerRun` / `maxAutoSubmitsPerRun`）——
+//!    工具循环的轮数、调用数与自动提交工作流次数上限
+//!    （P4 第 31 步起前两条真的生效，见 `executor` 的 `step` / `calls`）。
 //!
 //! ⚠ **别在这里补一个"半份的路径判定"**：`resolve_write` 的语义是"越界一律拒绝"，
 //! 抄一半（比如只看前缀、不做真实路径）会让写操作通过一个比 Kotlin 松的闸门 ——
@@ -72,6 +73,28 @@ pub const MAX_COMFY_QUERIES_PER_RUN: i64 = 9;
 /// 一次回复里最多联网搜索几次（同上）。
 pub const MAX_WEB_QUERIES_PER_RUN: i64 = 8;
 
+/// 这一次调用要不要等用户批准。
+///
+/// 判据只有两条：权限档是 `ask`，或者**自动提交工作流**已经用满次数
+/// （`allow` 档的 `comfy_submit` 用满之后退回询问，不直接拒绝 —— 用户仍可放行）。
+/// `deny` 由调用方先拦，不走这里。
+pub fn requires_approval(
+    tool_name: &str,
+    access: ToolAccess,
+    auto_submit_limit: i64,
+    auto_submits_used: i64,
+) -> bool {
+    match access {
+        ToolAccess::Ask => true,
+        ToolAccess::Allow => {
+            tool_name == "comfy_submit"
+                && auto_submit_limit > 0
+                && auto_submits_used >= auto_submit_limit
+        }
+        ToolAccess::Deny => false,
+    }
+}
+
 /// 工具权限档（`allow` / `ask` / `deny`）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ToolAccess {
@@ -114,6 +137,12 @@ pub struct ToolPolicyConfig {
     /// 单个 Run 最多**工具调用次数**（出厂 48）——与轮数是两条线，见
     /// [`crate::tools::tools::budget_exceeded_note`] 里为什么措辞必须分开。
     pub max_calls_per_run: i64,
+    /// 单个 Run 最多**自动提交工作流**几次（出厂 0 = 不限制）。
+    ///
+    /// 「自动提交」指 `comfy_submit` 命中 allow 档、不需要审批就直接执行的那一次。
+    /// 用满之后同一个 Run 里再提交会回到「询问」档，由用户决定要不要继续跑。
+    /// 需要审批的那次提交不计入这份额度，否则"先关掉自动提交"反而会更快撞上限。
+    pub max_auto_submits_per_run: i64,
 }
 
 impl Default for ToolPolicyConfig {
@@ -126,6 +155,7 @@ impl Default for ToolPolicyConfig {
             permission_mode: String::new(),
             max_tool_steps: DEFAULT_MAX_TOOL_STEPS,
             max_calls_per_run: DEFAULT_MAX_CALLS_PER_RUN,
+            max_auto_submits_per_run: DEFAULT_MAX_AUTO_SUBMITS_PER_RUN,
         }
     }
 }
@@ -154,6 +184,13 @@ pub const LEGACY_DEFAULT_MAX_TOOL_STEPS: i64 = 16;
 pub const MAX_TOOL_STEPS_LIMIT: i64 = 48;
 /// 单个 Run 的工具调用次数上限（`ToolPolicyConfig.DEFAULT_MAX_CALLS_PER_RUN`）。
 pub const DEFAULT_MAX_CALLS_PER_RUN: i64 = 48;
+/// 单个 Run 自动提交工作流次数的出厂值：**0 = 不限制**（保持既有行为）。
+pub const DEFAULT_MAX_AUTO_SUBMITS_PER_RUN: i64 = 0;
+/// 自动提交次数上限的硬上界（设置页最大选项与 PUT 都夹到这里）。
+///
+/// 与 [`DEFAULT_MAX_CALLS_PER_RUN`] 同量级：一次回复里真的自动提交几十次
+/// 已经远超正常使用，再大就等于"不限制"。
+pub const MAX_AUTO_SUBMITS_PER_RUN_LIMIT: i64 = 48;
 
 /// 把"**旧出厂值** 16"升级成新默认（纯函数，用例直接喂配置，不用起库）。
 ///

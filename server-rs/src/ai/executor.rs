@@ -779,16 +779,21 @@ async fn run_once(
                 } else {
                     session.spend_call(&call.name);
                 }
+                // 自动提交工作流的次数只记「真的不经审批就跑了」的那一种。
+                // 需要审批的那次（`approval == "approved"`）不算：用户已经点过头，
+                // 不该再占用"免批准"的额度。
+                if call.name == "comfy_submit" && outcome.approval == "not_required" {
+                    session.spend_auto_submit();
+                }
             }
-            // 工作流参考图 / 产物预览：结果里带 `referenceImages` 时，把图挂到
-            // **工具结果之后的一条 user 轮**上（tool 轮装不了图 —— OpenAI / Anthropic
-            // 都不接受 tool 消息里的图片）。只有真的跑成功了才挂：失败结果里没有可用的路径。
+            // 工作流参考图 / 产物预览 / **本次刚生成的产物**：结果里带 `referenceImages`
+            // 时，把图挂到**工具结果之后的一条 user 轮**上（tool 轮装不了图 ——
+            // OpenAI / Anthropic 都不接受 tool 消息里的图片）。只有真的跑成功了才挂：
+            // 失败结果里没有可用的路径。
             //
             // ⚠ 只认**我们自己这两条**工具：MCP / 其它工具的结果是不可信数据，不能让一个
             // 外来的 `referenceImages` 决定"读取本机哪个文件并发给上游"。
-            if outcome.ok
-                && (call.name == "comfy_load_workflow" || call.name == "comfy_view_outputs")
-            {
+            if outcome.ok && may_attach_reference_images(&call.name) {
                 if let Some(batch) = crate::ai::reference_attach::plan(
                     &outcome.result,
                     can_inline_reference_images,
@@ -1107,6 +1112,18 @@ fn take_reason(arguments: &mut String) -> Option<String> {
     reason
 }
 
+/// 哪些工具的结果允许触发"把图附进下一轮"。
+///
+/// 只认我们自己产出的这几条：`comfy_load_workflow`（工作流里绑定的参考图）、
+/// `comfy_view_outputs`（画廊里的产物）、`comfy_submit`（本次刚生成的产物）。
+/// 别把 MCP / 其它工具也算进来 —— 那等于让外来结果决定读本机哪个文件、发给上游。
+fn may_attach_reference_images(name: &str) -> bool {
+    matches!(
+        name,
+        "comfy_load_workflow" | "comfy_view_outputs" | "comfy_submit"
+    )
+}
+
 /// 处理一次工具调用：**闸门 → 执行 → 落库 → 发事件**，返回喂回模型的那份结果。
 ///
 /// # 顺序不能倒（R8）
@@ -1163,7 +1180,14 @@ async fn handle_call(
         .access_of(&call.name)
         .unwrap_or_else(|| crate::tools::tools::default_access(&call.name));
     let access = policy.access_for(&call.name, fallback);
-    let needs_approval = access == crate::tools::policy::ToolAccess::Ask;
+    // 自动提交工作流用满次数之后，`allow` 档的 `comfy_submit` 退回询问 ——
+    // 不直接拒绝：用户仍可在对话里点批准放行，但不会再不经确认就烧 GPU。
+    let needs_approval = crate::tools::policy::requires_approval(
+        &call.name,
+        access,
+        policy.config.max_auto_submits_per_run,
+        session.auto_submits,
+    );
     // 工具卡（界面按它画"正在调用 / 已拒绝"）：先落调用块，再落结果块。
     // 参数用**原文**（不是解析后的对象）：Dart 侧 `map['arguments']` 读的就是这个字符串。
     {

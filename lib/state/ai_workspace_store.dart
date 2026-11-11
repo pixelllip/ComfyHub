@@ -1268,8 +1268,8 @@ class AiWorkspaceStore extends ChangeNotifier {
     for (final call in toolCallsFor(message)) {
       for (final candidate in call.layoutCandidates) {
         final key =
-            '${candidate.title}|${candidate.spec.regions.length}|'
-            '${candidate.spec.toJson()}';
+            '${candidate.title}|${candidate.forVerification}|${candidate.prompt}|'
+            '${candidate.spec.regions.length}|${candidate.spec.toJson()}';
         if (seen.add(key)) out.add(candidate);
       }
     }

@@ -439,6 +439,8 @@ Map<String, dynamic> _defaultPolicy() => {
   'overrides': <String, String>{},
   'maxToolSteps': 8,
   'maxCallsPerRun': 16,
+  // 自动提交工作流次数：0 = 不限制（与后端 ToolPolicyConfig 的出厂值一致）
+  'maxAutoSubmitsPerRun': 0,
   // 与后端 ToolPolicyConfig 的出厂值保持一致（2026-09-19 上调成 2MB / 4MB）
   'maxReadBytes': 2 * 1024 * 1024,
   'maxWriteBytes': 4 * 1024 * 1024,
@@ -1796,6 +1798,64 @@ void main() {
 
     expect(rec.lastPolicyPut, contains('"overrides"'));
     expect(rec.lastPolicyPut, contains('"read_file":"deny"'));
+  });
+
+  testWidgets('(e1a) 自动提交工作流次数可设置，写入 maxAutoSubmitsPerRun', (tester) async {
+    tester.view.physicalSize = const Size(1400, 1600);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    final rec = _Recorder();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: AiToolsSettingsPage(
+          api: AiApiClient('http://127.0.0.1:8080', client: _backend(rec)),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('自动提交工作流次数'), findsOneWidget);
+    expect(find.text('不限制'), findsOneWidget, reason: '出厂值是不限制');
+
+    // 第三个数字下拉就是自动提交次数（前两个是轮数与调用总数）
+    final dropdown = find.byType(DropdownButton<int>).at(2);
+    await tester.ensureVisible(dropdown);
+    await tester.pumpAndSettle();
+    await tester.tap(dropdown);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('3 次').last);
+    await tester.pumpAndSettle();
+
+    expect(rec.policyPuts, isNotEmpty);
+    expect(rec.policyPuts.last['maxAutoSubmitsPerRun'], 3);
+    expect(find.text('3 次'), findsOneWidget);
+    expect(find.text('不限制'), findsNothing);
+  });
+
+  testWidgets('(e1c) 旧后端没有这个键：如实说不支持，不画一个假的「不限制」', (tester) async {
+    tester.view.physicalSize = const Size(1400, 1600);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    final rec = _Recorder();
+    final legacy = Map<String, dynamic>.of(_defaultPolicy())
+      ..remove('maxAutoSubmitsPerRun');
+    await tester.pumpWidget(
+      MaterialApp(
+        home: AiToolsSettingsPage(
+          api: AiApiClient(
+            'http://127.0.0.1:8080',
+            client: _backend(rec, policy: legacy),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('版本较旧'), findsOneWidget);
+    expect(find.text('自动提交工作流次数'), findsNothing);
+    expect(find.byType(DropdownButton<int>), findsNWidgets(2));
   });
 
   testWidgets('(e1b) 逐工具设成「允许」后界面真的显示「允许」，不是悄悄回落到「询问」', (tester) async {

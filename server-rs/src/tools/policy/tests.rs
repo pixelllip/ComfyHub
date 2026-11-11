@@ -95,14 +95,35 @@ fn 工具预算的出厂值与_kotlin_一致() {
     let p = policy("{}");
     assert_eq!(p.config.max_tool_steps, 25);
     assert_eq!(p.config.max_calls_per_run, 48);
+    assert_eq!(p.config.max_auto_submits_per_run, 0, "出厂不限制自动提交");
     // 老库里冻着的配置没有这两个键 → 必须落到出厂值，不是 0
     let legacy = policy(r#"{"writeRoots":["comfyui"],"permissionMode":"full"}"#);
     assert_eq!(legacy.config.max_tool_steps, DEFAULT_MAX_TOOL_STEPS);
     assert_eq!(legacy.config.max_calls_per_run, DEFAULT_MAX_CALLS_PER_RUN);
+    assert_eq!(legacy.config.max_auto_submits_per_run, 0);
     // 手动调整过的值需生效
-    let custom = policy(r#"{"maxToolSteps":8,"maxCallsPerRun":16}"#);
+    let custom = policy(r#"{"maxToolSteps":8,"maxCallsPerRun":16,"maxAutoSubmitsPerRun":3}"#);
     assert_eq!(custom.config.max_tool_steps, 8);
     assert_eq!(custom.config.max_calls_per_run, 16);
+    assert_eq!(custom.config.max_auto_submits_per_run, 3);
+}
+
+/// 自动提交工作流用满之后退回询问，不直接拒绝；别的工具与 `deny` 不受影响。
+#[test]
+fn 自动提交次数用满后只有提交退回询问() {
+    use ToolAccess::{Allow, Ask, Deny};
+    // 不限制：allow 的提交照旧直接跑
+    assert!(!requires_approval("comfy_submit", Allow, 0, 100));
+    // 额度内：直接跑
+    assert!(!requires_approval("comfy_submit", Allow, 2, 1));
+    // 用满：退回询问（用户仍可批准）
+    assert!(requires_approval("comfy_submit", Allow, 2, 2));
+    // 不蔓延到其它工具
+    assert!(!requires_approval("comfy_get_status", Allow, 2, 9));
+    // 本来就该问的仍然问
+    assert!(requires_approval("comfy_submit", Ask, 0, 0));
+    // deny 由调用方先拦，这里不得把它说成"等批准"
+    assert!(!requires_approval("comfy_submit", Deny, 2, 2));
 }
 
 /// 库中那份"16"是**旧默认值写入**的，不升级它则默认值调整不生效。

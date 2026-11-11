@@ -176,6 +176,27 @@ impl NsfwNote for String {
 }
 
 #[test]
+fn 开工顺序先加载技能再动笔() {
+    let text = render_with_skills(&[skill("t2i-prompt", "写生图提示词")]);
+    assert!(text.contains("开工顺序"), "{}", text);
+    assert!(text.contains("命中就先 `load_skill` 取正文"));
+    assert!(
+        text.contains("没拿到正文之前不写提示词"),
+        "目录摘要不能当规则用，必须先把加载正文写成硬步骤"
+    );
+    assert!(text.contains("命中就必须先 `load_skill` 取正文"));
+    assert!(!text.contains("本机没有可加载的 Skill"));
+    // 顺序也要对：开工顺序在技能目录之前，模型才会先看见它。
+    let order = text.find("开工顺序").expect("缺少开工顺序");
+    let catalog = text.find("可用技能（Skills）与工具").expect("缺少技能目录");
+    assert!(order < catalog);
+
+    // 没有 skill 时如实说，让模型别假装调用
+    let empty = render_with(&policy("{}"), false, "");
+    assert!(empty.contains("本机没有可加载的 Skill"));
+}
+
+#[test]
 fn 技能目录超过六十个要说明没列全() {
     let skills: Vec<SkillEntry> = (1..=61)
         .map(|i| skill(&format!("s{i:02}"), "一条描述"))

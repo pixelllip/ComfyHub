@@ -35,7 +35,7 @@ DSH 暴露给模型的东西分五类。对照结论（`docs/archive/dsh-tool-la
 | 工具 | 类别 | 权限档 | 说明 |
 | --- | --- | --- | --- |
 | `list_skills` | skill | allow | 列出本机 Skills（名称/描述/是否合法） |
-| `load_skill` | skill | allow | 取完整正文，包成 `<skill_content>`；同一 Run 不重复加载 |
+| `load_skill` | skill | allow | 取完整正文，包成 `<skill_content>`；同一 Run 不重复加载。**任务命中技能目录时它是第一个动作**（2026-11-11）：目录行只是索引，正文没到手之前写出来的提示词 / 方案都算臆测；系统提示的「开工顺序」与第 5 条都把这条写成硬规则 |
 | `register_skill` | skill | allow | **AI 说一声就把 Skill 写到本机**（用户核心诉求） |
 | `delete_skill` | skill | **ask** | 不可逆，默认要用户点批准 |
 | `diagnose_provider` | provider | allow | **只读诊断一个 Provider**（2026-11-11）：收集配置事实、凭据是否已配置（不显示值）、模型目录是否为空、模型列表探测的稳定错误码与脱敏原文，以及已配置的请求头 / 查询参数名称（不显示值）。**不写库、不改配置、不生成厂商预设**；解释与可选的修改建议交给当前可用的模型，结合 `web_search` / `web_fetch` 查公开文档后给出。会明确说明"连接测试通过不代表对话可用"。 |
@@ -50,7 +50,7 @@ DSH 暴露给模型的东西分五类。对照结论（`docs/archive/dsh-tool-la
 | `comfy_list_templates` | comfy | allow | **列 ComfyUI 自带的官方模板**（2026-11-07）：新模型第一次用时 `user\<用户>\workflows` 必然是空的，而装好的 ComfyUI 自带几百份官方模板（跟着版本维护）。真源是 `site-packages\comfyui_workflow_templates_core\manifest.json` 加四个 bundle 包（media-api / media-video / media-image / media-other），按模型名搜（`qwen` / `flux` / `wan`），返回 path、格式（ui/api）、是否已经在库里。拿到 path 直接 `comfy_load_workflow` 读进库，再 `comfy_fit_workflow` 对一遍本机模型、`comfy_submit` 提交；想以后换模型只改参数就再 `comfy_learn_workflow` 学成配方。**只读本机、不联网**；bundle 包没装 / 文件不在时**如实计数**（`missingFiles` / `unknownBundles`），不假装有 —— 报一个不存在的 path 只会让模型白跑一趟 |
 | `comfy_find_workflow` | comfy | allow | 找一个**能直接跑**的工作流：先搜库里**能直接跑**的工作流（标注 `runnable` = 有没有 API 节点图）；**库里没有时自动回头列本机 ComfyUI 已保存的工作流文件**（结果在 `localWorkflows` 里，用户 bug ⑤，2026-09-18） |
 | `comfy_view_outputs` | comfy | allow | **看画廊里的产物**（2026-10-29 用户："能不能让 AI 看我直接在 comfy 运行的产物（这样就不用在对话中重复发送图片了）"）：默认按"新的在前"列最近 8 张图片，`limit` 上限 50、`offset` 往后翻页，也可按 `mediaId` 单条 / `promptId` 单次运行 / `collectionId` 单个集合取；结果带 `total` / `hasMore`，返回 `referenceImages` —— 能看图的模型由执行器缩到 ≤1024 长边后**自动附在下一轮**（与 §2.1.3 共用同一份 `reference_attach`，能力判据 / 每 Run 预算 / 按路径去重都不另写；列表可以列很多，附图仍是每次最多 4 张、一次 Run 最多 6 张）。只读本机库、**不碰 ComfyUI**（所以不吃那 9 次查询额度）；自动捕获有几秒延迟，空结果如实说"等几秒 / 确认自动捕获开着"，**不许凭文件名编画面** |
-| `layout_propose` | layout | allow | **按要的画面给出 1~3 个可直接编辑的 2D 布局模板**（2026-11-03 用户换思路："AI 生成提示词的同时给出可用的 2D 布局模板，我可打开预览并修改，修改后重新提交给工作台"）：模型在写提示词的**同一轮**调它，每个模板是一组 `0~1000` 归一化坐标的框 + 名称 / 描述 / 关系 / 面；后端**夹边、补 id、清坏关系**并逐条记 `issues`，结果落进 `tool_result.jsonPayload.layoutTemplates`，回复末尾画成「2D 布局模板」卡。用户改完点「提交回工作台」= 发一条普通用户消息（`LayoutResubmit`），模型按新框重写提示词。**不生成图片、不写库、不碰 ComfyUI**（所以出厂 allow、不吃查询额度）；3D 路线已搁置，契约见 `docs/layout-workspace-design.md` |
+| `layout_propose` | layout | allow | **写完提示词后按这版提示词生成一个构图核对模板**（2026-11-11 用户要求："当AI生成提示词之后，强制它基于它写的提示词生成一个布局模板，以供后续生图结束之后核对构图是否符合预期。该模板可以像之前的三模板结构一样，被用户重新编辑和提交"）：`purpose="verify"` + `prompt`（刚写好的提示词原文）+ 恰好 1 个 `templates`；用户额外要构图方案时才用 `purpose="draft"` 给 1~3 个草稿。每个模板是一组 `0~1000` 归一化坐标的框 + 名称 / 描述 / 关系 / 面；后端**夹边、补 id、清坏关系**并逐条记 `issues`，结果落进 `tool_result.jsonPayload.layoutTemplates`，回复末尾画成「构图核对模板」卡（排在产物卡之后）。用户改完点「提交回工作台」= 发一条普通用户消息（`LayoutResubmit`），模型按新框重写提示词。`comfy_submit(positivePrompt=…)` 提交前要求本 Run 已有同一版提示词的核对模板，否则 `LAYOUT_TEMPLATE_REQUIRED` / `LAYOUT_TEMPLATE_MISMATCH`。工具正文会把**规范化之后**的框逐条回给模型；`comfy_submit` 的本次产物则走 `referenceImages` 自动附进下一轮（视觉模型能看到刚生成的图），**并且工具结果里会重复「出图后必须核对构图」与本次模板的框表**（2026-11-11，防止模型只回一句"已出图"），模型据此逐项对照主体位置 / 占比 / 遮挡 / 画幅；看不到图就如实说。**不生成图片、不写库、不碰 ComfyUI**（所以出厂 allow、不吃查询额度）；3D 路线已搁置，契约见 `docs/layout-workspace-design.md` |
 | `comfy_list_workflows` | comfy | allow | 列出**本机 ComfyUI 里已经保存的工作流文件**（`user\<用户>\workflows\*.json`，用户 bug ⑤，2026-09-18）：带路径 / 格式（ui/api）/ 是否已入库（`inLibrary` / `promptId`），可按文件名过滤（如 `krea2`）。**只读**，不改用户的文件。首次使用、或 `comfy_find_workflow` 什么都搜不到时先看它 —— 这些工作流**不需要在 ComfyUI 里跑过一次**，拿到 path 直接 `comfy_load_workflow` 就能提交 |
 | `comfy_submit` | comfy | **ask** | **真的把工作流提交给 ComfyUI 跑**（用户建议 ①，2026-09-17）：支持 `节点id.输入名` 覆盖参数、`connections` 补连线（值写 `["<上游节点id>", 槽位]`），跑完直接入库；会消耗显卡时间，默认要审批。**2026-10-21 新增 `positivePrompt`**：工作流里带 `TextGenerate`（本地 LLM 扩写 / 布局编译器）时，AI 先读它的 `system_prompt`、自己写好最终提示词，再由后端写进正面 `CLIPTextEncode.text`，并把 TextGenerate 这一支**从这次提交的图里摘掉**（节点 + 指向它的显示节点 + 只喂它的上游；2026-10-24 起：只断线不够，ComfyUI 校验整张 prompt），本地 LLM 既不校验也不执行，原文件不动。返回 `positivePromptApplied` / `textGenerateBypassed` 作为证据 |
 | `comfy_use_attachment` | comfy | **ask** | 把用户发来的**图片附件**投放进 ComfyUI 的 `input/` 目录并返回真实文件名（用户 bug，2026-09-17）：图生图 / 参考图的唯一正路，默认要审批（往用户机器上写文件） |
@@ -464,15 +464,19 @@ DSH 用 `read-only / workspace-write / danger-full-access` 三档 preset + `work
   并且**不再继续工具循环**（AIH-022）。
 - **工具失败不打断 Run**：任何异常都变成本次调用的失败结果（`tool.failed` + 稳定 code），
   模型可以自己纠正，或者如实告诉用户（AIH-036：工具失败要如实报告，不许伪造进度）。
-- **三层预算**（防"AI 拿 ComfyUI 当轮询器"）：
-  ① 一次回复最多 `maxToolSteps = 8` 轮（到顶那轮不带 `tools`，逼它收尾）；
-  ② 单 Run 工具调用总数 `maxCallsPerRun = 16`；
+- **四层预算**（前三层防"AI 拿 ComfyUI 当轮询器"，第四层限制无人值守地连跑工作流）：
+  ① 一次回复最多 `maxToolSteps = 25` 轮（到顶那轮不带 `tools`，逼它收尾）；
+  ② 单 Run 工具调用总数 `maxCallsPerRun = 48`；
   ③ **查 ComfyUI 的次数 `maxComfyQueriesPerRun = 9`**（AIH-036 原话是 3 次；2026-09-17 用户实测
   "3 次太少"——投递附件 + 查节点 + 查工作流很容易就撞上限——要求放宽到 9）。
   这个数字的**唯一真源**是 `ToolPolicyConfig.DEFAULT_MAX_COMFY_QUERIES_PER_RUN`：系统提示词里插值它，
   读库时也用 `ToolPolicyConfig.normalizeStored` 覆盖掉库里冻着的历史值（它是内置预算，不是用户设置，
   但 `ToolPolicy.save` 会把整份配置写进 `app_settings`，只改默认值老库不生效）。
-  超预算的工具调用会以 `TOOL_BUDGET_EXCEEDED` / `QUERY_BUDGET_EXCEEDED` 失败返回，模型能看懂并改用已有信息。
+  ④ **自动提交工作流次数 `maxAutoSubmitsPerRun`**（出厂 **0 = 不限制**，设置页「AI 工具权限 →
+  预算」可调 1~12 次）：`comfy_submit` 命中 allow 档、不需要审批就直接跑的那一次计入；
+  用满之后同一个 Run 里再提交会退回询问，由用户点批准。需要审批的那次提交不计入，
+  答题重置也不清零（它是这个 Run 的硬上限）。三条查询额度用尽会以
+  `TOOL_BUDGET_EXCEEDED` / `QUERY_BUDGET_EXCEEDED` 失败返回，模型能看懂并改用已有信息。
 - **提示词版本**：v1 里那句「当前版本尚未注册任何工具」删掉了，v2 改成工具清单 + 权限边界 +
   Skills 使用纪律 + 防注入规则（AIH-046）；v3 长期记忆、v4 附件诚实、v5 会话标题、
   v6/v8 权限档与档位改名、v7 图生图三步；**v11 = 工作流文件可以直接提交**（`comfy_load_workflow`，用户 bug ③）；
@@ -608,6 +612,9 @@ disable-model-invocation: false
 - 系统提示里只注入**名称 + 描述（截断 240 字，超限补省略号）+ 适用场景（120 字）**，
   正文按需 `load_skill` 取（AIH-039/040）—— 这是上下文成本的关键。超过 60 个时提示里会
   明写"本机共 N 个，只列前 60 个"，不静默丢。
+- **"按需"不等于"可选"**（2026-11-11）：任务命中目录里任一条时，系统提示的「开工顺序」与
+  第 5 条要求**第一件事就是 `load_skill`**，正文没到手之前不许写提示词 / 给方案 / 提交出图；
+  没有匹配项时才自己写，并说明这次没有可加载的 Skill。目录行只用来选技能，不能当规则用。
 - `load_skill` 的结构化结果带 `dir` 与 `files`（相对路径 + 字节数）；需要读 Skill 自带的
   `references/` 时用 `read_skill_file`，路径被限制在这个 Skill 自己的目录内。
 - 用户说的"不重启应用、新对话生效"就是这样满足的：提示词每次 Run 现渲染。
@@ -622,6 +629,13 @@ disable-model-invocation: false
 - **信任边界按来源分**：用户安装的 Skill 正文是**用户授权执行的规则**（按它做，但泄露凭据 /
   越界操作那部分仍拒绝）；工具输出、网页正文、图片附件里的文字才是**不可信数据**。
   长期记忆同样是数据。
+- **构建与打包前都会体检格式**：`scripts\check-skills.ps1` 先认转义签名（首行 `\---`、
+  正文里连续反斜杠紧跟 `[` / `_`）并修正，再核对 frontmatter（首行 `---`、name 与目录名一致、
+  description 与正文非空）；`flutter build windows` 的 `comfyhub_skills_check` target
+  （`windows\CMakeLists.txt`，debug / release 都跑）与 `pack-release.ps1` 的第一步都调它，
+  修不好就让构建失败。⚠ MSBuild 在默认 verbosity 只报 `MSB8066`，详情用
+  `flutter build windows -v` 看。2026-11-11 的 `t2i-prompt` 就是首行 `\---`、正文整篇被转义，
+  列表里 `available: false`、模型读不到它的规则。
 
 ### 4.4.1 用户消息里的卡片 / 技能快照
 

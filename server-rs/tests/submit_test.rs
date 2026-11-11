@@ -295,6 +295,24 @@ async fn submit_runs_the_workflow_then_ingests_the_product() {
         .clone();
     assert_eq!(media_ids.len(), 1, "应当收进 1 个产物：{payload}");
     assert_eq!(payload["mediaCount"], json!(1));
+    // 本次刚生成的图也要回给模型（执行器会把 `referenceImages` 缩图后附进下一轮）——
+    // 只给 mediaId 的话，模型看不到画面，"对照构图"就只是用户自己能看。
+    let references = payload["referenceImages"]
+        .as_array()
+        .expect("本次产物要附给模型看");
+    assert_eq!(references.len(), 1, "{payload}");
+    assert_eq!(
+        references[0]["label"].as_str().unwrap(),
+        format!("本次产物 #{}", media_ids[0].as_i64().unwrap())
+    );
+    assert!(
+        references[0]["path"]
+            .as_str()
+            .unwrap()
+            .to_lowercase()
+            .ends_with(".png"),
+        "{payload}"
+    );
     assert!(
         payload["capturedPromptId"].as_i64().is_some(),
         "要有捕获后的提示词 id：{payload}"

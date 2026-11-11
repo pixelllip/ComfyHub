@@ -232,7 +232,10 @@ fn record_verified_binding(
         Ok(Some(row)) => row,
         Ok(None) => return,
         Err(error) => {
-            eprintln!("[comfy_submit] 读配方失败，跳过已验证回写：{}", error.human());
+            eprintln!(
+                "[comfy_submit] 读配方失败，跳过已验证回写：{}",
+                error.human()
+            );
             return;
         }
     };
@@ -1525,7 +1528,9 @@ pub async fn tool_submit(
                     // 产物与已有文件重复（duplicates）也算跑通：那次运行确实出图了，
                     // 只是文件早就在库里。**"完成但没有产物文件"不算**（没东西证明它跑出了什么）。
                     let ran_ok = !failed
-                        && (result.imported > 0 || result.duplicates > 0 || result.already_captured);
+                        && (result.imported > 0
+                            || result.duplicates > 0
+                            || result.already_captured);
                     // T3：把这次提交的来源档 / 配方记在 capture_runs 上（外部捕获那条路不动）。
                     // `COALESCE` 保证"缺省不落"：没声明的列保持原值（默认 'ComfyUI'）。
                     if source_kind.is_some() || recipe_id.is_some() {
@@ -1634,6 +1639,14 @@ pub async fn tool_submit(
     }
     out.insert("mediaIds".into(), json!(submission.media_ids));
     out.insert("mediaCount".into(), json!(submission.media_ids.len()));
+    // 本次刚生成的产物也走 `referenceImages`：执行器会把它们缩图后挂到下一轮，
+    // 模型因此能拿产物和提示词 / 构图核对模板**真正对照**，而不是只看到 mediaId。
+    // 视频 / 音频不在里面（看不了画面，链路上只附图片）。
+    let reference_images =
+        crate::comfy::media_view::references_for_media_ids(state, &submission.media_ids);
+    if !reference_images.is_empty() {
+        out.insert("referenceImages".into(), json!(reference_images));
+    }
     out.insert("nsfw".into(), json!(nsfw));
     // **这份工作流认不认负面提示词**（2026-10-11）：有些 turbo 模型没有负面输入。
     //

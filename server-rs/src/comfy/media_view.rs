@@ -259,6 +259,45 @@ pub fn tool_view_outputs(state: &AppState, arguments: &Value) -> Result<ToolOutc
     Ok(ToolOutcome::new(text, payload))
 }
 
+/// 把一批 media id 变成 `referenceImages` 条目（只收图片、只收还在磁盘上的）。
+///
+/// `comfy_submit` 用它把**本次刚生成的产物**交给执行器自动附到下一轮 ——
+/// 与 `comfy_view_outputs` 共用同一个形状与同一条附图预算/去重链路。
+/// 视频 / 音频没有 `inline_base64` 那条传输，直接跳过（模型只能看元数据）。
+pub fn references_for_media_ids(state: &AppState, ids: &[i64]) -> Vec<Value> {
+    if ids.is_empty() {
+        return Vec::new();
+    }
+    let Ok(rows) = crate::media::media::list_by_ids(state, ids) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for row in rows {
+        // 与 `comfy_view_outputs` 同一份"每结果最多几张"预算：多出来的不写进
+        // `referenceImages`，模型要看再按 `promptId` 调 `comfy_view_outputs`。
+        if out.len() >= crate::ai::reference_attach::MAX_PER_RESULT {
+            break;
+        }
+        if !row.kind.eq_ignore_ascii_case("IMAGE") {
+            continue;
+        }
+        let Some(path) = crate::media::media::resolve_media(state.media_dir(), &row.stored_name)
+        else {
+            continue;
+        };
+        out.push(json!({
+            "nodeId": row.id.to_string(),
+            "label": format!("本次产物 #{}", row.id),
+            "file": row.original_name,
+            "path": path.to_string_lossy().to_string(),
+            "exists": true,
+            "width": row.width,
+            "height": row.height,
+        }));
+    }
+    out
+}
+
 /// 读一页产物 + 这一批的总数（`total` 让模型知道"后面还有没有"）。
 ///
 /// `mediaId` 优先于 `promptId` / `collectionId`；翻页（`limit` / `offset`）只对列表生效。

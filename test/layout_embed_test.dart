@@ -54,6 +54,22 @@ Map<String, dynamic> _payload() => {
   'issues': [],
 };
 
+/// 写完提示词后按提示词生成的**一个**构图核对模板（`purpose=verify`）。
+Map<String, dynamic> _verifyPayload() {
+  final base = _payload();
+  final template = Map<String, dynamic>.from(
+    (base['layoutTemplates'] as List).single as Map,
+  );
+  template['purpose'] = 'verify';
+  template['prompt'] = '1girl, standing left of the church, lantern in hand';
+  return {
+    'purpose': 'verify',
+    'verificationPrompt': template['prompt'],
+    'layoutTemplates': [template],
+    'issues': [],
+  };
+}
+
 void main() {
   group('LayoutCandidate：读工具结构化结果', () {
     test('正常 payload → 一条候选，坐标 / 关系 / brief 都在', () {
@@ -122,6 +138,38 @@ void main() {
         LayoutCandidate.listFromPayload({'layoutTemplates': 'x'}),
         isEmpty,
       );
+    });
+  });
+
+  group('构图核对模板：按提示词生成，出图后对照', () {
+    test('purpose=verify 与 prompt 都被读出来', () {
+      final c = LayoutCandidate.listFromPayload(_verifyPayload()).single;
+      expect(c.forVerification, isTrue);
+      expect(c.prompt, contains('standing left of the church'));
+      expect(c.promptExcerpt, contains('1girl'));
+      // 草稿没有这两个字段时按普通模板处理（旧历史照样读得出来）
+      final draft = LayoutCandidate.listFromPayload(_payload()).single;
+      expect(draft.forVerification, isFalse);
+      expect(draft.prompt, isEmpty);
+    });
+
+    testWidgets('核对模板卡在 320 宽下显示提示词摘录，不溢出', (tester) async {
+      tester.view.physicalSize = const Size(320, 640);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+
+      final candidates = LayoutCandidate.listFromPayload(_verifyPayload());
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: LayoutTemplatesCard(candidates: candidates, onOpen: (_) {}),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('构图核对模板'), findsOneWidget);
+      expect(find.textContaining('依据提示词 '), findsOneWidget);
+      expect(tester.takeException(), isNull);
     });
   });
 

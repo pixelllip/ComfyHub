@@ -860,8 +860,12 @@ pub(crate) async fn scripted_tool_gateway(
 /// 不可见时按该上游原文返回 400 —— 这正是此前遇到的情形：
 /// `The reasoning_text in the thinking mode must be passed back to the API.`
 ///
+/// 同一轮里还按 OpenCode Go 的校验再来一次：`reasoning` 项必须带 `summary` 数组，
+/// 只发 `content` 时回 `input[1].summary: expected an array`（2026-11-11 现场）。
+///
 /// 返回 `(base_url, 记录到的每一轮请求体)`：第 2 份就是"工具结果回填"那次，
-/// 用例直接断言它的形状（`reasoning` 项在 `function_call` 之前、里面是 `reasoning_text`）。
+/// 用例直接断言它的形状（`reasoning` 项在 `function_call` 之前、`summary` 与
+/// `content` 两个字段都在）。
 pub(crate) async fn reasoning_echo_gateway() -> (
     String,
     tokio::task::JoinHandle<()>,
@@ -888,6 +892,23 @@ pub(crate) async fn reasoning_echo_gateway() -> (
                 recorder.lock().unwrap().push(request.clone());
                 if round >= 2 && !request.contains("reasoning_text") {
                     let body = r#"{"error":{"message":"The `reasoning_text` in the thinking mode must be passed back to the API.","type":"invalid_request_error"}}"#;
+                    let _ = socket
+                        .write_all(
+                            format!(
+                                "HTTP/1.1 400 Bad Request\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                                body.len()
+                            )
+                            .as_bytes(),
+                        )
+                        .await;
+                    let _ = socket.shutdown().await;
+                    return;
+                }
+                if round >= 2
+                    && request.contains(r#""type":"reasoning""#)
+                    && !request.contains(r#""type":"summary_text""#)
+                {
+                    let body = r#"{"type":"error","error":{"type":"invalid_request_error","message":"input[1].summary: expected an array"}}"#;
                     let _ = socket
                         .write_all(
                             format!(

@@ -111,13 +111,30 @@ pub fn render(
         if model_sees_images { "支持（本模型能接收图片）" } else { "不支持（本模型没有图片输入）" },
     ));
 
+    // 开工顺序：这一段放在技能目录**前面**，因为它是模型动手前的第一步。
+    // 目录行只是索引（正文在磁盘上），不把"先 load_skill"写成显式步骤时，模型会拿
+    // 一句摘要当规则、直接开始写提示词 —— 2026-11-11 用户报的就是这个现象。
+    out.push_str("\n\n开工顺序（每个新任务都按这个来，不要跳步）：\n");
+    if skills.is_empty() {
+        out.push_str("- 本机没有可加载的 Skill，直接按下面的规则做；不要假装调用 `load_skill`。\n");
+    } else {
+        out.push_str(
+            "- 先在下面「已安装的 Skills」里找与这次任务匹配的那一条，按名字与「适用」判断，\
+             不要凭印象挑；拿不准时先加载最接近的一条再判断。\n  \
+             - 命中就先 `load_skill` 取正文，它排在查库、查工作流、问用户之前；正文到手再动笔，\
+             没拿到正文之前不写提示词、不给方案、不提交出图。\n  \
+             - 目录行只是索引，不能代替正文规则；两者冲突时以正文为准。\n  \
+             - 没有匹配的 Skill 时才自己按这份提示做，并在回答里说明这次没有可加载的 Skill。\n",
+        );
+    }
+
     out.push_str("\n\n可用技能（Skills）与工具：\n");
     if skills.is_empty() {
         // ⚠ 这里提到 `register_skill` 是**故意的**（Kotlin 原文如此）：桌面专属工具也要能
         // 告诉模型"想记流程就注册一个"。照抄，别按"手机调不到"去改文案。
         out.push_str("- 本机还没有安装任何 Skill。用户要求「记住某个流程 / 以后都这么做」时，用 register_skill 注册一个。\n");
     } else {
-        out.push_str("- 已安装的 Skills（只给目录，正文按需加载）：\n");
+        out.push_str("- 已安装的 Skills（只给目录；命中就必须先 `load_skill` 取正文）：\n");
         for skill in skills.iter().take(60) {
             out.push_str("  · ");
             out.push_str(&skill.name);

@@ -111,6 +111,7 @@ enum AiReasoningEffort {
   /// ⚠ 2026-11-09：真正能关掉的那一类网关现在有单独一档 [disabled]（关闭）。
   /// 这一档仍然是"不发任何参数"，两档不是一回事：**默认 = 让网关决定，关闭 = 发关闭参数**。
   off('off', '默认', hint: '不发思考参数，由网关决定，有的网关（如聚合站）仍会思考'),
+
   /// 关闭思考：**真的发一个关闭取值**，不是"什么都不发"。
   ///
   /// 此前只有 [off]（空参数），对默认开启思考的网关无法关闭。
@@ -449,8 +450,8 @@ class AiModel {
   /// 「关闭」没有自己的键，读的是 `off` / `disabled` 两个历史键（见 [disabledEffortWire]）。
   String? effortWireValue(AiReasoningEffort effort) =>
       effort == AiReasoningEffort.disabled
-          ? disabledEffortWire
-          : thinkingEfforts[effort.wire];
+      ? disabledEffortWire
+      : thinkingEfforts[effort.wire];
   AiThinkingFormat? get thinkingFormatEnum =>
       AiThinkingFormat.parse(thinkingFormat);
 
@@ -1802,7 +1803,7 @@ class AiToolInfo {
     'web' => '联网搜索',
     // O7/O8（2026-09-25）：搜自己的提示词库 / 读写角色卡
     'library' => '资料库',
-    // 2D 布局模板（2026-11-03）：写提示词时同轮给的构图草稿
+    // 布局模板：写完提示词后的构图核对模板（用户额外要方案时是草稿）
     'layout' => '布局',
     _ => category,
   };
@@ -1831,6 +1832,18 @@ class AiToolPolicy {
   final Map<String, String> overrides;
   final int maxToolSteps;
   final int maxCallsPerRun;
+
+  /// 这一次回复里最多**自动提交工作流**几次（0 = 不限制）。
+  ///
+  /// 自动提交指 `comfy_submit` 不需要审批就直接执行的那一次。用满之后，
+  /// 同一个 Run 里再提交会回到询问档，等用户点批准。
+  final int maxAutoSubmitsPerRun;
+
+  /// 这台后端是否认识 [maxAutoSubmitsPerRun]。
+  ///
+  /// 旧版后端返回的策略里没有这个键；那时界面不能假装"已设为不限制"，
+  /// 也不该发一个对方会忽略的字段。
+  final bool supportsAutoSubmitLimit;
   final int maxReadBytes;
   final int maxWriteBytes;
 
@@ -1858,6 +1871,8 @@ class AiToolPolicy {
     this.overrides = const {},
     this.maxToolSteps = 25,
     this.maxCallsPerRun = 48,
+    this.maxAutoSubmitsPerRun = 0,
+    this.supportsAutoSubmitLimit = true,
     this.maxReadBytes = 0,
     this.maxWriteBytes = 0,
     this.defaultWriteRoot,
@@ -1881,6 +1896,8 @@ class AiToolPolicy {
         const {},
     maxToolSteps: (json['maxToolSteps'] as num?)?.toInt() ?? 25,
     maxCallsPerRun: (json['maxCallsPerRun'] as num?)?.toInt() ?? 48,
+    maxAutoSubmitsPerRun: (json['maxAutoSubmitsPerRun'] as num?)?.toInt() ?? 0,
+    supportsAutoSubmitLimit: json.containsKey('maxAutoSubmitsPerRun'),
     maxReadBytes: (json['maxReadBytes'] as num?)?.toInt() ?? 0,
     maxWriteBytes: (json['maxWriteBytes'] as num?)?.toInt() ?? 0,
     defaultWriteRoot: json['defaultWriteRoot']?.toString(),
@@ -1903,6 +1920,7 @@ class AiToolPolicy {
     Map<String, String>? overrides,
     int? maxToolSteps,
     int? maxCallsPerRun,
+    int? maxAutoSubmitsPerRun,
   }) => AiToolPolicy(
     writeRoots: writeRoots ?? this.writeRoots,
     readRoots: readRoots ?? this.readRoots,
@@ -1910,6 +1928,8 @@ class AiToolPolicy {
     overrides: overrides ?? this.overrides,
     maxToolSteps: maxToolSteps ?? this.maxToolSteps,
     maxCallsPerRun: maxCallsPerRun ?? this.maxCallsPerRun,
+    maxAutoSubmitsPerRun: maxAutoSubmitsPerRun ?? this.maxAutoSubmitsPerRun,
+    supportsAutoSubmitLimit: supportsAutoSubmitLimit,
     maxReadBytes: maxReadBytes,
     maxWriteBytes: maxWriteBytes,
     defaultWriteRoot: defaultWriteRoot,
@@ -2436,8 +2456,7 @@ class AiToolCallState {
         // 不能一律当失败 —— 真机上那会让"明明跑成功了的 load_skill"显示「失败」。
         // 判据只有一条：失败的正文一定以 `[工具失败:<码>] ` 开头（`ToolOutcome.failure`），
         // 没这个前缀就按成功画。写端已经改成与桌面同形（带 `ok`），这段只为历史数据。
-        final legacyOk =
-            !hasOk && !((part.text ?? '').startsWith('[工具失败:'));
+        final legacyOk = !hasOk && !((part.text ?? '').startsWith('[工具失败:'));
         final succeeded = hasOk ? ok : legacyOk;
         final approval = (map['approval'] ?? '').toString();
         final i = indexOf[id];

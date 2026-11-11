@@ -780,3 +780,71 @@ async fn layout_propose_returns_editable_templates_and_fixes_boxes() {
 
     std::fs::remove_dir_all(state.project_root()).ok();
 }
+
+/// 2026-11-11：写完提示词后按它生成**一个**构图核对模板；提交同一版提示词才放行。
+#[tokio::test]
+async fn layout_verify_template_is_required_before_submitting_its_prompt() {
+    let state = state();
+    let mut session = comfyhub_server_rs::tools::tools::ToolSession::default();
+    let prompt = "1girl, standing left of the church, lantern in hand";
+
+    // 没生成核对模板 → 提交在工具层就被拒，不碰 ComfyUI。
+    let err = call_tool_with_session(
+        &state,
+        "comfy_submit",
+        serde_json::json!({ "promptId": 1, "positivePrompt": prompt }),
+        &mut session,
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(err.code, "LAYOUT_TEMPLATE_REQUIRED", "{}", err.message);
+
+    // 生成之后，同一版提示词（只差空白）能过闸门；后面的失败原因是"库里没有这份图"。
+    let out = call_tool_with_session(
+        &state,
+        "layout_propose",
+        serde_json::json!({
+            "purpose": "verify",
+            "prompt": prompt,
+            "brief": "雾夜废墟",
+            "templates": [{
+                "title": "三分法：旅人压左",
+                "width": 768,
+                "height": 1024,
+                "regions": [
+                    { "label": "提灯的旅人", "kind": "character",
+                      "x": 40, "y": 300, "w": 260, "h": 640 }
+                ]
+            }]
+        }),
+        &mut session,
+    )
+    .await
+    .unwrap();
+    assert_eq!(out.payload["layoutTemplates"][0]["purpose"], "verify");
+
+    // 换了一版提示词 → 模板对不上，必须重新生成。
+    let err = call_tool_with_session(
+        &state,
+        "comfy_submit",
+        serde_json::json!({ "promptId": 1, "positivePrompt": "1girl, lantern" }),
+        &mut session,
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(err.code, "LAYOUT_TEMPLATE_MISMATCH", "{}", err.message);
+
+    // 同一版提示词 → 过了核对闸门（后面的报错是"库里没有这份图"，与本功能无关）。
+    let err = call_tool_with_session(
+        &state,
+        "comfy_submit",
+        serde_json::json!({ "promptId": 1, "positivePrompt": prompt }),
+        &mut session,
+    )
+    .await
+    .unwrap_err();
+    assert_ne!(err.code, "LAYOUT_TEMPLATE_REQUIRED", "{}", err.message);
+    assert_ne!(err.code, "LAYOUT_TEMPLATE_MISMATCH", "{}", err.message);
+
+    std::fs::remove_dir_all(state.project_root()).ok();
+}

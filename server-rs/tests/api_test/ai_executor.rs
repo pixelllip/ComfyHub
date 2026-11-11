@@ -335,6 +335,10 @@ async fn responses_run_echoes_each_round_reasoning_or_the_upstream_400s() {
         "内容块是 reasoning_text：{second}"
     );
     assert!(
+        second.contains(r#""summary":[{"type":"summary_text","text":"先看看技能"}]"#),
+        "summary 必须带同一段思考；严格网关缺了它就回 400 input[N].summary: expected an array：{second}"
+    );
+    assert!(
         second.contains("先看看技能"),
         "回传的是**这一轮**的思维链原文：{second}"
     );
@@ -1751,7 +1755,10 @@ async fn run_mentions_persist_card_snapshots_and_load_skills_server_side() {
     assert_eq!(parts[0]["type"], "mention");
     assert_eq!(parts[0]["jsonPayload"]["kind"], "character_card");
     assert_eq!(parts[0]["jsonPayload"]["snapshot"]["prompt"], "银发");
-    assert_eq!(parts[0]["jsonPayload"]["modelText"], "[CHARACTER CARD]\n凛\n银发");
+    assert_eq!(
+        parts[0]["jsonPayload"]["modelText"],
+        "[CHARACTER CARD]\n凛\n银发"
+    );
     assert_eq!(parts[1]["type"], "mention");
     assert_eq!(parts[1]["jsonPayload"]["kind"], "skill");
     assert!(

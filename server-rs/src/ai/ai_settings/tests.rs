@@ -44,7 +44,7 @@ fn 类别与权限档的线上字与_kotlin_一致() {
 }
 
 #[test]
-fn policy_dto_的键集合就是_kotlin_那十一个() {
+fn policy_dto_的键集合就是_kotlin_那十一个加自动提交次数() {
     let policy = ToolPolicy::new(PathBuf::from(r"D:\proj"), ToolPolicyConfig::default());
     let json = policy_dto(&policy, &[]);
     let mut keys: Vec<&str> = json
@@ -59,6 +59,7 @@ fn policy_dto_的键集合就是_kotlin_那十一个() {
         vec![
             "autoReadRoots",
             "defaultWriteRoot",
+            "maxAutoSubmitsPerRun",
             "maxCallsPerRun",
             "maxComfyQueriesPerRun",
             "maxReadBytes",

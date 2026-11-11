@@ -3,9 +3,10 @@ import 'package:flutter/material.dart';
 import '../models/layout_embed.dart';
 import 'layout_thumbnail.dart';
 
-/// 回复末尾（或工具卡后面）那排**候选布局**。
+/// 回复末尾（或工具卡后面）的**布局模板**。
 ///
-/// AI 生成提示词时同时给出可用的 2D 布局模板，可打开预览并修改，修改后重新提交给工作台。
+/// 写完提示词后给出的是"构图核对模板"（出图后和产物对照），也可以打开预览并修改，
+/// 修改后重新提交给工作台。用户明确要构图方案时，这里也可能是 1~3 个草稿。
 /// 这张卡只做两件事：显示模板、提供明确的「打开画布」动作。
 /// **不在此处直接"应用"** —— 是否修改、修改位置由画布决定。
 class LayoutTemplatesCard extends StatelessWidget {
@@ -23,6 +24,12 @@ class LayoutTemplatesCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final verifying =
+        candidates.isNotEmpty && candidates.every((c) => c.forVerification);
+    final title = verifying ? '构图核对模板' : '2D 布局模板（${candidates.length}）';
+    final hint = verifying
+        ? 'AI 按这次提示词生成的构图。能看图的模型会在出图后自动对照。点开可以改框，改完提交回对话。'
+        : '点一条打开画布，改完提交回对话 —— AI 会按新构图重写提示词。';
     return Container(
       key: const Key('layout-templates-card'),
       padding: const EdgeInsets.all(8),
@@ -44,18 +51,13 @@ class LayoutTemplatesCard extends StatelessWidget {
                 color: theme.colorScheme.primary,
               ),
               const SizedBox(width: 6),
-              Expanded(
-                child: Text(
-                  '2D 布局模板（${candidates.length}）',
-                  style: theme.textTheme.labelMedium,
-                ),
-              ),
+              Expanded(child: Text(title, style: theme.textTheme.labelMedium)),
             ],
           ),
           Padding(
             padding: const EdgeInsets.only(left: 21, top: 2),
             child: Text(
-              '点一条打开画布，改完提交回对话 —— AI 会按新构图重写提示词。',
+              hint,
               style: theme.textTheme.labelSmall?.copyWith(
                 color: theme.colorScheme.outline,
               ),
@@ -114,6 +116,19 @@ class _LayoutCandidateRow extends StatelessWidget {
                         overflow: TextOverflow.ellipsis,
                         style: theme.textTheme.labelLarge,
                       ),
+                      if (candidate.forVerification &&
+                          candidate.promptExcerpt.isNotEmpty)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 2),
+                          child: Text(
+                            '依据提示词 ${candidate.promptExcerpt}',
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: theme.textTheme.labelSmall?.copyWith(
+                              color: theme.colorScheme.outline,
+                            ),
+                          ),
+                        ),
                       if (candidate.note.isNotEmpty)
                         Padding(
                           padding: const EdgeInsets.only(top: 2),

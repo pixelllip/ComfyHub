@@ -36,7 +36,12 @@ async fn run_kit_ships_every_rule_the_phone_needs() {
     //   新增 offset 翻页 / promptId / collectionId 过滤，结果带 total / hasMore。
     // v67（2026-11-11）：新增只读的 diagnose_provider —— Provider 诊断只报事实，
     //   解释与修复建议交给当前可用的模型。
-    assert_eq!(body["promptVersion"], "v67");
+    // v68（2026-11-11）：写完提示词后按它生成 1 个构图核对模板；comfy_submit 在传
+    //   positivePrompt 时要求本 Run 已有同一版提示词的核对模板。
+    // v69（2026-11-11）：模型侧核对闭环 —— verify 结果正文带规范化框表，comfy_submit
+    //   的本次产物自动附图，第 25 条要求出图后逐项对照。
+    // v70（2026-11-11）：开工顺序（命中技能先 load_skill）+ 出图后必须核对构图。
+    assert_eq!(body["promptVersion"], "v70");
     assert_eq!(body["nsfwEnabled"], false, "夹具里没开 NSFW");
     assert_eq!(body["inlineBudget"]["perImageBytes"], 8388608, "单图 8MB");
     assert_eq!(body["inlineBudget"]["totalBytes"], 20971520, "合计 20MB");
@@ -339,7 +344,8 @@ async fn run_kit_nsfw_switch_decides_whether_the_block_is_injected() {
 
 /// **权限档与 NSFW 开关**（P4 第 33 步，界面端点第一批）：设置页那两张卡的地基。
 ///
-/// 这一条盯四件事：① `GET /api/ai/tools/policy` 的键集合就是 Kotlin 那 11 个；
+/// 这一条盯四件事：① `GET /api/ai/tools/policy` 的键集合就是 Kotlin 那 11 个，
+/// 另加本版新增的 `maxAutoSubmitsPerRun`；
 /// ② `PUT` **只改传了的字段**、并把权限档真的写进库（下一轮 Run 读的就是它）；
 /// ③ 非法权限档 **400**（不静默回落 —— 否则会把配置意图改为另一种行为）；
 /// ④ NSFW 的 `effectiveBlur` 是"两个都开"的结论，**不是**前端再算一遍。
@@ -355,6 +361,7 @@ async fn tool_policy_and_nsfw_endpoints() {
         vec![
             "autoReadRoots",
             "defaultWriteRoot",
+            "maxAutoSubmitsPerRun",
             "maxCallsPerRun",
             "maxComfyQueriesPerRun",
             "maxReadBytes",
@@ -369,6 +376,7 @@ async fn tool_policy_and_nsfw_endpoints() {
     assert_eq!(policy["permissionMode"], "ask");
     assert_eq!(policy["maxToolSteps"], 25);
     assert_eq!(policy["maxCallsPerRun"], 48);
+    assert_eq!(policy["maxAutoSubmitsPerRun"], 0, "默认不限制自动提交");
     assert!(
         policy["writeRoots"][0]
             .as_str()
@@ -428,6 +436,37 @@ async fn tool_policy_and_nsfw_endpoints() {
     assert_eq!(status, StatusCode::OK, "{saved}");
     assert_eq!(saved["permissionMode"], "full");
 
+    // ②b 自动提交工作流次数：写入、回读，越界值夹回合法区间
+    let (status, saved) = send_json(
+        router_for(state.clone()),
+        "PUT",
+        "/api/ai/tools/policy",
+        serde_json::json!({ "maxAutoSubmitsPerRun": 3 }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{saved}");
+    assert_eq!(saved["maxAutoSubmitsPerRun"], 3);
+    let (status, clamped) = send_json(
+        router_for(state.clone()),
+        "PUT",
+        "/api/ai/tools/policy",
+        serde_json::json!({ "maxAutoSubmitsPerRun": 999 }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{clamped}");
+    assert_eq!(clamped["maxAutoSubmitsPerRun"], 48, "上界是 48");
+    let (status, negative) = send_json(
+        router_for(state.clone()),
+        "PUT",
+        "/api/ai/tools/policy",
+        serde_json::json!({ "maxAutoSubmitsPerRun": -1 }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{negative}");
+    assert_eq!(
+        negative["maxAutoSubmitsPerRun"], 0,
+        "负数按「不限制」处理，不许让整页保存失败"
+    );
     // ④ 工具清单：只列这台后端能跑的（条数不写死，按下面这份名单逐条对），六个键与 `AiToolInfo` 对齐
     let (status, tools) = get_json(router_for(state.clone()), "/api/ai/tools").await;
     assert_eq!(status, StatusCode::OK);

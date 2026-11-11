@@ -225,6 +225,27 @@ fn comfy_查询额度只认_comfy_类工具且只在成功时计数() {
     assert_eq!(session.comfy_queries_in_window, 0);
 }
 
+/// 自动提交工作流次数按 Run 累计；答题重置只清"窗内查询额度"，
+/// 不放宽这条硬上限（否则问一个问题就能继续无人值守地跑）。
+#[test]
+fn 自动提交额度按次累计且答题重置不放宽() {
+    let mut session = ToolSession::default();
+    assert!(session.has_auto_submits_left(0), "0 = 不限制，永远有额度");
+    assert!(session.has_auto_submits_left(2));
+    session.spend_auto_submit();
+    assert!(session.has_auto_submits_left(2), "用了 1 次还剩 1 次");
+    session.spend_auto_submit();
+    assert!(
+        !session.has_auto_submits_left(2),
+        "用满 2 次之后必须退回询问"
+    );
+    session.reset_budget();
+    assert!(
+        !session.has_auto_submits_left(2),
+        "答题重置不许把自动提交次数也清零"
+    );
+}
+
 #[test]
 fn missing_arguments_are_reported_not_unwrapped() {
     let err = string_arg(&json!({}), "name").unwrap_err();
@@ -694,7 +715,12 @@ fn comfy_recent_successes_认得真库里的_history_形状() {
     let state = AppState::new(conn, ":memory:", dir.join("media"));
     let out = comfy_recent_successes(&state, &json!({"task": "t2i"})).unwrap();
     let items = out.payload["items"].as_array().unwrap();
-    assert_eq!(items.len(), 1, "history 形状的 raw 要被认出来：{}", out.content);
+    assert_eq!(
+        items.len(),
+        1,
+        "history 形状的 raw 要被认出来：{}",
+        out.content
+    );
     assert_eq!(items[0]["runKey"], "history-shape");
     assert_eq!(items[0]["promptId"], 7);
     assert_eq!(items[0]["models"][0], "anima-base-v1.0.safetensors");

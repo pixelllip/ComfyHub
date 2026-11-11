@@ -2,7 +2,9 @@ import 'dart:convert';
 
 import 'layout_spec.dart';
 
-/// AI 在写提示词那一轮给出的**候选布局**（工具 `layout_propose` 的结构化结果）。
+/// 写完提示词后按提示词生成的**构图核对模板**（工具 `layout_propose` 的结构化结果）。
+///
+/// 用户额外要构图方案时，它也可以是 1~3 个草稿。
 ///
 /// 后端已经把坐标夹回 0~1000、补好 id、清掉坏关系（`ai/layout_proposal.rs`），
 /// 这里只负责读。**坏数据返回空表，绝不抛** —— 一张卡片读不出来，不该连累整段历史。
@@ -10,6 +12,8 @@ class LayoutCandidate {
   const LayoutCandidate({
     required this.title,
     this.note = '',
+    this.forVerification = false,
+    this.prompt = '',
     required this.spec,
   });
 
@@ -19,7 +23,23 @@ class LayoutCandidate {
   /// 这版的构图意图（可空）。
   final String note;
 
+  /// 这是"写完提示词后按提示词生成的构图核对模板"，而不是构图草稿。
+  ///
+  /// 核对模板出图后要和产物对照；草稿是用户还没定稿时看的几种不同构图。
+  final bool forVerification;
+
+  /// 核对模板依据的那版提示词原文（草稿为空）。
+  final String prompt;
+
   final LayoutSpec spec;
+
+  /// 提示词摘录：卡片上只显示前两行，点开画布仍能看到完整 brief。
+  String get promptExcerpt {
+    final text = prompt.replaceAll(RegExp(r'\s+'), ' ').trim();
+    final runes = text.runes;
+    if (runes.length <= 120) return text;
+    return '${String.fromCharCodes(runes.take(120))}…';
+  }
 
   /// 从 `tool_result.jsonPayload` 里读候选（键 `layoutTemplates`）。
   ///
@@ -40,6 +60,8 @@ class LayoutCandidate {
         LayoutCandidate(
           title: title.isEmpty ? '布局 ${out.length + 1}' : title,
           note: item['note']?.toString().trim() ?? '',
+          forVerification: item['purpose']?.toString() == 'verify',
+          prompt: item['prompt']?.toString().trim() ?? '',
           spec: spec,
         ),
       );

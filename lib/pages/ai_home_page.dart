@@ -1226,7 +1226,7 @@ class _MessageBubbleSlotState extends State<_MessageBubbleSlot> {
         producedPromptIds: message.isUser
             ? const []
             : store.producedPromptIds(message),
-        // 2D 布局模板（2026-11-03）：AI 与提示词同轮给出的构图草稿
+        // 布局模板：写完提示词后生成的构图核对模板（用户额外要方案时是草稿）
         layoutCandidates: message.isUser
             ? const []
             : store.layoutCandidates(message),
@@ -1307,7 +1307,8 @@ class _MessageBubble extends StatelessWidget {
   /// 可以直接打开本次实际运行的工作流（也可拖回 ComfyUI 复现）。
   final List<int> producedPromptIds;
 
-  /// AI 与提示词同轮给出的候选布局（`layout_propose`，2026-11-03）。
+  /// 写完提示词后按提示词生成的构图核对模板（`layout_propose`，2026-11-11）；
+  /// 用户额外要构图方案时也可能是 1~3 个草稿。
   final List<LayoutCandidate> layoutCandidates;
 
   /// 画布修改后提交回工作台（正文为一条消息）。
@@ -1849,20 +1850,6 @@ class _MessageBubble extends StatelessWidget {
                       ),
                     ),
                   ),
-                // 2D 布局模板（2026-11-03）：AI 与提示词同轮给出的构图草稿。
-                // 放在产物卡之前 —— 它是"还没出图、先对构图"的那一步。
-                if (layoutCandidates.isNotEmpty)
-                  Padding(
-                    padding: const EdgeInsets.only(top: 8),
-                    child: LayoutTemplatesCard(
-                      candidates: layoutCandidates,
-                      onOpen: (candidate) => _openLayoutEditor(
-                        context,
-                        candidate.spec,
-                        name: candidate.title,
-                      ),
-                    ),
-                  ),
                 // 画廊入口卡：本次回复**实际生成产物**时，
                 // 在末尾提供可打开详情的入口，不需要到画廊中查找。
                 // 该卡也包含"生成它的工作流"（一次运行产生的图 + 该工作流
@@ -1878,6 +1865,21 @@ class _MessageBubble extends StatelessWidget {
                       mediaPosterUrlOf: mediaPosterUrlOf,
                       // 手机读的是电脑的后端：缩略图地址里没有令牌，得靠这个头
                       mediaHeaders: attachmentPreviewHeaders(),
+                    ),
+                  ),
+                // 2D 布局模板：写完提示词后按提示词生成的构图核对模板。
+                // 放在产物卡**之后** —— 出图结束后，用户拿它和刚生成的图对照构图；
+                // 用户明确要构图方案时，这里也可能是 1~3 个草稿。
+                if (layoutCandidates.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 8),
+                    child: LayoutTemplatesCard(
+                      candidates: layoutCandidates,
+                      onOpen: (candidate) => _openLayoutEditor(
+                        context,
+                        candidate.spec,
+                        name: candidate.title,
+                      ),
                     ),
                   ),
                 if (m.status == 'cancelled')

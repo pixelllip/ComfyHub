@@ -194,6 +194,42 @@ void main() {
       expect(t.warnings.join(), contains('5 个约束'));
     });
 
+    test('大面积重叠只有"没说谁挡谁"才算损失', () {
+      // 前后遮挡就该重叠：标了「挡在前面」是**表达纵深**，不是翻译损失。
+      const ordered = LayoutSpec(
+        width: 1024,
+        height: 1024,
+        regions: [
+          LayoutRegion(
+            id: 'a',
+            rect: LayoutRect(100, 100, 600, 600),
+            label: '钢琴演奏者',
+            relation: LayoutRelation.inFront,
+            relationTo: 'b',
+          ),
+          LayoutRegion(id: 'b', rect: LayoutRect(250, 150, 600, 600), label: '合唱团'),
+        ],
+      );
+      expect(
+        ordered.translate().warnings.join(),
+        isNot(contains('没说谁挡谁')),
+      );
+
+      // 叠在一起却没有任何遮挡关系 → 散文确实说不清谁在前。
+      const unexplained = LayoutSpec(
+        width: 1024,
+        height: 1024,
+        regions: [
+          LayoutRegion(id: 'a', rect: LayoutRect(100, 100, 600, 600), label: '甲'),
+          LayoutRegion(id: 'b', rect: LayoutRect(250, 150, 600, 600), label: '乙'),
+        ],
+      );
+      expect(
+        unexplained.translate().warnings.join(),
+        contains('没说谁挡谁'),
+      );
+    });
+
     test('比例名不重复叠"构图"，且名称不会因为写了描述就被丢掉', () {
       const spec = LayoutSpec(
         width: 768,
