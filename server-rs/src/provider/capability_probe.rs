@@ -129,6 +129,8 @@ impl HttpTransport {
         timeout_seconds: u64,
         extras: &crate::provider::request_extras::RequestExtras,
     ) -> ProbeResponse {
+        // 校准不属于任何对话：{{session}} 用固定作用域
+        let extras = extras.resolve(None);
         let url = match extras.with_query(url) {
             Ok(url) => url,
             Err(error) => return ProbeResponse::failed(error.human().to_string()),

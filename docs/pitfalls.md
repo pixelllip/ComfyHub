@@ -58,7 +58,8 @@
 | 「文件信息」的值挤在卡片左半边 | 单列键值对在一张宽卡片里，右边一大片空白 | 卡片宽 ≥ 460 时排成两列（文件名 / 备注这类长值仍独占整行），把整张卡片铺满 |
 | 删掉导入的产物后，再点「导入已有产物」永远提示重复 | `capture_runs.run_key = import:<sha>` 只是个日志，却把重新导入挡在门外（媒体行其实已经删了） | 调用前先按 SHA-256 确认文件不在库里；导入这条路用 `force` 抢占运行记录（**正在处理中的**运行仍不会被抢），轮询那条路保持原样 —— 用户删掉的捕获不会被下一次轮询偷偷加回来 |
 | （MySQL 已于 2026-09-29 退役，本条仅存档）后端在跑但 MySQL 挂了，`server.ps1 start` 什么都不修 | 它看到后端进程存在就提前 return，跳过了数据库检查 | 统一入口 `comfyhub.ps1 up`：先确保数据库，再判断后端 `db` 是否 ok，不 ok 就重启后端（现在库是 SQLite、由后端自己管，MySQL 起停那一段已不存在） |
-| 接 OpenCode Go / Zen 时「测试连接」通过，发消息却 400 `MissingSessionID` | 网关要求**每一次推理请求**都带 `x-opencode-session`，而它的 `/models` 不校验这个头 —— 所以"连接测试正常"说明不了任何事 | 桌面在「AI 模型与凭据 → 编辑 Provider → 额外请求参数」里加一条请求头（名称 `x-opencode-session`，值填一个固定标识），保存即可；手机 harness 也读同一份配置。Azure 那类要求 `api-version` 查询参数的网关，在同一处加「查询参数」 |
+| 接 OpenCode Go / Zen 时「测试连接」通过，发消息却 400 `MissingSessionID` | 网关要求**每一次推理请求**都带 `x-opencode-session`，而它的 `/models` 不校验这个头 —— 所以"连接测试正常"说明不了任何事 | 桌面在「AI 模型与凭据 → 编辑 Provider → 额外请求参数」里加一条请求头（名称 `x-opencode-session`，值填 `ses_{{session}}`），保存即可；`{{session}}` 按对话展开，同一对话固定、不同对话不同。手机 harness 也读同一份配置。Azure 那类要求 `api-version` 查询参数的网关，在同一处加「查询参数」 |
+| 用 OpenCode **Go 套餐**却回 402 `Insufficient balance` | Base URL 填成了 Console 推理端点 `https://opencode.ai/inference/openai/v1`，它按账户余额计费；Go 套餐走 `https://opencode.ai/zen/go/v1`（Zen 按量付费是 `https://opencode.ai/zen/v1`） | 把 Base URL 改成 `https://opencode.ai/zen/go/v1`。若仍报余额不足，是 API Key 属于另一个工作区（Go 订阅不在那个工作区），换一把订阅所在工作区的 key |
 
 | 脚本报 `Cannot overwrite variable HOME` | `$home` 是 PowerShell 的只读自动变量，不能当普通变量赋值 | 改名成 `$mysqlHome` / `$javaHome` |
 | （MySQL 已于 2026-09-29 退役，本条仅存档）`Get-ChildItem 'D:\tools\mysql\*\bin' -Filter x.exe` 静默返回空 | 路径里带通配符时文件系统提供程序不会正确应用 `-Filter` | 改成先 `-Directory` 列目录再拼 `bin\x.exe` |

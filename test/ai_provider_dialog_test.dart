@@ -168,7 +168,7 @@ void main() {
     );
     await tester.enterText(
       find.byKey(const ValueKey('extra-header-value-0')),
-      'ses_abc',
+      'ses_{{session}}',
     );
     await tester.enterText(
       find.byKey(const ValueKey('extra-query-name-0')),
@@ -187,8 +187,8 @@ void main() {
         jsonDecode(recorder.providerCreates.single) as Map<String, dynamic>;
     expect(
       sent['headers'],
-      {'x-opencode-session': 'ses_abc'},
-      reason: '额外请求头必须跟 Provider 一起存，发消息时才带得上',
+      {'x-opencode-session': 'ses_{{session}}'},
+      reason: '存的是模板原文：每台设备 / 每条对话发请求时才展开',
     );
     expect(sent['query'], {'api-version': '2024-10-21'});
   });
@@ -210,6 +210,34 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.textContaining('名称不合法'), findsOneWidget);
+    final create = tester.widget<FilledButton>(
+      find.ancestor(of: find.text('创建'), matching: find.byType(FilledButton)),
+    );
+    expect(create.onPressed, isNull);
+    expect(recorder.providerCreates, isEmpty);
+  });
+
+  testWidgets('额外请求头里拼错变量会被就地拦下', (tester) async {
+    final recorder = _Recorder();
+    await _openDialog(tester, recorder);
+
+    await tester.enterText(_field('Provider ID（创建后不可改）'), 'my-gateway');
+    await tester.enterText(_field('显示名'), '我的网关');
+    await tester.enterText(_field('Base URL'), 'https://api.example.com/v1');
+    await tester.ensureVisible(find.text('额外请求参数（可选）'));
+    await tester.tap(find.text('额外请求参数（可选）'));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const ValueKey('extra-header-name-0')),
+      'x-opencode-session',
+    );
+    await tester.enterText(
+      find.byKey(const ValueKey('extra-header-value-0')),
+      'ses_{{sesion}}',
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('不认识的变量'), findsOneWidget);
     final create = tester.widget<FilledButton>(
       find.ancestor(of: find.text('创建'), matching: find.byType(FilledButton)),
     );

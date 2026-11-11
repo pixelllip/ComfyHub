@@ -29,6 +29,7 @@ import kotlinx.serialization.json.jsonPrimitive
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -223,7 +224,7 @@ class HarnessRunnerTest {
         val outcome = runner(transport, bus).run(
             request().copy(
                 headers = mapOf(
-                    "x-opencode-session" to "ses_1",
+                    "x-opencode-session" to "ses_{{session}}",
                     "Authorization" to "Token abc",
                 ),
                 query = mapOf("api-version" to "2024-10-21"),
@@ -236,11 +237,39 @@ class HarnessRunnerTest {
             transport.urls.single(),
         )
         val sent = transport.seenHeaders.single()
-        assertEquals("ses_1", sent["x-opencode-session"])
+        val session = sent["x-opencode-session"].orEmpty()
+        assertTrue(
+            "前缀由用户填、变量由程序展开：$session",
+            Regex("ses_[0-9a-f]{26}").matches(session),
+        )
         assertEquals(
             "自定义头覆盖同名默认头，不能出现两条 Authorization",
             "Token abc",
             sent.entries.single { it.key.equals("authorization", ignoreCase = true) }.value,
+        )
+    }
+
+    /// `{{session}}` 只由对话 ID 决定：同一对话固定、不同对话不同（与桌面同一条算法）。
+    @Test
+    fun `会话变量：同一对话固定，不同对话不同`() {
+        val header = mapOf("x-opencode-session" to "ses_{{session}}")
+        val first = UpstreamClient.resolveExtras(header, "c-1")["x-opencode-session"].orEmpty()
+        val again = UpstreamClient.resolveExtras(header, "c-1")["x-opencode-session"].orEmpty()
+        val other = UpstreamClient.resolveExtras(header, "c-2")["x-opencode-session"].orEmpty()
+
+        assertEquals("同一对话（含重试 / 工具轮）必须稳定", first, again)
+        assertNotEquals("不同对话必须不同", first, other)
+        assertTrue("26 个十六进制字符：$first", Regex("ses_[0-9a-f]{26}").matches(first))
+        assertEquals(
+            "算法与桌面 Rust 端必须逐字节一致",
+            "a6f7ef47ee8dc84af9056a3051",
+            UpstreamClient.sessionToken("c-1"),
+        )
+        assertEquals(
+            "c-1",
+            UpstreamClient.resolveExtras(mapOf("x-conversation" to "{{conversation}}"), "c-1")[
+                "x-conversation"
+            ],
         )
     }
 

@@ -242,6 +242,8 @@ class _AiProviderDialogState extends State<AiProviderDialog> {
         if (value.runes.any((c) => c != 9 && (c < 32 || c > 126))) {
           return '额外请求头「$name」的值只能是可见 ASCII 字符，不能有中文或换行。';
         }
+        final template = _templateError(name, value);
+        if (template != null) return template;
       } else {
         if (name.runes.any(
           (c) => c < 32 || c == 0x7f || c == 0x23 || c == 0x26 || c == 0x3d,
@@ -255,9 +257,32 @@ class _AiProviderDialogState extends State<AiProviderDialog> {
         if (value.runes.any((c) => c == 0 || c == 10 || c == 13)) {
           return '额外查询参数「$name」的值不能包含换行或空字符。';
         }
+        final template = _templateError(name, value);
+        if (template != null) return template;
       }
     }
     return null;
+  }
+
+  /// 值里的 `{{…}}` 只认 `session` 与 `conversation`；不认识 / 没闭合都当场拦下。
+  ///
+  /// 静默原样发出去的话，网关会回一个和配置毫无关系的 400，用户根本看不出是变量拼错了。
+  String? _templateError(String label, String value) {
+    var rest = value;
+    while (true) {
+      final start = rest.indexOf('{{');
+      if (start < 0) return null;
+      final after = rest.substring(start + 2);
+      final end = after.indexOf('}}');
+      if (end < 0) {
+        return '「$label」的值里有没闭合的变量，只支持 {{session}} 和 {{conversation}}。';
+      }
+      final variable = after.substring(0, end);
+      if (variable != 'session' && variable != 'conversation') {
+        return '「$label」的值里有不认识的变量 {{$variable}}，只支持 {{session}} 和 {{conversation}}。';
+      }
+      rest = after.substring(end + 2);
+    }
   }
 
   Map<String, String> _collectRows(List<_ExtraRow> rows) => {
@@ -464,8 +489,10 @@ class _AiProviderDialogState extends State<AiProviderDialog> {
                 AiNote(
                   text:
                       '每次向这个 Provider 发请求都会带上这些参数，连接测试与获取模型也一样。'
-                      '名称相同的请求头会覆盖默认头。这些参数按原样保存在本机配置里，'
-                      '不要用来存密钥；密钥请填在上面的 API Key 里。',
+                      '名称相同的请求头会覆盖默认头。值里可以用 {{session}}（同一对话固定、'
+                      '不同对话不同）和 {{conversation}}（对话 ID），'
+                      'OpenCode 的 x-opencode-session 可以填 ses_{{session}}。'
+                      '这些参数按原样保存在本机配置里，不要用来存密钥；密钥请填在上面的 API Key 里。',
                   error: _extrasError != null,
                 ),
                 if (_extrasError != null)

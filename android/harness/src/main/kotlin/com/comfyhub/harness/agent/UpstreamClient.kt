@@ -60,6 +60,7 @@ class UpstreamClient(private val transport: HttpTransport) {
         adapter: ProtocolAdapter,
         extraHeaders: Map<String, String> = emptyMap(),
         query: Map<String, String> = emptyMap(),
+        conversationId: String? = null,
         onEvent: (StreamEvent) -> Unit,
     ): RoundStream {
         val text = StringBuilder()
@@ -89,12 +90,15 @@ class UpstreamClient(private val transport: HttpTransport) {
             extractFinishReason(frame.data)?.let { finishReason = it }
         }
 
+        // Provider 配的额外参数先按**这一条对话**展开（同一对话固定、不同对话不同）
+        val resolvedHeaders = resolveExtras(extraHeaders, conversationId)
+        val resolvedQuery = resolveExtras(query, conversationId)
         // OpenAI 兼容网关的 Base URL 填不填 /v1 是两个不同地址，候选依次试（与桌面同一条规则）
-        val candidates = urlCandidates(baseUrl, api, query)
+        val candidates = urlCandidates(baseUrl, api, resolvedQuery)
         var lastFailure: UpstreamFailure? = null
         for (url in candidates) {
             try {
-                transport.postJsonStreaming(url, body, headers(api, secret, extraHeaders)) { line ->
+                transport.postJsonStreaming(url, body, headers(api, secret, resolvedHeaders)) { line ->
                     handleFrame(sse.line(line))
                 }
                 // 流结束时收尾：最后一段可能没有空行收尾
@@ -152,6 +156,44 @@ class UpstreamClient(private val transport: HttpTransport) {
     }
 
     companion object {
+        /** 没有对话的请求（探测 / 校准）用的固定作用域，与桌面 `STANDALONE_SCOPE` 同值。 */
+        const val STANDALONE_SCOPE = "standalone"
+
+        private const val HEX = "0123456789abcdef"
+
+        /**
+         * 把额外参数里的 `{{session}}` / `{{conversation}}` 展开。
+         *
+         * `{{session}}` = `sha256(conversationId)` 的前 13 个字节（26 个小写十六进制），
+         * 与桌面 `request_extras::session_token` **同一条算法**：
+         * 同一对话（含重试 / 工具轮）固定，不同对话不同。
+         */
+        fun resolveExtras(
+            values: Map<String, String>,
+            conversationId: String?,
+        ): Map<String, String> {
+            if (values.isEmpty()) return values
+            val scope = conversationId?.trim()?.takeIf { it.isNotEmpty() } ?: STANDALONE_SCOPE
+            val session = sessionToken(scope)
+            return values.mapValues { (_, value) ->
+                value
+                    .replace("{{session}}", session)
+                    .replace("{{conversation}}", scope)
+            }
+        }
+
+        /** `sha256(scope)` 的前 13 个字节，26 个小写十六进制字符。 */
+        fun sessionToken(scope: String): String {
+            val digest = java.security.MessageDigest.getInstance("SHA-256")
+                .digest(scope.toByteArray(Charsets.UTF_8))
+            val out = StringBuilder(26)
+            for (i in 0 until 13) {
+                val byte = digest[i].toInt() and 0xff
+                out.append(HEX[byte ushr 4]).append(HEX[byte and 0x0f])
+            }
+            return out.toString()
+        }
+
         /** 请求头（**只在这里拼一次**：密钥不进日志、不进异常）。 */
         fun headers(
             api: AiApiRef,

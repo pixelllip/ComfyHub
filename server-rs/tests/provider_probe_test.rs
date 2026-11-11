@@ -380,7 +380,7 @@ async fn 额外请求头与查询参数跟着探测请求一起发出() {
             conn.execute(
                 "UPDATE ai_providers SET headers_json = ?1, compat_json = ?2 WHERE id = 'p1'",
                 rusqlite::params![
-                    r#"{"x-opencode-session":"ses_probe"}"#,
+                    r#"{"x-opencode-session":"ses_{{session}}"}"#,
                     r#"{"query":{"api-version":"2024-10-21"}}"#
                 ],
             )?;
@@ -393,16 +393,26 @@ async fn 额外请求头与查询参数跟着探测请求一起发出() {
     assert_eq!(body["ok"], json!(true), "{body}");
     let seen = seen.lock().unwrap();
     assert!(!seen.is_empty(), "探测请求真的到了假上游");
+    let mut sessions = Vec::new();
     for (session, query) in seen.iter() {
-        assert_eq!(
-            session, "ses_probe",
-            "每一个探测请求都要带 Provider 配的请求头"
+        let token = session
+            .strip_prefix("ses_")
+            .unwrap_or_else(|| panic!("前缀由用户填，程序只展开变量：{session}"));
+        assert_eq!(token.len(), 26, "{{session}} 是 26 个小写十六进制字符");
+        assert!(
+            token.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()),
+            "会话标识必须是十六进制：{session}"
         );
+        sessions.push(session.clone());
         assert!(
             query.contains("api-version=2024-10-21"),
             "查询参数要追加在 URL 上，实际是 {query}"
         );
     }
+    assert!(
+        sessions.windows(2).all(|pair| pair[0] == pair[1]),
+        "同一 Provider 的探测没有对话，{{session}} 必须稳定：{sessions:?}"
+    );
 
     gateway.abort();
     let _ = std::fs::remove_dir_all(dir);

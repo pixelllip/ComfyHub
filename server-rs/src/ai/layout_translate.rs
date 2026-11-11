@@ -231,6 +231,8 @@ async fn complete(
         reasoning: ReasoningRequest::default(),
         max_output_tokens: MAX_OUTPUT_TOKENS,
         extras: &provider.extras,
+        // 布局翻译是独立请求，不属于任何对话：{{session}} 按固定作用域展开
+        conversation_id: None,
     };
     let outcome = upstream::stream_chat(
         request,

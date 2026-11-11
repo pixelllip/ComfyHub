@@ -68,6 +68,11 @@ pub struct ChatRequest<'a> {
     pub max_output_tokens: Option<i64>,
     /// Provider 级的额外请求头与查询参数（每一条请求都要带）
     pub extras: &'a crate::provider::request_extras::RequestExtras,
+    /// 这次请求所属的对话 ID：额外参数里的 `{{session}}` / `{{conversation}}`
+    /// 用它展开（同一对话固定、不同对话不同）。
+    ///
+    /// 没有对话的请求（布局翻译）传 `None`，按固定作用域展开。
+    pub conversation_id: Option<&'a str>,
 }
 
 /// 按正文里的关键字**细化**错误码（Kotlin `AiUpstream.refineFromBody`，AIH-024）。
@@ -221,8 +226,10 @@ where
     F: FnMut(StreamEvent) -> Result<(), ApiError>,
 {
     let url = request.api.chat_url(request.base_url);
+    // 额外参数里的变量按**这一条对话**展开：同一对话固定、不同对话不同。
+    let extras = request.extras.resolve(request.conversation_id);
     // 查询参数在拼好端点之后再追加（Base URL 不允许自带查询串）
-    let url = request.extras.with_query(&url)?;
+    let url = extras.with_query(&url)?;
     let host = host_of(&url).ok_or_else(|| {
         ApiError::ai(
             "CONFIG_ERROR",
@@ -273,8 +280,7 @@ where
         })?;
         headers.insert(name, value);
     }
-    request.extras.apply_headers(&mut headers)?;
-    // 思考模式下的"思维链回传"被拒时，先补回传、再考虑降档（顺序见下面的 `loop`）。
+    extras.apply_headers(&mut headers)?;    // 思考模式下的"思维链回传"被拒时，先补回传、再考虑降档（顺序见下面的 `loop`）。
     let mut thinking_forced_off = false;
     // 这一轮是不是**补了空 `reasoning` 项**才成功的（执行器据此让余下的轮次也补）。
     let mut echo_forced = false;

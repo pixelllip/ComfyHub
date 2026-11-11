@@ -481,6 +481,7 @@ class HarnessRunner(
                     adapter = adapter,
                     extraHeaders = request.headers,
                     query = request.query,
+                    conversationId = request.conversationId,
                 ) { event ->
                     when (event) {
                         is StreamEvent.TextDelta -> {

@@ -103,6 +103,8 @@ pub async fn probe_get(
     with_body: bool,
     extras: &crate::provider::request_extras::RequestExtras,
 ) -> Probe {
+    // 探测不属于任何对话：{{session}} 用固定作用域（同一个值就够了）
+    let extras = extras.resolve(None);
     let url = match extras.with_query(url) {
         Ok(url) => url,
         Err(error) => {

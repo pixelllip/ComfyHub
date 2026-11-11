@@ -22,10 +22,29 @@
 //! 额外参数作用于这个 Provider 的**每一条**出网请求：对话、连接测试、获取模型、
 //! 思考档位校准。四处共用 [`RequestExtras::apply_headers`] 与
 //! [`RequestExtras::with_query`]，不要再各拼一份。
+//!
+//! # 值里的变量（按对话稳定的标识）
+//!
+//! 有些头必须**每个会话一个**值（OpenCode 的 `x-opencode-session` 就是：
+//! 同一对话内固定，不同对话必须不同）。写死一个固定值会让所有对话挤进同一个
+//! 上游会话；这里改成两个占位符，发请求前才展开：
+//!
+//! | 占位符 | 展开成 |
+//! | --- | --- |
+//! | `{{session}}` | 26 个小写十六进制字符：`sha256(对话 ID)` 的前 13 个字节 |
+//! | `{{conversation}}` | 对话 ID 本身（探测等"没有对话"的请求为 `standalone`） |
+//!
+//! `{{session}}` **只由对话 ID 决定**：同一对话（含重试、工具轮、重新打开）
+//! 永远是同一个值，不同对话一定不同；它也是不透明的，不含供应商前缀 ——
+//! OpenCode 的写法是 `ses_{{session}}`（前缀由用户填，程序不认识任何厂商）。
+//!
+//! 这两条替换在**发请求时**做，存进库里的仍是模板原文：手机同步过去之后，
+//! 每台设备用自己的对话 ID 展开，不会把桌面那台的会话标识带过去。
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
+use sha2::{Digest, Sha256};
 
 use crate::web::routes::ApiError;
 
@@ -35,6 +54,13 @@ pub const MAX_ENTRIES: usize = 32;
 pub const MAX_NAME_CHARS: usize = 128;
 /// 单个值的长度上限。
 pub const MAX_VALUE_CHARS: usize = 1024;
+
+/// "每个对话一个稳定标识"的占位符；由 [`RequestExtras::resolve`] 在发请求前展开。
+pub const SESSION_PLACEHOLDER: &str = "{{session}}";
+/// 对话 ID 本身的占位符。
+pub const CONVERSATION_PLACEHOLDER: &str = "{{conversation}}";
+/// 没有对话的请求（连接测试 / 模型发现 / 思考校准 / 布局翻译）用的固定作用域。
+pub const STANDALONE_SCOPE: &str = "standalone";
 
 /// 由 HTTP 客户端自己生成、不允许用户覆盖的头（覆盖它们只会让请求发不出去）。
 const FORBIDDEN_HEADERS: &[&str] = &[
@@ -69,6 +95,38 @@ impl RequestExtras {
         Self {
             headers: parse_string_object(headers_json, "headers_json"),
             query: query_from_compat(compat_json),
+        }
+    }
+
+    /// 把值里的 `{{session}}` / `{{conversation}}` 展开成**这一次请求**的值。
+    ///
+    /// `conversation_id` 为空（连接测试、思考校准、布局翻译）时用
+    /// [`STANDALONE_SCOPE`]：这些请求没有对话，同一个固定值就够了。
+    ///
+    /// ⚠ 只在发请求前调用；库里的 `headers_json` / `compat_json` 永远存**模板原文**，
+    /// 这样手机同步过去之后用的是手机自己那条对话的标识。
+    pub fn resolve(&self, conversation_id: Option<&str>) -> Self {
+        let scope = conversation_id
+            .map(str::trim)
+            .filter(|id| !id.is_empty())
+            .unwrap_or(STANDALONE_SCOPE);
+        let session = session_token(scope);
+        let expand = |value: &str| -> String {
+            value
+                .replace(SESSION_PLACEHOLDER, &session)
+                .replace(CONVERSATION_PLACEHOLDER, scope)
+        };
+        Self {
+            headers: self
+                .headers
+                .iter()
+                .map(|(name, value)| (name.clone(), expand(value)))
+                .collect(),
+            query: self
+                .query
+                .iter()
+                .map(|(name, value)| (name.clone(), expand(value)))
+                .collect(),
         }
     }
 
@@ -125,6 +183,7 @@ impl RequestExtras {
                 )));
             }
             validate_header_value(name, value)?;
+            validate_template(name, value)?;
         }
 
         for (name, value) in &query {
@@ -154,6 +213,7 @@ impl RequestExtras {
                     "额外查询参数「{name}」的值不能包含换行或空字符。"
                 )));
             }
+            validate_template(name, value)?;
         }
 
         Ok(Self { headers, query })
@@ -243,6 +303,45 @@ impl RequestExtras {
 
 fn config_error(message: impl Into<String>) -> ApiError {
     ApiError::ai("CONFIG_ERROR", message.into())
+}
+
+/// `sha256(scope)` 的前 13 个字节（26 个小写十六进制字符）。
+///
+/// 长度选 26 是为了让 `ses_{{session}}` 满足 OpenCode 那类网关对
+/// `ses_<12 hex><14 alnum>` 的形态要求；对其它网关它就是一个不透明标识。
+pub fn session_token(scope: &str) -> String {
+    let digest = Sha256::digest(scope.as_bytes());
+    let mut out = String::with_capacity(26);
+    for byte in digest.iter().take(13) {
+        out.push_str(&format!("{byte:02x}"));
+    }
+    out
+}
+
+/// 值里的 `{{…}}` 只允许 [`SESSION_PLACEHOLDER`] 与 [`CONVERSATION_PLACEHOLDER`]。
+///
+/// 不认识的变量 / 没闭合的 `{{` 一律报错：静默原样发出去的话，网关会回一个
+/// 与配置毫无关系的 400，用户根本看不出是占位符写错了。
+fn validate_template(label: &str, value: &str) -> Result<(), ApiError> {
+    let mut rest = value;
+    while let Some(start) = rest.find("{{") {
+        let after = &rest[start + 2..];
+        let Some(end) = after.find("}}") else {
+            return Err(config_error(format!(
+                "「{label}」的值里有没闭合的变量，只支持 {} 和 {}。",
+                SESSION_PLACEHOLDER, CONVERSATION_PLACEHOLDER
+            )));
+        };
+        let variable = &after[..end];
+        if variable != "session" && variable != "conversation" {
+            return Err(config_error(format!(
+                "「{label}」的值里有不认识的变量，只支持 {} 和 {}。",
+                SESSION_PLACEHOLDER, CONVERSATION_PLACEHOLDER
+            )));
+        }
+        rest = &after[end + 2..];
+    }
+    Ok(())
 }
 
 fn validate_header_value(name: &str, value: &str) -> Result<(), ApiError> {

@@ -519,6 +519,8 @@ async fn run_once(
                     reasoning: reasoning_for_round,
                     max_output_tokens: model.max_output_tokens,
                     extras: &provider.extras,
+                    // 额外参数里的 {{session}} 按**这条对话**展开（重试 / 工具轮都固定）
+                    conversation_id: Some(&conversation_id),
                 },
                 move |event| {
                     // ⚠ 这个闭包**不能 await**（`stream_chat` 的签名要求同步回调）——
