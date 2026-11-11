@@ -256,6 +256,26 @@ $manifest = Get-Content -LiteralPath $ManifestFile -Raw -Encoding utf8 | Convert
 Say ("  清单: {0}  ({1} 个组件)" -f $ManifestFile.Replace($ProjectRoot + '\', ''), $manifest.components.Count) 'DarkGray'
 Say "  输出: $OutDir" 'DarkGray'
 
+# ---------------------------------------------------------------------------
+#  打包前体检：skills（转义与 frontmatter）
+#
+#  一份 SKILL.md 只要首行不是 `---`，后端的 frontmatter 解析就按"没有 frontmatter"处理
+#  （server-rs\src\ai\skills.rs 的 parse_front_matter）：description 为空，判成
+#  `validationError: 缺少 description` —— 名单里还在、available 为 false、load_skill 取不到，
+#  模型读不到这份 skill 的任何规则。2026-11-11 的 t2i-prompt 就是首行 `\---`、正文整篇被转义。
+#  这里在装配之前先核对并修正转义；frontmatter 仍不合法就中止打包，不把坏 skill 带进包。
+# ---------------------------------------------------------------------------
+Step '打包前体检：skills（转义与 frontmatter）'
+$skillsCheck = Join-Path $PSScriptRoot 'check-skills.ps1'
+if (-not (Test-Path -LiteralPath $skillsCheck)) {
+    throw "找不到 skills 体检脚本：$skillsCheck"
+}
+try {
+    & $skillsCheck -Root $ProjectRoot
+} catch {
+    throw "skills 体检未通过，已中止打包。$($_.Exception.Message)"
+}
+
 # -Clean 只清掉"我们自己装进去的东西"。
 # 默认输出目录就是 flutter 的产物目录，整个 Remove-Item 会把 viewer.exe /
 # flutter_windows.dll 一起删掉 —— 那不叫清理，那叫把 App 弄没了。

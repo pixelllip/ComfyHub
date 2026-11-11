@@ -77,7 +77,10 @@ const TABLES: &[TableSpec] = &[
         id: Some("id"),
         int_id: true,
         dedupe: &["sha256", "original_name"],
-        refs: &[("prompt_id", "prompts"), ("collection_id", "media_collections")],
+        refs: &[
+            ("prompt_id", "prompts"),
+            ("collection_id", "media_collections"),
+        ],
         files: Files::Media,
     },
     TableSpec {
@@ -205,7 +208,10 @@ const TABLES: &[TableSpec] = &[
         id: Some("question_id"),
         int_id: false,
         dedupe: &[],
-        refs: &[("run_id", "ai_runs"), ("conversation_id", "ai_conversations")],
+        refs: &[
+            ("run_id", "ai_runs"),
+            ("conversation_id", "ai_conversations"),
+        ],
         files: Files::None,
     },
     TableSpec {
@@ -376,7 +382,9 @@ fn read_rows(conn: &Connection, table: &str) -> Result<Vec<Row>, String> {
         .map(|s| s.to_string())
         .collect();
     let mut out = Vec::new();
-    let mut rows = stmt.query([]).map_err(|e| format!("读 {table} 失败：{e}"))?;
+    let mut rows = stmt
+        .query([])
+        .map_err(|e| format!("读 {table} 失败：{e}"))?;
     while let Some(row) = rows.next().map_err(|e| format!("读 {table} 失败：{e}"))? {
         let mut values = Vec::with_capacity(columns.len());
         for (i, name) in columns.iter().enumerate() {
@@ -487,8 +495,12 @@ pub fn merge(req: &MergeRequest) -> Result<MergeReport, String> {
     let mut sources: Vec<(PathBuf, Connection, PathBuf)> = Vec::new();
     for dir in &req.sources {
         let (db_path, storage) = source_layout(dir)?;
-        let conn = db::open_readonly(&db_path)
-            .map_err(|e| format!("打开源库 {} 失败（它是不是正在被别的程序写？）：{e}", db_path.display()))?;
+        let conn = db::open_readonly(&db_path).map_err(|e| {
+            format!(
+                "打开源库 {} 失败（它是不是正在被别的程序写？）：{e}",
+                db_path.display()
+            )
+        })?;
         sources.push((dir.clone(), conn, storage));
     }
 
@@ -527,14 +539,7 @@ pub fn merge(req: &MergeRequest) -> Result<MergeReport, String> {
 
     let outcome = (|| -> Result<(), String> {
         for (src_dir, src_conn, src_storage) in &sources {
-            merge_one_source(
-                &conn,
-                src_dir,
-                src_conn,
-                src_storage,
-                req,
-                &mut report,
-            )?;
+            merge_one_source(&conn, src_dir, src_conn, src_storage, req, &mut report)?;
         }
         // 外键自洽：不合就不提交（宁可整轮作废，也不把库留成半截）
         let bad = foreign_key_violations(&conn)?;
@@ -551,7 +556,9 @@ pub fn merge(req: &MergeRequest) -> Result<MergeReport, String> {
         Ok(()) => {
             if req.dry_run {
                 let _ = conn.execute_batch("ROLLBACK");
-                report.problems.push("演练模式：所有写入已回滚，一个字节都没改".into());
+                report
+                    .problems
+                    .push("演练模式：所有写入已回滚，一个字节都没改".into());
             } else {
                 conn.execute_batch("COMMIT")
                     .map_err(|e| format!("提交失败：{e}"))?;
@@ -665,10 +672,7 @@ fn merge_one_source(
                         };
                         // 先看有没有等价行（标签名 / 内容哈希 …）
                         if let Some(existing) = find_equivalent(conn, spec, &row, &available)? {
-                            (
-                                Some(existing.clone()),
-                                true,
-                            )
+                            (Some(existing.clone()), true)
                         } else if exists(conn, spec.name, id_col, &Value::Integer(src_id))? {
                             // 号被目标库里**别的**行占着 → 换个新号
                             let next = next_int
@@ -740,7 +744,10 @@ fn merge_one_source(
                         .find(|(n, _)| n == id_col)
                         .and_then(|(_, v)| value_key(v))
                     {
-                        id_map.entry(spec.name).or_default().insert(key, tid.clone());
+                        id_map
+                            .entry(spec.name)
+                            .or_default()
+                            .insert(key, tid.clone());
                     }
                 }
                 continue;
@@ -748,9 +755,8 @@ fn merge_one_source(
 
             // 3) 写进去（主键我们自己填，别让 SQLite 再发一个号）
             let insert_cols: Vec<String> = mapped_row.iter().map(|(n, _)| n.clone()).collect();
-            let placeholders: Vec<String> = (1..=insert_cols.len())
-                .map(|i| format!("?{i}"))
-                .collect();
+            let placeholders: Vec<String> =
+                (1..=insert_cols.len()).map(|i| format!("?{i}")).collect();
             let verb = if spec.id.is_none() {
                 "INSERT OR IGNORE"
             } else {
@@ -890,9 +896,7 @@ fn copy_files(
                 .and_then(|m| m.get(&src_id))
                 .and_then(value_key)
                 .unwrap_or_else(|| src_id.clone());
-            let was_inserted = inserted
-                .get(spec.name)
-                .is_some_and(|s| s.contains(&dst_id));
+            let was_inserted = inserted.get(spec.name).is_some_and(|s| s.contains(&dst_id));
 
             // 原件：源 storage → 目标 storage（找不到就去 --media-from 里翻）
             let dst_orig = req.target_storage.join(orig_sub).join(&stored);
@@ -999,7 +1003,8 @@ fn count_files(
             };
             if req.target_storage.join(orig_sub).join(&stored).is_file() {
                 report.files.already_there += 1;
-            } else if locate_file(&stored, orig_sub, src_storage, &req.media_from, src_dir).is_some()
+            } else if locate_file(&stored, orig_sub, src_storage, &req.media_from, src_dir)
+                .is_some()
             {
                 report.files.copied += 1;
             } else {
@@ -1031,10 +1036,7 @@ fn locate_file(
         roots.push(parent.join("storage"));
     }
     for root in roots {
-        for candidate in [
-            root.join(sub).join(name),
-            root.join(name),
-        ] {
+        for candidate in [root.join(sub).join(name), root.join(name)] {
             if candidate.is_file() {
                 return Some(candidate);
             }
@@ -1057,7 +1059,8 @@ fn files_equal(a: &Path, b: &Path) -> bool {
     }
 }
 
-fn verify_sha(path: &Path, expected: Option<&Value>, report: &mut MergeReport, name: &str) {    let Some(Value::Text(expected)) = expected else {
+fn verify_sha(path: &Path, expected: Option<&Value>, report: &mut MergeReport, name: &str) {
+    let Some(Value::Text(expected)) = expected else {
         return;
     };
     if expected.is_empty() {

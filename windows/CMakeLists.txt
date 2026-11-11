@@ -65,6 +65,35 @@ add_subdirectory(${FLUTTER_MANAGED_DIR})
 add_subdirectory("runner")
 
 
+# === Skills 格式体检（每次构建都跑） ========================================
+#
+# `skills\builtin` 里的 SKILL.md 首行必须是 `---`。被字符串转义过的文件（首行 `\---`、
+# 正文里的 `\\\[CHARACTER CARD]` / `300\~400` / `## 1\.`）在后端按"没有 frontmatter"
+# 解析：description 取到空串，整份 skill 判成 `validationError: 缺少 description` ——
+# 名单里还在、available 为 false、load_skill 取不到、系统提示也不注入。
+#
+# 这里在构建期调用 `scripts\check-skills.ps1`：先修正转义，再逐份核对 frontmatter；
+# 修不好就让构建失败。`flutter build windows`（debug 与 release）都会跑，所以构建
+# 产物里出不了"available: false"的坏 skill。判据只有那一个脚本（pack-release.ps1
+# 也调它），别在这里再写一份。
+#
+# ⚠ 自定义 target 没有输出文件，每次构建都会执行；脚本本身是幂等的（没坏文件就只打印通过）。
+#   失败时 MSBuild 只报 MSB8066（自定义生成退出码 1）；要看是哪几份 skill、哪一条不合法，
+#   用 `flutter build windows -v`，或直接跑 `pwsh -File scripts\check-skills.ps1`。
+find_program(COMFYHUB_PWSH NAMES pwsh pwsh.exe)
+if(COMFYHUB_PWSH)
+  add_custom_target(comfyhub_skills_check
+    COMMAND "${COMFYHUB_PWSH}" -NoProfile -File
+            "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/check-skills.ps1"
+            -Root "${CMAKE_CURRENT_SOURCE_DIR}/.."
+    COMMENT "ComfyHub: 核对并修正 skills 的转义 / frontmatter"
+    VERBATIM)
+  add_dependencies(${BINARY_NAME} comfyhub_skills_check)
+else()
+  message(WARNING "ComfyHub: 找不到 pwsh，跳过 skills 体检（scripts/check-skills.ps1）")
+endif()
+
+
 # Generated plugin build rules, which manage building the plugins and adding
 # them to the application.
 include(flutter/generated_plugins.cmake)

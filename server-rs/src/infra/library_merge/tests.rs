@@ -75,7 +75,10 @@ fn 合并把提示词产物角色卡和文件都搬过来_同号不同物时改�
         )
         .unwrap();
     // 目标库里已有的那份文件（不该被覆盖）
-    write_file(&target.join("storage").join("media").join("live.png"), b"live");
+    write_file(
+        &target.join("storage").join("media").join("live.png"),
+        b"live",
+    );
 
     let sconn = open_with_schema(&db_of(&source));
     let payload = b"old-image";
@@ -94,7 +97,10 @@ fn 合并把提示词产物角色卡和文件都搬过来_同号不同物时改�
         ))
         .unwrap();
     write_file(&source.join("storage").join("media").join("a.png"), payload);
-    write_file(&source.join("storage").join("thumbs").join("1.jpg"), b"thumb");
+    write_file(
+        &source.join("storage").join("thumbs").join("1.jpg"),
+        b"thumb",
+    );
 
     let report = merge(&request(&target, &source, &[], false)).unwrap();
 
@@ -115,7 +121,9 @@ fn 合并把提示词产物角色卡和文件都搬过来_同号不同物时改�
     assert_eq!(stored, "a.png");
     // 例图关系跟着改
     let example_media: i64 = tconn
-        .query_row("SELECT media_id FROM character_card_examples", [], |r| r.get(0))
+        .query_row("SELECT media_id FROM character_card_examples", [], |r| {
+            r.get(0)
+        })
         .unwrap();
     assert_eq!(example_media, 2);
     // 提示词与标签的关系仍在
@@ -126,7 +134,11 @@ fn 合并把提示词产物角色卡和文件都搬过来_同号不同物时改�
         payload
     );
     assert!(
-        target.join("storage").join("thumbs").join("2.jpg").is_file(),
+        target
+            .join("storage")
+            .join("thumbs")
+            .join("2.jpg")
+            .is_file(),
         "缩略图要跟着新 id 改名"
     );
     // 目标库原有的文件一个字节没动
@@ -136,7 +148,10 @@ fn 合并把提示词产物角色卡和文件都搬过来_同号不同物时改�
     );
     // 外键自洽 + 备份在
     assert!(super::foreign_key_violations(&tconn).unwrap().is_empty());
-    assert!(report.backup.as_ref().is_some_and(|p| p.is_file()), "合并前必须留一份备份");
+    assert!(
+        report.backup.as_ref().is_some_and(|p| p.is_file()),
+        "合并前必须留一份备份"
+    );
     assert!(report.problems.is_empty(), "{:?}", report.problems);
     assert_eq!(report.tables["media_assets"].renumbered, 1);
 }
@@ -284,17 +299,33 @@ fn 文件不在源库那一份里时从额外目录找() {
             payload.len()
         ))
         .unwrap();
-    write_file(&leftover.join("storage").join("media").join("z.png"), payload);
-    write_file(&leftover.join("storage").join("thumbs").join("1.jpg"), b"thumb-z");
+    write_file(
+        &leftover.join("storage").join("media").join("z.png"),
+        payload,
+    );
+    write_file(
+        &leftover.join("storage").join("thumbs").join("1.jpg"),
+        b"thumb-z",
+    );
 
-    let report = merge(&request(&target, &source, &[leftover.join("storage")], false)).unwrap();
+    let report = merge(&request(
+        &target,
+        &source,
+        &[leftover.join("storage")],
+        false,
+    ))
+    .unwrap();
 
     assert_eq!(
         std::fs::read(target.join("storage").join("media").join("z.png")).unwrap(),
         payload
     );
     // 缩略图也从额外目录找过来了
-    assert!(target.join("storage").join("thumbs").join("1.jpg").is_file());
+    assert!(target
+        .join("storage")
+        .join("thumbs")
+        .join("1.jpg")
+        .is_file());
     assert_eq!(report.files.missing, 0);
     assert!(report.problems.is_empty(), "{:?}", report.problems);
 }

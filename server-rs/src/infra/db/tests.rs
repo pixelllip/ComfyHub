@@ -38,7 +38,10 @@ fn 老库补_capture_runs_的_provenance_两列_且重复打开不炸() {
         .unwrap()
         .map(|row| row.unwrap())
         .collect();
-    assert!(cols.contains(&"source_kind".to_string()), "要补 source_kind");
+    assert!(
+        cols.contains(&"source_kind".to_string()),
+        "要补 source_kind"
+    );
     assert!(cols.contains(&"recipe_id".to_string()), "要补 recipe_id");
     let kind: String = conn
         .query_row(
