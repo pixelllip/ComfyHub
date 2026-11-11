@@ -24,6 +24,7 @@ import 'settings_interface_page.dart';
 import 'settings_local_services_page.dart';
 import 'settings_mobile_local_page.dart';
 import 'settings_pairing_page.dart';
+import 'settings_search_page.dart';
 
 /// 设置首页。
 ///
@@ -37,7 +38,13 @@ import 'settings_pairing_page.dart';
 /// 判断标准别写反：不是"看起来长就拆"，而是**选项 ≥ 3 就进子页**。NSFW 只有
 /// 两个开关、缓存只有一个滑杆，它们留在首页反而更好用。
 class SettingsPage extends StatefulWidget {
-  const SettingsPage({super.key});
+  /// 设置搜索跳转到首页某一节时传入（例如 `nsfw` / `cache`）。
+  final String? initialSectionId;
+
+  /// 被搜索结果当作独立页面打开时需要返回键；作为导航的一页时不需要。
+  final bool showBack;
+
+  const SettingsPage({super.key, this.initialSectionId, this.showBack = false});
 
   @override
   State<SettingsPage> createState() => _SettingsPageState();
@@ -102,6 +109,19 @@ class _SettingsPageState extends State<SettingsPage> {
     Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => page));
   }
 
+  /// 打开独立的结果页：从结果点进去的目标页返回时，先回到这一页。
+  void _openSearch(BuildContext context, bool isWindowsDesktop) {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => SettingsSearchPage(
+          isWindowsDesktop: isWindowsDesktop,
+          homePageBuilder: (sectionId) =>
+              SettingsPage(initialSectionId: sectionId, showBack: true),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -116,7 +136,11 @@ class _SettingsPageState extends State<SettingsPage> {
     return SettingsScaffold(
       // 首页在 `HomeShell` 的内容区里，不需要返回箭头。
       title: '设置',
-      showBack: false,
+      showBack: widget.showBack,
+      initialSectionId: widget.initialSectionId,
+      header: SettingsSearchBar(
+        onTap: () => _openSearch(context, isWindowsDesktop),
+      ),
       sections: wide
           ? _wideSections(context, theme, store, launcher, isWindowsDesktop)
           : _narrowSections(context, theme, store, launcher, isWindowsDesktop),
@@ -217,6 +241,7 @@ class _SettingsPageState extends State<SettingsPage> {
     final cacheCard = (!isWindowsDesktop && !kIsWeb)
         ? SettingsSection(
             title: '产物缓存（本机）',
+            id: 'cache',
             child: MediaCacheCard(
               stats: _cacheStats,
               budgetMb: context.watch<SettingsStore>().mediaCacheOrigBudgetMb,
@@ -231,10 +256,12 @@ class _SettingsPageState extends State<SettingsPage> {
       // 第一组不带小标题：它就是"全部入口"。
       SettingsSection(
         title: '',
+        id: 'entries',
         child: SettingsTileGrid(maxColumns: 4, tiles: entries),
       ),
       SettingsSection(
         title: '',
+        id: 'nsfw',
         child: _StatusArea(
           nsfw: _nsfwCard(theme),
           stats: _statsStrip(theme, store),
@@ -259,6 +286,7 @@ class _SettingsPageState extends State<SettingsPage> {
     return [
       SettingsSection(
         title: '服务',
+        id: 'service',
         estimatedHeight: 280,
         child: Column(
           children: [
@@ -290,6 +318,7 @@ class _SettingsPageState extends State<SettingsPage> {
       ),
       SettingsSection(
         title: 'AI',
+        id: 'ai',
         estimatedHeight: 280,
         child: Column(
           children: [
@@ -314,6 +343,7 @@ class _SettingsPageState extends State<SettingsPage> {
       // 「采集」与「界面」属于不同类别（不应合并为一组）。
       SettingsSection(
         title: '采集',
+        id: 'capture',
         estimatedHeight: 140,
         child: SettingsEntryTile(
           icon: Icons.sync_alt,
@@ -324,6 +354,7 @@ class _SettingsPageState extends State<SettingsPage> {
       ),
       SettingsSection(
         title: '界面',
+        id: 'interface',
         estimatedHeight: 140,
         child: SettingsEntryTile(
           icon: Icons.palette_outlined,
@@ -333,10 +364,11 @@ class _SettingsPageState extends State<SettingsPage> {
         ),
       ),
       // NSFW 只有两个选项，而且从属关系要一眼看见 —— 留在首页。
-      SettingsSection(title: 'NSFW 内容', child: _nsfwCard(theme)),
+      SettingsSection(title: 'NSFW 内容', id: 'nsfw', child: _nsfwCard(theme)),
       if (!isWindowsDesktop && !kIsWeb)
         SettingsSection(
           title: '产物缓存（本机）',
+          id: 'cache',
           child: MediaCacheCard(
             stats: _cacheStats,
             budgetMb: context.watch<SettingsStore>().mediaCacheOrigBudgetMb,
@@ -345,7 +377,11 @@ class _SettingsPageState extends State<SettingsPage> {
             onClear: _clearCache,
           ),
         ),
-      SettingsSection(title: '库统计', child: _statsRows(theme, store)),
+      SettingsSection(
+        title: '库统计',
+        id: 'stats',
+        child: _statsRows(theme, store),
+      ),
       // 「数据目录」是**主设置菜单**中的一项，不放在「界面」子页内。
       // 该页可查看当前位置、打开目录、更换位置（含迁移）。
       //
@@ -354,6 +390,7 @@ class _SettingsPageState extends State<SettingsPage> {
       if (isWindowsDesktop)
         SettingsSection(
           title: '目录',
+          id: 'dataDir',
           estimatedHeight: 140,
           child: SettingsEntryTile(
             icon: Icons.folder_open_outlined,
@@ -367,6 +404,7 @@ class _SettingsPageState extends State<SettingsPage> {
       if (isWindowsDesktop)
         SettingsSection(
           title: '导出',
+          id: 'export',
           estimatedHeight: 160,
           child: Card(
             clipBehavior: Clip.antiAlias,
@@ -431,11 +469,7 @@ class _SettingsPageState extends State<SettingsPage> {
         child: Column(
           // 被拉伸到和左栏一样高时，两行均匀铺开；纵向叠放时就是自然高度。
           mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-          children: [
-            row(0, 1),
-            const Divider(height: 25),
-            row(2, 3),
-          ],
+          children: [row(0, 1), const Divider(height: 25), row(2, 3)],
         ),
       ),
     );

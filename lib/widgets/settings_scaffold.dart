@@ -33,11 +33,19 @@ class SettingsScaffold extends StatefulWidget {
   /// 子页顶栏默认带返回箭头；首页传 `false`（它在 `HomeShell` 的内容区里）。
   final bool showBack;
 
+  /// 设置页顶部的搜索入口（首页用）。它属于正文，跟着内容一起滚动。
+  final Widget? header;
+
+  /// 打开时定位到哪一块（设置搜索结果跳转用）。null = 从页首开始。
+  final String? initialSectionId;
+
   const SettingsScaffold({
     super.key,
     required this.title,
     required this.sections,
     this.showBack = true,
+    this.header,
+    this.initialSectionId,
   });
 
   @override
@@ -56,10 +64,65 @@ class _SettingsScaffoldState extends State<SettingsScaffold> {
   /// 大标题 → 顶栏标题的联动进度（见 [ScrollTitleProgress]）。
   final _progress = ScrollTitleProgress();
 
+  /// 每块一个稳定 key：设置搜索跳转靠它定位到具体区块。
+  final Map<String, GlobalKey> _sectionKeys = {};
+
+  GlobalKey _keyFor(String id) =>
+      _sectionKeys.putIfAbsent(id, () => GlobalKey(debugLabel: id));
+
+  @override
+  void initState() {
+    super.initState();
+    _scrollToInitial();
+  }
+
+  @override
+  void didUpdateWidget(covariant SettingsScaffold oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.initialSectionId != widget.initialSectionId) {
+      _scrollToInitial();
+    }
+  }
+
+  /// 首帧之后把目标区块滚进可视区。
+  ///
+  /// 有些子页要等数据读回来才建出目标区块，所以多等几帧而不是只试一次。
+  Future<void> _scrollToInitial() async {
+    final id = widget.initialSectionId;
+    if (id == null) return;
+    for (var attempt = 0; attempt < 20; attempt++) {
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      if (!mounted) return;
+      final target = _sectionKeys[id]?.currentContext;
+      if (target == null || !target.mounted) continue;
+      await Scrollable.ensureVisible(
+        target,
+        alignment: 0.04,
+        duration: const Duration(milliseconds: 260),
+        curve: Curves.easeOutCubic,
+      );
+      return;
+    }
+  }
+
   @override
   void dispose() {
     _progress.dispose();
     super.dispose();
+  }
+
+  /// 区块之间统一留 24 的间距；有 id 的块包一层 key，供搜索跳转定位。
+  List<Widget> _sectionsWithGaps() {
+    final children = <Widget>[];
+    for (var i = 0; i < widget.sections.length; i++) {
+      if (i > 0) children.add(const SizedBox(height: _sectionGap));
+      final section = widget.sections[i];
+      final id = section.id;
+      children.add(
+        id == null ? section : KeyedSubtree(key: _keyFor(id), child: section),
+      );
+    }
+    return children;
   }
 
   @override
@@ -109,9 +172,13 @@ class _SettingsScaffoldState extends State<SettingsScaffold> {
                           ),
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.stretch,
-                            children: _withSectionGaps([
-                              for (final section in widget.sections) section,
-                            ]),
+                            children: [
+                              if (widget.header != null) ...[
+                                widget.header!,
+                                const SizedBox(height: _sectionGap),
+                              ],
+                              ..._sectionsWithGaps(),
+                            ],
                           ),
                         ),
                       ),
@@ -298,6 +365,9 @@ class SettingsSection extends StatelessWidget {
   final Widget child;
   final double estimatedHeight;
 
+  /// 搜索跳转用的稳定标识（同一页内唯一）。null = 不能被定位。
+  final String? id;
+
   /// 放在**等高的并排行**里时置 true：卡片撑满这一行剩下的高度。
   ///
   /// 设置首页的状态区是 4:6 的 NSFW / 库统计两栏，
@@ -311,6 +381,7 @@ class SettingsSection extends StatelessWidget {
     required this.child,
     this.estimatedHeight = 280,
     this.fill = false,
+    this.id,
   });
 
   @override
@@ -332,20 +403,16 @@ class SettingsSection extends StatelessWidget {
     if (header == null && !fill) return child;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [?header, if (fill) Expanded(child: child) else child],
+      children: [
+        ?header,
+        if (fill) Expanded(child: child) else child,
+      ],
     );
   }
 }
 
 /// 相邻两块之间的间距（与旧分栏里的 `runSpacing` 一致）。
 const double _sectionGap = 24;
-
-List<Widget> _withSectionGaps(List<Widget> sections) => [
-  for (var i = 0; i < sections.length; i++) ...[
-    if (i > 0) const SizedBox(height: _sectionGap),
-    sections[i],
-  ],
-];
 
 /// 设置首页（以及子页里的跳转项）的**入口行**：图标 + 标题 + 一句说明 + 箭头。
 ///

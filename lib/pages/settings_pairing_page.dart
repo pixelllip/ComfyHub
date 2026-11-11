@@ -12,7 +12,10 @@ import 'pairing_section.dart';
 /// 同步密钥…… 远超"一张卡的容量"）。内容本身仍然是 [PairingSection]，
 /// 这里只负责给它一个独立的页面与顶栏。
 class PairingSettingsPage extends StatelessWidget {
-  const PairingSettingsPage({super.key});
+  /// 设置搜索跳转到的区块（当前只有 `pairing`）。null = 从页首开始。
+  final String? initialSectionId;
+
+  const PairingSettingsPage({super.key, this.initialSectionId});
 
   @override
   Widget build(BuildContext context) {
@@ -20,9 +23,11 @@ class PairingSettingsPage extends StatelessWidget {
 
     return SettingsScaffold(
       title: '远程访问与配对',
+      initialSectionId: initialSectionId,
       sections: [
         SettingsSection(
           title: '配对',
+          id: 'pairing',
           estimatedHeight: 720,
           child: PairingSection(
             baseUrl: settings.baseUrl,

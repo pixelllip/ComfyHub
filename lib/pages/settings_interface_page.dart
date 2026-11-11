@@ -14,7 +14,10 @@ import '../widgets/settings_scaffold.dart';
 /// **主题 / 系统主题色 / 列表** 三块 —— 宽窗口下 [SettingsScaffold] 才能把它们
 /// 分到不同列里，而不是一整张长卡占住一列。
 class InterfaceSettingsPage extends StatelessWidget {
-  const InterfaceSettingsPage({super.key});
+  /// 设置搜索跳转到的区块（例如 `theme` / `accent`）。null = 从页首开始。
+  final String? initialSectionId;
+
+  const InterfaceSettingsPage({super.key, this.initialSectionId});
 
   /// 重新读取平台强调色：系统颜色变更后无需重启 App 即可生效。
   Future<void> _redetectAccent(BuildContext context) async {
@@ -32,9 +35,11 @@ class InterfaceSettingsPage extends StatelessWidget {
 
     return SettingsScaffold(
       title: '外观与布局',
+      initialSectionId: initialSectionId,
       sections: [
         SettingsSection(
           title: '主题',
+          id: 'theme',
           estimatedHeight: 150,
           child: Card(
             child: ListTile(
@@ -61,6 +66,7 @@ class InterfaceSettingsPage extends StatelessWidget {
         // 点标题那一行 = 重新检测（系统里换了颜色不用重启 App）。
         SettingsSection(
           title: '系统主题色',
+          id: 'accent',
           estimatedHeight: 270,
           child: Card(
             child: Padding(
@@ -110,10 +116,7 @@ class InterfaceSettingsPage extends StatelessWidget {
                         trailing: wide ? buttons : null,
                       ),
                       if (!wide)
-                        Align(
-                          alignment: Alignment.centerLeft,
-                          child: buttons,
-                        ),
+                        Align(alignment: Alignment.centerLeft, child: buttons),
                       const SizedBox(height: 8),
                       Text(
                         settings.accentMode.description,
@@ -130,6 +133,7 @@ class InterfaceSettingsPage extends StatelessWidget {
         ),
         SettingsSection(
           title: '列表',
+          id: 'list',
           estimatedHeight: 150,
           child: Card(
             child: ListTile(
@@ -156,6 +160,7 @@ class InterfaceSettingsPage extends StatelessWidget {
         ),
         SettingsSection(
           title: '画廊',
+          id: 'gallery',
           estimatedHeight: 280,
           child: Card(
             child: Padding(

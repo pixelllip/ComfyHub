@@ -15,7 +15,10 @@ import '../widgets/settings_switch_row.dart';
 /// 页面内容与原来那张卡**一模一样**（状态 / 开关 / 地址 / 输出目录 / 轮询 /
 /// 自动标签 / 保存 / 立即同步 / 导入），只是现在有独立的顶栏与滚动区。
 class ComfyCaptureSettingsPage extends StatefulWidget {
-  const ComfyCaptureSettingsPage({super.key});
+  /// 设置搜索跳转到的区块（例如 `address` / `polling`）。null = 从页首开始。
+  final String? initialSectionId;
+
+  const ComfyCaptureSettingsPage({super.key, this.initialSectionId});
 
   @override
   State<ComfyCaptureSettingsPage> createState() =>
@@ -310,9 +313,11 @@ class _ComfyCaptureSettingsPageState extends State<ComfyCaptureSettingsPage> {
 
     return SettingsScaffold(
       title: 'ComfyUI 自动捕获',
+      initialSectionId: widget.initialSectionId,
       sections: [
         SettingsSection(
           title: '捕获配置',
+          id: 'capture',
           // 估算值需接近实际，否则两列的"连续切分"会选错切点。
           estimatedHeight: 400,
           child: Card(
@@ -388,6 +393,7 @@ class _ComfyCaptureSettingsPageState extends State<ComfyCaptureSettingsPage> {
         ),
         SettingsSection(
           title: '地址与目录',
+          id: 'address',
           estimatedHeight: 360,
           child: Card(
             child: Padding(
@@ -440,6 +446,7 @@ class _ComfyCaptureSettingsPageState extends State<ComfyCaptureSettingsPage> {
         ),
         SettingsSection(
           title: '轮询与操作',
+          id: 'polling',
           // 轮询 + 自动标签 + 四个按钮 + 最近捕获（最多 8 条）
           estimatedHeight: 820,
           child: Card(

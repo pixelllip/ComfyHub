@@ -19,7 +19,10 @@ import '../widgets/settings_scaffold.dart';
 /// 先停止程序 → 复制 → 逐个核对 → 核对一致后才记录新位置（`data-dir.json`）。
 /// 原来的文件夹既不会被删除，也不会被修改。
 class DataDirSettingsPage extends StatefulWidget {
-  const DataDirSettingsPage({super.key});
+  /// 设置搜索跳转到的区块（当前只有 `current`）。null = 从页首开始。
+  final String? initialSectionId;
+
+  const DataDirSettingsPage({super.key, this.initialSectionId});
 
   @override
   State<DataDirSettingsPage> createState() => _DataDirSettingsPageState();
@@ -53,9 +56,11 @@ class _DataDirSettingsPageState extends State<DataDirSettingsPage> {
 
     return SettingsScaffold(
       title: '数据目录',
+      initialSectionId: widget.initialSectionId,
       sections: [
         SettingsSection(
           title: '当前位置',
+          id: 'current',
           estimatedHeight: 240,
           child: Card(
             child: Padding(
@@ -113,7 +118,10 @@ class _DataDirSettingsPageState extends State<DataDirSettingsPage> {
                         onPressed: dataDir == null || _busy
                             ? null
                             : () => _changeLocation(launcher),
-                        icon: const Icon(Icons.drive_file_move_outlined, size: 18),
+                        icon: const Icon(
+                          Icons.drive_file_move_outlined,
+                          size: 18,
+                        ),
                         label: const Text('搬到别处…'),
                       ),
                       if (!isDefault)
@@ -137,6 +145,7 @@ class _DataDirSettingsPageState extends State<DataDirSettingsPage> {
         if (info != null && info.otherCandidates.isNotEmpty)
           SettingsSection(
             title: '还发现一份数据',
+            id: 'other',
             estimatedHeight: 160,
             child: Card(
               child: Column(
@@ -163,6 +172,7 @@ class _DataDirSettingsPageState extends State<DataDirSettingsPage> {
           ),
         SettingsSection(
           title: '说明',
+          id: 'help',
           estimatedHeight: 180,
           child: Card(
             child: Padding(
@@ -183,6 +193,7 @@ class _DataDirSettingsPageState extends State<DataDirSettingsPage> {
         if (_busy)
           SettingsSection(
             title: '进度',
+            id: 'progress',
             estimatedHeight: 80,
             child: Card(
               child: ListTile(

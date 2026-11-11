@@ -20,7 +20,10 @@ class AiToolsSettingsPage extends StatefulWidget {
   /// [api] 仅供测试注入假后端；正式运行时按设置里的后端地址创建。
   final AiApiClient? api;
 
-  const AiToolsSettingsPage({super.key, this.api});
+  /// 从设置搜索进入时要定位到的卡片（例如 `budget`）。null = 从页首开始。
+  final String? initialSectionId;
+
+  const AiToolsSettingsPage({super.key, this.api, this.initialSectionId});
 
   @override
   State<AiToolsSettingsPage> createState() => _AiToolsSettingsPageState();
@@ -48,12 +51,38 @@ class _AiToolsSettingsPageState extends State<AiToolsSettingsPage> {
   AiAttachmentCacheStats? _cacheStats;
   bool _cacheBusy = false;
 
+  /// 每张卡一个稳定 key，供设置搜索跳转到具体一项。
+  final Map<String, GlobalKey> _cardKeys = {};
+
+  GlobalKey _cardKey(String id) =>
+      _cardKeys.putIfAbsent(id, () => GlobalKey(debugLabel: id));
+
+  /// 搜索跳转：等首帧建出目标卡之后滚到它那里（读取策略是异步的，重试几帧）。
+  Future<void> _scrollToInitial() async {
+    final id = widget.initialSectionId;
+    if (id == null) return;
+    for (var attempt = 0; attempt < 20; attempt++) {
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      if (!mounted) return;
+      final target = _cardKeys[id]?.currentContext;
+      if (target == null || !target.mounted) continue;
+      await Scrollable.ensureVisible(
+        target,
+        alignment: 0.04,
+        duration: const Duration(milliseconds: 260),
+        curve: Curves.easeOutCubic,
+      );
+      return;
+    }
+  }
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _api = widget.api ?? AiApiClient(context.read<SettingsStore>().baseUrl);
       _reload();
+      _scrollToInitial();
     });
   }
 
@@ -302,28 +331,35 @@ class _AiToolsSettingsPageState extends State<AiToolsSettingsPage> {
                           maxWidth: kSettingsContentMaxWidth,
                         ),
                         child: _stackedCards([
-                          _defaultBanner(),
-                          _budgetCard(),
-                          _rootsCard(
-                            title: '写白名单',
-                            hint: '这些目录里的文件，工具才允许创建 / 覆盖 / 删除。',
-                            roots: _policy.writeRoots,
-                            controller: _writeInput,
-                            onAdd: _addWriteRoot,
-                            onRemove: _removeWriteRoot,
+                          _keyedCard('default', _defaultBanner()),
+                          _keyedCard('budget', _budgetCard()),
+                          _keyedCard(
+                            'writeRoots',
+                            _rootsCard(
+                              title: '写白名单',
+                              hint: '这些目录里的文件，工具才允许创建 / 覆盖 / 删除。',
+                              roots: _policy.writeRoots,
+                              controller: _writeInput,
+                              onAdd: _addWriteRoot,
+                              onRemove: _removeWriteRoot,
+                            ),
                           ),
-                          _rootsCard(
-                            title: '读白名单',
-                            hint: '这些目录里的文件，工具才允许读取（写白名单内的目录默认可读）。',
-                            roots: _policy.readRoots,
-                            controller: _readInput,
-                            onAdd: _addReadRoot,
-                            onRemove: _removeReadRoot,
+                          _keyedCard(
+                            'readRoots',
+                            _rootsCard(
+                              title: '读白名单',
+                              hint: '这些目录里的文件，工具才允许读取（写白名单内的目录默认可读）。',
+                              roots: _policy.readRoots,
+                              controller: _readInput,
+                              onAdd: _addReadRoot,
+                              onRemove: _removeReadRoot,
+                            ),
                           ),
-                          if (_policy.autoReadRoots.isNotEmpty) _autoReadCard(),
-                          _webSearchCard(),
-                          _attachmentCacheCard(),
-                          _toolsEntryCard(),
+                          if (_policy.autoReadRoots.isNotEmpty)
+                            _keyedCard('autoRead', _autoReadCard()),
+                          _keyedCard('webSearch', _webSearchCard()),
+                          _keyedCard('attachmentCache', _attachmentCacheCard()),
+                          _keyedCard('tools', _toolsEntryCard()),
                         ]),
                       ),
                     ),
@@ -344,6 +380,10 @@ class _AiToolsSettingsPageState extends State<AiToolsSettingsPage> {
       ],
     ],
   );
+
+  /// 给一张卡挂上稳定 key：设置搜索跳转靠它定位（读完策略后才建出来的卡也能等到）。
+  Widget _keyedCard(String id, Widget card) =>
+      KeyedSubtree(key: _cardKey(id), child: card);
 
   /// 默认状态需**明确说明**：否则会被理解为"未配置即不限制"。
   Widget _defaultBanner() {
@@ -445,6 +485,8 @@ class _AiToolsSettingsPageState extends State<AiToolsSettingsPage> {
     final theme = Theme.of(context);
     const stepOptions = [1, 2, 4, 6, 8, 12, 16, 25, 32, 48];
     const callOptions = [4, 8, 16, 24, 32, 48, 64, 100];
+    // 0 = 不限制；其余是"这一次回复里最多自动跑几次"。12 次已远超正常使用。
+    const autoSubmitOptions = [0, 1, 2, 3, 4, 6, 8, 12];
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(14),
@@ -481,6 +523,35 @@ class _AiToolsSettingsPageState extends State<AiToolsSettingsPage> {
               labelOf: (v) => '$v 次',
               onChanged: (v) => _patch({'maxCallsPerRun': v}, '调用总数上限已设为 $v'),
             ),
+            const SizedBox(height: 8),
+            if (_policy.supportsAutoSubmitLimit) ...[
+              _dropdownRow<int>(
+                label: '自动提交工作流次数',
+                value: autoSubmitOptions.contains(_policy.maxAutoSubmitsPerRun)
+                    ? _policy.maxAutoSubmitsPerRun
+                    : 0,
+                options: autoSubmitOptions,
+                labelOf: (v) => v == 0 ? '不限制' : '$v 次',
+                onChanged: (v) => _patch({
+                  'maxAutoSubmitsPerRun': v,
+                }, v == 0 ? '自动提交工作流已改为不限制' : '自动提交工作流次数已设为 $v 次'),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                '自动提交指不需要你批准就直接执行的工作流。只有权限档是「自动允许（无需批准）」'
+                '或把提交工作流设成「允许」时，这项才会计数。用满次数后，'
+                '这一次回复里再提交会等你批准。',
+                style: theme.textTheme.labelSmall?.copyWith(
+                  color: theme.colorScheme.outline,
+                ),
+              ),
+            ] else
+              Text(
+                '这台后端版本较旧，不支持限制自动提交工作流次数。',
+                style: theme.textTheme.labelSmall?.copyWith(
+                  color: theme.colorScheme.outline,
+                ),
+              ),
             if (_policy.maxReadBytes > 0 || _policy.maxWriteBytes > 0) ...[
               const SizedBox(height: 10),
               Text(

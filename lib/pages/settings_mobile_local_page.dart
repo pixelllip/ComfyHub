@@ -21,7 +21,10 @@ import 'settings_pairing_page.dart';
 ///
 /// 手机端使用对应的专用功能，不显示仅桌面可用的功能。
 class MobileLocalSettingsPage extends StatefulWidget {
-  const MobileLocalSettingsPage({super.key});
+  /// 设置搜索跳转到的区块（例如 `library`）。null = 从页首开始。
+  final String? initialSectionId;
+
+  const MobileLocalSettingsPage({super.key, this.initialSectionId});
 
   @override
   State<MobileLocalSettingsPage> createState() =>
@@ -170,9 +173,11 @@ class _MobileLocalSettingsPageState extends State<MobileLocalSettingsPage> {
 
     return SettingsScaffold(
       title: '本机数据与同步',
+      initialSectionId: widget.initialSectionId,
       sections: [
         SettingsSection(
           title: '桌面连接',
+          id: 'connection',
           estimatedHeight: 260,
           child: Card(
             child: Padding(
@@ -186,9 +191,7 @@ class _MobileLocalSettingsPageState extends State<MobileLocalSettingsPage> {
                   ),
                   const SizedBox(height: 4),
                   Text(
-                    paired
-                        ? '已经和这台电脑配对，聊天记录会推给它。'
-                        : '还没有配对令牌。配对之后才能同步与取密钥。',
+                    paired ? '已经和这台电脑配对，聊天记录会推给它。' : '还没有配对令牌。配对之后才能同步与取密钥。',
                     style: theme.textTheme.bodySmall?.copyWith(
                       color: paired
                           ? theme.colorScheme.onSurfaceVariant
@@ -236,6 +239,7 @@ class _MobileLocalSettingsPageState extends State<MobileLocalSettingsPage> {
         ),
         SettingsSection(
           title: '本机库',
+          id: 'library',
           estimatedHeight: 300,
           child: Card(
             child: Padding(
@@ -245,11 +249,7 @@ class _MobileLocalSettingsPageState extends State<MobileLocalSettingsPage> {
                 children: [
                   _row(theme, '本机会话', '${store.conversations.length} 条'),
                   const Divider(height: 20),
-                  _row(
-                    theme,
-                    '待上行',
-                    pending == null ? '正在读…' : '$pending 条',
-                  ),
+                  _row(theme, '待上行', pending == null ? '正在读…' : '$pending 条'),
                   const SizedBox(height: 6),
                   Text(
                     '手机上的聊天先落在本机库，桌面离线也能翻看。桌面在线时它会自己推上去，'
@@ -270,7 +270,10 @@ class _MobileLocalSettingsPageState extends State<MobileLocalSettingsPage> {
                       ),
                       OutlinedButton.icon(
                         onPressed: _busy ? null : _pullDown,
-                        icon: const Icon(Icons.cloud_download_outlined, size: 18),
+                        icon: const Icon(
+                          Icons.cloud_download_outlined,
+                          size: 18,
+                        ),
                         label: const Text('从桌面拉取'),
                       ),
                     ],
@@ -293,6 +296,7 @@ class _MobileLocalSettingsPageState extends State<MobileLocalSettingsPage> {
         ),
         SettingsSection(
           title: '本机数据在哪',
+          id: 'where',
           estimatedHeight: 180,
           child: Card(
             child: Padding(

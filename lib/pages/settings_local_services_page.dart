@@ -20,7 +20,10 @@ import '../widgets/settings_switch_row.dart';
 /// 现在它同时收编了原来独立的「后端服务」卡（地址 / 测试连接 / 存储目录）——
 /// 这两件事本来就是同一个进程的两面。
 class LocalServicesSettingsPage extends StatefulWidget {
-  const LocalServicesSettingsPage({super.key});
+  /// 设置搜索跳转到的区块（例如 `status` / `url`）。null = 从页首开始。
+  final String? initialSectionId;
+
+  const LocalServicesSettingsPage({super.key, this.initialSectionId});
 
   @override
   State<LocalServicesSettingsPage> createState() =>
@@ -241,9 +244,11 @@ class _LocalServicesSettingsPageState extends State<LocalServicesSettingsPage> {
 
     return SettingsScaffold(
       title: '本地服务',
+      initialSectionId: widget.initialSectionId,
       sections: [
         SettingsSection(
           title: '开关',
+          id: 'switches',
           estimatedHeight: 340,
           child: Card(
             child: Padding(
@@ -302,6 +307,7 @@ class _LocalServicesSettingsPageState extends State<LocalServicesSettingsPage> {
         ),
         SettingsSection(
           title: '服务状态',
+          id: 'status',
           estimatedHeight: 360,
           child: Card(
             child: Padding(
@@ -423,6 +429,7 @@ class _LocalServicesSettingsPageState extends State<LocalServicesSettingsPage> {
         // 但比地址更容易被误会 —— danbooru 回 503 那次，谁都以为是没吃代理。
         SettingsSection(
           title: '联网代理',
+          id: 'proxy',
           estimatedHeight: 320,
           child: OutboundCard(
             info: _outbound,
@@ -437,17 +444,20 @@ class _LocalServicesSettingsPageState extends State<LocalServicesSettingsPage> {
         // 两件事在同一屏。
         const SettingsSection(
           title: '备份与恢复',
+          id: 'backup',
           estimatedHeight: 460,
           child: BackupCard(),
         ),
         // 存储占用 / 孤儿 / 事件归档：与备份同屏，便于排查磁盘占用。
         const SettingsSection(
           title: '存储',
+          id: 'storage',
           estimatedHeight: 420,
           child: StorageCard(),
         ),
         SettingsSection(
           title: '运行根目录',
+          id: 'root',
           estimatedHeight: 190,
           child: Card(
             child: Padding(
@@ -496,6 +506,7 @@ class _LocalServicesSettingsPageState extends State<LocalServicesSettingsPage> {
         ),
         SettingsSection(
           title: '后端地址',
+          id: 'url',
           estimatedHeight: 380,
           child: Card(
             child: Padding(
