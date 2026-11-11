@@ -151,7 +151,7 @@ void main() {
     expect(recorder.keyPuts.single, contains('sk-secret-value'));
   });
 
-  testWidgets('额外请求头与查询参数随 Provider 一起提交（OpenCode 场景）', (tester) async {
+  testWidgets('额外请求头与查询参数随 Provider 一起提交', (tester) async {
     final recorder = _Recorder();
     await _openDialog(tester, recorder);
 

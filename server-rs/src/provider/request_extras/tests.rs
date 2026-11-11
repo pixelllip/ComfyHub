@@ -129,14 +129,19 @@ fn session_token_is_stable_per_conversation_and_distinct_across_conversations() 
     assert_eq!(a, b, "同一对话（含重试 / 工具轮）必须稳定");
     assert_ne!(a, other, "不同对话必须不同");
     assert_eq!(a.len(), 26);
-    assert!(a.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()));
+    assert!(a
+        .chars()
+        .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()));
     assert_eq!(
         a, "a6f7ef47ee8dc84af9056a3051",
         "算法与手机 harness 必须逐字节一致（同一对话在两端的标识相同）"
     );
 
     // 没有对话的请求（探测 / 校准 / 布局翻译）用固定作用域
-    assert_eq!(session_token(STANDALONE_SCOPE), session_token(STANDALONE_SCOPE));
+    assert_eq!(
+        session_token(STANDALONE_SCOPE),
+        session_token(STANDALONE_SCOPE)
+    );
 }
 
 /// 占位符在发请求前展开，存库的原文不变。
@@ -152,8 +157,7 @@ fn templates_expand_per_conversation_in_both_headers_and_query() {
     .unwrap();
     // 写回库的是模板原文（手机同步过去才不会带上桌面那条对话的标识）
     assert_eq!(
-        extras.headers["x-opencode-session"],
-        "ses_{{session}}",
+        extras.headers["x-opencode-session"], "ses_{{session}}",
         "落库必须是模板，不是展开后的值"
     );
 
@@ -161,10 +165,12 @@ fn templates_expand_per_conversation_in_both_headers_and_query() {
     let again = extras.resolve(Some("c-1"));
     let other = extras.resolve(Some("c-2"));
     assert_eq!(first, again);
-    assert_ne!(first.headers["x-opencode-session"], other.headers["x-opencode-session"]);
+    assert_ne!(
+        first.headers["x-opencode-session"],
+        other.headers["x-opencode-session"]
+    );
     assert!(
-        first.headers["x-opencode-session"]
-            .starts_with("ses_"),
+        first.headers["x-opencode-session"].starts_with("ses_"),
         "前缀由用户填，程序只替换变量"
     );
     assert_eq!(
@@ -183,17 +189,13 @@ fn templates_expand_per_conversation_in_both_headers_and_query() {
 /// 不认识 / 没闭合的变量要当场报错，不能原样发出去换一个看不出原因的 400。
 #[test]
 fn unknown_or_unclosed_template_is_rejected() {
-    let unknown = RequestExtras::validated(
-        map(&[("x-session", "{{sesion}}")]),
-        BTreeMap::new(),
-    );
+    let unknown = RequestExtras::validated(map(&[("x-session", "{{sesion}}")]), BTreeMap::new());
     assert!(
         unknown.unwrap_err().human().contains("不认识"),
         "拼错变量名时必须指出"
     );
 
-    let unclosed =
-        RequestExtras::validated(BTreeMap::new(), map(&[("q", "{{session")]));
+    let unclosed = RequestExtras::validated(BTreeMap::new(), map(&[("q", "{{session")]));
     assert!(unclosed.unwrap_err().human().contains("没闭合"));
 
     // 两个变量都认识、可重复出现

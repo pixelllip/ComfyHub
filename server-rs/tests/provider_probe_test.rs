@@ -23,6 +23,7 @@ use rusqlite::Connection;
 use serde_json::{json, Value};
 use tower::ServiceExt;
 
+use comfyhub_server_rs::provider::provider_diagnose::diagnose;
 use comfyhub_server_rs::web::routes::{router, AppState};
 
 fn temp_dir(label: &str) -> std::path::PathBuf {
@@ -341,11 +342,72 @@ async fn provider_不存在时两条端点都给人话() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
+/// 诊断**只报事实**：给出稳定错误码、脱敏原文与通用下一步，不给厂商预设、不给可直接应用的补丁。
+#[tokio::test]
+async fn 诊断只报事实不生成厂商预设() {
+    let dir = temp_dir("diagnose");
+    let (base, _auth, _paths, gateway) =
+        upstream(402, json!({"error": "Insufficient balance"})).await;
+    let state = state(&dir, &base, None);
+    let report = diagnose(&state, "p1").await.expect("诊断本身应当成功返回");
+
+    assert_eq!(report["ok"], json!(false));
+    assert_eq!(report["provider"]["id"], "p1");
+    assert_eq!(report["provider"]["enabledModels"], 0);
+    assert_eq!(report["probe"]["httpStatus"], 402);
+    let findings = report["findings"].as_array().unwrap();
+    assert!(
+        findings
+            .iter()
+            .any(|f| f["code"] == "QUOTA_EXCEEDED" && f["severity"] == "error"),
+        "402 要归到额度问题：{findings:?}"
+    );
+    assert!(
+        findings.iter().any(|f| f["code"] == "NO_MODELS"),
+        "模型目录为空要如实报：{findings:?}"
+    );
+    assert!(
+        report.get("suggestedPatch").is_none(),
+        "不生成可直接应用的补丁（没有厂商预设）"
+    );
+    let raw = serde_json::to_string(&report).unwrap();
+    assert!(
+        raw.contains("余额") || raw.contains("工作区"),
+        "解释要说清这不是改请求头能解决的：{raw}"
+    );
+
+    gateway.abort();
+    let _ = std::fs::remove_dir_all(dir);
+}
+/// 端点有响应但 `/models` 回 404：**不许说成"模型列表可达"**，更不能推出对话可用。
+#[tokio::test]
+async fn 诊断区分端点可达与模型列表可达() {
+    let dir = temp_dir("diagnose-no-models-endpoint");
+    let (base, _auth, _paths, gateway) = upstream(404, json!({})).await;
+    let state = state(&dir, &base, None);
+    let report = diagnose(&state, "p1").await.expect("诊断本身应当成功返回");
+
+    assert_eq!(report["ok"], json!(true), "端点确实有响应：{report}");
+    let findings = report["findings"].as_array().unwrap();
+    assert!(
+        findings
+            .iter()
+            .any(|f| f["code"] == "ENDPOINT_REACHABLE_NO_MODEL_LIST"),
+        "404 只说明端点有响应、没有列表：{findings:?}"
+    );
+    assert!(
+        !findings.iter().any(|f| f["code"] == "MODEL_LIST_REACHABLE"),
+        "不许把没有模型列表的端点说成模型列表可达：{findings:?}"
+    );
+
+    gateway.abort();
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 /// 额外请求头与查询参数**真的发到了上游**（不是只存在库里）。
 ///
-/// OpenCode Go / Zen 就卡在这一点上：`/models` 不校验 `x-opencode-session`，
-/// 真正发消息时才 400（`MissingSessionID`）—— 所以光"连接测试通过"说明不了任何事。
-/// 这里同时盯住请求头与 URL 查询串，防止两边各改一半。
+/// 有些网关的模型列表端点不校验会话头，真正推理时才拒绝；所以这里同时盯住请求头与
+/// URL 查询串，防止两边各改一半。
 #[tokio::test]
 async fn 额外请求头与查询参数跟着探测请求一起发出() {
     let dir = temp_dir("extras");
@@ -400,7 +462,9 @@ async fn 额外请求头与查询参数跟着探测请求一起发出() {
             .unwrap_or_else(|| panic!("前缀由用户填，程序只展开变量：{session}"));
         assert_eq!(token.len(), 26, "{{session}} 是 26 个小写十六进制字符");
         assert!(
-            token.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()),
+            token
+                .chars()
+                .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()),
             "会话标识必须是十六进制：{session}"
         );
         sessions.push(session.clone());

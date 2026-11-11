@@ -34,7 +34,9 @@ async fn run_kit_ships_every_rule_the_phone_needs() {
     );
     // v66（2026-11-09）：comfy_view_outputs 放开浏览 —— limit 上限 8 → 50（默认 3 → 8），
     //   新增 offset 翻页 / promptId / collectionId 过滤，结果带 total / hasMore。
-    assert_eq!(body["promptVersion"], "v66");
+    // v67（2026-11-11）：新增只读的 diagnose_provider —— Provider 诊断只报事实，
+    //   解释与修复建议交给当前可用的模型。
+    assert_eq!(body["promptVersion"], "v67");
     assert_eq!(body["nsfwEnabled"], false, "夹具里没开 NSFW");
     assert_eq!(body["inlineBudget"]["perImageBytes"], 8388608, "单图 8MB");
     assert_eq!(body["inlineBudget"]["totalBytes"], 20971520, "合计 20MB");
@@ -485,6 +487,8 @@ async fn tool_policy_and_nsfw_endpoints() {
             // danbooru（会把数据送出本机的工具；出厂档 allow，但受联网预算约束）
             "danbooru_lookup",
             "delete_skill",
+            // Provider 诊断（2026-11-11）：只读；把事实交给当前可用的模型解释，不改配置
+            "diagnose_provider",
             // 定向查询（P4 第 64 步）：先查本机、再按 Civitai → HF → ModelScope 查，
             // **绝不代下**（只给链接 + sha256 + 目标目录）
             "find_model",

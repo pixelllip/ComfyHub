@@ -320,7 +320,7 @@ class _AiProviderDialogState extends State<AiProviderDialog> {
               enableSuggestions: false,
               decoration: InputDecoration(
                 labelText: header ? '请求头名称' : '参数名称',
-                hintText: header ? 'x-opencode-session' : 'api-version',
+                hintText: header ? 'X-Custom-Header' : 'custom-param',
                 isDense: true,
               ),
             ),
@@ -334,7 +334,7 @@ class _AiProviderDialogState extends State<AiProviderDialog> {
               enableSuggestions: false,
               decoration: InputDecoration(
                 labelText: header ? '请求头的值' : '参数的值',
-                hintText: header ? 'ses_…' : '2024-10-21',
+                hintText: header ? '值或 {{session}}' : '值或 {{conversation}}',
                 isDense: true,
               ),
             ),
@@ -490,9 +490,9 @@ class _AiProviderDialogState extends State<AiProviderDialog> {
                   text:
                       '每次向这个 Provider 发请求都会带上这些参数，连接测试与获取模型也一样。'
                       '名称相同的请求头会覆盖默认头。值里可以用 {{session}}（同一对话固定、'
-                      '不同对话不同）和 {{conversation}}（对话 ID），'
-                      'OpenCode 的 x-opencode-session 可以填 ses_{{session}}。'
-                      '这些参数按原样保存在本机配置里，不要用来存密钥；密钥请填在上面的 API Key 里。',
+                      '不同对话不同）和 {{conversation}}（对话 ID），需要固定前缀时自己加，'
+                      '例如 prefix-{{session}}。这些参数按原样保存在本机配置里，'
+                      '不要用来存密钥；密钥请填在上面的 API Key 里。',
                   error: _extrasError != null,
                 ),
                 if (_extrasError != null)

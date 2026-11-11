@@ -366,6 +366,18 @@ pub const DESKTOP_TOOLS: &[DesktopToolSpec] = &[
         mutating: true,
     },
     DesktopToolSpec {
+        name: "diagnose_provider",
+        description: r#"**诊断一个 AI Provider**：只采集事实，不修改配置。
+会回答：配置是否完整、凭据有没有配（不显示值）、模型目录是否为空、模型列表端点是否可达、上游返回的稳定错误码与脱敏原文；还会列出已配置的请求头 / 查询参数名称（不显示值）。
+⚠ 连接测试只请求模型列表端点，它通过**不代表**对话请求可用；对话端点还可能因余额、套餐、工作区、会话标识或协议被拒。
+拿到结果后，结合 `web_search` / `web_fetch` 查该服务的公开文档，用平实的话解释原因并给出可选的修改建议；**不要自动修改配置，也不要编造端点或请求头**。修复建议由用户决定是否应用。
+什么时候用：用户说某个 Provider 连不上、测试连接通过但发消息失败、或要你判断该改地址 / 协议 / 请求头时。"#,
+        input_schema: r#"{"type":"object","properties":{"providerId":{"type":"string","description":"要诊断的 Provider ID（不知道时先让用户确认）"}},"required":["providerId"],"additionalProperties":false}"#,
+        scope: "DESKTOP",
+        access: "ALLOW",
+        mutating: false,
+    },
+    DesktopToolSpec {
         name: "find_model",
         // ⚠ 逐字来自 Kotlin `ToolRegistry.kt` 的 `find_model`（R12/R13）：
         //   description 与 schema 都是**机器抽取**的（不是手抄）—— Kotlin 那边是一串

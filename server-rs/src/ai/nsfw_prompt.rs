@@ -178,7 +178,10 @@ pub const VERSION: &str = "nsfw-v3";
 ///   8 → 50（默认 3 → 8），新增 `offset` 翻页与 `promptId` / `collectionId` 过滤，
 ///   结果多 `total` / `hasMore`，正文按"第 X–Y 张（共 N 张）"说明如何继续查看。约束：
 ///   "应该放开 AI 工作台查看产物的权限，不能只看前 x 张。" 工具 schema 与描述都变了 → bump。
-pub const PROMPT_VERSION: &str = "v66";
+/// - **Rust v67**（2026-11-11）：新增只读的 `diagnose_provider` —— 把 Provider 的配置、
+///   凭据状态、模型列表探测与上游错误整理成事实，解释与修复建议交给当前可用的模型。
+///   工具清单变了 → bump。
+pub const PROMPT_VERSION: &str = "v67";
 
 /// 第一问时按轮追加的起标题指令（`SystemPrompt.TITLE_INSTRUCTION`）。
 pub const TITLE_INSTRUCTION: &str = r#"【本次附加任务：为这个对话起标题】

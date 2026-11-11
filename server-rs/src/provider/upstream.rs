@@ -280,7 +280,8 @@ where
         })?;
         headers.insert(name, value);
     }
-    extras.apply_headers(&mut headers)?;    // 思考模式下的"思维链回传"被拒时，先补回传、再考虑降档（顺序见下面的 `loop`）。
+    extras.apply_headers(&mut headers)?;
+    // 思考模式下的"思维链回传"被拒时，先补回传、再考虑降档（顺序见下面的 `loop`）。
     let mut thinking_forced_off = false;
     // 这一轮是不是**补了空 `reasoning` 项**才成功的（执行器据此让余下的轮次也补）。
     let mut echo_forced = false;

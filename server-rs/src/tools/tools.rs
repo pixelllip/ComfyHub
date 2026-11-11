@@ -484,7 +484,7 @@ pub fn implemented() -> Vec<ToolView<'static>> {
 /// ⚠ 加一个名字之前先确认 [`execute`] 里真的有那条分支 —— 两个清单漂移的后果是
 /// **模型会去调一个必然失败的工具**（`TOOL_NOT_FOUND`），而界面上看不出为什么。
 ///
-/// 当前四十三个：手机那四个只碰本机的（Skills 两个 + 长期记忆 + 提问）+ 桌面文件工具五件
+/// 当前四十七个：手机那四个只碰本机的（Skills 两个 + 长期记忆 + 提问）+ 桌面文件工具五件
 /// （`list_dir` / `read_file` / `write_file` / `register_skill` / `delete_skill`，P4 第 40 步）
 /// + 联网三件（`web_search` / `web_fetch` / `civitai_search`，见 [`crate::tools::web_tools`] 与
 ///   [`crate::tools::civitai`]，P4 第 64 步；它们本来就是 `BOTH` 档，只是**实现**在这一步才落地）
@@ -508,7 +508,7 @@ pub fn implemented() -> Vec<ToolView<'static>> {
 /// + **2D 布局模板**（`layout_propose`，见 [`crate::ai::layout_proposal`]，2026-11-03：
 ///   写提示词的同一轮把构图草稿提供预览 / 修改，改完再提交回来 —— 只出草稿，
 ///   不生成图片、不写库）。
-pub const IMPLEMENTED: [&str; 46] = [
+pub const IMPLEMENTED: [&str; 47] = [
     "ask_user_question",
     "civitai_search",
     "comfy_audit_workflow",
@@ -537,6 +537,7 @@ pub const IMPLEMENTED: [&str; 46] = [
     "comfy_view_outputs",
     "danbooru_lookup",
     "delete_skill",
+    "diagnose_provider",
     "find_model",
     "layout_propose",
     "list_dir",
@@ -667,6 +668,11 @@ pub async fn execute(
         "write_file" => write_file(policy, arguments),
         "register_skill" => register_skill(state, arguments),
         "delete_skill" => delete_skill(state, arguments),
+        // Provider 诊断（只读）：把配置、凭据状态、模型列表探测与上游错误整理成事实，
+        // 解释与修复建议交给当前可用的模型。
+        "diagnose_provider" => {
+            crate::provider::provider_diagnose::tool_diagnose(state, arguments).await
+        }
         // ---- comfy 查询三件（P4 第 41/42 步）--------------------------------
         "comfy_get_run" => comfy_get_run(state, arguments),
         // 本机模型清单（`ComfyModels` 的 Rust 版）：**只报不改**，回答"盘上有 / 实例看不到"
@@ -1139,7 +1145,10 @@ fn read_skill_file(state: &AppState, arguments: &Value) -> Result<ToolOutcome, T
         ));
     };
     if rel.is_empty() || Path::new(rel).is_absolute() || rel.contains('\u{0}') {
-        return Err(ToolFailure::new("PATH_DENIED", "附带文件路径必须是相对路径"));
+        return Err(ToolFailure::new(
+            "PATH_DENIED",
+            "附带文件路径必须是相对路径",
+        ));
     }
     let mut target = root.to_path_buf();
     for comp in Path::new(rel).components() {
@@ -1154,9 +1163,8 @@ fn read_skill_file(state: &AppState, arguments: &Value) -> Result<ToolOutcome, T
             }
         }
     }
-    let real_root = std::fs::canonicalize(root).map_err(|e| {
-        ToolFailure::new("IO_ERROR", format!("读不了 skill「{name}」的目录：{e}"))
-    })?;
+    let real_root = std::fs::canonicalize(root)
+        .map_err(|e| ToolFailure::new("IO_ERROR", format!("读不了 skill「{name}」的目录：{e}")))?;
     let real = std::fs::canonicalize(&target).map_err(|_| {
         ToolFailure::new(
             "FILE_NOT_FOUND",
@@ -1787,10 +1795,7 @@ fn comfy_list_workflows(state: &AppState, arguments: &Value) -> Result<ToolOutco
 ///
 /// 任务与模型文件名都走 [`crate::workflow::workflow_recipe::analyze`] ——
 /// 与 `comfy_learn_workflow` **同一条分类路**（判据顺序在 `classify`，这里不另写）。
-fn comfy_recent_successes(
-    state: &AppState,
-    arguments: &Value,
-) -> Result<ToolOutcome, ToolFailure> {
+fn comfy_recent_successes(state: &AppState, arguments: &Value) -> Result<ToolOutcome, ToolFailure> {
     use crate::workflow::workflow_recipe::{analyze, Task};
 
     let task_filter = match arguments
@@ -1872,7 +1877,10 @@ fn comfy_recent_successes(
         models.sort();
         models.dedup();
         if let Some(query) = &model_query {
-            if !models.iter().any(|name| name.to_lowercase().contains(query)) {
+            if !models
+                .iter()
+                .any(|name| name.to_lowercase().contains(query))
+            {
                 continue;
             }
         }
@@ -1919,12 +1927,17 @@ fn comfy_recent_successes(
         if skipped > 0 {
             text.push_str(&format!("另有 {skipped} 条 raw 解析失败，已跳过。"));
         }
-        text.push_str("先确认这条工作流真的跑通过一次，或用 comfy_list_workflows 找现成的；不要凭标题猜。");
+        text.push_str(
+            "先确认这条工作流真的跑通过一次，或用 comfy_list_workflows 找现成的；不要凭标题猜。",
+        );
     } else {
         text.push_str(&format!("最近 {count} 条成功运行（同任务 + 同族优先）：\n"));
         for item in &items {
             let obj = item.as_object().expect("item 是对象");
-            let title = obj.get("title").and_then(Value::as_str).unwrap_or("(没有标题)");
+            let title = obj
+                .get("title")
+                .and_then(Value::as_str)
+                .unwrap_or("(没有标题)");
             let task = obj.get("task").and_then(Value::as_str).unwrap_or("unknown");
             let models = obj
                 .get("models")
@@ -1940,7 +1953,11 @@ fn comfy_recent_successes(
             let run_key = obj.get("runKey").and_then(Value::as_str).unwrap_or("");
             text.push_str(&format!(
                 "- {title}（{task}；模型：{}；{at}；runKey {run_key}）\n",
-                if models.is_empty() { "没记录" } else { &models }
+                if models.is_empty() {
+                    "没记录"
+                } else {
+                    &models
+                }
             ));
         }
         text.push_str(

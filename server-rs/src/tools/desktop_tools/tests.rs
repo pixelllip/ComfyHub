@@ -85,6 +85,8 @@ fn 只列真搬过来了的那些() {
             "comfy_view_outputs",
             "danbooru_lookup",
             "delete_skill",
+            // Provider 诊断（2026-11-11）：只读，把事实交给当前可用的模型解释
+            "diagnose_provider",
             // 定向查询（P4 第 64 步）：**绝不代下**，只给链接 + sha256 + 目标目录
             "find_model",
             // 2D 布局模板（2026-11-03）：写提示词时同轮给构图草稿，只读、不生成图片
@@ -122,6 +124,24 @@ fn 只列真搬过来了的那些() {
             "{present} 已经搬过来了，不许漏：{names:?}"
         );
     }
+}
+
+/// Provider 诊断是**只读**的：它只采集事实，解释与建议由可用模型给出，不写配置。
+#[test]
+fn 诊断工具只读且不需要审批() {
+    let tool = DESKTOP_TOOLS
+        .iter()
+        .find(|t| t.name == "diagnose_provider")
+        .expect("diagnose_provider 必须在桌面清单里");
+    assert_eq!(tool.access, "ALLOW");
+    assert!(!tool.mutating, "诊断不许写库 / 改 Provider");
+    assert_eq!(tool.scope, "DESKTOP");
+    assert!(
+        !tool.description.contains("opencode")
+            && !tool.description.contains("azure")
+            && !tool.description.contains("openrouter"),
+        "工具描述不许带厂商示例"
+    );
 }
 
 /// 配方三件的出厂档（与 Kotlin `ToolRegistry.kt` 逐条一致）：
