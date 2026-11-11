@@ -335,7 +335,11 @@ pub fn accept(state: &AppState, item: &PushItem) -> Result<Accepted, Reject> {
         } else {
             String::new()
         },
-        if auto_approve { "自动提交，免桌面批准" } else { "等人批准" }
+        if auto_approve {
+            "自动提交，免桌面批准"
+        } else {
+            "等人批准"
+        }
     );
     start(state, &parsed.queue_id);
     Ok(Accepted::Fresh)
@@ -746,9 +750,8 @@ async fn execute(state: &AppState, job: &Job) -> Terminal {
                     .and_then(crate::workflow::workflow_recipe::Task::parse),
                 family: job.auto.family.clone(),
             };
-            let picked = match state.with(|conn| {
-                crate::workflow::auto_select::pick(conn, &wanted)
-            }) {
+            let picked = match state.with(|conn| crate::workflow::auto_select::pick(conn, &wanted))
+            {
                 Ok(outcome) => outcome,
                 Err(error) => {
                     return Terminal::failed(
@@ -797,11 +800,8 @@ async fn execute(state: &AppState, job: &Job) -> Terminal {
         .flatten();
     let mut size_note: Option<String> = None;
     if let Some(graph) = graph.as_ref() {
-        let (size, note) = crate::workflow::auto_select::size_overrides(
-            graph,
-            job.auto.width,
-            job.auto.height,
-        );
+        let (size, note) =
+            crate::workflow::auto_select::size_overrides(graph, job.auto.width, job.auto.height);
         for (key, value) in size {
             overrides.entry(key).or_insert(Value::String(value));
         }
@@ -1604,7 +1604,8 @@ pub fn sweep(state: &AppState) -> SweepReport {
         ),
     );
     // ④ 人已经批过、只是没人认领 → 交给调用方复起（认领是原子的，复起不会重复提交）
-    report.need_worker = awaiting_ids(state, "AND approval IN ('approved', 'auto')").unwrap_or_default();
+    report.need_worker =
+        awaiting_ids(state, "AND approval IN ('approved', 'auto')").unwrap_or_default();
     // ⑤ 回执投递（终态 + 还没送达）：会话晚到 / 写库失败都在这里重试
     let delivered = deliver_pending(state);
     report.delivered = delivered;

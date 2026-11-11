@@ -12,5 +12,5 @@ pub mod comfy_launch;
 pub mod comfy_models;
 pub mod comfy_progress;
 pub mod image_edit;
-pub mod template_library;
 pub mod media_view;
+pub mod template_library;

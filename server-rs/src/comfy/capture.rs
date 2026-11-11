@@ -291,10 +291,7 @@ impl CaptureRunInfo {
             out.insert("capturedAt".into(), serde_json::json!(at));
         }
         // 来源档（列 NOT NULL DEFAULT 'ComfyUI'）：始终给；配方 id 可空则整键省略。
-        out.insert(
-            "sourceKind".into(),
-            serde_json::json!(self.source_kind),
-        );
+        out.insert("sourceKind".into(), serde_json::json!(self.source_kind));
         if let Some(id) = self.recipe_id {
             out.insert("recipeId".into(), serde_json::json!(id));
         }

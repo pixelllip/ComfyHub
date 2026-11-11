@@ -445,9 +445,10 @@ fn responses_body_shape() {
 /// `The reasoning_text in the thinking mode must be passed back to the API.`
 ///
 /// 那家 API 是**无状态**的，思考模式下"带 `tools` 的请求"要求后续每一次请求都把历史轮次的
-/// 思维链按轮回传。形状与顺序两条都盯着（顺序错了会被当成"另一个 assistant 轮"）：
+/// 思维链按轮回传。形状与顺序三条都盯着（顺序错了会被当成"另一个 assistant 轮"）：
 /// `reasoning` 项排在**同一条助手轮**的 `message` / `function_call` 之前，
-/// 内容块是 `reasoning_text`（**不是** OpenAI 的 `summary_text` —— DeepSeek 不支持 summary）。
+/// `content` 是 `reasoning_text`，`summary` 是 `summary_text` 数组。
+/// 后者少了就过不了严格网关：`input[N].summary: expected an array`（2026-11-11 现场）。
 #[test]
 fn responses_reasoning_round_trip() {
     let adapter = OpenAiResponsesAdapter;
@@ -484,6 +485,11 @@ fn responses_reasoning_round_trip() {
     );
     assert_eq!(input[1]["content"][0]["type"], "reasoning_text");
     assert_eq!(input[1]["content"][0]["text"], "先查一下天气工具");
+    assert_eq!(
+        input[1]["summary"],
+        json!([{ "type": "summary_text", "text": "先查一下天气工具" }]),
+        "summary 必须是数组：缺了它，严格网关回 400 input[N].summary: expected an array"
+    );
     assert_eq!(
         input[2]["type"], "function_call",
         "思考项后面紧跟同一轮的 function_call"
@@ -548,6 +554,7 @@ fn responses_fills_placeholder_reasoning_for_turns_that_did_not_think() {
         ..Default::default()
     };
     let placeholder = json!([{ "type": "reasoning_text", "text": NO_REASONING_TEXT }]);
+    let placeholder_summary = json!([{ "type": "summary_text", "text": NO_REASONING_TEXT }]);
     let deepseek = ReasoningRequest {
         effort: Some("high".into()),
         wire_value: Some("high".into()),
@@ -566,6 +573,10 @@ fn responses_fills_placeholder_reasoning_for_turns_that_did_not_think() {
         body["input"][0]["content"], placeholder,
         "回传的是零宽空格占位，不是空 content"
     );
+    assert_eq!(
+        body["input"][0]["summary"], placeholder_summary,
+        "占位轮的 summary 同样是数组，严格网关才不拒"
+    );
     assert_eq!(body["input"][1]["type"], "function_call");
 
     // ② 没有工具调用的助手轮也要补（官方原文点了 "even for turns where the model did not
@@ -579,6 +590,7 @@ fn responses_fills_placeholder_reasoning_for_turns_that_did_not_think() {
     );
     assert_eq!(body["input"][0]["type"], "reasoning");
     assert_eq!(body["input"][0]["content"], placeholder);
+    assert_eq!(body["input"][0]["summary"], placeholder_summary);
 
     let off = ReasoningRequest {
         effort: Some("none".into()),
@@ -665,6 +677,11 @@ fn responses_补回传与方言解耦() {
     assert_eq!(
         body["input"][0]["content"],
         json!([{ "type": "reasoning_text", "text": NO_REASONING_TEXT }])
+    );
+    assert_eq!(
+        body["input"][0]["summary"],
+        json!([{ "type": "summary_text", "text": NO_REASONING_TEXT }]),
+        "补出来的占位项也要带 summary 数组"
     );
     assert_eq!(body["input"][1]["type"], "function_call");
     assert_eq!(body["reasoning"]["effort"], "high", "补回传不许动思考强度");

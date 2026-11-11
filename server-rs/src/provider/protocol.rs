@@ -185,7 +185,8 @@ pub struct ChatTurn {
     /// 历史轮次的思维链**完整回传**，否则直接 400（[DeepSeek Responses API 指南]：
     /// 输入 item 里的 `reasoning` 明文 `content` 会被归并进相邻的 assistant 消息）。
     ///
-    /// ⚠ **只有需要回传的协议才发它**：`openai-responses` 的适配器把它铺成 `reasoning` 项；
+    /// ⚠ **只有需要回传的协议才发它**：`openai-responses` 的适配器把它铺成 `reasoning` 项
+    /// （`summary` 与 `content` 两个字段都带，见 [`reasoning_item`]）；
     /// `openai-completions` 在 `deepseek` 方言 + 请求带 `tools` 时铺成助手消息的
     /// `reasoning_content`（官方 Thinking Mode 指南对 OpenAI 格式是**同一条硬要求**，
     /// 2026-11 之前我们一个字节都不发 —— 那条路上第一次工具往返之后必 400）；
@@ -745,6 +746,27 @@ fn reasoning_echo_required(reasoning: &ReasoningRequest) -> bool {
     reasoning.echo_all || matches!(reasoning.format, Some(ThinkingFormat::DeepSeek))
 }
 
+/// 历史轮次的思考项（Responses 协议）。
+///
+/// 两个字段都要有，缺一个就有网关拒收：
+/// - `summary`：`summary_text` 数组。OpenAI 格式里它是可选字段，但部分网关（opencode Go、
+///   DashScope）按"必填且必须是数组"校验 —— 只发 `content` 会被拒成
+///   `input[N].summary: expected an array`（2026-11-11 现场）；
+/// - `content`：`reasoning_text` 数组。DeepSeek 无状态 Responses 要的就是它。
+///
+/// 当前存下来的思考文本不区分"摘要"与"原文"：DeepSeek 发 `reasoning_text`，
+/// 那些只给摘要的网关发 `reasoning_summary_text`，两者都进同一个 `reasoning` 块。
+/// 所以同一段文本同时铺进两个字段 —— 对 DeepSeek 来说 `summary` 不参与计费
+/// （实测同一条请求有无该字段 `input_tokens` 相同），对只读 `summary` 的网关来说
+/// 这才是它认的那份思考。
+fn reasoning_item(text: &str) -> Value {
+    json!({
+        "type": "reasoning",
+        "summary": [{ "type": "summary_text", "text": text }],
+        "content": [{ "type": "reasoning_text", "text": text }],
+    })
+}
+
 impl Adapter for OpenAiResponsesAdapter {
     fn api(&self) -> Api {
         Api::OpenAiResponses
@@ -788,11 +810,9 @@ impl Adapter for OpenAiResponsesAdapter {
             //
             // 正文空、只有工具调用那一轮也要发（模型想完直接调工具是常态）—— 它归并进的是
             // **相邻的**助手轮，而下面紧跟的正是那一轮的 `function_call`。
+            // 形状见 [`reasoning_item`]：`summary` 与 `content` 两个字段都要有。
             if let Some(reasoning) = turn.reasoning.as_deref().filter(|r| !r.trim().is_empty()) {
-                input.push(json!({
-                    "type": "reasoning",
-                    "content": [{ "type": "reasoning_text", "text": reasoning }],
-                }));
+                input.push(reasoning_item(reasoning));
             } else if turn.role == "assistant" && reasoning_echo_required(reasoning) {
                 // **这一轮模型根本没思考**（实测 2026-10-25：`krea2 r2i` 那次的 16 轮里，
                 // 有一轮只发了一个工具调用、2.3 秒就回来了，思维链 0 字符）。
@@ -801,14 +821,11 @@ impl Adapter for OpenAiResponsesAdapter {
                 // 还特意写了 "even for turns where the model did not perform a tool call"，
                 // 所以这里补的是**每一条**没思考的助手轮（不只是带工具调用的那些）。
                 //
-                // 形状：空 `content`（`[]`）在 2026-10 还能过，2026-11-09 第二次就被拒了
-                // （空数组归并进相邻消息之后什么都不剩）。现在改回传一个**零宽空格占位**：
-                // 非空、不可见、不参与 `trim()`，既满足"必须有 reasoning_text"，又不需要
-                // 编一段假思考。见 [`NO_REASONING_TEXT`]。
-                input.push(json!({
-                    "type": "reasoning",
-                    "content": [{ "type": "reasoning_text", "text": NO_REASONING_TEXT }],
-                }));
+                // 形状：`summary` 与 `content` 各一个占位块（见 [`reasoning_item`]）——
+                // 空数组归并进相邻消息之后什么都不剩，所以用**零宽空格占位**：
+                // 非空、不可见、不参与 `trim()`，既满足"必须有 reasoning_text"，
+                // 又不需要编一段假思考。见 [`NO_REASONING_TEXT`]。
+                input.push(reasoning_item(NO_REASONING_TEXT));
             }
             if !turn.content.is_empty() || !turn.images.is_empty() {
                 let mut content: Vec<Value> = Vec::new();

@@ -64,10 +64,7 @@ pub fn write_router() -> Router<AppState> {
         .route("/api/media/collections", post(create_collection))
         // 改名（2026-11-07）：展开详情里点「重命名集合」；改名同时把它转成 manual，
         // 免得「重新自动整理」下次把名字连同集合一起解散。
-        .route(
-            "/api/media/collections/{id}",
-            patch(rename_collection),
-        )
+        .route("/api/media/collections/{id}", patch(rename_collection))
         // 「重新自动整理」：把 `origin='auto'` 的集合全解散再按当前规则重分。
         // ⚠ 与上面那条是**两个互相独立**的静态路径（不是同一路径的不同方法，
         // 也不是动态段），所以两条都要写出来 —— 少了任何一条，对应操作都是 404/405。
@@ -125,11 +122,9 @@ async fn create_collection(
         crate::media::collection::create_manual(tx, &body.media_ids, body.title.as_deref())
     })?;
     // 直接按 id 取摘要：默认名 / 成员数都由后端算好，别让界面再猜一遍。
-    let summary = state
-        .with(|conn| {
-            crate::media::collection::summary(conn, created)
-                .map_err(crate::web::routes::as_sql_error)
-        })?;
+    let summary = state.with(|conn| {
+        crate::media::collection::summary(conn, created).map_err(crate::web::routes::as_sql_error)
+    })?;
     Ok((StatusCode::CREATED, Json(summary.into())))
 }
 

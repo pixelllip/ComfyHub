@@ -53,7 +53,11 @@ async fn 既没有_prompt_id_也没有_source_ref_是永久性拒绝() {
     assert_eq!(failure.code, "MISSING_WORKFLOW");
     // 拒绝时要把**两条路**都说出来（只说"缺 promptId"会让手机 AI 一直来试名字）
     assert!(failure.message.contains("sourceRef"), "{}", failure.message);
-    assert!(failure.message.contains("modelFamily"), "{}", failure.message);
+    assert!(
+        failure.message.contains("modelFamily"),
+        "{}",
+        failure.message
+    );
 }
 
 /// 只说族（`task` + `modelFamily` + `positivePrompt`）**能受理**，而且那三项要进账 ——
@@ -79,7 +83,10 @@ async fn 只说族也能受理_三项写进账上() {
     assert!(job.prompt_id.is_none(), "只是说族，还不知道是哪份工作流");
     assert_eq!(job.auto.task.as_deref(), Some("t2i"));
     assert_eq!(job.auto.family.as_deref(), Some("anima"));
-    assert_eq!(job.auto.positive_prompt.as_deref(), Some("雨夜便利店，暖光"));
+    assert_eq!(
+        job.auto.positive_prompt.as_deref(),
+        Some("雨夜便利店，暖光")
+    );
     assert_eq!(job.auto.width, Some(832));
     assert_eq!(job.auto.height, Some(1216));
 }

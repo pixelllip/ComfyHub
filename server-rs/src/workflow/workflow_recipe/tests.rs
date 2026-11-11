@@ -1721,13 +1721,20 @@ fn 已验证回写按槽位与模型去重_且不会抹掉别的组合() {
     )
     .unwrap()
     .0;
-    assert!(verified_in(&conn, id).unwrap().is_empty(), "新配方没有验证记录");
+    assert!(
+        verified_in(&conn, id).unwrap().is_empty(),
+        "新配方没有验证记录"
+    );
 
     // 第一次跑通
     let written = record_verified(
         &conn,
         id,
-        &[verified("krea2_turbo_v11.safetensors", "1.ckpt_name", "run-a")],
+        &[verified(
+            "krea2_turbo_v11.safetensors",
+            "1.ckpt_name",
+            "run-a",
+        )],
     )
     .unwrap();
     assert_eq!(written, 1);
@@ -1739,7 +1746,11 @@ fn 已验证回写按槽位与模型去重_且不会抹掉别的组合() {
     record_verified(
         &conn,
         id,
-        &[verified("krea2_turbo_v11.safetensors", "1.ckpt_name", "run-b")],
+        &[verified(
+            "krea2_turbo_v11.safetensors",
+            "1.ckpt_name",
+            "run-b",
+        )],
     )
     .unwrap();
     let list = verified_in(&conn, id).unwrap();
@@ -1750,7 +1761,11 @@ fn 已验证回写按槽位与模型去重_且不会抹掉别的组合() {
     record_verified(
         &conn,
         id,
-        &[verified("krea2_turbo_v20.safetensors", "1.ckpt_name", "run-c")],
+        &[verified(
+            "krea2_turbo_v20.safetensors",
+            "1.ckpt_name",
+            "run-c",
+        )],
     )
     .unwrap();
     let list = verified_in(&conn, id).unwrap();
@@ -1764,7 +1779,10 @@ fn 已验证回写按槽位与模型去重_且不会抹掉别的组合() {
     assert_eq!(row.verified[0]["overrideKey"], "1.ckpt_name");
     assert_eq!(row.verified[0]["role"], "diffusion_models");
     let summary = verified_summary(&verified_of(&row.verified)).unwrap();
-    assert!(summary.contains("1.ckpt_name=krea2_turbo_v20.safetensors"), "{summary}");
+    assert!(
+        summary.contains("1.ckpt_name=krea2_turbo_v20.safetensors"),
+        "{summary}"
+    );
 }
 
 /// 重新学一份（`save_row` 走 UPDATE）**不许清掉**已验证记录 ——
@@ -1796,7 +1814,11 @@ fn 已验证的组合在绑定结果里标出来_但不放松写键的判据() {
         "diffusion_models",
         true,
     )]);
-    let proven = [verified("krea2_turbo_v11.safetensors", "55.unet_name", "r1")];
+    let proven = [verified(
+        "krea2_turbo_v11.safetensors",
+        "55.unet_name",
+        "r1",
+    )];
     let report = bind(
         &recipe,
         &[request("krea2_turbo_v11.safetensors")],
@@ -1812,7 +1834,11 @@ fn 已验证的组合在绑定结果里标出来_但不放松写键的判据() {
         report.bindings[0].verified_at.as_deref(),
         Some("2026-11-09T02:00:00Z")
     );
-    assert!(report.render().contains("✔ 已验证跑通"), "{}", report.render());
+    assert!(
+        report.render().contains("✔ 已验证跑通"),
+        "{}",
+        report.render()
+    );
     assert!(
         report.render().contains("已经跑通过"),
         "要有「直接开跑」的结论：{}",
@@ -1831,7 +1857,11 @@ fn 已验证的组合在绑定结果里标出来_但不放松写键的判据() {
         false,
     );
     assert!(!report.bindings[0].verified);
-    assert!(report.render().contains("还没跑通过"), "{}", report.render());
+    assert!(
+        report.render().contains("还没跑通过"),
+        "{}",
+        report.render()
+    );
 }
 
 /// 别人给的文件名写法不同（大小写 / 分隔符）时，仍要认出"这就是上次跑通的那个"。
@@ -1843,7 +1873,11 @@ fn 已验证记录按词根集合比模型名_不因写法不同而失效() {
         "diffusion_models",
         true,
     )]);
-    let proven = [verified("krea2_turbo_v11.safetensors", "55.unet_name", "r1")];
+    let proven = [verified(
+        "krea2_turbo_v11.safetensors",
+        "55.unet_name",
+        "r1",
+    )];
     let report = bind(
         &recipe,
         &[request("krea2-turbo-v11.safetensors")],
@@ -1859,4 +1893,3 @@ fn 已验证记录按词根集合比模型名_不因写法不同而失效() {
         "同一个文件的另一种写法不该被当成没跑过"
     );
 }
-

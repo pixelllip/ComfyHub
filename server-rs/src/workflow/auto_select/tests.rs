@@ -87,8 +87,18 @@ fn 同任务同族的最近成功优先于已验证配方() {
     let conn = conn();
     let p1 = seed_prompt(&conn, "anima 9点");
     let p2 = seed_prompt(&conn, "anima 10点");
-    seed_run(&conn, p1, "silvermoonmixAnimaEvolved_v2329B_int8.safetensors", "2026-11-08T09:00:00.000Z");
-    seed_run(&conn, p2, "silvermoonmixAnimaEvolved_v2329B_int8.safetensors", "2026-11-08T10:00:00.000Z");
+    seed_run(
+        &conn,
+        p1,
+        "silvermoonmixAnimaEvolved_v2329B_int8.safetensors",
+        "2026-11-08T09:00:00.000Z",
+    );
+    seed_run(
+        &conn,
+        p2,
+        "silvermoonmixAnimaEvolved_v2329B_int8.safetensors",
+        "2026-11-08T10:00:00.000Z",
+    );
     // 配方里也有这一族（更"正式"的凭据），但①档优先
     seed_recipe(
         &conn,
@@ -135,7 +145,11 @@ fn 没有成功记录时落到已验证配方_并带出那组槽位覆盖() {
     assert_eq!(picked.prompt_id, p1);
     let mut keys: Vec<&str> = picked.overrides.iter().map(|(k, _)| k.as_str()).collect();
     keys.sort();
-    assert_eq!(keys, vec!["55.unet_name", "56.clip_name"], "只带最近那次跑的覆盖");
+    assert_eq!(
+        keys,
+        vec!["55.unet_name", "56.clip_name"],
+        "只带最近那次跑的覆盖"
+    );
     assert!(
         picked.note.contains("已经跑通过"),
         "结论要说清是经验不是保证：{}",
@@ -147,7 +161,12 @@ fn 没有成功记录时落到已验证配方_并带出那组槽位覆盖() {
 fn 没有命中时如实列出试过哪几档_绝不猜一份() {
     let conn = conn();
     let p1 = seed_prompt(&conn, "moss 的工作流");
-    seed_run(&conn, p1, "moss_image_v1.safetensors", "2026-11-08T09:00:00.000Z");
+    seed_run(
+        &conn,
+        p1,
+        "moss_image_v1.safetensors",
+        "2026-11-08T09:00:00.000Z",
+    );
 
     let out = pick(&conn, &anima()).unwrap();
     assert!(out.picked.is_none(), "别的族不能算命中");
@@ -160,7 +179,12 @@ fn 没有命中时如实列出试过哪几档_绝不猜一份() {
 fn 任务不同不命中_族不同也不命中() {
     let conn = conn();
     let p1 = seed_prompt(&conn, "moss 的工作流");
-    seed_run(&conn, p1, "moss_image_v1.safetensors", "2026-11-08T09:00:00.000Z");
+    seed_run(
+        &conn,
+        p1,
+        "moss_image_v1.safetensors",
+        "2026-11-08T09:00:00.000Z",
+    );
 
     // 同族但任务不对
     let out = pick(

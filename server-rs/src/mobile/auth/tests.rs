@@ -73,7 +73,11 @@ async fn set_device_auto_approve_只改指定设备() {
     let conn = crate::infra::db::open_memory().unwrap();
     conn.execute_batch(crate::infra::db::schema_sql())
         .expect("建 schema");
-    let state = AppState::new(conn, ":memory:", crate::infra::testpaths::scratch("auth-auto"));
+    let state = AppState::new(
+        conn,
+        ":memory:",
+        crate::infra::testpaths::scratch("auth-auto"),
+    );
     state
         .with(|conn| {
             let mut file = load(conn);

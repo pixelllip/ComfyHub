@@ -40,7 +40,9 @@ fn 固定盘列表只包含真的存在的盘根_而且不只认某一个盘() {
     if let Ok(system) = std::env::var("SystemDrive") {
         let expected = format!("{system}\\");
         assert!(
-            roots.iter().any(|r| r.to_string_lossy().eq_ignore_ascii_case(&expected)),
+            roots
+                .iter()
+                .any(|r| r.to_string_lossy().eq_ignore_ascii_case(&expected)),
             "固定盘里必须有系统盘 {expected}，实际：{roots:?}"
         );
     }

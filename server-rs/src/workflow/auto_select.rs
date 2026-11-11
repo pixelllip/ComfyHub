@@ -164,9 +164,7 @@ fn pick_recent(
             .filter(|t| !t.trim().is_empty())
             .unwrap_or_else(|| format!("prompt {prompt_id}"));
         let at = created_at.unwrap_or_default();
-        tried.push(format!(
-            "① 同任务同族的最近成功：命中「{label}」（{at}）"
-        ));
+        tried.push(format!("① 同任务同族的最近成功：命中「{label}」（{at}）"));
         return Ok(Some(Picked {
             prompt_id,
             source_kind: "recent",
@@ -215,10 +213,13 @@ fn pick_verified_recipe(
         // ⚠ **同族只看"主模型"那一格**：一次跑通常同时记了底模 / 文本编码器 / VAE 几条，
         // 而族名（anima / krea2 / moss）只出现在主模型的文件名里。按"任一条命中就把
         // 同一次跑的那几条全覆盖"来取 —— 否则换族重绑时会把文本编码器漏掉（静默跑错）。
-        let Some(anchor) = verified.iter().find(|entry| match wanted.family.as_deref() {
-            Some(family) => family_matches(&entry.model, family),
-            None => true,
-        }) else {
+        let Some(anchor) = verified
+            .iter()
+            .find(|entry| match wanted.family.as_deref() {
+                Some(family) => family_matches(&entry.model, family),
+                None => true,
+            })
+        else {
             continue;
         };
         let hit_run = anchor.run_key.clone();

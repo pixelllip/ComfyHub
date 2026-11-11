@@ -710,7 +710,10 @@ fn 新建手动集合_没给名字就用默认名() {
     let second = create_manual(&conn, &[b], Some("   ")).unwrap();
     let named = create_manual(&conn, &[c], Some("  我的精选  ")).unwrap();
 
-    assert_eq!(summary(&conn, first).unwrap().title.as_deref(), Some("集合 1"));
+    assert_eq!(
+        summary(&conn, first).unwrap().title.as_deref(),
+        Some("集合 1")
+    );
     assert_eq!(
         summary(&conn, second).unwrap().title.as_deref(),
         Some("集合 2"),
@@ -748,7 +751,10 @@ fn 重命名集合_改名字并把算法分组转成手动() {
         other => panic!("空名字应该回 Validation，实际是 {other}"),
     }
     assert!(
-        matches!(rename(&conn, 9999, "找不到").unwrap_err(), WriteError::NotFound),
+        matches!(
+            rename(&conn, 9999, "找不到").unwrap_err(),
+            WriteError::NotFound
+        ),
         "不存在的集合要回 NotFound"
     );
 

@@ -442,10 +442,7 @@ pub(crate) fn drive_install_candidates() -> Vec<(PathBuf, String)> {
     let mut out = Vec::new();
     for drive in fixed_drive_roots() {
         let letter = drive.to_string_lossy().trim_end_matches('\\').to_string();
-        out.push((
-            drive.join("ComfyUI"),
-            format!("常见位置 {letter}\\ComfyUI"),
-        ));
+        out.push((drive.join("ComfyUI"), format!("常见位置 {letter}\\ComfyUI")));
         out.push((
             drive.join("ComfyUI_windows_portable").join("ComfyUI"),
             format!("免安装包 {letter}\\ComfyUI_windows_portable"),
