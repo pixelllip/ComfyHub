@@ -30,12 +30,12 @@ pwsh -File scripts\dev-app.ps1           # 日常开发：debug 版起起来，�
 
 | 页面 | 做什么 |
 | --- | --- |
-| **AI 工作台**（默认落地页） | 和模型对话干活：写提示词、查 danbooru、投放参考图、提交 ComfyUI、看实时进度与产物入口卡。审批闸门 / 提问闸门 / 轮次与预算上限都在这一页看得见。AppBar 的「LoRA 训练台」进次级页（见下） |
+| **AI 工作台**（默认落地页） | 和模型对话干活：写提示词、查 danbooru、投放参考图、提交 ComfyUI、看实时进度与产物入口卡。审批闸门 / 提问闸门 / 轮次、调用与自动提交次数上限都在这一页看得见。AppBar 的「LoRA 训练台」进次级页（见下） |
 | **LoRA 训练台**（次级页） | 可选能力：本机 anima-lora-next 的**完整训练台**（与 Qt GUI 的页签对齐，MOSS 页除外）—— 取训练集 → **人工筛选** → 打标（可选）→ 预处理 → **参数（复现 Qt GUI 的 Config 表单）** → 正式训练；另有 **Krea-2**、**合并（烘焙 / 融合 / ΔW 提取）**、**EasyControl**（方法 / 描述符变体）、**TensorBoard**、**Anime Tools 策展面板**、**实验（Turbo / Soup）** 与**全局作业队列**。内嵌引擎自己的响应式 WebUI（手机 / 电脑同一份状态），AI 工作台调的是同一批 `anima_studio_*` 工具 |
 | **画廊** | 生成产物：列表 / 详情 / 大图（滚轮缩放）/ 视频播放；NSFW 标记与模糊；右键菜单。**手机上默认缓存看过的缩略图 / 原件**，详情菜单可「保存到手机相册」 |
 | **提示词** | 本机提示词库：搜索、收藏、标签、工作流原文（界面格式 ↔ API 图的转换在服务端）。AppBar 的「布局 → 提示词」进画布次级页（主入口在 AI 工作台的模板卡，见下） |
 | **标签** | 标签库与分类、使用次数；入库时按提示词 / 底模 / LoRA 自动补标签，产物可手动增删，标签页可给存量内容补标签 |
-| **设置** | Provider / 模型目录 / API Key / 额外请求头与查询参数、「远程访问与配对」、NSFW 开关、ComfyUI 自动捕获、桌面端还有本地服务与后端地址、**联网代理**、**产物导出**、**备份与恢复**、**存储占用与清理** |
+| **设置** | 首页顶部可按关键词搜索设置项并跳到对应位置。包含 Provider / 模型目录 / API Key / 额外请求头与查询参数、「远程访问与配对」、NSFW 开关、ComfyUI 自动捕获、AI 工具权限（含**自动提交工作流次数**）、桌面端还有本地服务与后端地址、**联网代理**、**产物导出**、**备份与恢复**、**存储占用与清理** |
 
 后端能力（都是 AI 的工具，不是界面按钮）：
 
@@ -52,19 +52,27 @@ pwsh -File scripts\dev-app.ps1           # 日常开发：debug 版起起来，�
 - **图像编辑**：把画廊产物 / 用户附件**投放**进 ComfyUI 的 `input`，生成遮罩，贴人物（抠图交给工作流里的 rembg 节点）。
 - **工具与 Skills**：桌面全量工具清单（`server-rs/src/tools/tools.rs` 是唯一真源）+ 三层准入（选完预检 / 发送前禁用 /
   建 Run 前后端再验）；Skills 正文真源是磁盘（`<storage>\ai\skills` 与 `<项目根>\skills\builtin`），**不做缓存**。
+  任务命中技能目录时，系统提示要求**先 `load_skill` 取正文再动笔**；目录行只是索引，不能代替正文规则。
 - **长期记忆**：`<storage>\ai\memory.md`，一行一条，用户可手改；写超限**报错不截断**。
 - **卡片库**：角色卡（画的是谁）+ 画风卡（画成什么样），同等地位。每张卡只有**一版自然语言正面提示词**
   + 负面提示词 + 示例产物；工作台输入区点 `+`（或输入 `@`）就能把卡插进这一条消息。见 §4。
-- **2D 布局（工作台内，2026-11-03 换思路）**：用户在 AI 工作台描述画面、要一版提示词时，AI 在写提示词的
-  **同一轮**调 `layout_propose` 给出 1~3 个可编辑的构图草稿；回复末尾出现「2D 布局模板」卡，点开进画布
-  （`lib/pages/layout_canvas_page.dart`，带 AI 的草图）改框 / 改关系，点「提交回工作台」就把这份规格作为
-  一条用户消息发回对话，AI 按新框重写提示词。契约见
+- **2D 布局（工作台内，2026-11-03 换思路）**：用户在 AI 工作台描述画面、要一版提示词时，AI 在**写完提示词之后**
+  按提示词原文调 `layout_propose(purpose="verify")` 给出**一个**构图核对模板；回复末尾出现「构图核对模板」卡
+  （排在产物卡之后），出图后可拿它对照构图，点开进画布（`lib/pages/layout_canvas_page.dart`，带 AI 的草图）
+  改框 / 改关系，点「提交回工作台」就把这份规格作为一条用户消息发回对话，AI 按新框重写提示词并再给一个新模板。
+  `comfy_submit(positivePrompt=…)` 提交同一版提示词前要求本 Run 已有对应模板，否则拒绝提交。
+  出图后执行器会把本次产物图自动附给能看图的模型（`referenceImages`，与 `comfy_view_outputs` 同一条链路），
+  `comfy_submit` 的结果里还会重复「必须核对」与本次模板的框表 —— 模型要逐项对照主体位置 / 占比 / 遮挡 / 画幅，
+  看不了图时如实说，不凭提示词编画面。用户额外要构图方案时
+  才给 1~3 个 `purpose="draft"` 草稿。契约见
   [docs/layout-workspace-design.md](docs/layout-workspace-design.md)；**3D 路线已搁置**
-  （[docs/layout-3d-design.md](docs/layout-3d-design.md) 保留为技术评估）。画布仍有两个入口（工作台卡片 /
+  （[docs/layout-3d-design.md](docs/layout-3d-design.md) 保留为技术评估）。两视图
+  （镜头 + 俯视摆位）的设计稿见 [docs/layout-two-view-design.md](docs/layout-two-view-design.md)，
+  尚未实现。画布仍有两个入口（工作台卡片 /
   预设库图标），产出两条出口：**通用提示词**（散文，任何模型都能读）与 **MOSS 布局 JSON**
   （与 ComfyUI `MOSSImageLayoutPrompt` 节点输出逐字节同构，可直接当提示词喂给 MOSS-Image）。
   坐标内部只有一套单位（`0~1000`，与上游 `Create Bounding Boxes` 一致）；散文是**有损投影**，所以界面会列出
-  **翻译损失**（超过 5 个框、框小于 1%、大面积重叠、留白进不了 JSON……）。框之间还能标**关系**（镜像 / 同一主体 /
+  **翻译损失**（超过 5 个框、框小于 1%、重叠却没标谁挡谁、留白进不了 JSON……）。框之间还能标**关系**（镜像 / 同一主体 /
   挡在前），它会同时进散文与 JSON —— 坐标说不出"镜里那个是不是同一个人"。布局可以**存进本地布局库**
   （`SharedPreferences`，键 `comfyhub.layoutPresets`）随时调回来，存的是规格不是提示词。
   **「让 AI 写」**把布局交给译者（`POST /api/layout/translate`，规则见 [docs/layout-translator.md](docs/layout-translator.md)），
@@ -205,6 +213,7 @@ D:\dist\ComfyHub\viewer.exe
 | `backend.ps1` | e2e / dev 用的后端旁路：`start` / `stop` / `status` / `build`（先修映像标签） |
 | `api-port.ps1` | 读 `.run\api.json` 拿端口（脚本侧唯一的读法） |
 | `pack-release.ps1` | 打包 / 校验发布包（`-OutDir` 建议指到工作区外；`-Clean` 不动运行期数据） |
+| `check-skills.ps1` | 打包 / 构建前体检：修正 skills 的转义，校验 `SKILL.md` 的 frontmatter（`pack-release.ps1` 与 `flutter build windows` 都会跑；失败详情用 `flutter build windows -v` 看） |
 | `comfy-path.ps1` | 找 ComfyUI（判据与后端 `comfy_dirs` 必须一致） |
 | `mcp-runtime.ps1` | 可选能力：MCP 运行时（检测优先，装不上下载便携版兜底） |
 | `train-engine.ps1` | 可选能力：本地 LoRA 训练引擎（探测器 / 起停守护进程与自有 WebUI / 打开界面）。见 [docs/training-engine.md](docs/training-engine.md) |
