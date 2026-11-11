@@ -5,10 +5,11 @@
 //!
 //! # 两个最容易做错的地方（都会**静默**）
 //!
-//! 1. **键集合**：`AiProviderDto` 有 11 个字段，其中 `credential`（对象）与
+//! 1. **键集合**：`AiProviderDto` 的键一个都不能少，其中 `credential`（对象）与
 //!    `createdAt` / `updatedAt` 是最容易漏的三个 —— Kotlin 的 `Json.kt` 里
 //!    `encodeDefaults = true`，所以**它们一定会被序列化**。"少一个键 = 界面上少一块内容"
-//!    是这个仓库栽过好几次的那类故障。
+//!    是这个仓库栽过好几次的那类故障。`headers` / `query` 是**例外**：空表时键不出现
+//!    （与 `credentialRef` 同一条 `explicitNulls = false` 纪律），读侧按空表兜底。
 //! 2. **凭据状态的三分支**（`CredentialService.describe`）：
 //!    ref 为空 → `(false, "none", false)`；环境变量命中（`<ref>` 或 `COMFYHUB_CRED_<ref>`）
 //!    → `(值非空, "env", **false**)`；否则看托管凭据文件里有没有这个 ref
@@ -73,6 +74,15 @@ pub struct AiProviderDto {
     pub endpoint_trust: String,
     pub enabled: bool,
     pub revision: i64,
+    /// 额外请求头（名称 → 值），对每一次上游请求都生效。
+    ///
+    /// 空表时**键不出现**（与 `credentialRef` 同一条 `explicitNulls = false` 的纪律）；
+    /// 界面读不到就按空表处理，不需要第二份默认值。
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub headers: std::collections::BTreeMap<String, String>,
+    /// 额外查询参数（名称 → 值），追加在每一次请求的 URL 上。
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub query: std::collections::BTreeMap<String, String>,
     /// 只写凭据的状态，**绝不包含值**（AIH-012）
     pub credential: CredentialStatus,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -124,7 +134,7 @@ pub fn list_providers(state: &AppState) -> Result<Vec<AiProviderDto>, ApiError> 
     let rows: Vec<AiProviderRow> = state.with(|conn| {
         let mut stmt = conn.prepare(
             "SELECT id, display_name, api, base_url, credential_ref, endpoint_trust, enabled,
-                    revision, created_at, updated_at
+                    revision, created_at, updated_at, headers_json, compat_json
              FROM ai_providers ORDER BY display_name, id",
         )?;
         let rows = stmt
@@ -140,6 +150,10 @@ pub fn list_providers(state: &AppState) -> Result<Vec<AiProviderDto>, ApiError> 
                     revision: row.get(7)?,
                     created_at: row.get(8)?,
                     updated_at: row.get(9)?,
+                    extras: crate::provider::request_extras::RequestExtras::from_columns(
+                        row.get::<_, Option<String>>(10)?.as_deref(),
+                        row.get::<_, Option<String>>(11)?.as_deref(),
+                    ),
                 })
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -161,6 +175,8 @@ pub struct AiProviderRow {
     pub revision: i64,
     pub created_at: Option<String>,
     pub updated_at: Option<String>,
+    /// 额外请求头与查询参数（`headers_json` / `compat_json` 两列解析出来的）
+    pub extras: crate::provider::request_extras::RequestExtras,
 }
 
 /// 查一条 provider（`AiRepo.getProvider` 的对应物）。`None` = 没有这个 id。
@@ -172,7 +188,7 @@ pub fn get_provider_row(state: &AppState, id: &str) -> Result<Option<AiProviderR
     state.with(|conn| {
         let mut stmt = conn.prepare(
             "SELECT id, display_name, api, base_url, credential_ref, endpoint_trust, enabled,
-                    revision, created_at, updated_at
+                    revision, created_at, updated_at, headers_json, compat_json
              FROM ai_providers WHERE id = ?1",
         )?;
         let mut rows = stmt.query_map([id], |row| {
@@ -187,6 +203,10 @@ pub fn get_provider_row(state: &AppState, id: &str) -> Result<Option<AiProviderR
                 revision: row.get(7)?,
                 created_at: row.get(8)?,
                 updated_at: row.get(9)?,
+                extras: crate::provider::request_extras::RequestExtras::from_columns(
+                    row.get::<_, Option<String>>(10)?.as_deref(),
+                    row.get::<_, Option<String>>(11)?.as_deref(),
+                ),
             })
         })?;
         match rows.next() {
@@ -225,6 +245,8 @@ impl AiProviderRow {
             endpoint_trust: self.endpoint_trust,
             enabled: self.enabled,
             revision: self.revision,
+            headers: self.extras.headers,
+            query: self.extras.query,
             credential,
             created_at,
             updated_at,
@@ -356,6 +378,13 @@ pub struct AiProviderUpsert {
     pub credential_ref: Option<String>,
     #[serde(default)]
     pub endpoint_trust: Option<String>,
+    /// 额外请求头（名称 → 值）。**更新时缺省 = 保留原值**（老客户端不带这一项时不清空配置）；
+    /// 显式提交空对象才是"清空"。新建时缺省 = 空表。
+    #[serde(default)]
+    pub headers: Option<std::collections::BTreeMap<String, String>>,
+    /// 额外查询参数（名称 → 值）。缺省语义同 `headers`。
+    #[serde(default)]
+    pub query: Option<std::collections::BTreeMap<String, String>>,
     #[serde(default = "default_true")]
     pub enabled: bool,
     #[serde(default)]
@@ -942,11 +971,16 @@ pub fn validate_model(model: &AiModelDto) -> Result<(), ApiError> {
 
 /// 新增一个 provider（`AiRepo.insertProvider`）：`revision` 由库给 **1**。
 pub fn insert_provider(state: &AppState, dto: &AiProviderDto) -> Result<AiProviderDto, ApiError> {
+    let extras = crate::provider::request_extras::RequestExtras {
+        headers: dto.headers.clone(),
+        query: dto.query.clone(),
+    };
     state.write(|tx| {
         tx.execute(
             "INSERT INTO ai_providers
-               (id, display_name, api, base_url, credential_ref, endpoint_trust, enabled, revision)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 1)",
+               (id, display_name, api, base_url, credential_ref, endpoint_trust, enabled,
+                revision, headers_json, compat_json)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 1, ?8, ?9)",
             rusqlite::params![
                 dto.id,
                 dto.display_name,
@@ -955,6 +989,8 @@ pub fn insert_provider(state: &AppState, dto: &AiProviderDto) -> Result<AiProvid
                 dto.credential_ref,
                 dto.endpoint_trust,
                 dto.enabled as i64,
+                extras.headers_json(),
+                extras.compat_json(),
             ],
         )?;
         Ok(())
@@ -987,12 +1023,17 @@ pub fn update_provider(
             ),
         ));
     }
+    let extras = crate::provider::request_extras::RequestExtras {
+        headers: dto.headers.clone(),
+        query: dto.query.clone(),
+    };
     state.write(|tx| {
         tx.execute(
             "UPDATE ai_providers
                 SET display_name = ?1, api = ?2, base_url = ?3, credential_ref = ?4,
-                    endpoint_trust = ?5, enabled = ?6, revision = revision + 1
-              WHERE id = ?7 AND revision = ?8",
+                    endpoint_trust = ?5, enabled = ?6, revision = revision + 1,
+                    headers_json = ?7, compat_json = ?8
+              WHERE id = ?9 AND revision = ?10",
             rusqlite::params![
                 dto.display_name,
                 dto.api,
@@ -1000,6 +1041,8 @@ pub fn update_provider(
                 dto.credential_ref,
                 dto.endpoint_trust,
                 dto.enabled as i64,
+                extras.headers_json(),
+                extras.compat_json(),
                 dto.id,
                 expected_revision,
             ],

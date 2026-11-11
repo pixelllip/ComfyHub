@@ -134,6 +134,8 @@ pub struct ModelRow {
     pub max_output_tokens: Option<i64>,
     /// `ai_models.input_modalities`（附件那一层要判"这个模型吃不吃图"）
     pub input_modalities: Vec<String>,
+    /// Provider 级的额外请求头与查询参数（每一次上游请求都要带）。
+    pub extras: crate::provider::request_extras::RequestExtras,
 }
 
 /// 这条助手消息有没有**有序块**（Kotlin `AiConversationRepo.hasParts()`）。
@@ -155,7 +157,8 @@ fn assistant_has_parts(state: &AppState, message_id: &str) -> Result<bool, ApiEr
 pub fn provider(state: &AppState, id: &str) -> Result<ModelRow, ApiError> {
     let row = state.with(|conn| {
         let mut stmt = conn.prepare(
-            "SELECT id, display_name, api, base_url, credential_ref, endpoint_trust, enabled
+            "SELECT id, display_name, api, base_url, credential_ref, endpoint_trust, enabled,
+                    headers_json, compat_json
                FROM ai_providers WHERE id = ?1",
         )?;
         let mut rows = stmt.query_map(rusqlite::params![id], |row| {
@@ -167,6 +170,10 @@ pub fn provider(state: &AppState, id: &str) -> Result<ModelRow, ApiError> {
                 row.get::<_, Option<String>>("credential_ref")?,
                 row.get::<_, String>("endpoint_trust")?,
                 row.get::<_, Option<i64>>("enabled")?.unwrap_or(0) != 0,
+                crate::provider::request_extras::RequestExtras::from_columns(
+                    row.get::<_, Option<String>>("headers_json")?.as_deref(),
+                    row.get::<_, Option<String>>("compat_json")?.as_deref(),
+                ),
             ))
         })?;
         match rows.next() {
@@ -174,7 +181,8 @@ pub fn provider(state: &AppState, id: &str) -> Result<ModelRow, ApiError> {
             None => Ok(None),
         }
     })?;
-    let Some((id, display_name, api, base_url, credential_ref, endpoint_trust, enabled)) = row
+    let Some((id, display_name, api, base_url, credential_ref, endpoint_trust, enabled, extras)) =
+        row
     else {
         return Err(ApiError::ai(
             "CONFIG_ERROR",
@@ -198,6 +206,8 @@ pub fn provider(state: &AppState, id: &str) -> Result<ModelRow, ApiError> {
         thinking_format: None,
         max_output_tokens: None,
         input_modalities: Vec::new(),
+        // 额外请求参数属于 Provider（模型那一层不覆盖它）
+        extras,
     })
 }
 
@@ -436,16 +446,10 @@ fn prepare_mentions(
             }
             if let Some(snapshot) = &mention.snapshot {
                 if !snapshot.is_object() {
-                    return Err(ApiError::ai(
-                        "INVALID_ARGUMENT",
-                        "卡片快照必须是一个对象",
-                    ));
+                    return Err(ApiError::ai("INVALID_ARGUMENT", "卡片快照必须是一个对象"));
                 }
                 if snapshot.to_string().len() > MAX_MENTION_SNAPSHOT {
-                    return Err(ApiError::ai(
-                        "INVALID_ARGUMENT",
-                        "卡片快照太大",
-                    ));
+                    return Err(ApiError::ai("INVALID_ARGUMENT", "卡片快照太大"));
                 }
                 payload["snapshot"] = snapshot.clone();
             }
@@ -605,11 +609,7 @@ pub fn start(
             let mut parts = prepare_mentions(state, &req.mentions)?;
             parts.push(crate::ai::conversations::AiMessagePartDto {
                 r#type: "text".into(),
-                text: Some(
-                    req.display_text
-                        .clone()
-                        .unwrap_or_else(|| req.text.clone()),
-                ),
+                text: Some(req.display_text.clone().unwrap_or_else(|| req.text.clone())),
                 attachment_id: None,
                 tool_call_id: None,
                 json_payload: None,

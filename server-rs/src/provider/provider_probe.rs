@@ -101,8 +101,20 @@ pub async fn probe_get(
     trust: &str,
     timeout_seconds: u64,
     with_body: bool,
+    extras: &crate::provider::request_extras::RequestExtras,
 ) -> Probe {
-    let Some(host) = crate::provider::upstream::host_of(url) else {
+    let url = match extras.with_query(url) {
+        Ok(url) => url,
+        Err(error) => {
+            return Probe {
+                ok: false,
+                code: "CONFIG_ERROR".to_string(),
+                detail: error.human().to_string(),
+                ..Default::default()
+            }
+        }
+    };
+    let Some(host) = crate::provider::upstream::host_of(&url) else {
         return Probe {
             ok: false,
             code: "CONFIG_ERROR".to_string(),
@@ -142,13 +154,30 @@ pub async fn probe_get(
             }
         }
     };
-    let mut builder = client
-        .get(url)
-        .header("accept", "application/json")
-        .timeout(std::time::Duration::from_secs(timeout_seconds));
+    // 默认头 → 鉴权头 → 自定义头（后者覆盖同名项；`header` 是追加，所以统一放进 HeaderMap）
+    let mut headers = reqwest::header::HeaderMap::new();
+    headers.insert(
+        reqwest::header::ACCEPT,
+        reqwest::header::HeaderValue::from_static("application/json"),
+    );
     for (name, value) in crate::provider::upstream::auth_header(parsed, secret) {
-        builder = builder.header(name, value);
+        let name = reqwest::header::HeaderName::from_static(name);
+        if let Ok(value) = reqwest::header::HeaderValue::from_str(&value) {
+            headers.insert(name, value);
+        }
     }
+    if let Err(error) = extras.apply_headers(&mut headers) {
+        return Probe {
+            ok: false,
+            code: "CONFIG_ERROR".to_string(),
+            detail: error.human().to_string(),
+            ..Default::default()
+        };
+    }
+    let builder = client
+        .get(&url)
+        .timeout(std::time::Duration::from_secs(timeout_seconds))
+        .headers(headers);
 
     let response = match builder.send().await {
         Ok(response) => response,
@@ -158,7 +187,7 @@ pub async fn probe_get(
             } else {
                 format!(
                     "无法连接：{}",
-                    crate::comfy::comfy_client::friendly_error(&error, url)
+                    crate::comfy::comfy_client::friendly_error(&error, &url)
                 )
             };
             return Probe {
@@ -230,6 +259,7 @@ async fn get_models(state: &AppState, provider: &AiProviderRow, secret: Option<&
             trust,
             MODELS_TIMEOUT_SECONDS,
             true,
+            &provider.extras,
         )
         .await;
         if probe.ok {
@@ -308,6 +338,7 @@ pub async fn test_connection_json(state: &AppState, provider: &AiProviderRow) ->
             trust,
             TEST_TIMEOUT_SECONDS,
             false,
+            &provider.extras,
         )
         .await;
         if probe.ok {

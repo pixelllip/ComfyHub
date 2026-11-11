@@ -104,6 +104,9 @@ class ProviderSync {
               'credentialRef': p.credentialRef,
             'endpointTrust': p.endpointTrust,
             'enabled': p.enabled,
+            // 额外请求参数是配置的一部分：不搬过去，手机上发消息会缺网关要求的头
+            'headers': p.headers,
+            'query': p.query,
           });
           created.add(id);
         } else if (_sameConfig(existing, p)) {
@@ -122,6 +125,9 @@ class ProviderSync {
               revision: existing.revision,
               // 凭据状态是本机的即时事实，同步不碰它
               credential: existing.credential,
+              // 额外请求参数跟着桌面走（同 id 的覆盖语义）
+              headers: p.headers,
+              query: p.query,
             ),
           );
           updated.add(id);
@@ -200,7 +206,18 @@ class ProviderSync {
       a.baseURL == b.baseURL &&
       (a.credentialRef ?? '').trim() == (b.credentialRef ?? '').trim() &&
       a.endpointTrust == b.endpointTrust &&
-      a.enabled == b.enabled;
+      a.enabled == b.enabled &&
+      _sameMap(a.headers, b.headers) &&
+      _sameMap(a.query, b.query);
+
+  /// 两个"名称 → 值"表是否一致（与顺序无关）。
+  static bool _sameMap(Map<String, String> a, Map<String, String> b) {
+    if (a.length != b.length) return false;
+    for (final entry in a.entries) {
+      if (b[entry.key] != entry.value) return false;
+    }
+    return true;
+  }
 
   /// 两份模型目录是否一致（按与后端逐字相同的 DTO 形状比对）。
   static bool _sameModels(List<AiModel> a, List<AiModel> b) {

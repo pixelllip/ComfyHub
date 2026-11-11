@@ -518,6 +518,7 @@ async fn run_once(
                     tools: &tools,
                     reasoning: reasoning_for_round,
                     max_output_tokens: model.max_output_tokens,
+                    extras: &provider.extras,
                 },
                 move |event| {
                     // ⚠ 这个闭包**不能 await**（`stream_chat` 的签名要求同步回调）——

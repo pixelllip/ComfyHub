@@ -351,6 +351,9 @@ fn to_provider_dto(provider: &BuiltinProvider) -> Result<AiProviderDto, ApiError
         endpoint_trust: trust,
         enabled: true,
         revision: 1,
+        // 内置目录只描述协议与地址，没有额外请求参数（那一项只能由用户自填）
+        headers: Default::default(),
+        query: Default::default(),
         credential: crate::ai::ai::describe_credential(None, |_| None, |_| false),
         created_at: None,
         updated_at: None,

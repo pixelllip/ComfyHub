@@ -2618,6 +2618,8 @@ class AiWorkspaceStore extends ChangeNotifier {
           api: provider.api,
           baseUrl: provider.baseURL,
           credentialRef: provider.credentialRef,
+          headers: provider.headers,
+          query: provider.query,
           attachmentIds: ids,
         ),
       );
@@ -3062,6 +3064,8 @@ class AiWorkspaceStore extends ChangeNotifier {
           api: p.api,
           baseUrl: p.baseURL,
           credentialRef: p.credentialRef,
+          headers: p.headers,
+          query: p.query,
           retryOfRunId: _runIdOf(assistantMessageId),
         ),
       );

@@ -44,6 +44,7 @@ impl Transport for FakeGateway {
         _trust: &str,
         body: &str,
         _timeout_seconds: u64,
+        _extras: &crate::provider::request_extras::RequestExtras,
     ) -> ProbeResponse {
         self.calls.fetch_add(1, Ordering::SeqCst);
         self.bodies.lock().unwrap().push(body.to_string());
@@ -193,6 +194,7 @@ async fn 最高档被拒就往下一档试_阶梯只含试过的() {
         None,
         "loopback",
         &rungs,
+        &Default::default(),
     )
     .await;
     assert_eq!(outcome.accepted_top.as_deref(), Some("high"));
@@ -228,6 +230,7 @@ async fn 全部档位被拒就如实失败且不发明档位() {
         None,
         "loopback",
         &rungs,
+        &Default::default(),
     )
     .await;
     assert!(
@@ -258,6 +261,7 @@ async fn 基准请求失败就不下结论() {
         None,
         "loopback",
         &rungs,
+        &Default::default(),
     )
     .await;
     assert!(outcome.accepted_top.is_none());
@@ -284,6 +288,7 @@ async fn 与思考参数无关的_400_如实中止而不是继续降档() {
         None,
         "loopback",
         &rungs,
+        &Default::default(),
     )
     .await;
     assert!(outcome.ladder.is_none());
@@ -315,6 +320,7 @@ async fn 严格网关只认_max_completion_tokens_时按提示换字段重试() 
         None,
         "loopback",
         &rungs,
+        &Default::default(),
     )
     .await;
     // 两次基准（换字段）都过不了 → 如实失败，但**确实换过字段**
@@ -785,6 +791,7 @@ async fn 端到端_一个模型失败不影响另一个() {
             _trust: &str,
             body: &str,
             _timeout_seconds: u64,
+            _extras: &crate::provider::request_extras::RequestExtras,
         ) -> ProbeResponse {
             let parsed: Value = serde_json::from_str(body).unwrap();
             let model = parsed["model"].as_str().unwrap().to_string();

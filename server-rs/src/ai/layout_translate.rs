@@ -230,6 +230,7 @@ async fn complete(
         // 思考模式在这里只会把 300 个 token 变成 3000 个。
         reasoning: ReasoningRequest::default(),
         max_output_tokens: MAX_OUTPUT_TOKENS,
+        extras: &provider.extras,
     };
     let outcome = upstream::stream_chat(
         request,

@@ -10,4 +10,5 @@ pub mod capability_rules;
 pub mod credentials;
 pub mod protocol;
 pub mod provider_probe;
+pub mod request_extras;
 pub mod upstream;

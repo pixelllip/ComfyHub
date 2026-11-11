@@ -607,6 +607,9 @@ class _AiProviderSettingsPageState extends State<AiProviderSettingsPage> {
         'baseURL': draft.baseURL,
         // 凭据引用名**由程序决定**（不在界面上显示）：Provider ID 全大写 + `_API_KEY`。
         'credentialRef': defaultCredentialRef(draft.id),
+        // 额外请求参数：空表也提交（更新接口靠"显式空对象"识别清空）
+        'headers': draft.headers,
+        'query': draft.query,
         // ⚠ **不发端点信任级别**：它由软件按地址自己判（桌面后端 `EndpointTrust.infer`；
         //    手机侧存默认值，且手机侧根本不读这个字段 —— 见 `ProviderJson` 的注释）。
         //    实测问题：强加"仅本机"会使公网地址立即被后端拒绝，而错误不可见。
@@ -681,6 +684,9 @@ class _AiProviderSettingsPageState extends State<AiProviderSettingsPage> {
           enabled: p.enabled,
           revision: p.revision,
           credential: p.credential,
+          // 额外请求参数：这里是用户在对话框里改过的那一份（空表 = 清空）
+          headers: draft.headers,
+          query: draft.query,
         ),
       );
       final saved = await _saveDialogKey(updated, draft.apiKey);
@@ -755,8 +761,8 @@ class _AiProviderSettingsPageState extends State<AiProviderSettingsPage> {
         content: const SingleChildScrollView(
           child: Text(
             '把桌面上的 Provider 清单与模型目录搬到这台手机。\n\n'
-            '桌面有、手机没有的会新建。同 id 的用桌面那份覆盖，包括显示名、协议、Base URL 和模型能力。'
-            '只在手机上有的保留不删。\n\n'
+            '桌面有、手机没有的会新建。同 id 的用桌面那份覆盖，包括显示名、协议、Base URL、'
+            '额外请求参数和模型能力。只在手机上有的保留不删。\n\n'
             'API Key 不在其中，它要单独在「远程访问与配对」里取回，而且桌面要允许这台设备读密钥。',
           ),
         ),

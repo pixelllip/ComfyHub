@@ -834,6 +834,10 @@ async fn create_provider(
         ));
     }
     let api = parse_api(body.api.as_deref())?;
+    let extras = crate::provider::request_extras::RequestExtras::validated(
+        body.headers.unwrap_or_default(),
+        body.query.unwrap_or_default(),
+    )?;
     let trust =
         crate::web::endpoint_guard::parse_trust(body.endpoint_trust.as_deref().unwrap_or(""))
             .map(str::to_string)
@@ -851,6 +855,8 @@ async fn create_provider(
         credential_ref: crate::ai::ai::require_credential_ref(body.credential_ref.as_deref())?,
         endpoint_trust: trust,
         enabled: body.enabled,
+        headers: extras.headers,
+        query: extras.query,
         // 下面四个是**回读之后才算得出来**的（库给 revision，凭据状态现查）
         revision: 0,
         credential: crate::ai::ai::describe_credential(None, |_| None, |_| false),
@@ -891,6 +897,13 @@ async fn update_provider(
     let revision = body
         .revision
         .ok_or_else(|| ApiError::ai("CONFIG_ERROR", "缺少 revision，请刷新后重试"))?;
+    // 缺省 = 保留原值：老客户端不带这两个键时，不能把已经配好的额外参数清空；
+    // 显式提交空对象才是清空（界面每次都提交当前值，所以能删干净）。
+    let current = crate::ai::ai::require_provider_row(&state, &id)?;
+    let extras = crate::provider::request_extras::RequestExtras::validated(
+        body.headers.unwrap_or(current.extras.headers),
+        body.query.unwrap_or(current.extras.query),
+    )?;
     let dto = crate::ai::ai::AiProviderDto {
         id,
         display_name: crate::ai::ai::require_display_name(body.display_name.as_deref())?,
@@ -899,6 +912,8 @@ async fn update_provider(
         credential_ref: crate::ai::ai::require_credential_ref(body.credential_ref.as_deref())?,
         endpoint_trust: trust,
         enabled: body.enabled,
+        headers: extras.headers,
+        query: extras.query,
         revision,
         credential: crate::ai::ai::describe_credential(None, |_| None, |_| false),
         created_at: None,

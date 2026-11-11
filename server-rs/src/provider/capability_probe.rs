@@ -106,6 +106,7 @@ pub trait Transport {
         trust: &str,
         body: &str,
         timeout_seconds: u64,
+        extras: &crate::provider::request_extras::RequestExtras,
     ) -> ProbeResponse;
 }
 
@@ -126,8 +127,13 @@ impl HttpTransport {
         trust: &str,
         body: &str,
         timeout_seconds: u64,
+        extras: &crate::provider::request_extras::RequestExtras,
     ) -> ProbeResponse {
-        let Some(host) = crate::provider::upstream::host_of(url) else {
+        let url = match extras.with_query(url) {
+            Ok(url) => url,
+            Err(error) => return ProbeResponse::failed(error.human().to_string()),
+        };
+        let Some(host) = crate::provider::upstream::host_of(&url) else {
             return ProbeResponse::failed("URL 无法解析出主机名");
         };
         if let Err(message) = crate::web::endpoint_guard::assert_allowed(&host, trust) {
@@ -140,15 +146,31 @@ impl HttpTransport {
         let Some(parsed) = crate::provider::protocol::Api::parse(api) else {
             return ProbeResponse::failed(format!("未知协议：{api}"));
         };
-        let mut builder = client
-            .post(url)
-            .header("content-type", "application/json")
-            .header("accept", "application/json")
-            .timeout(std::time::Duration::from_secs(timeout_seconds))
-            .body(body.to_string());
+        // 默认头 → 鉴权头 → 自定义头：后者覆盖同名项。`header` 是追加，
+        // 所以统一放进 HeaderMap，避免同一个名字出现两条。
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert(
+            reqwest::header::ACCEPT,
+            reqwest::header::HeaderValue::from_static("application/json"),
+        );
+        headers.insert(
+            reqwest::header::CONTENT_TYPE,
+            reqwest::header::HeaderValue::from_static("application/json"),
+        );
         for (name, value) in crate::provider::upstream::auth_header(parsed, secret) {
-            builder = builder.header(name, value);
+            let name = reqwest::header::HeaderName::from_static(name);
+            if let Ok(value) = reqwest::header::HeaderValue::from_str(&value) {
+                headers.insert(name, value);
+            }
         }
+        if let Err(error) = extras.apply_headers(&mut headers) {
+            return ProbeResponse::failed(error.human().to_string());
+        }
+        let builder = client
+            .post(&url)
+            .timeout(std::time::Duration::from_secs(timeout_seconds))
+            .headers(headers)
+            .body(body.to_string());
         match builder.send().await {
             Ok(response) => {
                 let status = response.status().as_u16();
@@ -179,8 +201,9 @@ impl Transport for HttpTransport {
         trust: &str,
         body: &str,
         timeout_seconds: u64,
+        extras: &crate::provider::request_extras::RequestExtras,
     ) -> ProbeResponse {
-        Self::send(url, api, secret, trust, body, timeout_seconds).await
+        Self::send(url, api, secret, trust, body, timeout_seconds, extras).await
     }
 }
 
@@ -317,6 +340,7 @@ pub async fn run_ladder<T: Transport>(
     secret: Option<&str>,
     trust: &str,
     rungs: &[(String, String)],
+    extras: &crate::provider::request_extras::RequestExtras,
 ) -> LadderOutcome {
     // ① 找可用的 chat 端点
     let mut endpoint: Option<String> = None;
@@ -333,6 +357,7 @@ pub async fn run_ladder<T: Transport>(
                 trust,
                 &probe_body(model_id, None, token_field),
                 PROBE_TIMEOUT_SECONDS,
+                extras,
             )
             .await;
         // 每个探测请求都计为一次尝试（连接失败也算 —— 需显示"实际发送次数"）；
@@ -365,6 +390,7 @@ pub async fn run_ladder<T: Transport>(
                 trust,
                 &probe_body(model_id, None, token_field),
                 PROBE_TIMEOUT_SECONDS,
+                extras,
             )
             .await;
     }
@@ -399,6 +425,7 @@ pub async fn run_ladder<T: Transport>(
                 trust,
                 &probe_body(model_id, Some(wire), token_field),
                 PROBE_TIMEOUT_SECONDS,
+                extras,
             )
             .await;
         if is_success(&response) {
@@ -1209,6 +1236,7 @@ async fn probe_one<T: Transport>(
         secret,
         trust,
         &rungs,
+        &provider.extras,
     )
     .await;
 

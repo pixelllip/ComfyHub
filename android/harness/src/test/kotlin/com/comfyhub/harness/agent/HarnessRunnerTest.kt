@@ -53,6 +53,7 @@ class HarnessRunnerTest {
     ) : HttpTransport {
         val bodies = CopyOnWriteArrayList<String>()
         val urls = CopyOnWriteArrayList<String>()
+        val seenHeaders = CopyOnWriteArrayList<Map<String, String>>()
 
         /** 每轮给一段"按行"的 SSE 数据。 */
         fun script(vararg lines: String) {
@@ -82,6 +83,7 @@ class HarnessRunnerTest {
         ): Int {
             urls += url
             bodies += body
+            seenHeaders += headers
             val next = scripts.removeFirstOrNull() ?: return 200
             return try {
                 next().forEach(onLine)
@@ -207,8 +209,42 @@ class HarnessRunnerTest {
         assertEquals("https://api.example.com/v1/chat/completions", transport.urls.single())
     }
 
-    // --- 标题 --------------------------------------------------------------
+    /**
+     * Provider 配的额外请求头与查询参数要跟着**每一次**上游请求走。
+     *
+     * OpenCode Go / Zen 的 `x-opencode-session` 就是这一类：缺了它，测试连接能过、
+     * 一发消息就 400（`MissingSessionID`）。这里同时盯 URL 与请求头，避免只接了一半。
+     */
+    @Test
+    fun `额外请求头与查询参数跟着上游请求一起发出（同名头覆盖默认值）`() = runBlocking {
+        val transport = ScriptedTransport()
+        transport.script(*(sse(textFrame("好"), doneFrame("stop"))).toTypedArray())
+        val bus = com.comfyhub.harness.event.RunEventBus()
+        val outcome = runner(transport, bus).run(
+            request().copy(
+                headers = mapOf(
+                    "x-opencode-session" to "ses_1",
+                    "Authorization" to "Token abc",
+                ),
+                query = mapOf("api-version" to "2024-10-21"),
+            ),
+        )
 
+        assertEquals(RunStatus.COMPLETED, outcome.status)
+        assertEquals(
+            "https://api.example.com/v1/chat/completions?api-version=2024-10-21",
+            transport.urls.single(),
+        )
+        val sent = transport.seenHeaders.single()
+        assertEquals("ses_1", sent["x-opencode-session"])
+        assertEquals(
+            "自定义头覆盖同名默认头，不能出现两条 Authorization",
+            "Token abc",
+            sent.entries.single { it.key.equals("authorization", ignoreCase = true) }.value,
+        )
+    }
+
+    // --- 标题 --------------------------------------------------------------
     // --- 用户消息的卡片快照（2026-11-07）-------------------------------------
 
     @Test

@@ -58,6 +58,8 @@ class UpstreamClient(private val transport: HttpTransport) {
         secret: String?,
         body: String,
         adapter: ProtocolAdapter,
+        extraHeaders: Map<String, String> = emptyMap(),
+        query: Map<String, String> = emptyMap(),
         onEvent: (StreamEvent) -> Unit,
     ): RoundStream {
         val text = StringBuilder()
@@ -88,11 +90,11 @@ class UpstreamClient(private val transport: HttpTransport) {
         }
 
         // OpenAI 兼容网关的 Base URL 填不填 /v1 是两个不同地址，候选依次试（与桌面同一条规则）
-        val candidates = urlCandidates(baseUrl, api)
+        val candidates = urlCandidates(baseUrl, api, query)
         var lastFailure: UpstreamFailure? = null
         for (url in candidates) {
             try {
-                transport.postJsonStreaming(url, body, headers(api, secret)) { line ->
+                transport.postJsonStreaming(url, body, headers(api, secret, extraHeaders)) { line ->
                     handleFrame(sse.line(line))
                 }
                 // 流结束时收尾：最后一段可能没有空行收尾
@@ -151,7 +153,11 @@ class UpstreamClient(private val transport: HttpTransport) {
 
     companion object {
         /** 请求头（**只在这里拼一次**：密钥不进日志、不进异常）。 */
-        fun headers(api: AiApiRef, secret: String?): Map<String, String> {
+        fun headers(
+            api: AiApiRef,
+            secret: String?,
+            extraHeaders: Map<String, String> = emptyMap(),
+        ): Map<String, String> {
             val base = mutableMapOf("Accept" to "text/event-stream")
             when (api) {
                 AiApiRef.OPENAI_COMPLETIONS, AiApiRef.OPENAI_RESPONSES ->
@@ -160,6 +166,13 @@ class UpstreamClient(private val transport: HttpTransport) {
                     if (!secret.isNullOrEmpty()) base["x-api-key"] = secret
                     base["anthropic-version"] = "2023-06-01"
                 }
+            }
+            // 自定义头覆盖同名默认头（`HttpURLConnection` 不保证同名去重，所以先删掉旧键）。
+            // 名称比较不区分大小写；大小写按用户填的写出去。
+            for ((name, value) in extraHeaders) {
+                val existing = base.keys.firstOrNull { it.equals(name, ignoreCase = true) }
+                if (existing != null) base.remove(existing)
+                base[name] = value
             }
             return base
         }
@@ -171,7 +184,11 @@ class UpstreamClient(private val transport: HttpTransport) {
          * `https://api.x.com` 与 `https://api.x.com/v1` 是两个不同的 URL，
          * 前者拼出来 404，用户看到的却是"连接失败"。
          */
-        fun urlCandidates(baseUrl: String, api: AiApiRef): List<String> {
+        fun urlCandidates(
+            baseUrl: String,
+            api: AiApiRef,
+            query: Map<String, String> = emptyMap(),
+        ): List<String> {
             val base = baseUrl.trimEnd('/')
             val stripped = if (base.endsWith("/v1")) base.dropLast(3) else "$base/v1"
             val suffix = when (api) {
@@ -179,7 +196,22 @@ class UpstreamClient(private val transport: HttpTransport) {
                 AiApiRef.OPENAI_RESPONSES -> "/responses"
                 AiApiRef.ANTHROPIC_MESSAGES -> "/messages"
             }
-            return listOf("$base$suffix", "$stripped$suffix").distinct()
+            // 查询参数**拼好端点之后**再追加：Base URL 本身不能带查询串，
+            // 而候选地址是 `路径 + 后缀` 的形状，先拼后加不会把后缀挤进参数值里。
+            return listOf("$base$suffix", "$stripped$suffix")
+                .distinct()
+                .map { withQuery(it, query) }
+        }
+
+        /** 把额外查询参数追加到 URL 上（编码规则与表单一致；空表完全不动原地址）。 */
+        fun withQuery(url: String, query: Map<String, String>): String {
+            if (query.isEmpty()) return url
+            val separator = if (url.contains('?')) '&' else '?'
+            val encoded = query.entries.joinToString("&") { (name, value) ->
+                "${java.net.URLEncoder.encode(name, "UTF-8")}=" +
+                    java.net.URLEncoder.encode(value, "UTF-8")
+            }
+            return "$url$separator$encoded"
         }
 
         /** 从原始 SSE data 里取 `choices[].finish_reason`（适配器刻意不透传它）。 */

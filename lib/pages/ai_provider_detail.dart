@@ -111,6 +111,16 @@ class AiProviderDetail extends StatelessWidget {
             color: theme.colorScheme.outline,
           ),
         ),
+        if (p.headers.isNotEmpty || p.query.isNotEmpty) ...[
+          const SizedBox(height: 4),
+          Text(
+            '已配置 ${p.headers.length} 条额外请求头与 ${p.query.length} 条查询参数，'
+            '每次请求都会带上。点「编辑 Provider」可以修改。',
+            style: theme.textTheme.labelSmall?.copyWith(
+              color: theme.colorScheme.outline,
+            ),
+          ),
+        ],
         if (info != null) ...[
           const SizedBox(height: 10),
           AiNote(text: info!, error: false),

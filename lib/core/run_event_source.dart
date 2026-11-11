@@ -17,6 +17,8 @@ class RunStartRequest {
     this.api,
     this.baseUrl,
     this.credentialRef,
+    this.headers = const {},
+    this.query = const {},
     this.reasoningEffort,
     this.maxSteps,
     this.userMessageId,
@@ -36,6 +38,13 @@ class RunStartRequest {
   final String? api;
   final String? baseUrl;
   final String? credentialRef;
+
+  /// Provider 的额外请求头与查询参数（手机本地 harness 自己发上游请求，必须带上）。
+  ///
+  /// 桌面那侧由后端按 provider id 查库，不看这两个字段；这里传是为了让两端
+  /// **同一份配置、同一条请求形状**，不出现"桌面能用、手机 400"。
+  final Map<String, String> headers;
+  final Map<String, String> query;
   final String? reasoningEffort;
   final int? maxSteps;
 
@@ -622,6 +631,9 @@ class LocalHarnessRunEventSource implements RunEventSource, LocalSkillSource {
       'api': ?request.api,
       'baseUrl': ?request.baseUrl,
       'credentialRef': ?request.credentialRef,
+      // 额外请求参数：手机 harness 自己发上游请求，必须和桌面用同一份配置
+      if (request.headers.isNotEmpty) 'headers': jsonEncode(request.headers),
+      if (request.query.isNotEmpty) 'query': jsonEncode(request.query),
       'reasoningEffort': ?request.reasoningEffort,
       'maxSteps': ?request.maxSteps,
       // 界面生成的一对 id 传下去：harness 按它们落库，**回显**回来给界面认气泡

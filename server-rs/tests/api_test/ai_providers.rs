@@ -506,6 +506,124 @@ async fn provider_crud_round_trip_with_revision_and_validation() {
     assert_eq!(body["detail"], "Provider 不存在: my-gateway");
 }
 
+/// 额外请求头与查询参数：**取回原样、缺省保留、显式空对象才清空**。
+///
+/// 这条盯的是 OpenCode 那类网关：固定请求头必须跟着每一次请求走，而配置入口只有
+/// Provider 这一张卡。写进 `headers_json` / `compat_json` 两列（老库本来就有）。
+#[tokio::test]
+async fn provider_extra_headers_and_query_round_trip() {
+    let state = state();
+    let (status, body) = send_json(
+        router_for(state.clone()),
+        "POST",
+        "/api/ai/providers",
+        serde_json::json!({
+            "id": "opencode-gw",
+            "displayName": "OpenCode",
+            "api": "openai-completions",
+            "baseURL": "http://127.0.0.1:1234/v1",
+            "headers": {
+                "x-opencode-session": "ses_abc",
+                "X-Client": "ComfyHub"
+            },
+            "query": { "api-version": "2024-10-21" }
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "body={body}");
+    assert_eq!(
+        body["headers"],
+        serde_json::json!({"X-Client": "ComfyHub", "x-opencode-session": "ses_abc"}),
+        "名称原样保留（BTreeMap 按名称排序）"
+    );
+    assert_eq!(
+        body["query"],
+        serde_json::json!({"api-version": "2024-10-21"})
+    );
+
+    // 清单 / 单条都能取回同一份
+    let (_, list) = get_json(router_for(state.clone()), "/api/ai/providers").await;
+    assert_eq!(list[0]["headers"]["x-opencode-session"], "ses_abc");
+    let (_, single) = get_json(router_for(state.clone()), "/api/ai/providers/opencode-gw").await;
+    assert_eq!(single["query"]["api-version"], "2024-10-21");
+
+    // 只提交 headers（缺省 query）→ **query 保留**：老客户端不会顺手清掉新配置
+    let (status, body) = send_json(
+        router_for(state.clone()),
+        "PUT",
+        "/api/ai/providers/opencode-gw",
+        serde_json::json!({
+            "displayName": "OpenCode",
+            "api": "openai-completions",
+            "baseURL": "http://127.0.0.1:1234/v1",
+            "revision": 1,
+            "headers": { "x-opencode-session": "ses_def" }
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "body={body}");
+    assert_eq!(body["headers"]["x-opencode-session"], "ses_def");
+    assert_eq!(body["query"]["api-version"], "2024-10-21");
+
+    // 显式空对象 = 清空（界面删掉最后一条时提交的就是 {}）
+    let (status, body) = send_json(
+        router_for(state.clone()),
+        "PUT",
+        "/api/ai/providers/opencode-gw",
+        serde_json::json!({
+            "displayName": "OpenCode",
+            "api": "openai-completions",
+            "baseURL": "http://127.0.0.1:1234/v1",
+            "revision": 2,
+            "headers": {},
+            "query": {}
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "body={body}");
+    assert!(
+        body.get("headers").is_none(),
+        "空表不出现这个键（与 credentialRef 同一条 explicitNulls 纪律）"
+    );
+    assert!(body.get("query").is_none());
+
+    // 写侧校验：保留头不许自定义、值必须是可发送的 ASCII
+    let (status, body) = send_json(
+        router_for(state.clone()),
+        "POST",
+        "/api/ai/providers",
+        serde_json::json!({
+            "id": "bad-header",
+            "displayName": "x",
+            "api": "openai-completions",
+            "baseURL": "https://api.example.com",
+            "headers": { "Host": "evil.example.com" }
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["error"], "CONFIG_ERROR");
+    assert!(body["detail"].as_str().unwrap().contains("由程序生成"));
+
+    let (_, body) = send_json(
+        router_for(state.clone()),
+        "POST",
+        "/api/ai/providers",
+        serde_json::json!({
+            "id": "bad-value",
+            "displayName": "x",
+            "api": "openai-completions",
+            "baseURL": "https://api.example.com",
+            "headers": { "x-note": "中文" }
+        }),
+    )
+    .await;
+    assert!(
+        body["detail"].as_str().unwrap().contains("可见 ASCII"),
+        "body={body}"
+    );
+}
+
 /// `PUT /providers/{id}/models`：全量替换 + 逐条校验（AIH-011）。
 ///
 /// 模型目录是**附件准入与思考强度的唯一真源** —— 少校验一条，就会保存一个

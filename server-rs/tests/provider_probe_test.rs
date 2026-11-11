@@ -340,3 +340,70 @@ async fn provider_不存在时两条端点都给人话() {
     gateway.abort();
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// 额外请求头与查询参数**真的发到了上游**（不是只存在库里）。
+///
+/// OpenCode Go / Zen 就卡在这一点上：`/models` 不校验 `x-opencode-session`，
+/// 真正发消息时才 400（`MissingSessionID`）—— 所以光"连接测试通过"说明不了任何事。
+/// 这里同时盯住请求头与 URL 查询串，防止两边各改一半。
+#[tokio::test]
+async fn 额外请求头与查询参数跟着探测请求一起发出() {
+    let dir = temp_dir("extras");
+    let seen: Arc<Mutex<Vec<(String, String)>>> = Arc::new(Mutex::new(Vec::new()));
+    let recorded = seen.clone();
+    let app = Router::new().route(
+        "/models",
+        get(
+            |axum::extract::OriginalUri(uri): axum::extract::OriginalUri,
+             headers: axum::http::HeaderMap| async move {
+                recorded.lock().unwrap().push((
+                    headers
+                        .get("x-opencode-session")
+                        .and_then(|v| v.to_str().ok())
+                        .unwrap_or("")
+                        .to_string(),
+                    uri.query().unwrap_or("").to_string(),
+                ));
+                Json(models_body())
+            },
+        ),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let gateway = tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
+    });
+    let base = format!("http://{addr}");
+    let state = state(&dir, &base, None);
+    state
+        .with(|conn| {
+            conn.execute(
+                "UPDATE ai_providers SET headers_json = ?1, compat_json = ?2 WHERE id = 'p1'",
+                rusqlite::params![
+                    r#"{"x-opencode-session":"ses_probe"}"#,
+                    r#"{"query":{"api-version":"2024-10-21"}}"#
+                ],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+
+    let (status, body) = post(&state, "/api/ai/providers/p1/test").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["ok"], json!(true), "{body}");
+    let seen = seen.lock().unwrap();
+    assert!(!seen.is_empty(), "探测请求真的到了假上游");
+    for (session, query) in seen.iter() {
+        assert_eq!(
+            session, "ses_probe",
+            "每一个探测请求都要带 Provider 配的请求头"
+        );
+        assert!(
+            query.contains("api-version=2024-10-21"),
+            "查询参数要追加在 URL 上，实际是 {query}"
+        );
+    }
+
+    gateway.abort();
+    let _ = std::fs::remove_dir_all(dir);
+}

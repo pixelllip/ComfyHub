@@ -40,6 +40,7 @@ fn model_with(reasoning: bool, efforts: &[(&str, &str)]) -> ModelRow {
         thinking_format: None,
         max_output_tokens: None,
         input_modalities: Vec::new(),
+        extras: Default::default(),
     }
 }
 

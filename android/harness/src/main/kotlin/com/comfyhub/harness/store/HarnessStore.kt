@@ -686,12 +686,13 @@ class HarnessStore(private val session: SqlSession) {
                     """
                     INSERT INTO ai_providers
                       (id, display_name, api, base_url, credential_ref, endpoint_trust, enabled,
-                       revision, created_at, updated_at)
-                    VALUES (?,?,?,?,?,?,?,1,?,?)
+                       revision, headers_json, compat_json, created_at, updated_at)
+                    VALUES (?,?,?,?,?,?,?,1,?,?,?,?)
                     """.trimIndent(),
                     listOf(
                         record.id, record.displayName, record.api, record.baseUrl,
-                        record.credentialRef, record.endpointTrust, record.enabled, now, now,
+                        record.credentialRef, record.endpointTrust, record.enabled,
+                        headersJsonOf(record), ProviderJson.compatJson(record.query), now, now,
                     ),
                 )
                 return@transaction
@@ -709,12 +710,15 @@ class HarnessStore(private val session: SqlSession) {
                 """
                 UPDATE ai_providers
                    SET display_name = ?, api = ?, base_url = ?, credential_ref = ?, endpoint_trust = ?,
-                       enabled = ?, revision = revision + 1, updated_at = ?
+                       enabled = ?, revision = revision + 1, headers_json = ?, compat_json = ?,
+                       updated_at = ?
                  WHERE id = ? AND revision = ?
                 """.trimIndent(),
                 listOf(
                     record.displayName, record.api, record.baseUrl, record.credentialRef,
-                    record.endpointTrust, record.enabled, now, record.id, record.revision,
+                    record.endpointTrust, record.enabled,
+                    headersJsonOf(record), ProviderJson.compatJson(record.query),
+                    now, record.id, record.revision,
                 ),
             )
         }
@@ -1334,7 +1338,13 @@ private fun Row.toProvider() = ProviderRecord(
     revision = int("revision") ?: 1,
     createdAt = str("created_at"),
     updatedAt = str("updated_at"),
+    headers = ProviderJson.stringMapOf(text("headers_json")),
+    query = ProviderJson.queryOf(text("compat_json")),
 )
+
+/** 额外请求头落 `headers_json`；空表写 NULL（与后端 `headers_json()` 同一条口径）。 */
+private fun headersJsonOf(record: ProviderRecord): String? =
+    if (record.headers.isEmpty()) null else ProviderJson.stringMapJson(record.headers)
 
 private fun Row.toModel() = ModelRecord(
     providerId = str("provider_id"),

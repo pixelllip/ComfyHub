@@ -42,13 +42,42 @@ class AiProviderDraft {
   /// 建完之后由页面调 `CredentialStore.save` 单独存（桌面 = 后端托管，手机 = 本机密钥库）。
   final String apiKey;
 
+  /// 额外请求头与查询参数（名称 → 值），每次上游请求都会带上。
+  ///
+  /// 空表也照常提交（`{}`）：更新接口把"缺省"解释为"保留原值"，
+  /// 只有显式空对象才能把最后一条删掉。
+  final Map<String, String> headers;
+  final Map<String, String> query;
+
   const AiProviderDraft(
     this.id,
     this.displayName,
     this.api,
     this.baseURL,
-    this.apiKey,
-  );
+    this.apiKey, {
+    this.headers = const {},
+    this.query = const {},
+  });
+}
+
+/// 对话框里的一行"名称 → 值"。
+///
+/// 控制器跟着行一起生灭：行被删掉之后由 `_removeRow` 在下一帧释放，
+/// 避免正在重建的那一帧里还在读一个已释放的控制器。
+class _ExtraRow {
+  _ExtraRow(String name, String value)
+    : name = TextEditingController(text: name),
+      value = TextEditingController(text: value);
+
+  final TextEditingController name;
+  final TextEditingController value;
+
+  bool get isBlank => name.text.trim().isEmpty && value.text.isEmpty;
+
+  void dispose() {
+    name.dispose();
+    value.dispose();
+  }
 }
 
 class AiProviderDialog extends StatefulWidget {
@@ -72,9 +101,31 @@ class _AiProviderDialogState extends State<AiProviderDialog> {
   final _key = TextEditingController();
   AiApi _api = AiApi.openaiCompletions;
 
+  /// 额外请求参数：**高级区**默认收起；已有配置时自动展开（否则用户看不到它们还在生效）。
+  final List<_ExtraRow> _headerRows = [];
+  final List<_ExtraRow> _queryRows = [];
+  bool _advancedOpen = false;
+
   bool get _editing => widget.existing != null;
 
   static final _kebab = RegExp(r'^[a-z0-9]+(-[a-z0-9]+)*$');
+
+  /// RFC 7230 的 token（请求头名称的合法字符），与后端 `request_extras.rs` 同一条规则。
+  static final _headerName = RegExp(r"^[A-Za-z0-9!#$%&'*+\-.^_`|~]+$");
+
+  /// 后端拒绝自定义的头（它们由 HTTP 客户端生成）。
+  static const _forbiddenHeaders = {
+    'host',
+    'content-length',
+    'transfer-encoding',
+    'connection',
+    'upgrade',
+    'expect',
+    'te',
+    'trailer',
+    'proxy-connection',
+    'keep-alive',
+  };
 
   @override
   void initState() {
@@ -86,11 +137,25 @@ class _AiProviderDialogState extends State<AiProviderDialog> {
       _name.text = existing.displayName;
       _url.text = existing.baseURL;
       _api = AiApi.parse(existing.api) ?? AiApi.openaiCompletions;
+      for (final entry in existing.headers.entries) {
+        _headerRows.add(_newRow(entry.key, entry.value));
+      }
+      for (final entry in existing.query.entries) {
+        _queryRows.add(_newRow(entry.key, entry.value));
+      }
+      _advancedOpen = _headerRows.isNotEmpty || _queryRows.isNotEmpty;
     }
     // 输入时就实时校验，按钮状态跟着变
     _id.addListener(_revalidate);
     _url.addListener(_revalidate);
     _name.addListener(_revalidate);
+  }
+
+  _ExtraRow _newRow(String name, String value) {
+    final row = _ExtraRow(name, value);
+    row.name.addListener(_revalidate);
+    row.value.addListener(_revalidate);
+    return row;
   }
 
   void _revalidate() => setState(() {});
@@ -101,6 +166,9 @@ class _AiProviderDialogState extends State<AiProviderDialog> {
     _name.dispose();
     _url.dispose();
     _key.dispose();
+    for (final row in [..._headerRows, ..._queryRows]) {
+      row.dispose();
+    }
     super.dispose();
   }
 
@@ -132,10 +200,133 @@ class _AiProviderDialogState extends State<AiProviderDialog> {
       _kebab.hasMatch(_id.text.trim()) &&
       _name.text.trim().isNotEmpty &&
       _url.text.trim().isNotEmpty &&
-      _urlError == null;
+      _urlError == null &&
+      _extrasError == null;
+
+  /// 额外请求参数的校验：**名称与值都必须能真的发出去**（否则保存成功、发消息才炸）。
+  ///
+  /// 只看非空行：两格都空的行是"还没填"，提交时直接丢掉，不算错误。
+  String? get _extrasError =>
+      _validateRows(_headerRows, header: true) ??
+      _validateRows(_queryRows, header: false);
+
+  String? _validateRows(List<_ExtraRow> rows, {required bool header}) {
+    final seen = <String>{};
+    for (final row in rows) {
+      if (row.isBlank) continue;
+      final name = row.name.text.trim();
+      final value = row.value.text;
+      if (name.isEmpty) {
+        return header ? '额外请求头的名称不能为空。' : '额外查询参数的名称不能为空。';
+      }
+      if (name != row.name.text) {
+        return '额外${header ? "请求头" : "查询参数"}「$name」的名称首尾不能有空格。';
+      }
+      if (name.length > 128) {
+        return '额外${header ? "请求头" : "查询参数"}「$name」的名称不能超过 128 个字符。';
+      }
+      if (header) {
+        if (!_headerName.hasMatch(name)) {
+          return '额外请求头「$name」的名称不合法，只能用字母、数字和 !#\$%&\'*+-.^_`|~。';
+        }
+        final lower = name.toLowerCase();
+        if (_forbiddenHeaders.contains(lower)) {
+          return '额外请求头「$name」由程序生成，不能自定义。';
+        }
+        if (!seen.add(lower)) {
+          return '额外请求头「$name」重复了，名称不区分大小写。';
+        }
+        if (value.length > 1024) {
+          return '额外请求头「$name」的值不能超过 1024 个字符。';
+        }
+        if (value.runes.any((c) => c != 9 && (c < 32 || c > 126))) {
+          return '额外请求头「$name」的值只能是可见 ASCII 字符，不能有中文或换行。';
+        }
+      } else {
+        if (name.runes.any(
+          (c) => c < 32 || c == 0x7f || c == 0x23 || c == 0x26 || c == 0x3d,
+        )) {
+          return '额外查询参数「$name」的名称不能包含控制字符或 # & =。';
+        }
+        if (!seen.add(name)) return '额外查询参数「$name」重复了。';
+        if (value.length > 1024) {
+          return '额外查询参数「$name」的值不能超过 1024 个字符。';
+        }
+        if (value.runes.any((c) => c == 0 || c == 10 || c == 13)) {
+          return '额外查询参数「$name」的值不能包含换行或空字符。';
+        }
+      }
+    }
+    return null;
+  }
+
+  Map<String, String> _collectRows(List<_ExtraRow> rows) => {
+    for (final row in rows)
+      if (!row.isBlank) row.name.text.trim(): row.value.text,
+  };
+
+  void _addRow(List<_ExtraRow> rows) {
+    setState(() {
+      rows.add(_newRow('', ''));
+    });
+  }
+
+  void _removeRow(List<_ExtraRow> rows, int index) {
+    if (index < 0 || index >= rows.length) return;
+    final row = rows.removeAt(index);
+    setState(() {});
+    // 下一帧再释放：本帧的 TextField 还没卸载
+    WidgetsBinding.instance.addPostFrameCallback((_) => row.dispose());
+  }
+
+  Widget _rowEditor(List<_ExtraRow> rows, int index, {required bool header}) {
+    final row = rows[index];
+    final prefix = header ? 'header' : 'query';
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 6),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Expanded(
+            child: TextField(
+              key: ValueKey('extra-$prefix-name-$index'),
+              controller: row.name,
+              autocorrect: false,
+              enableSuggestions: false,
+              decoration: InputDecoration(
+                labelText: header ? '请求头名称' : '参数名称',
+                hintText: header ? 'x-opencode-session' : 'api-version',
+                isDense: true,
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: TextField(
+              key: ValueKey('extra-$prefix-value-$index'),
+              controller: row.value,
+              autocorrect: false,
+              enableSuggestions: false,
+              decoration: InputDecoration(
+                labelText: header ? '请求头的值' : '参数的值',
+                hintText: header ? 'ses_…' : '2024-10-21',
+                isDense: true,
+              ),
+            ),
+          ),
+          IconButton(
+            tooltip: '删除这一条',
+            icon: const Icon(Icons.remove_circle_outline, size: 20),
+            onPressed: () => _removeRow(rows, index),
+          ),
+        ],
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
     return AlertDialog(
       title: Text(_editing ? '编辑 Provider' : '新建 Provider'),
       content: SizedBox(
@@ -214,6 +405,83 @@ class _AiProviderDialogState extends State<AiProviderDialog> {
                   error: false,
                 ),
               ],
+              const Divider(height: 24),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: TextButton.icon(
+                  onPressed: () => setState(() {
+                    _advancedOpen = !_advancedOpen;
+                    // 第一次展开时给一行空白，省掉再点一次「添加」
+                    if (_advancedOpen && _headerRows.isEmpty && _queryRows.isEmpty) {
+                      _headerRows.add(_newRow('', ''));
+                      _queryRows.add(_newRow('', ''));
+                    }
+                  }),
+                  icon: Icon(
+                    _advancedOpen
+                        ? Icons.expand_less
+                        : Icons.expand_more,
+                    size: 18,
+                  ),
+                  label: Text(
+                    '额外请求参数（可选）'
+                    '${_headerRows.any((r) => !r.isBlank) || _queryRows.any((r) => !r.isBlank) ? ' · 已配置' : ''}',
+                  ),
+                ),
+              ),
+              if (_advancedOpen) ...[
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text('请求头', style: theme.textTheme.titleSmall),
+                ),
+                const SizedBox(height: 4),
+                for (var i = 0; i < _headerRows.length; i++)
+                  _rowEditor(_headerRows, i, header: true),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: TextButton.icon(
+                    onPressed: () => _addRow(_headerRows),
+                    icon: const Icon(Icons.add, size: 18),
+                    label: const Text('添加请求头'),
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text('查询参数', style: theme.textTheme.titleSmall),
+                ),
+                const SizedBox(height: 4),
+                for (var i = 0; i < _queryRows.length; i++)
+                  _rowEditor(_queryRows, i, header: false),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: TextButton.icon(
+                    onPressed: () => _addRow(_queryRows),
+                    icon: const Icon(Icons.add, size: 18),
+                    label: const Text('添加查询参数'),
+                  ),
+                ),
+                AiNote(
+                  text:
+                      '每次向这个 Provider 发请求都会带上这些参数，连接测试与获取模型也一样。'
+                      '名称相同的请求头会覆盖默认头。这些参数按原样保存在本机配置里，'
+                      '不要用来存密钥；密钥请填在上面的 API Key 里。',
+                  error: _extrasError != null,
+                ),
+                if (_extrasError != null)
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: Padding(
+                      padding: const EdgeInsets.only(top: 4),
+                      child: Text(
+                        _extrasError!,
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: theme.colorScheme.error,
+                        ),
+                      ),
+                    ),
+                  ),
+              ],
             ],
           ),
         ),
@@ -234,6 +502,8 @@ class _AiProviderDialogState extends State<AiProviderDialog> {
                     _api,
                     _url.text.trim(),
                     _key.text,
+                    headers: _collectRows(_headerRows),
+                    query: _collectRows(_queryRows),
                   ),
                 ),
           child: Text(_editing ? '保存' : '创建'),

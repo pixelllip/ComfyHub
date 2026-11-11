@@ -66,6 +66,8 @@ pub struct ChatRequest<'a> {
     pub tools: &'a [ToolSpec],
     pub reasoning: ReasoningRequest,
     pub max_output_tokens: Option<i64>,
+    /// Provider 级的额外请求头与查询参数（每一条请求都要带）
+    pub extras: &'a crate::provider::request_extras::RequestExtras,
 }
 
 /// 按正文里的关键字**细化**错误码（Kotlin `AiUpstream.refineFromBody`，AIH-024）。
@@ -219,6 +221,8 @@ where
     F: FnMut(StreamEvent) -> Result<(), ApiError>,
 {
     let url = request.api.chat_url(request.base_url);
+    // 查询参数在拼好端点之后再追加（Base URL 不允许自带查询串）
+    let url = request.extras.with_query(&url)?;
     let host = host_of(&url).ok_or_else(|| {
         ApiError::ai(
             "CONFIG_ERROR",
@@ -249,19 +253,33 @@ where
     );
 
     let client = client_for(&host)?;
+    // 默认头 → 鉴权头 → 自定义头（后者覆盖同名的前两者，大小写不敏感）
+    let mut headers = reqwest::header::HeaderMap::new();
+    headers.insert(
+        reqwest::header::ACCEPT,
+        reqwest::header::HeaderValue::from_static("text/event-stream"),
+    );
+    headers.insert(
+        reqwest::header::CONTENT_TYPE,
+        reqwest::header::HeaderValue::from_static("application/json"),
+    );
+    for (name, value) in auth_header(request.api, secret.as_deref()) {
+        let name = reqwest::header::HeaderName::from_static(name);
+        let value = reqwest::header::HeaderValue::from_str(&value).map_err(|_| {
+            ApiError::ai(
+                "CONFIG_ERROR",
+                "凭据里包含无法放进 HTTP 请求头的字符。请重新填写 API Key。",
+            )
+        })?;
+        headers.insert(name, value);
+    }
+    request.extras.apply_headers(&mut headers)?;
     // 思考模式下的"思维链回传"被拒时，先补回传、再考虑降档（顺序见下面的 `loop`）。
     let mut thinking_forced_off = false;
     // 这一轮是不是**补了空 `reasoning` 项**才成功的（执行器据此让余下的轮次也补）。
     let mut echo_forced = false;
     let response = loop {
-        let mut builder = client
-            .post(&url)
-            .header("accept", "text/event-stream")
-            .header("content-type", "application/json")
-            .json(&body);
-        for (name, value) in auth_header(request.api, secret.as_deref()) {
-            builder = builder.header(name, value);
-        }
+        let builder = client.post(&url).headers(headers.clone()).json(&body);
 
         // 只记 provider / 端点 / 协议 / 模型，**绝不记 header 与请求体**
         eprintln!(

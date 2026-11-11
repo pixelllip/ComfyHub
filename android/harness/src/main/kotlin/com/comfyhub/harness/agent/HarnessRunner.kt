@@ -60,6 +60,10 @@ data class RunRequest(
     val api: AiApiRef,
     val baseUrl: String,
     val credentialRef: String? = null,
+    /** Provider 的额外请求头（每一次上游请求都带，例如 OpenCode 的 `x-opencode-session`）。 */
+    val headers: Map<String, String> = emptyMap(),
+    /** Provider 的额外查询参数（追加在每一次请求的 URL 上）。 */
+    val query: Map<String, String> = emptyMap(),
     /** 本次 Run 用的规则工件（**必须来自 run-kit**，R13）。 */
     val kit: RunKit,
     val userText: String,
@@ -475,6 +479,8 @@ class HarnessRunner(
                     secret = secret,
                     body = body,
                     adapter = adapter,
+                    extraHeaders = request.headers,
+                    query = request.query,
                 ) { event ->
                     when (event) {
                         is StreamEvent.TextDelta -> {

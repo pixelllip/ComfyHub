@@ -156,6 +156,10 @@ data class ProviderRecord(
     val revision: Int,
     val createdAt: String,
     val updatedAt: String,
+    /** 额外请求头（名称 → 值）：每一次上游请求都带（OpenCode 的 `x-opencode-session` 等）。 */
+    val headers: Map<String, String> = emptyMap(),
+    /** 额外查询参数（名称 → 值）：追加在每一次请求的 URL 上（Azure 的 `api-version` 等）。 */
+    val query: Map<String, String> = emptyMap(),
 )
 
 /**

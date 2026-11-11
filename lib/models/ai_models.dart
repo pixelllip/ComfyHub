@@ -203,6 +203,17 @@ class AiProvider {
   final int revision;
   final AiCredentialStatus credential;
 
+  /// 额外请求头（名称 → 值）：**每一次**向上游发请求都会带上。
+  ///
+  /// 有的网关在标准鉴权之外还要求固定请求头（OpenCode Go / Zen 的
+  /// `x-opencode-session` 就是一例）；这些要求随网关而异，所以名称与值都由用户填。
+  final Map<String, String> headers;
+
+  /// 额外查询参数（名称 → 值）：追加在每一次请求的 URL 上。
+  ///
+  /// Azure OpenAI 的 `api-version` 是这一类；与 [headers] 分开存，互不覆盖。
+  final Map<String, String> query;
+
   const AiProvider({
     required this.id,
     required this.displayName,
@@ -213,6 +224,8 @@ class AiProvider {
     required this.enabled,
     required this.revision,
     required this.credential,
+    this.headers = const {},
+    this.query = const {},
   });
 
   factory AiProvider.fromJson(Map<String, dynamic> json) => AiProvider(
@@ -229,6 +242,8 @@ class AiProvider {
             Map<String, dynamic>.from(json['credential'] as Map),
           )
         : AiCredentialStatus.none,
+    headers: _stringMap(json['headers']),
+    query: _stringMap(json['query']),
   );
 
   AiApi? get apiEnum => AiApi.parse(api);
@@ -236,6 +251,9 @@ class AiProvider {
 
   /// 落本地缓存用（M6）。`credential` **不进缓存**：它是"这台机器上有没有 key"的
   /// 即时状态，缓存下来的那一刻就可能已经过期了（手机上是本机密钥库说了算）。
+  ///
+  /// `headers` / `query` **总是写成对象**（空表就写 `{}`）—— 更新接口把"缺省"解释为
+  /// "保留原值"，只有显式空对象才能把最后一条删掉。
   Map<String, dynamic> toJson() => {
     'id': id,
     'displayName': displayName,
@@ -245,6 +263,8 @@ class AiProvider {
     'endpointTrust': endpointTrust,
     'enabled': enabled,
     'revision': revision,
+    'headers': headers,
+    'query': query,
   };
 
   /// 只换凭据状态。
@@ -262,7 +282,21 @@ class AiProvider {
     enabled: enabled,
     revision: revision,
     credential: status,
+    headers: headers,
+    query: query,
   );
+}
+
+/// `{"X-Foo":"bar"}` → `Map<String, String>`（读不懂的项一律丢掉，不编值）。
+Map<String, String> _stringMap(Object? raw) {
+  if (raw is! Map) return const {};
+  final out = <String, String>{};
+  raw.forEach((key, value) {
+    if (key == null || value == null) return;
+    if (value is Map || value is List) return;
+    out[key.toString()] = value.toString();
+  });
+  return out;
 }
 
 class AiModel {

@@ -42,6 +42,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
@@ -430,6 +431,20 @@ class HarnessBridge(private val context: Context) :
             result.error("BAD_ARGUMENTS", e.message ?: "mentions 读不懂", null)
             return
         }
+        // Provider 的额外请求参数（OpenCode 那类网关要求每次请求都带固定头）。
+        // 解析不了就当场报错：静默当空会让"测试连接通过、发消息 400"这个现象再出现一次。
+        val extraHeaders = try {
+            parseExtraMap(call.argument<String>("headers"), "headers")
+        } catch (e: IllegalArgumentException) {
+            result.error("BAD_ARGUMENTS", e.message ?: "headers 读不懂", null)
+            return
+        }
+        val extraQuery = try {
+            parseExtraMap(call.argument<String>("query"), "query")
+        } catch (e: IllegalArgumentException) {
+            result.error("BAD_ARGUMENTS", e.message ?: "query 读不懂", null)
+            return
+        }
         val request = RunRequest(
             conversationId = call.argument<String>("conversationId") ?: com.comfyhub.harness.store.Timestamps.newId(),
             providerId = call.argument<String>("providerId").orEmpty(),
@@ -437,6 +452,8 @@ class HarnessBridge(private val context: Context) :
             api = api,
             baseUrl = call.argument<String>("baseUrl").orEmpty(),
             credentialRef = call.argument<String>("credentialRef"),
+            headers = extraHeaders,
+            query = extraQuery,
             kit = kit,
             userText = call.argument<String>("text").orEmpty(),
             // 界面画气泡用这两样：`displayText` 是用户看到的正文，`mentions` 是小卡片。
@@ -501,6 +518,25 @@ class HarnessBridge(private val context: Context) :
                 snapshotJson = snapshot,
             )
         }
+    }
+
+    /**
+     * Dart 送来的"名称 → 值"表（JSON **对象字符串**）。空 / 缺省 = 没有额外参数。
+     *
+     * 值必须是字符串（数字按文本收下也行）：静默丢掉一个名字，表现为"配置里有、
+     * 发请求时少了那一条" —— 与 `mentions` 同一条纪律，读不懂就报。
+     */
+    private fun parseExtraMap(raw: String?, label: String): Map<String, String> {
+        if (raw.isNullOrBlank()) return emptyMap()
+        val obj = ProviderJson.parseObject(raw)
+            ?: throw IllegalArgumentException("$label 必须是一段 JSON 对象")
+        val out = mutableMapOf<String, String>()
+        for ((name, value) in obj) {
+            val text = (value as? JsonPrimitive)?.contentOrNull
+                ?: throw IllegalArgumentException("$label 里「$name」的值必须是字符串")
+            out[name] = text
+        }
+        return out
     }
 
     // -----------------------------------------------------------------------

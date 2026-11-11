@@ -26,9 +26,9 @@ import kotlinx.serialization.json.put
  *  3. **读不懂就抛**（`ProviderJsonFailure`）：一行缺 `id` 或者 `inputModalities` 不是数组，
  *     都不该静默变成一条"看起来对、其实空了"的配置 —— 那种错没人查得出来。
  *
- * ⚠ 表里的 `headers_json` / `compat_json` / `limits_json` / `max_attachment_bytes` /
- * `capability_verified_at` **不在**这份 DTO 里（Dart 的 DTO 也没有它们），
- * 新建/更新时一律写 NULL。要加得先加 DTO，别在这里偷偷多写一列。
+ * ⚠ 表里的 `compat_json` 只由本文件负责 `query` 这一段（额外查询参数）；
+ * `limits_json` / `max_attachment_bytes` / `capability_verified_at` **不在**这份 DTO 里
+ * （Dart 的 DTO 也没有它们），新建/更新时一律写 NULL。
  */
 object ProviderJson {
 
@@ -49,6 +49,9 @@ object ProviderJson {
         put("revision", p.revision)
         put("createdAt", p.createdAt)
         put("updatedAt", p.updatedAt)
+        // 空表不出现这个键（与后端 `skip_serializing_if` 一致）；Dart 缺省按空表读
+        if (p.headers.isNotEmpty()) put("headers", p.headers.toJsonMap())
+        if (p.query.isNotEmpty()) put("query", p.query.toJsonMap())
     }
 
     /**
@@ -73,6 +76,8 @@ object ProviderJson {
             // 时间列由库给（新建）/ 由更新语句自己写；从 JSON 读进来的这两个值**不用**
             createdAt = json.str("createdAt").orEmpty(),
             updatedAt = json.str("updatedAt").orEmpty(),
+            headers = json.stringMap("headers"),
+            query = json.stringMap("query"),
         )
     }
 
@@ -141,6 +146,25 @@ object ProviderJson {
     /** `{"low":"512"}`。 */
     fun stringMapJson(values: Map<String, String>): String =
         buildJsonObject { values.forEach { (k, v) -> put(k, v) } }.toString()
+
+    /**
+     * 额外查询参数 → `compat_json` 的文本（`{"query":{…}}`）。
+     *
+     * 空表回 `null`（库列写 NULL）。`compat_json` 里将来别的兼容开关不归这里管，
+     * 所以读侧只认 `query` 这一段。
+     */
+    fun compatJson(query: Map<String, String>): String? =
+        if (query.isEmpty()) null
+        else buildJsonObject { put("query", query.toJsonMap()) }.toString()
+
+    /** `compat_json` → 额外查询参数；坏 JSON 当空（一行坏数据不该让整页打不开）。 */
+    fun queryOf(raw: String?): Map<String, String> {
+        val root = rawObject(raw) ?: return emptyMap()
+        val query = root["query"] as? JsonObject ?: return emptyMap()
+        return query.mapNotNull { (k, v) ->
+            (v as? JsonPrimitive)?.contentOrNull?.let { k to it }
+        }.toMap()
+    }
 
     /** `{"image":["inline"]}`。 */
     fun stringListMapJson(values: Map<String, List<String>>): String = buildJsonObject {

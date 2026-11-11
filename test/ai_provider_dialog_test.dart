@@ -151,6 +151,72 @@ void main() {
     expect(recorder.keyPuts.single, contains('sk-secret-value'));
   });
 
+  testWidgets('额外请求头与查询参数随 Provider 一起提交（OpenCode 场景）', (tester) async {
+    final recorder = _Recorder();
+    await _openDialog(tester, recorder);
+
+    await tester.enterText(_field('Provider ID（创建后不可改）'), 'opencode-gw');
+    await tester.enterText(_field('显示名'), 'OpenCode');
+    await tester.enterText(_field('Base URL'), 'https://opencode.ai/zen/v1');
+    await tester.ensureVisible(find.text('额外请求参数（可选）'));
+    await tester.tap(find.text('额外请求参数（可选）'));
+    await tester.pumpAndSettle();
+
+    await tester.enterText(
+      find.byKey(const ValueKey('extra-header-name-0')),
+      'x-opencode-session',
+    );
+    await tester.enterText(
+      find.byKey(const ValueKey('extra-header-value-0')),
+      'ses_abc',
+    );
+    await tester.enterText(
+      find.byKey(const ValueKey('extra-query-name-0')),
+      'api-version',
+    );
+    await tester.enterText(
+      find.byKey(const ValueKey('extra-query-value-0')),
+      '2024-10-21',
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('创建'));
+    await tester.pumpAndSettle();
+
+    final sent =
+        jsonDecode(recorder.providerCreates.single) as Map<String, dynamic>;
+    expect(
+      sent['headers'],
+      {'x-opencode-session': 'ses_abc'},
+      reason: '额外请求头必须跟 Provider 一起存，发消息时才带得上',
+    );
+    expect(sent['query'], {'api-version': '2024-10-21'});
+  });
+
+  testWidgets('额外请求头名称不合法时就地拦下，不发请求', (tester) async {
+    final recorder = _Recorder();
+    await _openDialog(tester, recorder);
+
+    await tester.enterText(_field('Provider ID（创建后不可改）'), 'my-gateway');
+    await tester.enterText(_field('显示名'), '我的网关');
+    await tester.enterText(_field('Base URL'), 'https://api.example.com/v1');
+    await tester.ensureVisible(find.text('额外请求参数（可选）'));
+    await tester.tap(find.text('额外请求参数（可选）'));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const ValueKey('extra-header-name-0')),
+      'bad header',
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('名称不合法'), findsOneWidget);
+    final create = tester.widget<FilledButton>(
+      find.ancestor(of: find.text('创建'), matching: find.byType(FilledButton)),
+    );
+    expect(create.onPressed, isNull);
+    expect(recorder.providerCreates, isEmpty);
+  });
+
   testWidgets('ID 以数字开头也能直接提交（引用名由程序补前缀，不再是死角）', (tester) async {
     final recorder = _Recorder();
     await _openDialog(tester, recorder);

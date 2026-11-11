@@ -312,6 +312,40 @@ class ProviderStoreTest {
         assertNull(ProviderJson.providerFromJson(noRef).credentialRef)
     }
 
+    /** 额外请求参数：落库、读回、JSON 往返；清空后回到空表（不能残留旧值）。 */
+    @Test
+    fun `额外请求参数：落库读回与清空`() {
+        val saved = store.saveProvider(
+            provider().copy(
+                headers = mapOf("x-opencode-session" to "ses_abc", "X-Client" to "ComfyHub"),
+                query = mapOf("api-version" to "2024-10-21"),
+            ),
+        )
+        assertEquals("ses_abc", saved.headers["x-opencode-session"])
+        assertEquals("2024-10-21", saved.query["api-version"])
+
+        // 重新读一行（不是拿内存里那份）
+        val fromDb = store.getProvider("phone-gw")!!
+        assertEquals(saved.headers, fromDb.headers)
+        assertEquals(saved.query, fromDb.query)
+
+        // 桥进出的 JSON 也要原样带上；缺省不写空对象（与后端 skip_serializing_if 一致）
+        val json = ProviderJson.providerToJson(fromDb)
+        assertEquals(
+            setOf("X-Client", "x-opencode-session"),
+            (json["headers"] as kotlinx.serialization.json.JsonObject).keys,
+        )
+        assertEquals(fromDb, ProviderJson.providerFromJson(json))
+
+        // 清空：更新之后两列都回 NULL，读回来是空表
+        val cleared = store.saveProvider(
+            fromDb.copy(headers = emptyMap(), query = emptyMap(), revision = fromDb.revision),
+        )
+        assertTrue(cleared.headers.isEmpty())
+        assertTrue(cleared.query.isEmpty())
+        assertTrue(ProviderJson.providerToJson(cleared).keys.none { it == "headers" || it == "query" })
+    }
+
     /** 模型 JSON：可空键省掉、数组/映射原样，且 **providerId 一律以参数为准**。 */
     @Test
     fun `模型 JSON：往返一致，providerId 以调用方给的为准`() {
