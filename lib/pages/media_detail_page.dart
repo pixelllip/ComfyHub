@@ -43,7 +43,25 @@ class MediaDetailPage extends StatefulWidget {
   /// `null` = 普通入口（画廊 / 标签 / 提示词关联产物…），仍按集合成员切换。
   final List<MediaAsset>? siblings;
 
-  const MediaDetailPage({super.key, required this.mediaId, this.siblings});
+  /// 从**只有 id 的一批产物**点进来时，这一批是哪些（AI 工作台的产物卡 / 提交回执）。
+  ///
+  /// 与 [siblings] 是同一件事的两种入口，区别只在于调用方有没有现成的元数据：
+  /// 工作台的产物卡上只有 id，所以整组元数据由详情页打开时补齐。
+  /// 传了它，左右切换同样只在这一批里走，**不再按画廊里的 `collectionId` 取成员**
+  /// —— 一批产物可能来自多次提交，在画廊里会落在各自的分组里。
+  ///
+  /// 两条不能同时传。取不到的 id 会被略去，计数与左右切换只算真正能打开的那几条。
+  final List<int>? siblingIds;
+
+  const MediaDetailPage({
+    super.key,
+    required this.mediaId,
+    this.siblings,
+    this.siblingIds,
+  }) : assert(
+         siblings == null || siblingIds == null,
+         'siblings 与 siblingIds 只能传一个',
+       );
 
   @override
   State<MediaDetailPage> createState() => _MediaDetailPageState();
@@ -164,12 +182,23 @@ class _MediaDetailPageState extends State<MediaDetailPage> {
       // ⚠ 从卡片示例进来时**只看那一组**（`widget.siblings`），不去问集合：
       // 一张示例可能本来是画廊里某个集合的成员，按集合获取会带出卡片之外
       // （已报告的问题）。示例的顺序即卡片中的挂载顺序。
+      //
+      // ⚠ 从工作台的产物卡进来时**只看这一批**（`widget.siblingIds`），同样不问集合：
+      // 一批产物可能来自多次提交，在画廊里会落在各自的分组里；按集合取成员
+      // 就会变成"点开哪一张就进它自己那个分组"（已报告的问题）。
       var siblings = const <int>[];
       var siblingMedia = <int, MediaAsset>{};
       final fixed = widget.siblings;
+      final fixedIds = widget.siblingIds;
       if (fixed != null) {
         siblings = [for (final item in fixed) item.id];
         siblingMedia = {for (final item in fixed) item.id: item};
+      } else if (fixedIds != null) {
+        // 调用方只有 id：补齐这一批的完整元数据后再画（翻页动画要同时
+        // 画出前后两条，缺一条就翻不过去）。
+        final assets = await _assetsForIds(fixedIds, store, media);
+        siblings = [for (final item in assets) item.id];
+        siblingMedia = {for (final item in assets) item.id: item};
       } else if (media.collectionId != null) {
         try {
           final page = await store.api.listMedia(
@@ -229,6 +258,46 @@ class _MediaDetailPageState extends State<MediaDetailPage> {
         _loading = false;
       });
     }
+  }
+
+  /// 按给定顺序取出这一组产物的完整元数据。
+  ///
+  /// 先复用 [_siblingMedia]（左右切换时相邻几条已经取过），
+  /// 只补缺的。取不到的 id 直接略去 —— 同批里有一条已经不在盘上，
+  /// 不该让整组都打不开；计数与左右切换只算真正能打开的那几条。
+  Future<List<MediaAsset>> _assetsForIds(
+    List<int> ids,
+    LibraryStore store,
+    MediaAsset current,
+  ) async {
+    final byId = <int, MediaAsset>{
+      for (final id in ids)
+        if (_siblingMedia[id] != null) id: _siblingMedia[id]!,
+    };
+    byId[current.id] = current;
+    final missing = [
+      for (final id in ids)
+        if (!byId.containsKey(id)) id,
+    ];
+    if (missing.isNotEmpty) {
+      final fetched = await Future.wait(
+        missing.map<Future<MediaAsset?>>((id) async {
+          try {
+            return await store.api.getMedia(id);
+          } catch (_) {
+            // 取不到就略去，见本方法的说明。
+            return null;
+          }
+        }),
+      );
+      for (final asset in fetched) {
+        if (asset != null) byId[asset.id] = asset;
+      }
+    }
+    return [
+      for (final id in ids)
+        if (byId[id] != null) byId[id]!,
+    ];
   }
 
   /// 当前这条在集合里的下标（不在集合里 = -1）。

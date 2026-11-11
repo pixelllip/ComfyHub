@@ -33,7 +33,10 @@ class SubmitResultCard extends StatelessWidget {
   final Map<String, String> mediaHeaders;
 
   /// 点缩略图 / 「查看详情」时打开产物详情；为空时不给入口。
-  final void Function(int mediaId)? onOpenMedia;
+  ///
+  /// 第二个参数是**这一批**产物 id（这张回执上的全部产物），详情页据此只在这批里
+  /// 左右切换，不会退回到它们在画廊各自所属的分组。
+  final void Function(int mediaId, List<int> mediaIds)? onOpenMedia;
 
   const SubmitResultCard({
     super.key,
@@ -158,7 +161,7 @@ class SubmitResultCard extends StatelessWidget {
                       key: ValueKey('submit-result-media-$id'),
                       onTap: onOpenMedia == null
                           ? null
-                          : () => onOpenMedia!(id),
+                          : () => onOpenMedia!(id, mediaIds),
                       borderRadius: BorderRadius.circular(8),
                       child: ClipRRect(
                         borderRadius: BorderRadius.circular(8),
@@ -188,7 +191,7 @@ class SubmitResultCard extends StatelessWidget {
             if (onOpenMedia != null)
               TextButton.icon(
                 key: const Key('submit-result-open'),
-                onPressed: () => onOpenMedia!(mediaIds.first),
+                onPressed: () => onOpenMedia!(mediaIds.first, mediaIds),
                 icon: const Icon(Icons.open_in_new, size: 15),
                 label: const Text('查看产物'),
               ),

@@ -1403,9 +1403,14 @@ class _MessageBubble extends StatelessWidget {
           mediaThumbUrlOf: mediaThumbUrlOf,
           // 同 `_ProducedMediaCard`：手机上的缩略图要靠这个头才不是破图
           mediaHeaders: attachmentPreviewHeaders(),
-          onOpenMedia: (mediaId) => Navigator.of(context).push(
+          onOpenMedia: (mediaId, mediaIds) => Navigator.of(context).push(
             MaterialPageRoute<void>(
-              builder: (_) => MediaDetailPage(mediaId: mediaId),
+              builder: (_) => MediaDetailPage(
+                mediaId: mediaId,
+                // 回执上的这一批就是详情页里的"一组"：只在这几张里左右切换，
+                // 不退回它们在画廊各自所属的分组。
+                siblingIds: mediaIds,
+              ),
             ),
           ),
         ),
@@ -2449,7 +2454,16 @@ class _ProducedMediaCard extends StatelessWidget {
   void _openDetail(BuildContext context, int mediaId) {
     Navigator.of(context).push(
       MaterialPageRoute<void>(
-        builder: (_) => MediaDetailPage(mediaId: mediaId),
+        builder: (_) => MediaDetailPage(
+          mediaId: mediaId,
+          // 这一批产物就是详情页里的"一组"：卡上能看到的几张，左右切换也只在这几张里走。
+          // 只有一张时也传（这一组就一张，不再展开到画廊里的分组）。
+          //
+          // 只传 id（缩略图条里只有 id，元数据由详情页补齐）。不传的话详情页
+          // 会按 `collectionId` 去列画廊集合 —— 一批产物可能来自多次提交，
+          // 在画廊里落在各自的分组里，于是点开哪一张就进它自己那个分组。
+          siblingIds: mediaIds,
+        ),
       ),
     );
   }

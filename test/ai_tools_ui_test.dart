@@ -22,12 +22,15 @@ import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:viewer/core/ai_api_client.dart';
+import 'package:viewer/core/api_client.dart';
 import 'package:viewer/core/settings_store.dart';
 import 'package:viewer/models/ai_models.dart';
 import 'package:viewer/pages/ai_home_page.dart';
 import 'package:viewer/pages/ai_provider_settings_page.dart';
 import 'package:viewer/pages/ai_tools_settings_page.dart';
+import 'package:viewer/pages/media_detail_page.dart';
 import 'package:viewer/state/ai_workspace_store.dart';
+import 'package:viewer/state/library_store.dart';
 
 /// 记录这次用例里后端收到的请求，用来断言"界面上的动作真的打到了对的接口"。
 class _Recorder {
@@ -503,6 +506,53 @@ Future<Widget> _homePage(
       theme: platform == null ? null : ThemeData(platform: platform),
       home: const AiHomePage(),
     ),
+  );
+}
+
+/// 产物 JSON（详情页 `GET /api/media/{id}` 的返回形状）。
+Map<String, dynamic> _mediaJson(int id) => {
+  'id': id,
+  'kind': 'IMAGE',
+  'title': '产物 $id',
+  'originalName': 'media-$id.png',
+  'storedName': 'media-$id.png',
+  'sizeBytes': 100,
+  'width': 1024,
+  'height': 1024,
+  'favorite': false,
+  'nsfw': false,
+  'hasWorkflow': false,
+  'fileUrl': '/api/media/$id/file',
+  'thumbUrl': '/api/media/$id/thumb',
+  'collectionSize': 1,
+};
+
+/// 产物详情用的假库（只回答 `GET /api/media/{id}`）。
+///
+/// 记下请求路径，用例据此断言详情页**没有**按 `collectionId` 去列画廊集合。
+Future<LibraryStore> _libraryStore(List<String> calls) async {
+  SharedPreferences.setMockInitialValues({});
+  final settings = SettingsStore();
+  await settings.load();
+  final client = MockClient((request) async {
+    calls.add(
+      '${request.method} ${request.url.path}'
+      '${request.url.hasQuery ? '?${request.url.query}' : ''}',
+    );
+    final match = RegExp(r'^/api/media/(\d+)$').firstMatch(request.url.path);
+    if (match != null) {
+      final id = int.parse(match.group(1)!);
+      return http.Response(
+        jsonEncode(_mediaJson(id)),
+        200,
+        headers: {'content-type': 'application/json; charset=utf-8'},
+      );
+    }
+    return http.Response('{"error":"not found"}', 404);
+  });
+  return LibraryStore(
+    settings,
+    api: ApiClient(settings.baseUrl, client: client),
   );
 }
 
@@ -1109,6 +1159,72 @@ void main() {
         reason: '产物 #$id 的缩略图要在卡里',
       );
     }
+  });
+
+  testWidgets('(e3c) 点工作台产物缩略图：详情只在这一批里切换，不进画廊的分组', (tester) async {
+    tester.view.physicalSize = const Size(1400, 1000);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    final rec = _Recorder();
+    final sse =
+        _sse(1, 'run.started', '{"runId":"r1"}') +
+        _sse(2, 'message.started', '{"messageId":"a1"}') +
+        _sse(3, 'text.delta', '{"messageId":"a1","text":"跑好了。"}') +
+        _sse(
+          4,
+          'tool.requested',
+          '{"callId":"call-s","name":"comfy_submit","arguments":"{\\"promptId\\":7}",'
+              '"approval":"approved"}',
+        ) +
+        _sse(5, 'tool.started', '{"callId":"call-s","name":"comfy_submit"}') +
+        _sse(
+          6,
+          'tool.completed',
+          '{"callId":"call-s","name":"comfy_submit","elapsedMs":9000,"preview":"完成",'
+              '"result":{"promptId":7,"status":"success","mediaIds":[31,32],"mediaCount":2}}',
+        ) +
+        _sse(
+          7,
+          'message.completed',
+          '{"messageId":"a1","text":"跑好了。","steps":1}',
+        ) +
+        _sse(8, 'run.completed', '{"runId":"r1"}');
+
+    final calls = <String>[];
+    final library = await _libraryStore(calls);
+    addTearDown(library.dispose);
+
+    await tester.pumpWidget(
+      ChangeNotifierProvider<LibraryStore>.value(
+        value: library,
+        child: await _homePage(rec, sse: sse),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField).first, '帮我跑两张');
+    await tester.tap(find.text('发送'));
+    await tester.pumpAndSettle();
+
+    final thumbnail = find.byKey(const ValueKey('produced-media-31'));
+    expect(thumbnail, findsOneWidget);
+    await tester.ensureVisible(thumbnail);
+    await tester.pumpAndSettle();
+    await tester.tap(thumbnail);
+    await tester.pumpAndSettle();
+
+    expect(find.byType(MediaDetailPage), findsOneWidget);
+    // 两张的批次：点第 1 张，计数就该是 1 / 2，而不是它所在画廊集合的成员数
+    expect(
+      find.text('1 / 2'),
+      findsOneWidget,
+      reason: '详情页要按工作台的这一批产物算数量，不能按画廊分组',
+    );
+    expect(
+      calls.where((c) => c.contains('collectionId=')),
+      isEmpty,
+      reason: '从工作台产物卡进来时不该再去列画廊集合成员',
+    );
   });
 
   // 现象："更新长期记忆之后，侧边栏没有立即刷新状态"。

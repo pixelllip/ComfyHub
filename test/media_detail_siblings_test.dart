@@ -238,4 +238,64 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('shinku'), findsOneWidget);
   });
+
+  testWidgets('只给一组 id：详情页补齐这一组，并按这一组切换（工作台的一批产物）', (tester) async {
+    _surface(tester, const Size(1200, 900));
+    final calls = <String>[];
+    final store = await _store(_detailClient(calls));
+    addTearDown(store.dispose);
+
+    // 顺序刻意与画廊集合（1、2、3）不同：按这一批走时，1 是第 2 张。
+    await tester.pumpWidget(
+      MultiProvider(
+        providers: [
+          ChangeNotifierProvider<LibraryStore>.value(value: store),
+          ChangeNotifierProvider<SettingsStore>.value(value: store.settings),
+          ChangeNotifierProvider<NsfwStore>(create: (_) => NsfwStore()),
+        ],
+        child: MaterialApp(
+          home: MediaDetailPage(mediaId: 1, siblingIds: const [2, 1, 3]),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(
+      find.text('2 / 3'),
+      findsOneWidget,
+      reason: '计数必须按这一批 id 的顺序算（1 在这一批的第 2 位）',
+    );
+    expect(
+      calls.where((c) => c.contains('collectionId=')),
+      isEmpty,
+      reason: '只给了一组 id 时不该再去列画廊集合成员',
+    );
+    // 整组都要补齐：翻页动画要同时画出前后两条，缺一条就翻不过去。
+    expect(
+      calls.where((c) => c == 'GET /api/media/2'),
+      isNotEmpty,
+      reason: '这一批里排在当前条前面的那条要在打开时取到',
+    );
+    expect(
+      calls.where((c) => c == 'GET /api/media/3'),
+      isNotEmpty,
+      reason: '这一批里排在当前条后面的那条要在打开时取到',
+    );
+
+    // → 到这一批的第 3 张（id 3），不是集合里的下一张
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+    await tester.pumpAndSettle();
+    expect(find.text('3 / 3'), findsOneWidget);
+    expect(find.text('示例 3'), findsOneWidget);
+
+    // ← 回到第 2 张（id 1），再 ← 到第 1 张（id 2）
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
+    await tester.pumpAndSettle();
+    expect(find.text('2 / 3'), findsOneWidget);
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
+    await tester.pumpAndSettle();
+    expect(find.text('1 / 3'), findsOneWidget);
+    expect(find.text('示例 2'), findsOneWidget);
+  });
 }

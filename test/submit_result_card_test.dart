@@ -60,20 +60,24 @@ void main() {
     expect(find.text('COMFY_SUBMIT_FAILED'), findsOneWidget);
   });
 
-  testWidgets('成功回执：绿卡 + 产物入口，点开拿到 mediaId', (tester) async {
+  testWidgets('成功回执：绿卡 + 产物入口，点开拿到 mediaId 与这一批', (tester) async {
     final msg = _reply(
       ok: true,
-      text: '手机上排队的那次提交已经跑完了，产物已入库（1 个）',
-      mediaIds: const [7],
+      text: '手机上排队的那次提交已经跑完了，产物已入库（2 个）',
+      mediaIds: const [7, 8],
     );
     var opened = -1;
+    var batch = const <int>[];
 
     await tester.pumpWidget(
       _host(
         SubmitResultCard(
           message: msg,
           mediaThumbUrlOf: (id) => 'http://127.0.0.1:1/thumb/$id',
-          onOpenMedia: (id) => opened = id,
+          onOpenMedia: (id, ids) {
+            opened = id;
+            batch = ids;
+          },
         ),
       ),
     );
@@ -84,6 +88,7 @@ void main() {
 
     await tester.tap(find.text('查看产物'));
     expect(opened, 7);
+    expect(batch, const [7, 8], reason: '详情页要拿到整批产物，才能只在这批里左右切换');
   });
 
   testWidgets('产物缩略图带上配对令牌：手机上（局域网）不带就是破图', (tester) async {
