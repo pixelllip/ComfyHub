@@ -43,7 +43,7 @@
 //! 2. **失败要带稳定码**（`ToolFailure.code`）：界面与模型按码分支，
 //!    `INVALID_ARGUMENT` / `SKILL_NOT_FOUND` / `MEMORY_FULL` / `PATH_DENIED` 各有各的下一步。
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use serde_json::{json, Value};
@@ -182,16 +182,6 @@ pub fn budget_exceeded_note(limit: i64, resettable: bool) -> String {
 #[derive(Debug, Default)]
 pub struct ToolSession {
     loaded_skills: HashSet<String>,
-    /// 本 Run 里 `layout_propose(purpose="verify")` 依据过的提示词（已按空白归一化），
-    /// 值是核对模板的**简短框表**（标题 + 画幅 + 每个框的坐标）。出图后要把这份表
-    /// 和产物一起递回模型，不能只记"有模板"。
-    ///
-    /// `comfy_submit(positivePrompt=…)` 用它判断"提交的这版提示词有没有对应的
-    /// 构图核对模板"；同一 Run 里可以给多版提示词各生成一个。
-    layout_verifications: HashMap<String, String>,
-    /// 最近一次核对模板（提示词 key + 框表）。提交没带 `positivePrompt` 时，
-    /// 用它提醒模型"本 Run 最近做过一版模板"；带提示词的提交仍按精确匹配。
-    last_layout_verification: Option<(String, String)>,
     /// 本轮已新增几条长期记忆（`remember` 的节流额度）
     pub memory_writes: i64,
     /// 本 Run 的工具调用计数（**只增不减**，硬天花板见 [`ABSOLUTE_CALL_CAP`]）
@@ -302,49 +292,6 @@ impl ToolSession {
     /// 一次 `comfy_submit` 真的不经审批就执行成功 → 记一次自动提交。
     pub fn spend_auto_submit(&mut self) {
         self.auto_submits += 1;
-    }
-
-    /// 记下一条"按这版提示词生成了构图核对模板"。
-    ///
-    /// 只记**成功**的 `purpose="verify"` 调用；失败 / 参数错误不记，
-    /// 否则一次空模板会让后面的提交误以为核对过。
-    pub fn record_layout_verification(&mut self, prompt: &str, brief: String) {
-        let key = crate::ai::layout_proposal::prompt_key(prompt);
-        if key.is_empty() {
-            return;
-        }
-        self.last_layout_verification = Some((key.clone(), brief.clone()));
-        self.layout_verifications.insert(key, brief);
-    }
-
-    /// 这版提示词是否已有对应的构图核对模板（按空白归一化比对）。
-    pub fn has_layout_verification(&self, prompt: &str) -> bool {
-        self.layout_verifications
-            .contains_key(&crate::ai::layout_proposal::prompt_key(prompt))
-    }
-
-    /// 本 Run 是否生成过任意一版核对模板（用来区分"缺模板"与"模板对不上"）。
-    pub fn has_any_layout_verification(&self) -> bool {
-        !self.layout_verifications.is_empty()
-    }
-
-    /// 取核对模板的框表：给了提示词就按精确匹配；没给就用本 Run 最近那一版。
-    ///
-    /// 精确匹配优先是有意的 —— 同一 Run 里可能先后写了两版提示词，
-    /// 提交 A 版时不能拿 B 版的框去"核对"。没给提示词时也只在**只有一版**模板时兜底，
-    /// 多版时宁可不提醒，也不拿错的框硬套。
-    pub fn layout_brief_for(&self, prompt: Option<&str>) -> Option<&str> {
-        match prompt {
-            Some(prompt) => self
-                .layout_verifications
-                .get(&crate::ai::layout_proposal::prompt_key(prompt))
-                .map(String::as_str),
-            None if self.layout_verifications.len() == 1 => self
-                .last_layout_verification
-                .as_ref()
-                .map(|(_, brief)| brief.as_str()),
-            None => None,
-        }
     }
 
     /// **完成作答**提问 → 把这一窗的额度归零，以便继续完成后续操作
@@ -576,10 +523,7 @@ pub fn implemented() -> Vec<ToolView<'static>> {
 /// + **配方三件**（`comfy_learn_workflow` / `comfy_list_recipes` / `comfy_bind_recipe`，
 ///   见 [`crate::workflow::workflow_recipe`]，P4 第 67 步；学与绑都与
 ///   `POST /api/ai/workflow-recipes*` 共用一份实现）。
-/// + **2D 布局模板**（`layout_propose`，见 [`crate::ai::layout_proposal`]，2026-11-03：
-///   写提示词后按提示词出**一个**构图核对模板，出图后对照；用户明确要方案时才给
-///   1~3 个草稿。只出布局，不生成图片、不写库）。
-pub const IMPLEMENTED: [&str; 47] = [
+pub const IMPLEMENTED: [&str; 46] = [
     "ask_user_question",
     "civitai_search",
     "comfy_audit_workflow",
@@ -610,7 +554,6 @@ pub const IMPLEMENTED: [&str; 47] = [
     "delete_skill",
     "diagnose_provider",
     "find_model",
-    "layout_propose",
     "list_dir",
     "list_skills",
     "load_skill",
@@ -812,23 +755,8 @@ pub async fn execute(
         // 「审核 → 审批 → 提交 → 自己等 → captureRun 入库 → mediaIds」这条链：
         // 审批由执行器（`default_access = ASK`）负责，其余都在 `workflow_submit` 里。
         "comfy_submit" => {
-            // 模型自己定稿的提示词必须已有按它生成的构图核对模板（2026-11-11）。
-            // 闸门在真正提交之前，不碰 ComfyUI，也不会写库。
-            // 用户把 `layout_propose` 设成 deny 时跳过：那一刻模型根本调不了它，
-            // 再拦提交只会把出图这条路彻底堵死。
-            let layout_access = policy.access_for(
-                "layout_propose",
-                crate::tools::tools::default_access("layout_propose"),
-            );
-            if layout_access != crate::tools::policy::ToolAccess::Deny {
-                crate::ai::layout_proposal::ensure_verification_template(session, arguments)?;
-            }
-            let mut outcome =
-                crate::workflow::workflow_submit::tool_submit(state, policy, arguments).await?;
-            // 出图成功：把"必须核对"和本次核对模板的框表一起塞回工具结果。
-            // 系统提示第 25 条 ⑧ 离产物太远，模型很容易只回一句"已出图"。
-            crate::ai::layout_proposal::append_post_submit_check(session, arguments, &mut outcome);
-            Ok(outcome)
+            // 2D 布局已移除：提交只跑工作流，不再有构图模板的校验或回填。
+            crate::workflow::workflow_submit::tool_submit(state, policy, arguments).await
         }
         // ---- 图像编辑三件（图像编辑那一批：投放 + 遮罩）----------------------
         // 两阶段编辑（"先出人物、再换上去" / "换背景保人物"）的地基：ComfyUI 的
@@ -855,25 +783,6 @@ pub async fn execute(
         "save_style_card" => crate::library::style_cards::tool_save(state, arguments),
         // `search_prompts`：同一个落点的另一半 —— 库里可能已经有那个角色的完整 tag 栈
         "search_prompts" => search_prompts(state, arguments),
-        // ---- 2D 布局模板（2026-11-03：工作台里"提示词 + 可编辑布局"同轮交付）------
-        // 它只把模型给的构图草稿 / 按提示词生成的核对模板规范化成 `layoutTemplates`
-        // （坐标 0~1000），界面画缩略图；不生成图片、不写库、不碰 ComfyUI，
-        // 所以出厂 ALLOW、不吃任何查询额度。
-        //
-        // 核对模板成功后要记进 session：`comfy_submit(positivePrompt=…)` 靠它判定
-        // "这版提示词是不是已经出过核对模板"。
-        "layout_propose" => {
-            let outcome = crate::ai::layout_proposal::tool_propose(arguments)?;
-            if let Some(prompt) = crate::ai::layout_proposal::verification_prompt(&outcome.payload)
-            {
-                // 框表一起记：出图后 `comfy_submit` 的结果要把这份表重新递给模型，
-                // 只记一个 key 的话，模型只能凭几十轮之前的记忆对照。
-                let brief = crate::ai::layout_proposal::verification_brief(&outcome.payload)
-                    .unwrap_or_default();
-                session.record_layout_verification(&prompt, brief);
-            }
-            Ok(outcome)
-        }
         // ---- 联网三件 + 定向查询（P4 第 64 步）------
         // 这个类别是**本项目里唯一会把数据送出本机**的那一类（`ai_settings::category_of`
         // 返回 "web"），因此三件事绑定：出厂 `ASK`（确认后才发送）、

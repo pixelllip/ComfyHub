@@ -452,12 +452,6 @@ pub fn router(state: AppState) -> Router {
         .route("/api/media/{id}/workflow", get(media_workflow))
         // API 格式节点图（"当时真正跑的东西"：comfy_submit 与端到端自测都读它，R10）
         .route("/api/prompts/{id}/api-graph", get(prompt_api_graph))
-        // 布局 → 提示词：把一份布局规格交给 AI 译者，返回提示词 + 校验结果。
-        // 模板兜底在前端（`lib/models/layout_spec.dart`），这条接口不持有那份逻辑。
-        .route(
-            "/api/layout/translate",
-            axum::routing::post(layout_translate),
-        )
         // 同步 API（P4 第 10 步）：手机连上来的第一件事（契约 §1）
         .route("/api/sync/manifest", get(sync_manifest))
         .route("/api/sync/changes", get(sync_changes))
@@ -765,16 +759,6 @@ async fn ingest_comfyui(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     Ok(Json(
         crate::comfy::capture_import::ingest_json(&state, &body).await?,
-    ))
-}
-
-/// `POST /api/layout/translate`：布局规格 + 意图 → 提示词（含五条校验的结果）。
-async fn layout_translate(
-    State(state): State<AppState>,
-    Json(body): Json<serde_json::Value>,
-) -> Result<Json<serde_json::Value>, ApiError> {
-    Ok(Json(
-        crate::ai::layout_translate::translate(&state, &body).await?,
     ))
 }
 

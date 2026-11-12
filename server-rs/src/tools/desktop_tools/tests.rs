@@ -89,8 +89,6 @@ fn 只列真搬过来了的那些() {
             "diagnose_provider",
             // 定向查询（P4 第 64 步）：**绝不代下**，只给链接 + sha256 + 目标目录
             "find_model",
-            // 2D 布局模板（2026-11-03）：写提示词时同轮给构图草稿，只读、不生成图片
-            "layout_propose",
             "list_dir",
             "read_file",
             "read_skill_file",

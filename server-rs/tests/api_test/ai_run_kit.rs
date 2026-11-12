@@ -41,7 +41,8 @@ async fn run_kit_ships_every_rule_the_phone_needs() {
     // v69（2026-11-11）：模型侧核对闭环 —— verify 结果正文带规范化框表，comfy_submit
     //   的本次产物自动附图，第 25 条要求出图后逐项对照。
     // v70（2026-11-11）：开工顺序（命中技能先 load_skill）+ 出图后必须核对构图。
-    assert_eq!(body["promptVersion"], "v70");
+    // v72（2026-11-12）：移除 2D 布局 —— 删掉 `layout_propose` 与第 25 条。
+    assert_eq!(body["promptVersion"], "v72");
     assert_eq!(body["nsfwEnabled"], false, "夹具里没开 NSFW");
     assert_eq!(body["inlineBudget"]["perImageBytes"], 8388608, "单图 8MB");
     assert_eq!(body["inlineBudget"]["totalBytes"], 20971520, "合计 20MB");
@@ -531,8 +532,6 @@ async fn tool_policy_and_nsfw_endpoints() {
             // 定向查询（P4 第 64 步）：先查本机、再按 Civitai → HF → ModelScope 查，
             // **绝不代下**（只给链接 + sha256 + 目标目录）
             "find_model",
-            // 2D 布局模板（2026-11-03）：写提示词时同轮给构图草稿，只读、不生成图片
-            "layout_propose",
             "list_dir",
             "list_skills",
             "load_skill",

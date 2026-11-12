@@ -625,27 +625,6 @@ class AiApiClient {
     ),
   );
 
-  // --- 布局 → 提示词 ------------------------------------------------------
-
-  /// `POST /api/layout/translate`：把布局规格交给 AI 译者。
-  ///
-  /// 返回 `{prompt, ok, issues, attempts, model, translator}`。
-  /// **模板兜底在调用方**（前端）：这条接口不返回模板，它不持有那份逻辑。
-  Future<Map<String, dynamic>> translateLayout({
-    required Map<String, Object?> spec,
-    required String intent,
-    required String providerId,
-    required String model,
-  }) async {
-    final res = await _send('POST', '/api/layout/translate', {
-      'spec': spec,
-      'intent': intent,
-      'providerId': providerId,
-      'model': model,
-    });
-    return (res as Map).cast<String, dynamic>();
-  }
-
   // --- 附件（M3） --------------------------------------------------------
 
   /// 上传附件（multipart，字段名 `files`）。

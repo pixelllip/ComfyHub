@@ -973,7 +973,6 @@ class _ToolPermissionsPageState extends State<_ToolPermissionsPage> {
             'skill' => Icons.auto_awesome_outlined,
             'files' => Icons.folder_outlined,
             'memory' => Icons.push_pin_outlined,
-            'layout' => Icons.dashboard_customize_outlined,
             'web' => Icons.travel_explore_outlined,
             'library' => Icons.menu_book_outlined,
             _ => Icons.dns_outlined,

@@ -12,7 +12,6 @@ import '../widgets/paged_swipe.dart';
 import '../widgets/scroll_linked_title.dart';
 import '../widgets/tag_editor.dart';
 import 'cards_page.dart';
-import 'layout_canvas_page.dart';
 import 'preset_run.dart';
 import 'prompt_detail_page.dart';
 import 'prompt_edit_page.dart';
@@ -185,14 +184,6 @@ class _PromptsPageState extends State<PromptsPage>
                   ),
               ]
             : [
-                // 布局工具与页签无关：三张页签底下都能进去（它产出的就是提示词）
-                IconButton(
-                  tooltip: '布局 → 提示词',
-                  icon: const Icon(Icons.dashboard_customize_outlined),
-                  onPressed: () => Navigator.of(context).push(
-                    MaterialPageRoute(builder: (_) => const LayoutCanvasPage()),
-                  ),
-                ),
                 // 批量管理只属于常规预设：卡片页签没有"批量"这个概念
                 if (section == PresetSection.prompts)
                   IconButton(

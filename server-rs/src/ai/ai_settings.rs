@@ -118,9 +118,6 @@ pub(crate) fn category_of(name: &str) -> &'static str {
         | "comfy_view_outputs" => "library",
         // 文件三件（Kotlin `ToolCategory.FILES`）
         "list_dir" | "read_file" | "write_file" => "files",
-        // 2D 布局模板（2026-11-03）：既不是文件也不是 ComfyUI —— 落进 `_ => "comfy"`
-        // 会让它白吃"不许把 ComfyUI 当轮询器"那 9 次额度，界面分组也会错。
-        "layout_propose" => "layout",
         // ⚠ **例外**：Kotlin 里 `comfy_env_report` 是 `ToolCategory.FILES`（它只是扫盘，
         //   不碰 ComfyUI 服务）—— 所以**不能**靠下面那条 `_ => "comfy"` 兜底，
         //   否则它一落地就会吃掉"不许把 ComfyUI 当轮询器"那 9 次额度（`MAX_COMFY_QUERIES_PER_RUN`）。

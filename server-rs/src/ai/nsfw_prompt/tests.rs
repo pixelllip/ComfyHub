@@ -63,17 +63,6 @@ fn 第5条要求命中技能先加载正文() {
     assert!(persona.contains("目录里没有对应项时才自己写"));
 }
 
-/// 第 25 条 ⑧：出图后**必须**核对构图，不是"建议对照"。
-#[test]
-fn 第25条要求出图后必须核对构图() {
-    let persona = persona_block();
-    assert!(persona.contains("出图后必须核对，不是可选项"));
-    assert!(persona.contains("主体数量与身份"));
-    assert!(persona.contains("符合") && persona.contains("不符合（差在哪）"));
-    assert!(persona.contains("我看不到这张图"));
-    assert!(persona.contains("结果里会重复这段核对要求"));
-}
-
 /// 第 19 条（图像编辑）在 2026-09-27 改过一次，改的是**实测结论**，不是措辞：
 /// 这里把四件"少了就会退回错误行为"的话钉住。
 ///
