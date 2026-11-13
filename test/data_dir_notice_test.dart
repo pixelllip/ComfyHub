@@ -6,7 +6,7 @@
 //
 // 三条钉住：正常时不占地方 / 有异常时把话原样说出来 / 关掉的是"这一次的问题"。
 
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:viewer/widgets/data_dir_notice_banner.dart';

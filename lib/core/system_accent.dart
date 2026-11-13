@@ -2,7 +2,7 @@ import 'dart:ffi';
 import 'dart:io' show Platform;
 
 import 'package:flutter/foundation.dart';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter/services.dart';
 
 /// **平台主题色（系统强调色）检测**。

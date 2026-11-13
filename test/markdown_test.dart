@@ -4,7 +4,7 @@
 //   2. **流式安全**：模型吐到一半时（未闭合的 `**` / 代码围栏）不能吞内容，
 //      否则界面会出现"字越写越少"的诡异现象。
 
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:viewer/widgets/markdown.dart';

@@ -1,6 +1,6 @@
 import 'dart:math' as math;
 
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 
 /// 缩略图（右下角）与倍数条（左下角）的 key，测试里用来定位
 const Key zoomableMinimapKey = Key('zoomable-minimap');

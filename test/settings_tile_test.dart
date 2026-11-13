@@ -6,7 +6,7 @@
 //   2) 换行后回到第一列，且每列宽度恒定（最后一行不满时不被拉宽）；
 //   3) 窄窗口（320dp）逐张叠放，不溢出。
 
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:viewer/widgets/settings_tile.dart';

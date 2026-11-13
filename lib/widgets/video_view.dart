@@ -1,6 +1,6 @@
 import 'dart:io' show File;
 
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 
 import 'android_video_view.dart';
 import 'win_video_view.dart';

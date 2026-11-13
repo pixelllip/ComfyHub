@@ -8,7 +8,7 @@
 // 这里钉住的是**主题里那一次设定**（改回去就等于 bug 复发），
 // 以及"它真的作用到了一个真实的滚动视图上"。
 
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:viewer/core/theme.dart';

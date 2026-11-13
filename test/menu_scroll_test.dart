@@ -13,7 +13,7 @@
 // ③ 界面中确实不再出现 `ModalBarrier`（防止被改回 `PopupMenuButton`）。
 
 import 'package:flutter/gestures.dart';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:viewer/widgets/app_menu.dart';

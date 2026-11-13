@@ -9,7 +9,7 @@
 //   2) 窄窗口铺满可用宽度（左右各 16 的留白不变）；
 //   3) 块与块之间的间距是 24，不会因为"分栏"消失而挤在一起。
 
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:viewer/widgets/settings_scaffold.dart';

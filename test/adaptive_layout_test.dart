@@ -3,7 +3,7 @@
 // 需求是「单列列表（提示词 / 标签 / 设置页）的列数 = 窗口宽度 / 550」，
 // 这里钉住算列的规则，以及宽窗口下确实排成了多列、窄窗口退回单列。
 
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:viewer/widgets/adaptive_layout.dart';

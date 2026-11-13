@@ -1,7 +1,7 @@
 import 'dart:io' show File;
 
 import 'package:audioplayers/audioplayers.dart';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 
 /// 音频播放器（audioplayers，Windows / Android / iOS 都支持）。
 class AudioPlayerView extends StatefulWidget {

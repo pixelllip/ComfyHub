@@ -10,7 +10,7 @@
 // ⚠ 真源只有一处：`SettingsStore.themeMode`。别在页面里自己存一份 ——
 // 那样设置页的 chip 和真正生效的主题会各说各话。
 
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 

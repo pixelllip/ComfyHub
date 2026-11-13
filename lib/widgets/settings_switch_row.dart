@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 
 /// 设置项里的开关行：标题 + 说明（左），开关（右）。
 ///

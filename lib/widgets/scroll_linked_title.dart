@@ -2,7 +2,7 @@ import 'dart:io' show Platform;
 
 import 'package:flutter/foundation.dart'
     show debugDefaultTargetPlatformOverride, kIsWeb, TargetPlatform;
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 
 /// 标题形态按**平台**区分，不按窗口宽度区分：
 ///

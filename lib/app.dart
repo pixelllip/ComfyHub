@@ -4,8 +4,7 @@ import 'dart:ui' show AppExitResponse;
 
 import 'package:flutter/foundation.dart'
     show debugPrint, kIsWeb, visibleForTesting;
-import 'package:flutter/material.dart';
-import 'package:flutter_localizations/flutter_localizations.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:provider/provider.dart';
 
 import 'core/backend_launcher.dart';
@@ -82,11 +81,10 @@ class ComfyHubApp extends StatelessWidget {
           // 返回按钮 tooltip、日期选择器…）都由 MaterialLocalizations 提供。
           // 不显式指定 zh_CN 的话，即使界面自身是中文，这些菜单也会是英文。
           locale: const Locale('zh', 'CN'),
-          localizationsDelegates: const [
-            GlobalMaterialLocalizations.delegate,
-            GlobalWidgetsLocalizations.delegate,
-            GlobalCupertinoLocalizations.delegate,
-          ],
+          // Flutter 3.50 起 Material / Cupertino 的本地化 delegate 移进
+          // `material_ui`：这一个常量已经包含 Cupertino 与 Widgets 两套，
+          // 不再需要 `flutter_localizations`。
+          localizationsDelegates: GlobalMaterialLocalizations.delegates,
           supportedLocales: const [Locale('zh', 'CN'), Locale('en')],
           // 外观默认深色，可在设置页切浅色 / 跟随系统（`SettingsStore.themeMode`）
           themeMode: settings.themeMode.material,

@@ -1,6 +1,6 @@
 import 'dart:io' show File, Platform;
 
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:video_player/video_player.dart';
 
 /// 安卓 / iOS 上的视频播放器（官方 `video_player`）。

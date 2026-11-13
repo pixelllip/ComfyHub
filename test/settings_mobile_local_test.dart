@@ -7,7 +7,7 @@
 //   ① 待上行条数**来自本地库**（不出网），同步完要立刻变成 0 并把结果说出来；
 //   ② 「从桌面拉取」成功时说的那句**不许**沿用上一条旧提示（会让人以为又推了一次）。
 
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';

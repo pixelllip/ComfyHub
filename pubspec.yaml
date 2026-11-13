@@ -70,6 +70,7 @@ dependencies:
   # 见 windows/CMakeLists.txt。**升级前必须跑 Windows 关窗回归**（AGENTS §9.1）；
   # 1.4.12 已在本机跑过：WM_CLOSE 后 System 日志 0 条 Application Popup（ID 26）。
   webview_all: 1.4.12
+  material_ui: ^1.11.0
 
 dev_dependencies:
   flutter_test:

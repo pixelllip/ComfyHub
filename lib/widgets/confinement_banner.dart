@@ -18,7 +18,7 @@
 /// 回到设置页点一次「保存并测试连接」就会重新问。
 library;
 
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 
 import '../models/models.dart';
 

@@ -16,7 +16,7 @@
 /// * 给一个「去设置」的出口 —— 那里能看实际路径、也能把指针改到实际数据上。
 library;
 
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 
 class DataDirNoticeBanner extends StatefulWidget {
   /// 要说的那句话。null / 空 = 什么都不显示。

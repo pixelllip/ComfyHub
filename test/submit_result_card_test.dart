@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:viewer/models/ai_models.dart';
 import 'package:viewer/widgets/submit_result_card.dart';

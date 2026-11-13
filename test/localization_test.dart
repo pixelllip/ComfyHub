@@ -5,7 +5,7 @@
 // 界面主体是中文、这些菜单却是英文的 "Copy / Select all"。
 // 这里直接查 ComfyHubApp 真正装上的那套本地化。
 
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 

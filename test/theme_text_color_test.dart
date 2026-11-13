@@ -14,7 +14,7 @@
 // ② 主题里**覆盖掉 M3 默认样式**的项（默认值里带着颜色，被我们整个顶掉）。
 // 下面两条分别盯这两类，最后再用"实际解析出来的颜色"兜一道底
 // （样式里有颜色 ≠ 组件真的用了它）。
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 

@@ -5,7 +5,7 @@
 //
 // 这条规则写在 AGENTS.md §6.3，设置家族 / 画廊 / 预设 / 标签都用同一套组件。
 
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:viewer/widgets/scroll_linked_title.dart';

@@ -7,7 +7,7 @@
 //
 // 这里钉两件事：① 弹窗真的是应用内的（`Dialog`）；② 右上角的关闭按钮能把它关掉。
 
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:viewer/widgets/attachment_preview.dart';
