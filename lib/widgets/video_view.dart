@@ -15,6 +15,7 @@ class PlatformVideoView extends StatelessWidget {
   const PlatformVideoView({
     super.key,
     required this.url,
+    this.localPath,
     this.file,
     this.posterUrl,
     this.autoPlay = false,
@@ -22,6 +23,9 @@ class PlatformVideoView extends StatelessWidget {
   });
 
   final String url;
+
+  /// 桌面本地后端的原件绝对路径；Windows 播放器优先用它（见 `WinVideoView.localPath`）。
+  final String? localPath;
 
   /// Android 优先播本机缓存；Windows 侧仍走 Media Foundation 的 URL。
   final File? file;
@@ -38,6 +42,7 @@ class PlatformVideoView extends StatelessWidget {
     if (WinVideoView.supported) {
       return WinVideoView(
         url: url,
+        localPath: localPath,
         posterUrl: posterUrl,
         autoPlay: autoPlay,
         loop: loop,

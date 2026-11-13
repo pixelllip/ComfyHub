@@ -80,8 +80,24 @@ HRESULT MyPlayer::initTexture()
     HRESULT hr;
     D3D11_TEXTURE2D_DESC textureDesc = {};
 
-    textureDesc.Width = m_VideoWidth;
-    textureDesc.Height = m_VideoHeight;
+    // 4K 不再按原分辨率建中转纹理：`TransferVideoFrame` 每帧要把解码帧转成
+    // BGRA 再写进共享纹理，3840×2160 在混合显卡上会把帧率打对折（2026-11-13
+    // 实测 4K30 只跑到 ~15fps）。缩到长边 2560（2560×1440）后传输量只有 4K 的
+    // 44%，而窗口/全屏的可见尺寸本身也到不了 4K；Flutter 侧再做最后的缩放。
+    int texW = m_VideoWidth;
+    int texH = m_VideoHeight;
+    const int longEdge = texW > texH ? texW : texH;
+    constexpr int kMaxTransferEdge = 2560;
+    if (longEdge > kMaxTransferEdge) {
+        const double scale = double(kMaxTransferEdge) / double(longEdge);
+        texW = int(double(m_VideoWidth) * scale + 0.5);
+        texH = int(double(m_VideoHeight) * scale + 0.5);
+        if (texW < 2) texW = 2;
+        if (texH < 2) texH = 2;
+    }
+
+    textureDesc.Width = texW;
+    textureDesc.Height = texH;
     textureDesc.MipLevels = 1;
     textureDesc.ArraySize = 1;
     textureDesc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
@@ -92,6 +108,7 @@ HRESULT MyPlayer::initTexture()
     textureDesc.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;  
     textureDesc.MiscFlags = D3D11_RESOURCE_MISC_SHARED;
     CHECK_HR(hr = pDX11Device->CreateTexture2D(&textureDesc, nullptr, &m_pTexture));
+    m_frameRectDst = RECT{0, 0, texW, texH};
 
 done:
     return hr;

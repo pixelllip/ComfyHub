@@ -86,6 +86,12 @@ class _MediaDetailPageState extends State<MediaDetailPage> {
   /// 当前这条的**本机缓存原件**（手机端）。`null` = 还没下完，预览继续走网络。
   File? _cachedFile;
 
+  /// 桌面本地后端给出的原件绝对路径（视频专用）。
+  ///
+  /// 让 Windows 播放器直接读本地文件，而不是走 HTTP：MF 的网络源在 4K 大文件上
+  /// 既掉帧、拖进度条又慢（见 `WinVideoView.localPath`）。远程后端拿不到路径时为 null。
+  String? _videoPath;
+
   /// 这一条**没有**在打开时自动缓存（太大，见 [kAutoCacheMaxBytes]）。
   ///
   /// 界面据此把菜单项改成「保存到手机相册（下载 xx MB）」—— 显示的不是
@@ -168,10 +174,7 @@ class _MediaDetailPageState extends State<MediaDetailPage> {
     }
   }
 
-  Future<void> _load({
-    bool showSpinner = true,
-    bool deferInfo = false,
-  }) async {
+  Future<void> _load({bool showSpinner = true, bool deferInfo = false}) async {
     if (!mounted) return;
     final store = context.read<LibraryStore>();
     // 本次要取的那一条。切换时 `_currentId` 会先变，但**旧内容要一直留到新数据回来**；
@@ -236,6 +239,18 @@ class _MediaDetailPageState extends State<MediaDetailPage> {
       }
       if (!mounted || _currentId != id) return;
       siblingMedia[media.id] = media;
+
+      // 视频在桌面本地后端上直接播磁盘原件（不走 HTTP），见 [_videoPath]。
+      String? videoPath;
+      if (Platform.isWindows && media.kind == MediaKind.video) {
+        try {
+          videoPath = await store.api.mediaPath(media.id);
+        } catch (_) {
+          // 远程后端 / 路径接口不可用：回落到 HTTP，不打断打开详情。
+          videoPath = null;
+        }
+        if (!mounted || _currentId != id) return;
+      }
       // 图片换页：面板更新推迟到翻页动画结束（见 [_applyPendingInfo]）。
       // 视频 / 音频 / 单张没有翻页动画，立即换面板。
       final defer =
@@ -254,6 +269,7 @@ class _MediaDetailPageState extends State<MediaDetailPage> {
           ..addAll(siblingMedia);
         _cachedFile = null;
         _autoCacheSkipped = false;
+        _videoPath = videoPath;
         _loading = false;
       });
       if (defer) _schedulePendingInfo();
@@ -565,9 +581,8 @@ class _MediaDetailPageState extends State<MediaDetailPage> {
       if (mounted) store.refreshAll();
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('保存标签失败: $e')));
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('保存标签失败: $e')));
       }
     }
   }
@@ -967,6 +982,7 @@ class _MediaDetailPageState extends State<MediaDetailPage> {
                 media: m,
                 url: url,
                 posterUrl: _posterUrl(m),
+                localPath: _videoPath,
                 file: file,
               );
 
@@ -1206,6 +1222,9 @@ class _Preview extends StatelessWidget {
   final String url;
   final String? posterUrl;
 
+  /// 桌面本地后端给出的原件绝对路径（视频专用，见 `_videoPath`）。
+  final String? localPath;
+
   /// 本机缓存原件；有它就不走网络（手机端离线看已缓存的图）。
   final File? file;
 
@@ -1216,6 +1235,7 @@ class _Preview extends StatelessWidget {
     required this.media,
     required this.url,
     this.posterUrl,
+    this.localPath,
     this.file,
     this.pager,
   });
@@ -1242,7 +1262,12 @@ class _Preview extends StatelessWidget {
           color: Colors.black,
           width: double.infinity,
           child: PlatformVideoView.supported
-              ? PlatformVideoView(url: url, file: file, posterUrl: posterUrl)
+              ? PlatformVideoView(
+                  url: url,
+                  localPath: localPath,
+                  file: file,
+                  posterUrl: posterUrl,
+                )
               : _Unsupported(
                   icon: Icons.movie_outlined,
                   message: '当前平台不支持内嵌视频播放',

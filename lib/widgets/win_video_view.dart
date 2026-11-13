@@ -11,12 +11,20 @@ class WinVideoView extends StatefulWidget {
   final bool autoPlay;
   final bool loop;
 
+  /// 本机原件的绝对路径（桌面本地后端才有）。
+  ///
+  /// 有它就直接让 Media Foundation 读本地文件：走 HTTP 时 MF 用自己的网络源，
+  /// 4K 大文件既容易掉帧，拖进度条还要重新发 Range 请求（2026-11-13 实测
+  /// 4K HEVC 只有十几帧、拖动很卡）。拿不到路径时回落到 [url]。
+  final String? localPath;
+
   /// 可选封面（预览图）：解码出第一帧之前先显示它，避免一大片黑。
   final String? posterUrl;
 
   const WinVideoView({
     super.key,
     required this.url,
+    this.localPath,
     this.autoPlay = false,
     this.loop = false,
     this.posterUrl,
@@ -39,6 +47,11 @@ class _WinVideoViewState extends State<WinVideoView> {
   String? _error;
   bool _ready = false;
 
+  /// 全屏期间内嵌这一路**不再渲染 Texture**：同一个 controller 同时接两个
+  /// `WinVideoPlayer` 会抢纹理（其中一个黑屏）。画面仍旧是同一个解码器，
+  /// 所以进出全屏不重建、不黑屏。
+  bool _fullscreen = false;
+
   @override
   void initState() {
     super.initState();
@@ -50,9 +63,10 @@ class _WinVideoViewState extends State<WinVideoView> {
       setState(() => _error = '当前平台不支持内嵌播放（仅 Windows）');
       return;
     }
-    final controller = WinVideoPlayerController.networkUrl(
-      Uri.parse(widget.url),
-    );
+    final path = widget.localPath;
+    final controller = (path != null && path.isNotEmpty)
+        ? WinVideoPlayerController.file(File(path))
+        : WinVideoPlayerController.networkUrl(Uri.parse(widget.url));
     _controller = controller;
     try {
       await controller.initialize();
@@ -75,42 +89,33 @@ class _WinVideoViewState extends State<WinVideoView> {
     super.dispose();
   }
 
-  /// 全屏播放：新开一个全屏路由再放一个播放器。
+  /// 全屏播放：**复用同一个 controller**，只把画面换到全屏路由里渲染。
   ///
-  /// 不复用同一个 controller —— `video_player_win` 的同一个 controller 接到两个
-  /// `WinVideoPlayer` 上会互相抢纹理，实测会出现其中一个黑屏。新开一路更稳，
-  /// 代价只是多解码一次（本地文件，可接受）。
-  ///
-  /// 进去之前先**暂停**内嵌这一路，退出时按全屏页回传的位置续播。
-  /// 以前只传 `startAt` 却不暂停/不回写，两路同时输出同一份音频，
-  /// 回来还停在旧进度 —— 看上去就是"点全屏后从头播"（bug 清单第 1 条）。
+  /// 以前新开一路播放器（重新 initialize + seek），进全屏会先黑一下等解码；
+  /// 而同一个 controller 同时接两个 `WinVideoPlayer` 又会抢纹理。所以这里在
+  /// 全屏期间让内嵌那一路只画黑底（不建 Texture），全屏页直接接管同一路画面。
   Future<void> _openFullscreen() async {
     final controller = _controller;
     final v = controller?.value;
-    if (controller == null || v == null || !v.isInitialized) return;
-
-    final startAt = v.position;
-    final wasPlaying = v.isPlaying;
-    if (wasPlaying) await controller.pause();
-    if (!mounted) return;
-
-    final exitAt = await Navigator.of(context).push<Duration>(
-      MaterialPageRoute<Duration>(
-        fullscreenDialog: true,
-        builder: (_) => _FullscreenVideo(
-          url: widget.url,
-          posterUrl: widget.posterUrl,
-          startAt: startAt,
-        ),
-      ),
-    );
-
-    // 全屏页里可能拖到了别处：回到内嵌这一路时接着最新进度，而不是倒回去
-    if (!mounted) return;
-    if (exitAt != null && exitAt > startAt) {
-      await controller.seekTo(exitAt);
+    if (controller == null || v == null || !v.isInitialized || _fullscreen) {
+      return;
     }
-    if (wasPlaying && mounted) await controller.play();
+
+    setState(() => _fullscreen = true);
+    try {
+      await Navigator.of(context, rootNavigator: true).push<void>(
+        // 进出全屏都**立即切换**，不做路由过渡：同一块画面只是换了尺寸，
+        // 淡入/位移只会让人以为视频卡了一下（2026-11-13 用户要求）。
+        PageRouteBuilder<void>(
+          fullscreenDialog: true,
+          transitionDuration: Duration.zero,
+          reverseTransitionDuration: Duration.zero,
+          pageBuilder: (_, _, _) => _FullscreenVideo(controller: controller),
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _fullscreen = false);
+    }
   }
 
   @override
@@ -121,6 +126,11 @@ class _WinVideoViewState extends State<WinVideoView> {
     final controller = _controller;
     if (controller == null || !_ready) {
       return _PosterOrSpinner(url: widget.posterUrl);
+    }
+
+    // 全屏路由正拿着同一个 controller 渲染：这里不能再建 Texture（会抢纹理）。
+    if (_fullscreen) {
+      return const ColoredBox(color: Colors.black);
     }
 
     final ratio = _ratioOf(controller);
@@ -201,27 +211,17 @@ class _PosterOrSpinner extends StatelessWidget {
   }
 }
 
-/// 全屏播放页：黑底 + 沉浸式铺满，带一套同样的控制条。
+/// 全屏播放页：直接渲染内嵌那一路的 controller，不重新初始化。
 class _FullscreenVideo extends StatefulWidget {
-  final String url;
-  final String? posterUrl;
-  final Duration startAt;
+  final WinVideoPlayerController controller;
 
-  const _FullscreenVideo({
-    required this.url,
-    this.posterUrl,
-    required this.startAt,
-  });
+  const _FullscreenVideo({required this.controller});
 
   @override
   State<_FullscreenVideo> createState() => _FullscreenVideoState();
 }
 
 class _FullscreenVideoState extends State<_FullscreenVideo> {
-  WinVideoPlayerController? _controller;
-  String? _error;
-  bool _ready = false;
-
   /// 键盘焦点锚点：没有它，按 Esc 时全屏页里可能没有任何东西持有焦点，
   /// `Shortcuts` 收不到按键（这就是"无法按 Esc 退出"的成因）。
   final _focus = FocusNode(debugLabel: 'fullscreen-video');
@@ -229,49 +229,24 @@ class _FullscreenVideoState extends State<_FullscreenVideo> {
   @override
   void initState() {
     super.initState();
-    _open();
+    // 自动接管焦点，Esc 才有效（点击控件后焦点会移过去，退出按钮依然在）。
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _focus.requestFocus();
+    });
   }
 
-  Future<void> _open() async {
-    final controller = WinVideoPlayerController.networkUrl(
-      Uri.parse(widget.url),
-    );
-    _controller = controller;
-    try {
-      await controller.initialize();
-      if (!mounted) return;
-      if (!controller.value.isInitialized) {
-        setState(() => _error = '无法打开视频（可能缺少解码器）');
-        return;
-      }
-      // 接着刚才的位置继续看
-      if (widget.startAt > Duration.zero) {
-        await controller.seekTo(widget.startAt);
-      }
-      setState(() => _ready = true);
-      await controller.play();
-      // 自动接管焦点，Esc 才有效（点击控件后焦点会移过去，退出按钮依然在）
-      _focus.requestFocus();
-    } catch (e) {
-      if (mounted) setState(() => _error = '全屏播放失败: $e');
-    }
-  }
-
-  /// 退出全屏：把当前进度交还给内嵌那一路，避免"退出后从头开始"。
-  void _exit() {
-    Navigator.of(context)
-        .pop<Duration>(_controller?.value.position ?? Duration.zero);
-  }
+  void _exit() => Navigator.of(context).pop();
 
   @override
   void dispose() {
     _focus.dispose();
-    _controller?.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
+    final controller = widget.controller;
+    final ratio = _WinVideoViewState._ratioOf(controller);
     return Scaffold(
       backgroundColor: Colors.black,
       body: Shortcuts(
@@ -291,94 +266,43 @@ class _FullscreenVideoState extends State<_FullscreenVideo> {
             focusNode: _focus,
             child: Stack(
               children: [
-                if (_error != null)
-                  Center(
-                    child: Text(
-                      _error!,
-                      style: const TextStyle(color: Colors.white70),
-                    ),
-                  )
-                else if (!_ready)
-                  _PosterOrSpinner(url: widget.posterUrl)
-                else
-                  Positioned.fill(
-                    child: LayoutBuilder(
-                      builder: (context, box) {
-                        final ratio = _WinVideoViewState._ratioOf(_controller!);
-                        var w = box.maxWidth;
-                        var h = w / ratio;
-                        if (h > box.maxHeight) {
-                          h = box.maxHeight;
-                          w = h * ratio;
-                        }
-                        return Center(
-                          child: SizedBox(
-                            width: w,
-                            height: h,
-                            child: WinVideoPlayer(_controller!),
-                          ),
-                        );
-                      },
-                    ),
-                  ),
-                // 顶部：退出全屏
-                Positioned(
-                  left: 8,
-                  top: 8,
-                  child: _OverlayButton(
-                    icon: Icons.fullscreen_exit,
-                    tooltip: '退出全屏（Esc）',
-                    onTap: _exit,
+                Positioned.fill(
+                  child: LayoutBuilder(
+                    builder: (context, box) {
+                      var w = box.maxWidth;
+                      var h = w / ratio;
+                      if (h > box.maxHeight) {
+                        h = box.maxHeight;
+                        w = h * ratio;
+                      }
+                      return Center(
+                        child: SizedBox(
+                          width: w,
+                          height: h,
+                          child: WinVideoPlayer(controller),
+                        ),
+                      );
+                    },
                   ),
                 ),
-                if (_ready)
-                  Positioned(
-                    left: 0,
-                    right: 0,
-                    bottom: 0,
-                    child: ColoredBox(
-                      color: Colors.black54,
-                      child: _Controls(
-                        controller: _controller!,
-                        onFullscreen: null,
-                        dark: true,
-                      ),
+                // 退出全屏和控制条的「全屏」在**同一个位置**（右下角）。
+                Positioned(
+                  left: 0,
+                  right: 0,
+                  bottom: 0,
+                  child: ColoredBox(
+                    color: Colors.black54,
+                    child: _Controls(
+                      controller: controller,
+                      onFullscreen: _exit,
+                      dark: true,
+                      fullscreenIcon: Icons.fullscreen_exit,
+                      fullscreenTooltip: '退出全屏（Esc）',
                     ),
                   ),
+                ),
               ],
             ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-/// 播放器上悬浮的圆形按钮（全屏 / 退出全屏）。
-class _OverlayButton extends StatelessWidget {
-  final IconData icon;
-  final String tooltip;
-  final VoidCallback onTap;
-
-  const _OverlayButton({
-    required this.icon,
-    required this.tooltip,
-    required this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Tooltip(
-      message: tooltip,
-      child: Material(
-        color: Colors.black45,
-        shape: const CircleBorder(),
-        child: InkWell(
-          customBorder: const CircleBorder(),
-          onTap: onTap,
-          child: Padding(
-            padding: const EdgeInsets.all(8),
-            child: Icon(icon, color: Colors.white, size: 22),
           ),
         ),
       ),
@@ -389,8 +313,12 @@ class _OverlayButton extends StatelessWidget {
 class _Controls extends StatefulWidget {
   final WinVideoPlayerController controller;
 
-  /// 控制条上的全屏按钮；传 null 表示已经有别的全屏入口（全屏页自己不再显示）。
+  /// 控制条上的全屏 / 退出全屏按钮；传 null 表示不显示。
   final VoidCallback? onFullscreen;
+
+  /// 全屏页用它把图标换成「退出全屏」，保证进出全屏的按钮落在同一个位置。
+  final IconData fullscreenIcon;
+  final String fullscreenTooltip;
 
   /// 黑底场景（全屏页）：文字与图标用白色。
   final bool dark;
@@ -398,6 +326,8 @@ class _Controls extends StatefulWidget {
   const _Controls({
     required this.controller,
     this.onFullscreen,
+    this.fullscreenIcon = Icons.fullscreen,
+    this.fullscreenTooltip = '全屏（Esc 退出）',
     this.dark = false,
   });
 
@@ -485,8 +415,8 @@ class _ControlsState extends State<_Controls> {
           if (widget.onFullscreen != null) ...[
             const SizedBox(width: 4),
             IconButton(
-              tooltip: '全屏（Esc 退出）',
-              icon: Icon(Icons.fullscreen, size: 22, color: fg),
+              tooltip: widget.fullscreenTooltip,
+              icon: Icon(widget.fullscreenIcon, size: 22, color: fg),
               onPressed: widget.onFullscreen,
             ),
           ],
