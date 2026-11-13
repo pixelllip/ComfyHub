@@ -53,6 +53,29 @@ void main() {
     expect(find.text('page 1'), findsOneWidget);
   });
 
+  testWidgets('翻页动画按帧推进：中途位置必须真的在移动', (tester) async {
+    final changes = <int>[];
+    await tester.pumpWidget(_host(changes: changes, pages: 3));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byTooltip('下一页'));
+    await tester.pump();
+    await tester.pump();
+    final start = tester.getTopLeft(find.text('page 2')).dx;
+
+    await tester.pump(const Duration(milliseconds: 120));
+    final mid = tester.getTopLeft(find.text('page 2')).dx;
+    expect(
+      mid,
+      lessThan(start),
+      reason: '新页要逐帧滑入；没有动画监听时它会在结束时直接跳到位',
+    );
+
+    await tester.pumpAndSettle();
+    expect(find.text('page 2'), findsOneWidget);
+    expect(find.text('page 1'), findsNothing);
+  });
+
   testWidgets('第一页往右滑不越界', (tester) async {
     final changes = <int>[];
     await tester.pumpWidget(_host(changes: changes, pages: 3));

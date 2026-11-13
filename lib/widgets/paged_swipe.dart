@@ -67,6 +67,9 @@ class SwipePageView extends StatefulWidget {
   /// 旧页滑出 + 新页滑入的时长。
   final Duration duration;
 
+  /// 一次换页动画（或回弹）结束时回调；用于把"新页的信息面板"推迟到动画之后更新。
+  final VoidCallback? onTransitionEnd;
+
   const SwipePageView({
     super.key,
     required this.page,
@@ -77,6 +80,7 @@ class SwipePageView extends StatefulWidget {
     this.controller,
     this.swipeEnabled = true,
     this.duration = const Duration(milliseconds: 300),
+    this.onTransitionEnd,
   });
 
   @override
@@ -146,6 +150,15 @@ class _SwipePageViewState extends State<SwipePageView>
     super.initState();
     _shownPage = widget.page.clamp(1, math.max(1, widget.pages));
     widget.controller?._attach(this);
+    // ⚠ 动画期间必须有人重建：`build` 读的是 `_anim.value`，而 `AnimationController`
+    // 只推进数值、不会自动标脏。缺这个监听时，控制器跑完只由 `whenComplete` 的
+    // `setState` 重建一次 —— 翻页从起点直接跳到终点，中间一帧都没有。
+    _anim.addListener(_onAnimTick);
+  }
+
+  void _onAnimTick() {
+    if (!mounted) return;
+    setState(() {});
   }
 
   @override
@@ -305,8 +318,11 @@ class _SwipePageViewState extends State<SwipePageView>
     _scheduleNeeded();
 
     // 动画的 300ms 内可能再次点击翻页：数据到达后继续滑动，保持页码与画面一致。
-    if (widget.page != _shownPage && _pages[widget.page] != null) {
-      _startTransitionTo(widget.page);
+    if (widget.page != _shownPage) {
+      if (_pages[widget.page] != null) _startTransitionTo(widget.page);
+    } else {
+      // 页码已经对齐：这次换页的收尾交给宿主（信息面板等）。
+      widget.onTransitionEnd?.call();
     }
   }
 

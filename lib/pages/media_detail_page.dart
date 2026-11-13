@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io' show File, Platform;
 
 import 'package:flutter/gestures.dart';
@@ -116,6 +117,9 @@ class _MediaDetailPageState extends State<MediaDetailPage> {
   /// 图片翻页的手势桥：`ZoomableImageView` 在 1:1 时把横向拖动交给它。
   final SwipePageController _pager = SwipePageController();
 
+  /// 相邻图片的预热计时器：翻页动画结束后再解码，避免和动画抢同一帧。
+  Timer? _precacheTimer;
+
   @override
   void initState() {
     super.initState();
@@ -124,6 +128,7 @@ class _MediaDetailPageState extends State<MediaDetailPage> {
 
   @override
   void dispose() {
+    _precacheTimer?.cancel();
     // 保存过的大原件在这里回收（此时播放器 / 图片都已经不再用那个文件了）。
     _flushPendingEvict();
     super.dispose();
@@ -225,6 +230,9 @@ class _MediaDetailPageState extends State<MediaDetailPage> {
         _autoCacheSkipped = false;
         _loading = false;
       });
+      // 翻页动画（300ms）结束后再预热左右相邻两张：下载 / 解码 / 上传纹理
+      // 不跟动画挤在同一帧。失败不打扰界面，翻到那一页时 `Image` 照常报错。
+      _schedulePrecache(store, id);
       // 详情页打开 = 查看原件：默认缓存到手机，之后离线也能看 / 保存。
       // 失败不打扰界面，继续用网络图（见 MediaCache.ensure）。
       //
@@ -257,6 +265,34 @@ class _MediaDetailPageState extends State<MediaDetailPage> {
         _error = '$e';
         _loading = false;
       });
+    }
+  }
+
+  /// 推迟到翻页动画之后再预热（600ms 足以覆盖 300ms 的过渡）。
+  void _schedulePrecache(LibraryStore store, int id) {
+    _precacheTimer?.cancel();
+    _precacheTimer = Timer(const Duration(milliseconds: 600), () {
+      if (mounted && _currentId == id) _precacheNeighbors(store);
+    });
+  }
+
+  /// 预解码左右相邻两张图（为**下一次**翻页提前下载 / 解码 / 上传纹理）。
+  ///
+  /// 不预热时，目标页的 `Image` 在动画第一帧才开始解析图片，一帧里同时做翻页与
+  /// 解码，动画会明显停顿；预热之后切换只移动图层。只预热图片，视频 / 音频不碰。
+  void _precacheNeighbors(LibraryStore store) {
+    if (!mounted) return;
+    final i = _indexInSiblings;
+    if (i < 0) return;
+    for (final j in [i - 1, i + 1]) {
+      if (j < 0 || j >= _siblings.length) continue;
+      final asset = _siblingMedia[_siblings[j]];
+      if (asset == null || asset.kind != MediaKind.image) continue;
+      final provider = NetworkImage(store.api.absolute(asset.fileUrl));
+      // 失败（文件不在 / 网络断）不影响界面：翻到那一页时 Image 会自己报错。
+      // 这里必须给 `onError`：不给的话 precache 的异常会走 `FlutterError.reportError`，
+      // 用例里（HTTP 一律 400）会直接判失败。
+      unawaited(precacheImage(provider, context, onError: (_, _) {}));
     }
   }
 
@@ -865,6 +901,8 @@ class _MediaDetailPageState extends State<MediaDetailPage> {
                   final id = _siblings[page - 1];
                   _goTo(id);
                 },
+                // 换页动画结束后再预热左右相邻两张：不跟动画抢帧。
+                onTransitionEnd: () => _schedulePrecache(store, _currentId),
               )
             : _Preview(
                 media: m,
