@@ -96,8 +96,7 @@ class SettingsStore extends ChangeNotifier {
   /// 默认 [kAiConversationPaneWidth]（拖动出现之前的固定宽度）。只记住拖动后的
   /// 结果，下限 / 上限与"中栏至少留多少"由页面按 [kAiSidePaneMaxWidth] /
   /// [kAiCenterMinWidth] 现算 —— 窗口宽度变化时宽度按现算值收窄，不改这条偏好。
-  static const _kAiConversationPaneWidth =
-      'comfyhub.aiConversationPaneWidth';
+  static const _kAiConversationPaneWidth = 'comfyhub.aiConversationPaneWidth';
 
   /// AI 工作台右栏（上下文与状态）被拖宽后的宽度（逻辑像素）。
   ///

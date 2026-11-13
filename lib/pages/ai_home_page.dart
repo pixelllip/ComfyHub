@@ -412,10 +412,15 @@ class _AiHomePageState extends State<AiHomePage> {
     );
 
     if (wide) {
-      // 三栏之间**不画分隔线**：层次由底色差表达 —— 左右两栏用
-      // `surfaceContainerLow`（与左侧导航栏同一档），中间的消息区保持 `surface`。
-      // 这样既符合 Material 3 的分区方式，也不会出现贯穿整屏的竖线。
-      final paneColor = Theme.of(context).colorScheme.surfaceContainerLow;
+      // 三栏之间**不画分隔线**：层次由底色差表达，中间的消息区保持 `surface`。
+      //
+      // 两栏**不是同一档底色**：导航栏是 `surfaceContainerLow`，会话列表再抬一档
+      // （`surfaceContainerHigh`），右侧状态栏回到 `surfaceContainerLow` 并把内容
+      // 放进 `surfaceContainerHigh` 的卡片里。这样导航栏、会话列表、右侧栏、
+      // 底部输入区四块各有各的底色，不会糊成一片。
+      final scheme = Theme.of(context).colorScheme;
+      final conversationPaneColor = scheme.surfaceContainerHigh;
+      final contextPaneColor = scheme.surfaceContainerLow;
       return Scaffold(
         body: LayoutBuilder(
           builder: (context, constraints) {
@@ -458,11 +463,14 @@ class _AiHomePageState extends State<AiHomePage> {
                   // 用 `Material` 而不是 `ColoredBox`：会话行是 `ListTile`，
                   // 它的选中底色与水波纹要画在最近的 Material 上；中间插一层
                   // ColoredBox 会把那些效果盖掉（框架会直接断言）。
-                  child: Material(color: paneColor, child: conversationList),
+                  child: Material(
+                    color: conversationPaneColor,
+                    child: conversationList,
+                  ),
                 ),
                 _PaneResizeHandle(
                   key: const Key('ai-conversation-resize'),
-                  background: paneColor,
+                  background: conversationPaneColor,
                   semanticLabel: '拖动调整会话列表宽度',
                   onDragStart: () {
                     // 从"当前实际显示宽度"开始累加：窗口变窄时显示宽度会被夹小，
@@ -482,7 +490,7 @@ class _AiHomePageState extends State<AiHomePage> {
                 if (showPanel) ...[
                   _PaneResizeHandle(
                     key: const Key('ai-context-resize'),
-                    background: paneColor,
+                    background: contextPaneColor,
                     semanticLabel: '拖动调整上下文栏宽度',
                     onDragStart: () {
                       setState(() => _contextPaneWidth = rightWidth);
@@ -501,7 +509,7 @@ class _AiHomePageState extends State<AiHomePage> {
                     key: const Key('ai-context-pane'),
                     width: rightWidth,
                     child: Material(
-                      color: paneColor,
+                      color: contextPaneColor,
                       child: _ContextPanel(store: store),
                     ),
                   ),
@@ -789,10 +797,7 @@ class _Thread extends StatelessWidget {
             Expanded(
               child: Stack(
                 children: [
-                  _MessageList(
-                    store: store,
-                    controller: controller,
-                  ),
+                  _MessageList(store: store, controller: controller),
                   // 「AI 正在生成」的加载提示**不做成底部浮层**：
                   // 显示在正在生成回复的气泡底部，且只保留转圈动画。
                   // 它现在是该气泡自身的内容，
@@ -1248,10 +1253,7 @@ class _MessageList extends StatelessWidget {
   final AiWorkspaceStore store;
   final ScrollController controller;
 
-  const _MessageList({
-    required this.store,
-    required this.controller,
-  });
+  const _MessageList({required this.store, required this.controller});
 
   /// 每一条气泡的外边距。
   ///
@@ -1265,6 +1267,17 @@ class _MessageList extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (store.messages.isEmpty) return _EmptyThread(store: store);
+
+    // 最后一条用户消息的位置：它**之后**的助手消息还"有效"，之前的助手消息
+    // 已经被用户的新提问顶掉 —— 结尾提问卡要据此自动收起（见 `_AskFollowUpCard`）。
+    final messages = store.messages;
+    var lastUser = -1;
+    for (var i = messages.length - 1; i >= 0; i--) {
+      if (messages[i].isUser) {
+        lastUser = i;
+        break;
+      }
+    }
 
     return SingleChildScrollView(
       // 聊天气泡列表：界面里还有别的可滚动区域（会话列表、气泡里的清单），
@@ -1282,15 +1295,16 @@ class _MessageList extends StatelessWidget {
         // 右侧出现大片空白。
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          for (final message in store.messages)
+          for (var i = 0; i < messages.length; i++)
             Padding(
-              key: ValueKey(message.id),
+              key: ValueKey(messages[i].id),
               padding: _itemPadding,
               // RepaintBoundary / 重建闸门都在 `_MessageBubbleSlot` 里：见它的注释
               // （流式输出时只有**真的变了**的那一条会重建，历史气泡整棵跳过）。
               child: _MessageBubbleSlot(
                 store: store,
-                message: message,
+                message: messages[i],
+                superseded: !messages[i].isUser && i < lastUser,
               ),
             ),
         ],
@@ -1329,9 +1343,16 @@ class _MessageBubbleSlot extends StatefulWidget {
   final AiWorkspaceStore store;
   final AiMessage message;
 
+  /// 这条助手消息是否已被**后来的用户消息**顶掉（见 `_MessageList.build`）。
+  ///
+  /// 只影响结尾提问卡的默认折叠状态；但它必须进重建闸门 —— 用户发出新提问时
+  /// 消息实例本身没变，只看实例会一直用缓存，卡片就不会自动收起。
+  final bool superseded;
+
   const _MessageBubbleSlot({
     required this.store,
     required this.message,
+    this.superseded = false,
   });
 
   @override
@@ -1345,6 +1366,7 @@ class _MessageBubbleSlotState extends State<_MessageBubbleSlot> {
   int? _cachedLive;
   String? _cachedStreamingId;
   String? _cachedPermission;
+  bool? _cachedSuperseded;
 
   @override
   Widget build(BuildContext context) {
@@ -1366,7 +1388,8 @@ class _MessageBubbleSlotState extends State<_MessageBubbleSlot> {
         _cachedSending == store.sending &&
         _cachedLive == live &&
         _cachedStreamingId == streamingId &&
-        _cachedPermission == permission;
+        _cachedPermission == permission &&
+        _cachedSuperseded == widget.superseded;
     if (unchanged) return _cached!;
 
     final message = widget.message;
@@ -1375,12 +1398,15 @@ class _MessageBubbleSlotState extends State<_MessageBubbleSlot> {
     _cachedLive = live;
     _cachedStreamingId = streamingId;
     _cachedPermission = permission;
+    _cachedSuperseded = widget.superseded;
     aiChatBubbleBuilds++;
     _cached = RepaintBoundary(
       child: _MessageBubble(
         message: message,
         store: store,
         sending: store.sending,
+        // 结尾提问卡：被后来的用户消息顶掉时默认收起
+        superseded: widget.superseded,
         // 「AI 正在生成」的转圈动画只绘制在**正在流式生成的那一条**上
         generating: generating,
         // 本轮权限档：**实时**读取 store，显示在正在生成的气泡中。
@@ -1469,6 +1495,11 @@ class _MessageBubble extends StatelessWidget {
   /// 这条消息的有序工具调用（M4）。
   final List<AiToolCallState> toolCalls;
 
+  /// 这条助手消息是否已经被**后来的用户消息**顶掉（见 `_MessageList.build`）。
+  ///
+  /// 只用于结尾提问卡的默认折叠：用户已经往下问了，旧提问不该继续摊开占版面。
+  final bool superseded;
+
   /// 这条消息按流顺序排好的段：思考段 + 正文段（`reasoning` / `text`）。
   final List<AiMessageSegment> segments;
 
@@ -1525,6 +1556,7 @@ class _MessageBubble extends StatelessWidget {
     this.modelLabel = '',
     required this.onRetry,
     this.toolCalls = const [],
+    this.superseded = false,
     this.segments = const [],
     this.producedMediaIds = const [],
     this.producedNsfwMediaIds = const [],
@@ -1813,6 +1845,8 @@ class _MessageBubble extends StatelessWidget {
                   submitText: call.submitText,
                   // 这一轮还在生成 / 还在发送时不能提交（要等它结束）
                   enabled: !sending,
+                  // 用户已经往下问了：旧提问默认收成一行
+                  superseded: superseded,
                 )
               : _AskCard(
                   key: ValueKey('${message.id}-${call.callId}'),
@@ -3689,9 +3723,10 @@ class _ComposerState extends State<_Composer> {
     final inputMax = _inputMaxLines;
 
     return Container(
-      // 输入区与消息区之间**不画横线**：换成比消息区高一档的底色，
+      // 输入区与消息区之间**不画横线**：换成比消息区高两档的底色，
       // 让"这里开始是输入区"由色阶表达（Material 3 的分层方式）。
-      color: theme.colorScheme.surfaceContainerLow,
+      // 比左右两栏再高一档，避免和导航栏 / 会话列表糊成同一个灰块。
+      color: theme.colorScheme.surfaceContainer,
       padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
       child: Column(
         // 输入区按内容取高（上限由页面那层 ConstrainedBox 给）：写成 max 会把

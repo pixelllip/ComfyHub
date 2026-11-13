@@ -552,10 +552,7 @@ void main() {
       const Offset(-90, 0),
     );
     await tester.pumpAndSettle();
-    expect(
-      widthOf('ai-context-pane'),
-      closeTo(kAiContextPaneWidth + 90, 0.5),
-    );
+    expect(widthOf('ai-context-pane'), closeTo(kAiContextPaneWidth + 90, 0.5));
 
     // ④ 拖过上限：停在最宽处，中栏没有被压没
     await tester.drag(
@@ -577,10 +574,7 @@ void main() {
         .element(find.byType(AiHomePage))
         .read<SettingsStore>();
     expect(settings.aiConversationPaneWidth, kAiSidePaneMaxWidth);
-    expect(
-      settings.aiContextPaneWidth,
-      closeTo(kAiContextPaneWidth + 90, 0.5),
-    );
+    expect(settings.aiContextPaneWidth, closeTo(kAiContextPaneWidth + 90, 0.5));
   });
 
   testWidgets('会话列表：显示最近一次对话时间，聊完立刻变成「刚刚」（用户建议 ⑥）', (tester) async {

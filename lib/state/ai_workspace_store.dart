@@ -1279,6 +1279,13 @@ class AiWorkspaceStore extends ChangeNotifier {
           optionIndex: optionIndex,
         ),
       );
+      // 结尾提问卡的数据来自定稿后的 `parts`，上面那次 patch 只改实时列表 ——
+      // 这里补一份本地答案，让卡片当场切成"已回答"（见 [_questionAnswers]）。
+      _rememberQuestionAnswer(
+        questionId,
+        answer: text ?? _optionLabelOf(questionId, optionIndex),
+        optionIndex: optionIndex,
+      );
       notifyListeners();
       return (ok: true, message: '已回答');
     } catch (e) {
@@ -1294,6 +1301,8 @@ class AiWorkspaceStore extends ChangeNotifier {
         _callIdForQuestion(questionId) ?? _liveAskCallIdHere() ?? questionId,
         (call) => _applyLocalAnswer(call, questionId, answer: ''),
       );
+      // 同 [answerQuestion]：让结尾提问卡立刻显示"已跳过"。
+      _rememberQuestionAnswer(questionId, answer: '');
       notifyListeners();
       return (ok: true, message: '已跳过');
     } catch (e) {
@@ -3200,6 +3209,14 @@ class AiWorkspaceStore extends ChangeNotifier {
   /// 助手消息 id → 实时工具调用（有序）。
   final Map<String, List<AiToolCallState>> _liveToolCalls = {};
 
+  /// 本地刚答过、但后端那份 `parts` 里还是"未回答"的提问（key = questionId）。
+  ///
+  /// 为什么需要它：消息定稿之后，气泡里的工具调用**优先从 `parts` 还原**（权威），
+  /// 而 [answerQuestion] 只改流式阶段的 [_liveToolCalls] —— 于是答完结尾提问卡
+  /// 界面不会立刻变成"已回答"，要退出重进 / 切走再切回才看得到（用户 2026-11-13
+  /// 反馈）。这里把本地答案叠在 parts 之上，读到后端的新状态后自动作废。
+  final Map<String, ({String? answer, int? optionIndex})> _questionAnswers = {};
+
   /// 助手消息 id → 实时思考正文。
   final Map<String, String> _liveReasoning = {};
 
@@ -3279,8 +3296,109 @@ class AiWorkspaceStore extends ChangeNotifier {
   /// 流式过程中 parts 还没有，就用事件累积的实时列表。
   List<AiToolCallState> toolCallsFor(AiMessage message) {
     final fromParts = AiToolCallState.listFromParts(message.parts);
-    if (fromParts.isNotEmpty) return fromParts;
-    return _liveToolCalls[message.id] ?? const [];
+    final base = fromParts.isNotEmpty
+        ? fromParts
+        : (_liveToolCalls[message.id] ?? const <AiToolCallState>[]);
+    if (_questionAnswers.isEmpty) return base;
+    var changed = false;
+    final out = <AiToolCallState>[];
+    for (final call in base) {
+      // 只叠结尾提问：阻塞式提问在同一个 Run 里回答，实时列表已经是准的。
+      if (call.name != 'ask_follow_up') {
+        out.add(call);
+        continue;
+      }
+      final questions = call.allQuestions;
+      final pendingLocal = questions.any(
+        (q) => !q.answered && _questionAnswers.containsKey(q.questionId),
+      );
+      if (!pendingLocal) {
+        out.add(call);
+        continue;
+      }
+      changed = true;
+      final next = [
+        for (final q in questions)
+          if (!q.answered && _questionAnswers.containsKey(q.questionId))
+            q.copyWith(
+              answered: true,
+              answer: _questionAnswers[q.questionId]!.answer,
+              optionIndex: _questionAnswers[q.questionId]!.optionIndex,
+            )
+          else
+            q,
+      ];
+      final original = call.question;
+      AiQuestion? current = original;
+      if (original != null) {
+        current = next.firstWhere(
+          (q) => q.questionId == original.questionId,
+          orElse: () => original,
+        );
+      }
+      out.add(call.copyWith(questions: next, question: current));
+    }
+    return changed ? out : base;
+  }
+
+  /// 记下本地刚答过的提问（见 [_questionAnswers]），并让对方那条气泡重建。
+  ///
+  /// 为什么必须 bump 版本：消息定稿后气泡走的是"实例没变就复用"的重建闸门，
+  /// 只改这张表不会让 `_MessageBubbleSlot` 失效 —— 表现就是"答了但界面没动"。
+  void _rememberQuestionAnswer(
+    String questionId, {
+    String? answer,
+    int? optionIndex,
+  }) {
+    _questionAnswers[questionId] = (answer: answer, optionIndex: optionIndex);
+    final messageId = _messageIdForQuestion(questionId);
+    if (messageId != null) _bumpLiveRevision(messageId);
+  }
+
+  /// 这个 `questionId` 挂在**哪条助手消息**上（先实时、再历史 parts）。
+  String? _messageIdForQuestion(String questionId) {
+    bool has(AiToolCallState call) =>
+        call.allQuestions.any((q) => q.questionId == questionId);
+    for (final entry in _liveToolCalls.entries) {
+      if (entry.value.any(has)) return entry.key;
+    }
+    for (final m in messages) {
+      if (AiToolCallState.listFromParts(m.parts).any(has)) return m.id;
+    }
+    return null;
+  }
+
+  /// 选项下标 → 选项文字（拿不到就返回 null）。
+  ///
+  /// 只用于把"点了第几个"记成可读的答案；题目本身仍以选项下标为准。
+  String? _optionLabelOf(String questionId, int? optionIndex) {
+    if (optionIndex == null) return null;
+    for (final list in _liveToolCalls.values) {
+      for (final call in list) {
+        for (final q in call.allQuestions) {
+          if (q.questionId == questionId &&
+              optionIndex >= 0 &&
+              optionIndex < q.options.length) {
+            return q.options[optionIndex];
+          }
+        }
+      }
+    }
+    return null;
+  }
+
+  /// 后端已经回传"已回答"的题：本地那份临时答案随之作废。
+  void _pruneQuestionAnswers() {
+    if (_questionAnswers.isEmpty) return;
+    final answered = <String>{};
+    for (final m in messages) {
+      for (final call in AiToolCallState.listFromParts(m.parts)) {
+        for (final q in call.allQuestions) {
+          if (q.answered) answered.add(q.questionId);
+        }
+      }
+    }
+    _questionAnswers.removeWhere((id, _) => answered.contains(id));
   }
 
   /// 一条消息的思考正文（`reasoning.delta` 累积 / parts 里的 reasoning 块）。
@@ -3501,6 +3619,7 @@ class AiWorkspaceStore extends ChangeNotifier {
             m,
       ]);
       _pruneLiveState();
+      _pruneQuestionAnswers();
       _syncConversationStats();
     } catch (_) {
       // 保留本地已有的流式内容，别因为一次刷新失败把回复擦掉
