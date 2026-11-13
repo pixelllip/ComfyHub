@@ -660,6 +660,17 @@ class _GalleryPageState extends State<GalleryPage> {
             },
             onPageChanged: store.setMediaPage,
             onPageNeeded: store.ensureMediaPage,
+            // 页码变了但这一页数据 / 选中状态没变时复用旧网格：翻页那一帧不重建
+            // 几十张卡片（当前页与预建的相邻页都不重建）。
+            pageVersion: (page) {
+              final data = store.mediaPageData(page);
+              return Object.hash(
+                data,
+                _selectionMode,
+                Object.hashAll(_picked.keys),
+                store.mediaFavoritesFlat,
+              );
+            },
             // 桌面格子可以直接拖去组成集合，横向拖动会被格子先抢走；
             // 关掉翻页手势，翻页只走下面那条显式按钮，避免"想翻页却拖走一张图"。
             swipeEnabled: !_mouseFirst,

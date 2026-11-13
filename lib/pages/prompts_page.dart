@@ -586,6 +586,16 @@ class _PromptsPageState extends State<PromptsPage>
             },
             onPageChanged: store.setPromptPage,
             onPageNeeded: store.ensurePromptPage,
+            // 页码变了但这一页数据 / 选中状态没变时复用旧列表，翻页不重建整页卡片。
+            pageVersion: (page) {
+              final data = store.promptPageData(page);
+              return Object.hash(
+                data,
+                _selectionMode,
+                Object.hashAll(_selected),
+                Object.hashAll(store.selectedTags),
+              );
+            },
           ),
         ),
         PageBar(

@@ -70,6 +70,10 @@ class SwipePageView extends StatefulWidget {
   /// 一次换页动画（或回弹）结束时回调；用于把"新页的信息面板"推迟到动画之后更新。
   final VoidCallback? onTransitionEnd;
 
+  /// 这一页内容的版本。父级重建时版本没变的页**不重新 build** —— 翻页只改页码，
+  /// 不该把当前页 / 预建页的整张网格或列表再建一遍。`null` = 每次都重建。
+  final Object? Function(int page)? pageVersion;
+
   const SwipePageView({
     super.key,
     required this.page,
@@ -81,6 +85,7 @@ class SwipePageView extends StatefulWidget {
     this.swipeEnabled = true,
     this.duration = const Duration(milliseconds: 300),
     this.onTransitionEnd,
+    this.pageVersion,
   });
 
   @override
@@ -122,6 +127,9 @@ class _SwipePageViewState extends State<SwipePageView>
   /// 已经拿到内容的页（widget 描述，不是 Element）。只在拖动 / 动画时进树。
   final Map<int, Widget> _pages = <int, Widget>{};
 
+  /// 每页内容的版本（见 [SwipePageView.pageVersion]）。
+  final Map<int, Object?> _pageVersions = <int, Object?>{};
+
   /// 水平拖动位移（像素）。`<0` = 往下一页拖。
   double _dragPx = 0;
 
@@ -140,6 +148,15 @@ class _SwipePageViewState extends State<SwipePageView>
 
   /// 已经请求过、但内容还没到的页（避免每帧重复请求）。
   final Set<int> _requested = <int>{};
+
+  /// 每页一个 `GlobalKey`：页面在 Stack 里的槽位会随当前页变化，靠它保住
+  /// Element / State（滚动位置、图片缩放状态都不丢）。
+  final Map<int, GlobalKey> _pageKeys = <int, GlobalKey>{};
+
+  GlobalKey _pageKey(int page) => _pageKeys.putIfAbsent(
+    page,
+    () => GlobalKey(debugLabel: 'swipe-page-$page'),
+  );
 
   double _width = 0;
 
@@ -230,16 +247,27 @@ class _SwipePageViewState extends State<SwipePageView>
     for (final page in wanted) {
       if (page < 1 || page > widget.pages) {
         _pages.remove(page);
+        _pageVersions.remove(page);
+        continue;
+      }
+      final version = widget.pageVersion?.call(page);
+      if (widget.pageVersion != null &&
+          _pages.containsKey(page) &&
+          _pageVersions[page] == version) {
+        // 页码变了但这一页的内容没变：复用旧 widget，整张网格 / 列表不重建。
         continue;
       }
       final content = widget.builder(page);
       if (content == null) {
         _pages.remove(page);
+        _pageVersions.remove(page);
       } else {
         _pages[page] = content;
+        _pageVersions[page] = version;
       }
     }
     _pages.removeWhere((page, _) => !wanted.contains(page));
+    _pageVersions.removeWhere((page, _) => !_pages.containsKey(page));
   }
 
   void _scheduleNeeded() {
@@ -439,58 +467,17 @@ class _SwipePageViewState extends State<SwipePageView>
         _width = constraints.maxWidth;
         final current = _pages[_shownPage];
         if (current == null) return const SizedBox.shrink();
+        final primary = PrimaryScrollController.maybeOf(context);
+        final pages = _pages.keys.toList()..sort();
 
-        // 动画 / 拖动时才把相邻页也放进树里：静止时只有当前页，
-        // 旧页在动画结束后就真的被注销了。
-        final showAdjacent = _dragging || _settling || _dragPx != 0;
-        final showPrev =
-            showAdjacent &&
-            _shownPage > 1 &&
-            _pages.containsKey(_shownPage - 1);
-        final showNext =
-            showAdjacent &&
-            _shownPage < widget.pages &&
-            _pages.containsKey(_shownPage + 1);
-
+        // **所有缓存的页都留在树里**（当前页可见，相邻页 `Offstage`）。
+        // 相邻页在静止时就已经建好、布局好，翻页那一帧只移动图层 —— 否则
+        // 目标页的整张网格 / 列表会在动画第一帧才 build，直接吃掉几十毫秒。
         final body = ClipRect(
           child: Stack(
             fit: StackFit.expand,
             children: [
-              if (_transitioning) ...[
-                _positioned(
-                  _fromPage,
-                  _pages[_fromPage] ?? current,
-                  _transitionOffset(),
-                  primary: null,
-                ),
-                _positioned(
-                  _toPage,
-                  _pages[_toPage] ?? current,
-                  _transitionOffset() + _direction * _width,
-                  primary: null,
-                ),
-              ] else ...[
-                if (showPrev)
-                  _positioned(
-                    _shownPage - 1,
-                    _pages[_shownPage - 1]!,
-                    _dragOffset() - _width,
-                    primary: null,
-                  ),
-                if (showNext)
-                  _positioned(
-                    _shownPage + 1,
-                    _pages[_shownPage + 1]!,
-                    _dragOffset() + _width,
-                    primary: null,
-                  ),
-                _positioned(
-                  _shownPage,
-                  current,
-                  _dragOffset(),
-                  primary: PrimaryScrollController.maybeOf(context),
-                ),
-              ],
+              for (final page in pages) _pageLayer(page, primary),
               if (_waiting)
                 const Positioned(
                   top: 0,
@@ -518,6 +505,55 @@ class _SwipePageViewState extends State<SwipePageView>
     );
   }
 
+  /// 一页的图层。`GlobalKey` 让页面在 Stack 里的位置变化时保住 Element / State
+  /// （翻页结束时当前页会从"右侧那一格"变成"中间那一格"）。
+  Widget _pageLayer(int page, ScrollController? primary) {
+    final child = _pages[page];
+    if (child == null) return const SizedBox.shrink();
+    final visible = _isPageVisible(page);
+    final controller = page == _shownPage ? primary : null;
+    final content = controller == null
+        ? PrimaryScrollController.none(child: child)
+        : PrimaryScrollController(controller: controller, child: child);
+    return Positioned.fill(
+      child: Transform.translate(
+        offset: Offset(_offsetFor(page), 0),
+        // 两页同时在场时，每页各自是一个独立图层：翻页每帧只改变换矩阵，内容不重画。
+        child: RepaintBoundary(
+          child: Offstage(
+            offstage: !visible,
+            child: TickerMode(
+              enabled: page == _shownPage,
+              child: IgnorePointer(
+                ignoring: page != _shownPage,
+                child: KeyedSubtree(
+                  key: _pageKey(page),
+                  child: content,
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  bool _isPageVisible(int page) {
+    if (_transitioning) return page == _fromPage || page == _toPage;
+    if (page == _shownPage) return true;
+    if (!(_dragging || _settling || _dragPx != 0)) return false;
+    return page == _shownPage - 1 || page == _shownPage + 1;
+  }
+
+  double _offsetFor(int page) {
+    if (_transitioning) {
+      if (page == _fromPage) return _transitionOffset();
+      if (page == _toPage) return _transitionOffset() + _direction * _width;
+      return (page - _shownPage) * _width;
+    }
+    return (page - _shownPage) * _width + _dragOffset();
+  }
+
   double _dragOffset() {
     if (_width <= 0) return 0;
     if (_settling) return _anim.value * _width;
@@ -530,32 +566,6 @@ class _SwipePageViewState extends State<SwipePageView>
     final end = -_direction * _width;
     return _startOffset + (end - _startOffset) * p;
   }
-
-  /// [primary] 只有"当前页"才传：相邻页同时挂着两个 `ScrollView`，
-  /// 如果两个都去认 `PrimaryScrollController`，手机上会直接报
-  /// "controller attached to multiple scroll views"。
-  Widget _positioned(
-    int page,
-    Widget child,
-    double dx, {
-    required ScrollController? primary,
-  }) => Positioned.fill(
-    child: Transform.translate(
-      offset: Offset(dx, 0),
-      // ★ 两页同时在场时要**各自是一个独立图层**：翻页每帧只改变换矩阵，
-      //   内容不重画（否则整页图片 + 列表每帧重新栅格化，手机上必掉帧）。
-      child: RepaintBoundary(
-        child: primary == null
-            ? PrimaryScrollController.none(
-                child: KeyedSubtree(key: ValueKey<int>(page), child: child),
-              )
-            : PrimaryScrollController(
-                controller: primary,
-                child: KeyedSubtree(key: ValueKey<int>(page), child: child),
-              ),
-      ),
-    ),
-  );
 }
 
 /// 把 FAB 抬到 [PageBar] 之上（移动端底部的「新建 / 上传」会盖住翻页按钮）。

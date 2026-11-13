@@ -76,6 +76,50 @@ void main() {
     expect(find.text('page 1'), findsNothing);
   });
 
+  testWidgets('静止时就预建相邻页：翻页那一帧不再建整页', (tester) async {
+    _ProbeState.built.clear();
+    var page = 1;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: StatefulBuilder(
+            builder: (context, setState) => Column(
+              children: [
+                Expanded(
+                  child: SwipePageView(
+                    page: page,
+                    pages: 3,
+                    builder: (p) => _Probe(p),
+                    onPageChanged: (p) => setState(() => page = p),
+                  ),
+                ),
+                PageBar(
+                  page: page,
+                  pages: 3,
+                  onChanged: (p) => setState(() => page = p),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(_ProbeState.built, containsAll(<int>[1, 2]), reason: '下一页要提前建好');
+    expect(
+      find.text('page 2', skipOffstage: false),
+      findsOneWidget,
+      reason: '相邻页在树里，只是 Offstage',
+    );
+    expect(find.text('page 2'), findsNothing, reason: '默认 finder 跳过 Offstage');
+
+    await tester.tap(find.byTooltip('下一页'));
+    await tester.pumpAndSettle();
+    expect(_ProbeState.built, containsAll(<int>[1, 2, 3]), reason: '新相邻页也要预建');
+    expect(find.text('page 2'), findsOneWidget);
+  });
+
   testWidgets('第一页往右滑不越界', (tester) async {
     final changes = <int>[];
     await tester.pumpWidget(_host(changes: changes, pages: 3));
@@ -172,6 +216,28 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('page 2'), findsOneWidget);
   });
+}
+
+class _Probe extends StatefulWidget {
+  final int page;
+
+  const _Probe(this.page);
+
+  @override
+  State<_Probe> createState() => _ProbeState();
+}
+
+class _ProbeState extends State<_Probe> {
+  static final List<int> built = <int>[];
+
+  @override
+  void initState() {
+    super.initState();
+    built.add(widget.page);
+  }
+
+  @override
+  Widget build(BuildContext context) => Center(child: Text('page ${widget.page}'));
 }
 
 Widget _asyncHost(GlobalKey<_AsyncHostState> key) => MaterialApp(
