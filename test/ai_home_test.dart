@@ -19,6 +19,7 @@ import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:viewer/core/ai_api_client.dart';
+import 'package:viewer/core/layout_constants.dart';
 import 'package:viewer/core/settings_store.dart';
 import 'package:viewer/core/theme.dart';
 import 'package:viewer/models/ai_models.dart';
@@ -328,7 +329,24 @@ void main() {
     expect(find.text('ComfyUI'), findsOneWidget);
     expect(find.text('上下文'), findsNothing, reason: '「上下文」这个含混的标题已经去掉');
     // 左侧栏和右侧栏同时存在，说明是三栏而不是单列
-    expect(find.byType(VerticalDivider), findsNWidgets(2));
+    expect(find.byKey(const Key('ai-conversation-pane')), findsOneWidget);
+    expect(find.byKey(const Key('ai-context-pane')), findsOneWidget);
+    // 三栏之间**不画分隔线**（用户要求：模块边界用底色差表达，不用线条）。
+    expect(
+      find.byType(VerticalDivider),
+      findsNothing,
+      reason: '三栏之间不许再有贯穿整屏的竖线',
+    );
+
+    final left = tester.getRect(find.byKey(const Key('ai-conversation-pane')));
+    final right = tester.getRect(find.byKey(const Key('ai-context-pane')));
+    expect(left.width, kAiConversationPaneWidth);
+    expect(right.width, kAiContextPaneWidth);
+    expect(
+      right.left - left.right - kAiResizeHandleWidth * 2,
+      greaterThanOrEqualTo(kAiCenterMinWidth),
+      reason: '默认宽度下中栏要足够宽',
+    );
   });
 
   testWidgets('900~1199px：第三栏铺不开，但 Comfy 状态仍然可达（AIH-002 死角）', (tester) async {
@@ -340,7 +358,9 @@ void main() {
     await tester.pumpAndSettle();
 
     // 这一段仍然是两栏（900px 宽时再塞一栏，正文区只剩约 400px，太挤）
-    expect(find.byType(VerticalDivider), findsOneWidget);
+    expect(find.byKey(const Key('ai-conversation-pane')), findsOneWidget);
+    expect(find.byKey(const Key('ai-context-pane')), findsNothing);
+    expect(find.byType(VerticalDivider), findsNothing);
     expect(find.text('ComfyUI'), findsNothing);
 
     // 但入口必须在：这一段既不是 <900 的右下角 FAB，也不是 ≥1200 的第三栏，
@@ -453,17 +473,21 @@ void main() {
     await tester.tap(find.text('发送'));
     await tester.pumpAndSettle();
 
-    final dividers = find.byType(VerticalDivider);
-    expect(dividers, findsNWidgets(2), reason: '前提：这是三栏布局');
-    final paneLeft = tester.getRect(dividers.at(0)).right;
-    final paneRight = tester.getRect(dividers.at(1)).left;
+    // 三栏之间没有分隔线，栏宽直接取两栏的实际矩形：
+    // 消息区两侧各让出一条拖动条的宽度。
+    final leftPane = tester.getRect(
+      find.byKey(const Key('ai-conversation-pane')),
+    );
+    final rightPane = tester.getRect(find.byKey(const Key('ai-context-pane')));
+    final paneLeft = leftPane.right + kAiResizeHandleWidth;
+    final paneRight = rightPane.left - kAiResizeHandleWidth;
     final list = tester.getRect(find.byKey(const Key('ai-message-list')));
 
-    expect(list.left, closeTo(paneLeft, 0.5), reason: '消息区要从左边栏那条分隔线开始');
+    expect(list.left, closeTo(paneLeft, 0.5), reason: '消息区要从左边栏与拖动条之后开始');
     expect(
       list.right,
       closeTo(paneRight, 0.5),
-      reason: '消息区要铺到右侧栏那条分隔线 —— 滚动条就画在这个右边缘，这才叫"贴边"',
+      reason: '消息区要铺到右侧栏之前 —— 滚动条就画在这个右边缘，这才叫"贴边"',
     );
     expect(
       list.width,
@@ -488,6 +512,74 @@ void main() {
       userBubble.right,
       closeTo(paneRight - 24, 0.5),
       reason: '用户气泡要贴右（旧行为：item 缩成气泡那么宽，end 对齐等于没生效）',
+    );
+  });
+
+  // 左右侧栏可以拖动加宽（用户建议）：下限就是拖动出现之前的 240 / 260，
+  // 上限 480，且两栏加起来必须给中栏留出 kAiCenterMinWidth；松手后宽度落盘。
+  testWidgets('左右侧栏可拖动加宽，下限与中栏保底都成立（用户建议）', (tester) async {
+    tester.view.physicalSize = const Size(1600, 1000);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    await tester.pumpWidget(await buildAiHomePage());
+    await tester.pumpAndSettle();
+
+    double widthOf(String key) => tester.getRect(find.byKey(Key(key))).width;
+
+    // ① 往左拖：已经在下限，宽度不许再变小
+    await tester.drag(
+      find.byKey(const Key('ai-conversation-resize')),
+      const Offset(-120, 0),
+    );
+    await tester.pumpAndSettle();
+    expect(widthOf('ai-conversation-pane'), kAiConversationPaneWidth);
+
+    // ② 往右拖 80：会话列表加宽 80
+    await tester.drag(
+      find.byKey(const Key('ai-conversation-resize')),
+      const Offset(80, 0),
+    );
+    await tester.pumpAndSettle();
+    expect(
+      widthOf('ai-conversation-pane'),
+      closeTo(kAiConversationPaneWidth + 80, 0.5),
+    );
+
+    // ③ 右栏的拖动条在它左侧：往左拖 90 = 加宽 90
+    await tester.drag(
+      find.byKey(const Key('ai-context-resize')),
+      const Offset(-90, 0),
+    );
+    await tester.pumpAndSettle();
+    expect(
+      widthOf('ai-context-pane'),
+      closeTo(kAiContextPaneWidth + 90, 0.5),
+    );
+
+    // ④ 拖过上限：停在最宽处，中栏没有被压没
+    await tester.drag(
+      find.byKey(const Key('ai-conversation-resize')),
+      const Offset(600, 0),
+    );
+    await tester.pumpAndSettle();
+    expect(widthOf('ai-conversation-pane'), kAiSidePaneMaxWidth);
+    // 中栏（两栏之间，含两条拖动条）仍在保底宽度以上
+    final left = tester.getRect(find.byKey(const Key('ai-conversation-pane')));
+    final right = tester.getRect(find.byKey(const Key('ai-context-pane')));
+    expect(
+      right.left - left.right - kAiResizeHandleWidth * 2,
+      greaterThanOrEqualTo(kAiCenterMinWidth),
+    );
+
+    // ⑤ 松手后宽度落盘（下次启动沿用），拖动过程不写偏好
+    final settings = tester
+        .element(find.byType(AiHomePage))
+        .read<SettingsStore>();
+    expect(settings.aiConversationPaneWidth, kAiSidePaneMaxWidth);
+    expect(
+      settings.aiContextPaneWidth,
+      closeTo(kAiContextPaneWidth + 90, 0.5),
     );
   });
 

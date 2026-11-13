@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'backend_paths.dart';
+import 'layout_constants.dart';
 import 'library_identity.dart';
 import 'media_cache.dart';
 import 'system_accent.dart';
@@ -90,6 +91,19 @@ class SettingsStore extends ChangeNotifier {
   /// （1MB 等同于关闭缓存，99999 等同于无上限）。
   static const _kMediaCacheOrigBudgetMb = 'comfyhub.mediaCacheOrigBudgetMb';
 
+  /// AI 工作台左栏（会话列表）被拖宽后的宽度（逻辑像素）。
+  ///
+  /// 默认 [kAiConversationPaneWidth]（拖动出现之前的固定宽度）。只记住拖动后的
+  /// 结果，下限 / 上限与"中栏至少留多少"由页面按 [kAiSidePaneMaxWidth] /
+  /// [kAiCenterMinWidth] 现算 —— 窗口宽度变化时宽度按现算值收窄，不改这条偏好。
+  static const _kAiConversationPaneWidth =
+      'comfyhub.aiConversationPaneWidth';
+
+  /// AI 工作台右栏（上下文与状态）被拖宽后的宽度（逻辑像素）。
+  ///
+  /// 默认 [kAiContextPaneWidth]。约束同 [_kAiConversationPaneWidth]。
+  static const _kAiContextPaneWidth = 'comfyhub.aiContextPaneWidth';
+
   /// 上次后端**实际**监听的端口（0 / 缺省 = 尚未记录）。
   ///
   /// 后端默认 `--port 0`（由操作系统选择空闲端口，避免被占用或落在 Windows
@@ -117,6 +131,8 @@ class SettingsStore extends ChangeNotifier {
   CollectionDetailStyle _collectionDetailWide = CollectionDetailStyle.dock;
   CollectionDetailStyle _collectionDetailNarrow = CollectionDetailStyle.popup;
   int? _lastApiPort;
+  double _aiConversationPaneWidth = kAiConversationPaneWidth;
+  double _aiContextPaneWidth = kAiContextPaneWidth;
 
   /// 上次用的是**哪一份库**（身份 + 位置），见 `library_identity.dart`。
   ///
@@ -238,6 +254,16 @@ class SettingsStore extends ChangeNotifier {
   ///
   /// 只用于**请求**同一端口，不是配置项：唯一真源是后端写入的 `.run\api.json`。
   int? get lastApiPort => _lastApiPort;
+
+  /// AI 工作台左栏（会话列表）记住的宽度（逻辑像素）。
+  ///
+  /// 页面会按窗口宽度与 [kAiCenterMinWidth] 再夹一次，这里返回的就是上次松手时
+  /// 那个值；越界 / 坏值在 [load] 里已经回默认。
+  double get aiConversationPaneWidth => _aiConversationPaneWidth;
+
+  /// AI 工作台右栏（上下文与状态）记住的宽度（逻辑像素），约束同
+  /// [aiConversationPaneWidth]。
+  double get aiContextPaneWidth => _aiContextPaneWidth;
 
   /// 上次用的是哪一份库（null = 还没记录过 / 记录坏了）。
   ///
@@ -385,6 +411,15 @@ class SettingsStore extends ChangeNotifier {
       fallback: CollectionDetailStyle.popup,
     );
     _lastApiPort = _sanitizePort(prefs.getInt(_kLastApiPort));
+    // 侧栏宽度：只认有限正数，坏值回默认（见 [_sanitizePaneWidth]）。
+    _aiConversationPaneWidth = _sanitizePaneWidth(
+      prefs.getDouble(_kAiConversationPaneWidth),
+      kAiConversationPaneWidth,
+    );
+    _aiContextPaneWidth = _sanitizePaneWidth(
+      prefs.getDouble(_kAiContextPaneWidth),
+      kAiContextPaneWidth,
+    );
     // "上次用的是哪份库"：坏记录当没记录（`LibraryRef.fromJson` 是宽容解析）。
     final rawLibrary = prefs.getString(kLastLibraryPrefsKey);
     if (rawLibrary != null && rawLibrary.isNotEmpty) {
@@ -601,6 +636,33 @@ class SettingsStore extends ChangeNotifier {
   /// 这件事本身就不该存在。
   static int? _sanitizePort(int? value) =>
       (value != null && value >= 1 && value <= 65535) ? value : null;
+
+  /// 侧栏宽度只接受有限的正数（手改偏好写进来的 `NaN` / 负数 / 0 一律回默认）。
+  ///
+  /// 这里**不做**上下限夹取：拖动上限取决于窗口宽度，唯一真源是页面按
+  /// [kAiSidePaneMaxWidth] / [kAiCenterMinWidth] 现算的那一份。
+  static double _sanitizePaneWidth(double? value, double fallback) =>
+      (value != null && value.isFinite && value > 0) ? value : fallback;
+
+  /// 记下 AI 工作台左栏拖动后的宽度。只由松手时调用（拖动过程中不落盘）。
+  Future<void> setAiConversationPaneWidth(double value) async {
+    if (!value.isFinite || value <= 0 || value == _aiConversationPaneWidth) {
+      return;
+    }
+    _aiConversationPaneWidth = value;
+    notifyListeners();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setDouble(_kAiConversationPaneWidth, value);
+  }
+
+  /// 记下 AI 工作台右栏拖动后的宽度。约束同 [setAiConversationPaneWidth]。
+  Future<void> setAiContextPaneWidth(double value) async {
+    if (!value.isFinite || value <= 0 || value == _aiContextPaneWidth) return;
+    _aiContextPaneWidth = value;
+    notifyListeners();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setDouble(_kAiContextPaneWidth, value);
+  }
 
   /// 把后端这次实际监听的端口落盘（下次启动要回它）。见 [_kLastApiPort]。
   Future<void> setLastApiPort(int? value) async {

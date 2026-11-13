@@ -570,6 +570,7 @@ class _KV extends StatelessWidget {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 1),
       child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
             k,
@@ -577,8 +578,17 @@ class _KV extends StatelessWidget {
               color: theme.colorScheme.outline,
             ),
           ),
-          const Spacer(),
-          Text(v, style: theme.textTheme.labelSmall),
+          const SizedBox(width: 8),
+          // 值可能很长（例如"已捕获"那一行的次数与产物数）。这里给弹性宽度并右对齐：
+          // 放得下时仍贴右侧，放不下时换行显示完整内容 —— 侧栏只有 260 宽，
+          // 用 `Spacer` + 不可换行的 Text 会直接画出卡片边缘。
+          Expanded(
+            child: Text(
+              v,
+              textAlign: TextAlign.right,
+              style: theme.textTheme.labelSmall,
+            ),
+          ),
         ],
       ),
     );

@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math' as math;
 import 'dart:ui' as ui;
 
 import 'package:file_picker/file_picker.dart';
@@ -12,6 +13,7 @@ import '../core/api_client.dart';
 import '../core/file_clipboard.dart';
 import '../core/file_drop.dart';
 import '../core/formatting.dart';
+import '../core/layout_constants.dart';
 import '../core/pairing_token.dart';
 import '../core/settings_store.dart';
 import '../core/theme.dart';
@@ -130,6 +132,15 @@ class _AiHomePageState extends State<AiHomePage> {
   /// 见 [_resetScrollForConversation]：换会话要把滚动位置重置到最新一条。
   String? _shownConversationId;
 
+  /// 左栏（会话列表）的宽度（逻辑像素）。可拖动，下限 / 上限见
+  /// `layout_constants.dart` 的 `kAiConversationPaneWidth` / `kAiSidePaneMaxWidth`。
+  ///
+  /// 初值来自偏好（上次松手时的宽度），拖动过程中只改这个字段，**松手才落盘**。
+  double _conversationPaneWidth = kAiConversationPaneWidth;
+
+  /// 右栏（上下文与状态）的宽度，约束同 [_conversationPaneWidth]。
+  double _contextPaneWidth = kAiContextPaneWidth;
+
   /// "已经贴底"的容差，单位像素。**只用来吸收亚像素误差**，不是"接近底部"的意思。
   ///
   /// 老代码这里是 80，那个数字就是"只滚一小段就被拽回底部"的根因 ——
@@ -142,6 +153,11 @@ class _AiHomePageState extends State<AiHomePage> {
     if (_loaded) return;
     _loaded = true;
     _store = context.read<AiWorkspaceStore>();
+    // 侧栏宽度是"上次松手时"的值；越界 / 坏值在 SettingsStore.load 里已回默认，
+    // 这里只负责取用（真正夹到当前窗口能容纳多少由 build 现算）。
+    final settings = context.read<SettingsStore>();
+    _conversationPaneWidth = settings.aiConversationPaneWidth;
+    _contextPaneWidth = settings.aiContextPaneWidth;
     _conversationList = _ConversationList(onRename: _rename);
     _input.addListener(_onInputChanged);
     _scroll.addListener(_onScroll);
@@ -396,17 +412,103 @@ class _AiHomePageState extends State<AiHomePage> {
     );
 
     if (wide) {
+      // 三栏之间**不画分隔线**：层次由底色差表达 —— 左右两栏用
+      // `surfaceContainerLow`（与左侧导航栏同一档），中间的消息区保持 `surface`。
+      // 这样既符合 Material 3 的分区方式，也不会出现贯穿整屏的竖线。
+      final paneColor = Theme.of(context).colorScheme.surfaceContainerLow;
       return Scaffold(
-        body: Row(
-          children: [
-            SizedBox(width: 240, child: conversationList),
-            const VerticalDivider(width: 1),
-            Expanded(child: thread),
-            if (showPanel) ...[
-              const VerticalDivider(width: 1),
-              SizedBox(width: 260, child: _ContextPanel(store: store)),
-            ],
-          ],
+        body: LayoutBuilder(
+          builder: (context, constraints) {
+            final bodyWidth = constraints.maxWidth;
+            // 两栏宽度都是"记住的值 + 当前窗口能容纳多少"的现算结果：
+            //   · 下限 = 拖动出现之前的固定宽度（240 / 260）；
+            //   · 上限 = 480，并且两栏加起来要给中栏留下 kAiCenterMinWidth。
+            // 先取右栏、再算左栏上限、最后回夹右栏 —— 后拖的那一栏让位给中栏，
+            // 否则窗口一窄中栏就会被压成一条缝。
+            final rightBase = _contextPaneWidth
+                .clamp(kAiContextPaneWidth, kAiSidePaneMaxWidth)
+                .toDouble();
+            final leftMax = math.max(
+              kAiConversationPaneWidth,
+              math.min(
+                kAiSidePaneMaxWidth,
+                bodyWidth - (showPanel ? rightBase : 0) - kAiCenterMinWidth,
+              ),
+            );
+            final leftWidth = _conversationPaneWidth
+                .clamp(kAiConversationPaneWidth, leftMax)
+                .toDouble();
+            final rightMax = math.max(
+              kAiContextPaneWidth,
+              math.min(
+                kAiSidePaneMaxWidth,
+                bodyWidth - leftWidth - kAiCenterMinWidth,
+              ),
+            );
+            final rightWidth = rightBase
+                .clamp(kAiContextPaneWidth, rightMax)
+                .toDouble();
+            return Row(
+              // 两栏与拖动条都铺满整列高度，底色才不会只盖住内容那一截。
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                SizedBox(
+                  key: const Key('ai-conversation-pane'),
+                  width: leftWidth,
+                  // 用 `Material` 而不是 `ColoredBox`：会话行是 `ListTile`，
+                  // 它的选中底色与水波纹要画在最近的 Material 上；中间插一层
+                  // ColoredBox 会把那些效果盖掉（框架会直接断言）。
+                  child: Material(color: paneColor, child: conversationList),
+                ),
+                _PaneResizeHandle(
+                  key: const Key('ai-conversation-resize'),
+                  background: paneColor,
+                  semanticLabel: '拖动调整会话列表宽度',
+                  onDragStart: () {
+                    // 从"当前实际显示宽度"开始累加：窗口变窄时显示宽度会被夹小，
+                    // 直接拿记住的值累加会出现一段拖不动的死区。
+                    setState(() => _conversationPaneWidth = leftWidth);
+                  },
+                  onDelta: (dx) {
+                    setState(() {
+                      _conversationPaneWidth = (_conversationPaneWidth + dx)
+                          .clamp(kAiConversationPaneWidth, leftMax)
+                          .toDouble();
+                    });
+                  },
+                  onDragEnd: _savePaneWidths,
+                ),
+                Expanded(child: thread),
+                if (showPanel) ...[
+                  _PaneResizeHandle(
+                    key: const Key('ai-context-resize'),
+                    background: paneColor,
+                    semanticLabel: '拖动调整上下文栏宽度',
+                    onDragStart: () {
+                      setState(() => _contextPaneWidth = rightWidth);
+                    },
+                    onDelta: (dx) {
+                      // 拖动条在右栏左侧：往左拖（dx 为负）= 右栏变宽。
+                      setState(() {
+                        _contextPaneWidth = (_contextPaneWidth - dx)
+                            .clamp(kAiContextPaneWidth, rightMax)
+                            .toDouble();
+                      });
+                    },
+                    onDragEnd: _savePaneWidths,
+                  ),
+                  SizedBox(
+                    key: const Key('ai-context-pane'),
+                    width: rightWidth,
+                    child: Material(
+                      color: paneColor,
+                      child: _ContextPanel(store: store),
+                    ),
+                  ),
+                ],
+              ],
+            );
+          },
         ),
       );
     }
@@ -415,6 +517,13 @@ class _AiHomePageState extends State<AiHomePage> {
       drawer: Drawer(child: SafeArea(child: conversationList)),
       body: thread,
     );
+  }
+
+  /// 拖动结束后把两栏宽度落盘（拖动过程中不写偏好，避免每帧一次磁盘写）。
+  void _savePaneWidths() {
+    final settings = context.read<SettingsStore>();
+    settings.setAiConversationPaneWidth(_conversationPaneWidth);
+    settings.setAiContextPaneWidth(_contextPaneWidth);
   }
 
   /// 手机上「上下文与状态」面板（模型能力 / ComfyUI / Skills / 长期记忆）。
@@ -490,11 +599,103 @@ class _AiHomePageState extends State<AiHomePage> {
   }
 }
 
+/// 两栏之间的拖动条（宽屏才有）。
+///
+/// 平时与相邻栏同色、不画分隔线；鼠标移上去才出现一条主色短棒，拖动时保持显示。
+/// 这样"可以拖"有一处可见的提示，同时又没有用户不喜欢的常驻竖线。
+///
+/// 命中区域就是 [kAiResizeHandleWidth] 宽的一整列，横向拖动交给它；
+/// 左右方向由调用方决定（左栏往右拖变宽，右栏往左拖变宽）。
+class _PaneResizeHandle extends StatefulWidget {
+  const _PaneResizeHandle({
+    super.key,
+    required this.background,
+    required this.semanticLabel,
+    required this.onDragStart,
+    required this.onDelta,
+    required this.onDragEnd,
+  });
+
+  /// 与相邻栏相同的底色：拖动条看起来是那一栏的边缘，而不是另一块区域。
+  final Color background;
+
+  /// 读屏软件念出来的名字（例如"拖动调整会话列表宽度"）。
+  final String semanticLabel;
+
+  /// 按下并开始拖动：调用方用它把"当前显示宽度"写回状态。
+  final VoidCallback onDragStart;
+
+  /// 本次水平位移（向右为正），由调用方换算成宽度并夹在上下限内。
+  final ValueChanged<double> onDelta;
+
+  /// 松手 / 取消：调用方落盘。
+  final VoidCallback onDragEnd;
+
+  @override
+  State<_PaneResizeHandle> createState() => _PaneResizeHandleState();
+}
+
+class _PaneResizeHandleState extends State<_PaneResizeHandle> {
+  bool _hovering = false;
+  bool _dragging = false;
+
+  void _end() {
+    if (_dragging && mounted) setState(() => _dragging = false);
+    widget.onDragEnd();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final active = _hovering || _dragging;
+    return Semantics(
+      label: widget.semanticLabel,
+      child: MouseRegion(
+        cursor: SystemMouseCursors.resizeLeftRight,
+        onEnter: (_) => setState(() => _hovering = true),
+        onExit: (_) => setState(() => _hovering = false),
+        child: Listener(
+          // 用原始指针事件而不是 `GestureDetector`：拖动条只需要"按住后横向跟手"，
+          // 不参与手势竞技场，所以没有 slop —— 按下即可拖动，边界与指针 1:1。
+          onPointerDown: (_) {
+            setState(() => _dragging = true);
+            widget.onDragStart();
+          },
+          onPointerMove: (event) {
+            if (_dragging) widget.onDelta(event.delta.dx);
+          },
+          onPointerUp: (_) {
+            if (_dragging) _end();
+          },
+          onPointerCancel: (_) {
+            if (_dragging) _end();
+          },
+          child: Container(
+            width: kAiResizeHandleWidth,
+            color: widget.background,
+            alignment: Alignment.center,
+            child: AnimatedOpacity(
+              opacity: active ? 1 : 0,
+              duration: AppMotion.short,
+              child: Container(
+                width: 2,
+                height: 32,
+                decoration: BoxDecoration(
+                  color: theme.colorScheme.primary,
+                  borderRadius: BorderRadius.circular(1),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 // ---------------------------------------------------------------------------
 //  对话主体：AppBar + 消息列表 + 输入区
-// ---------------------------------------------------------------------------
-
-/// 会话主体整棵树。
+// ---------------------------------------------------------------------------/// 会话主体整棵树。
 ///
 /// **单独抽出来是为了把 `watch` 关在这棵子树里**：流式回包（约 60 次/秒的增量、
 /// 攒到一帧仍有一二十次）与 ComfyUI 进度轮询（1.5 秒一次）都会
@@ -722,7 +923,8 @@ class _ConversationListState extends State<_ConversationList> {
             label: const Text('新建对话'),
           ),
         ),
-        const Divider(height: 1),
+        // 按钮与列表之间**不画横线**：这里留白本身就够分开，
+        // 一条贯穿整栏的线只会把侧栏切成两块。
         Expanded(
           child: store.conversations.isEmpty
               ? Center(
@@ -3487,10 +3689,9 @@ class _ComposerState extends State<_Composer> {
     final inputMax = _inputMaxLines;
 
     return Container(
-      decoration: BoxDecoration(
-        color: theme.colorScheme.surface,
-        border: Border(top: BorderSide(color: theme.dividerColor)),
-      ),
+      // 输入区与消息区之间**不画横线**：换成比消息区高一档的底色，
+      // 让"这里开始是输入区"由色阶表达（Material 3 的分层方式）。
+      color: theme.colorScheme.surfaceContainerLow,
       padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
       child: Column(
         // 输入区按内容取高（上限由页面那层 ConstrainedBox 给）：写成 max 会把
@@ -5091,7 +5292,9 @@ class _ComfyProgress extends StatelessWidget {
                 ),
               ),
             if (recent.isNotEmpty) ...[
-              const Divider(height: 14),
+              // 同一张卡里分"正在跑"与"最近提交"两组：用留白分开，
+              // 不画横线（卡片本身已经是独立的一块）。
+              const SizedBox(height: 10),
               Text(
                 '最近提交',
                 style: theme.textTheme.labelSmall?.copyWith(

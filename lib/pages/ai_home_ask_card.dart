@@ -1280,10 +1280,8 @@ class _AskComposerState extends State<_AskComposer> {
     final focus = store.pendingQuestionFocus;
 
     return Container(
-      decoration: BoxDecoration(
-        color: theme.colorScheme.surface,
-        border: Border(top: BorderSide(color: theme.dividerColor)),
-      ),
+      // 与普通输入区同一套分层：底色高一档，不画顶边横线。
+      color: theme.colorScheme.surfaceContainerLow,
       padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
       child: Column(
         // 与普通输入区同一条：写在页面那层 `ConstrainedBox` 里的上限（页面高度的 85%）

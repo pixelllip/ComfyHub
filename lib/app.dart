@@ -640,7 +640,9 @@ class _HomeShellState extends State<HomeShell> {
                   ),
                   destinations: _railDestinations,
                 ),
-                const VerticalDivider(width: 1),
+                // 侧边栏与内容区之间**不画分隔线**：侧边栏底色是
+                // `surfaceContainerLow`（见主题的 `navigationRailTheme`），内容区是
+                // `surface` —— 层次由底色差表达，与 Material 3 的分区方式一致。
                 Expanded(child: body),
               ],
             ),
