@@ -3294,6 +3294,9 @@ class AiWorkspaceStore extends ChangeNotifier {
   ///
   /// 优先用 `parts`（`message.completed` 给的权威有序块 / 历史消息）；
   /// 流式过程中 parts 还没有，就用事件累积的实时列表。
+  ///
+  /// 最后把**本地刚答过**的结尾提问叠上去（见 [_questionAnswers]）：后端那份
+  /// `parts` 还没刷新时，卡片也要当场显示"已回答"，不用退出重进。
   List<AiToolCallState> toolCallsFor(AiMessage message) {
     final fromParts = AiToolCallState.listFromParts(message.parts);
     final base = fromParts.isNotEmpty
