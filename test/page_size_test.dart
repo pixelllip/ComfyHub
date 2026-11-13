@@ -17,7 +17,8 @@ void main() {
 
   test('自动每页数量：窄窗口不扣侧边栏，极小窗口兜底 8 条', () {
     // 800 宽在 900 以下，是底部导航形态，内容区不扣 80 的侧栏。
-    expect(autoPageSizeFor(const Size(800, 800)), 16);
+    // 高度只够放 3 整排（第 4 排会被窗口底部切掉），所以是 4×3=12。
+    expect(autoPageSizeFor(const Size(800, 800)), 12);
     expect(autoPageSizeFor(const Size(360, 360)), 8);
   });
 

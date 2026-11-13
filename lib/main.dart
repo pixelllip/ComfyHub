@@ -2,6 +2,7 @@ import 'dart:io' show Platform;
 
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:material_ui/material_ui.dart';
+import 'package:media_kit/media_kit.dart';
 
 import 'app.dart';
 import 'core/backend_launcher.dart';
@@ -12,6 +13,7 @@ import 'core/system_accent.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  MediaKit.ensureInitialized();
   // 必须在第一次碰 SharedPreferences 之前装（见 portable_paths.dart 文件头）：
   // 受限会话里 viewer.exe 写不了 %APPDATA%，偏好保存一直报 errno 5；
   // 默认位置写得进的正常机器上这一步是空操作。

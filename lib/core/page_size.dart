@@ -29,6 +29,10 @@ int autoPageSizeFor(Size windowSize) {
   final cellWidth =
       (width - (columns - 1) * kGalleryCellSpacing) / columns;
   final height = (windowSize.height - 170).clamp(1.0, double.infinity);
-  final rows = (height / (cellWidth + kGalleryCellSpacing)).ceil().clamp(1, 12);
+  // 只算**完整可见**的行：多算一行会在窗口底部露出半排格子，用户看到的是
+  // "这个窗口明明只放得下三排，却排了四排"。
+  final rows = (height / (cellWidth + kGalleryCellSpacing))
+      .floor()
+      .clamp(1, 12);
   return (columns * rows).clamp(8, 120);
 }
