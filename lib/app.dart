@@ -587,6 +587,9 @@ class _HomeShellState extends State<HomeShell> {
   @override
   Widget build(BuildContext context) {
     final wide = MediaQuery.sizeOf(context).width >= kWideLayoutMinWidth;
+    // 每页数量：电脑端"自动"按窗口大小排满一页。先更新尺寸再建页面，
+    // 页面第一次请求就会用上算出来的数量，不会先用固定值拉一遍再重拉。
+    context.read<LibraryStore>().updateViewport(MediaQuery.sizeOf(context));
     // 横幅在**内容之上**（不是浮层）：它是常驻状态，不是转瞬的提示
     final body = Column(
       children: [

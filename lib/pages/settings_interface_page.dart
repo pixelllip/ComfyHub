@@ -134,26 +134,58 @@ class InterfaceSettingsPage extends StatelessWidget {
         SettingsSection(
           title: '列表',
           id: 'list',
-          estimatedHeight: 150,
+          estimatedHeight: 230,
           child: Card(
-            child: ListTile(
-              contentPadding: const EdgeInsets.symmetric(
-                horizontal: 16,
-                vertical: 8,
-              ),
-              title: const Text('每页数量'),
-              subtitle: Text('当前 ${settings.pageSize} 条'),
-              trailing: SizedBox(
-                width: 180,
-                child: Slider(
-                  value: settings.pageSize.toDouble(),
-                  min: 8,
-                  max: 96,
-                  divisions: 11,
-                  label: '${settings.pageSize}',
-                  onChanged: (v) => settings.setPageSize(v.round()),
-                  onChangeEnd: (_) => store.refreshAll(),
-                ),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              child: Column(
+                children: [
+                  ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text('每页数量'),
+                    subtitle: Text(
+                      settings.pageSizeMode == PageSizeMode.auto
+                          ? '电脑端按窗口大小排满一页，手机端每页 ${settings.pageSize} 条。'
+                          : '两端都用固定数量，当前 ${settings.pageSize} 条。',
+                    ),
+                    trailing: SegmentedButton<PageSizeMode>(
+                      segments: [
+                        for (final mode in PageSizeMode.values)
+                          ButtonSegment(value: mode, label: Text(mode.label)),
+                      ],
+                      selected: {settings.pageSizeMode},
+                      onSelectionChanged: (picked) =>
+                          settings.setPageSizeMode(picked.first),
+                      showSelectedIcon: false,
+                      style: const ButtonStyle(
+                        visualDensity: VisualDensity.compact,
+                      ),
+                    ),
+                  ),
+                  if (settings.pageSizeMode == PageSizeMode.auto)
+                    const Divider(height: 1),
+                  ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    title: Text(
+                      settings.pageSizeMode == PageSizeMode.auto
+                          ? '手机端每页数量'
+                          : '每页数量',
+                    ),
+                    subtitle: Text('当前 ${settings.pageSize} 条'),
+                    trailing: SizedBox(
+                      width: 180,
+                      child: Slider(
+                        value: settings.pageSize.toDouble(),
+                        min: 8,
+                        max: 96,
+                        divisions: 11,
+                        label: '${settings.pageSize}',
+                        onChanged: (v) => settings.setPageSize(v.round()),
+                        onChangeEnd: (_) => store.refreshAll(),
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ),
           ),

@@ -44,11 +44,34 @@ enum CollectionDetailStyle {
   }
 }
 
+/// 每页数量的取值方式。
+///
+/// [auto]（默认）在电脑端按窗口大小排满一页，手机端用 [SettingsStore.pageSize]
+/// 那个固定值；[fixed] 两端都用固定值。落盘取 [name]，不写魔法数。
+enum PageSizeMode {
+  auto('自动'),
+  fixed('固定');
+
+  final String label;
+
+  const PageSizeMode(this.label);
+
+  /// 认不出来的值（旧版本写入或手动修改）回默认，**不抛异常** —— 它在界面构建
+  /// 路径上，抛异常会导致白屏（与 [CollectionDetailStyle.parse] 约束一致）。
+  static PageSizeMode parse(String? raw) {
+    for (final mode in values) {
+      if (mode.name == raw) return mode;
+    }
+    return auto;
+  }
+}
+
 /// 全局设置（后端地址、自动启动、项目根目录等），持久化在本地。
 class SettingsStore extends ChangeNotifier {
   static const _kBaseUrl = 'comfyhub.baseUrl';
   static const _kBaseUrlHistory = 'comfyhub.baseUrlHistory';
   static const _kPageSize = 'comfyhub.pageSize';
+  static const _kPageSizeMode = 'comfyhub.pageSizeMode';
 
   /// 筛选栏折叠状态（**整体一个**，不按分区分别折叠）。
   ///
@@ -119,6 +142,7 @@ class SettingsStore extends ChangeNotifier {
 
   String _baseUrl = defaultBaseUrl();
   int _pageSize = 24;
+  PageSizeMode _pageSizeMode = PageSizeMode.auto;
   bool _galleryFiltersCollapsed = false;
   bool _promptFiltersCollapsed = false;
   bool _autoStartBackend = true;
@@ -159,6 +183,7 @@ class SettingsStore extends ChangeNotifier {
 
   String get baseUrl => _baseUrl;
   int get pageSize => _pageSize;
+  PageSizeMode get pageSizeMode => _pageSizeMode;
 
   /// 画廊筛选栏是否收起（默认展开）。
   bool get galleryFiltersCollapsed => _galleryFiltersCollapsed;
@@ -376,6 +401,7 @@ class SettingsStore extends ChangeNotifier {
     _baseUrlFromUser = stored != null && stored.isNotEmpty && !storedIsLocal;
     _baseUrl = _baseUrlFromUser ? stored! : defaultBaseUrl();
     _pageSize = prefs.getInt(_kPageSize) ?? 24;
+    _pageSizeMode = PageSizeMode.parse(prefs.getString(_kPageSizeMode));
     // 手机上筛选区默认**收起**：360dp 宽度下展开会占用半屏，画廊 / 预设应优先
     // 显示内容。桌面端仍默认展开。仅在无偏好时使用；设置后以偏好为准。
     //
@@ -577,6 +603,14 @@ class SettingsStore extends ChangeNotifier {
     notifyListeners();
     final prefs = await SharedPreferences.getInstance();
     await prefs.setInt(_kPageSize, _pageSize);
+  }
+
+  Future<void> setPageSizeMode(PageSizeMode value) async {
+    if (_pageSizeMode == value) return;
+    _pageSizeMode = value;
+    notifyListeners();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_kPageSizeMode, value.name);
   }
 
   /// 记住筛选栏的折叠状态（按页面各自记）。

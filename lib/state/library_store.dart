@@ -1,8 +1,10 @@
 import 'dart:async';
+import 'dart:ui' show Size;
 
 import 'package:flutter/foundation.dart';
 
 import '../core/api_client.dart';
+import '../core/page_size.dart';
 import '../core/settings_store.dart';
 import '../models/models.dart';
 
@@ -13,6 +15,7 @@ class LibraryStore extends ChangeNotifier {
     _apiInjected = api != null;
     this.api = api ?? _libraryClient(_settings.baseUrl);
     _apiBaseUrl = _settings.baseUrl;
+    _lastPageSizeMode = _settings.pageSizeMode;
     _settings.addListener(_onSettingsChanged);
   }
 
@@ -107,9 +110,76 @@ class LibraryStore extends ChangeNotifier {
 
   bool _disposed = false;
 
+  /// 窗口逻辑尺寸（由 `HomeShell` 每次 build 更新）。只有它能让"自动每页数量"
+  /// 跟着窗口走；测试里直接起画廊页时它是 null，仍用设置里的固定值。
+  Size? _viewport;
+
+  /// 窗口尺寸变化后的合并刷新计时器（拖动改窗口时不要每个像素都发一次请求）。
+  Timer? _viewportRefresh;
+
+  /// 上一次看到的每页数量模式：模式切换要重新分页，滑杆只改固定值（由设置页刷新）。
+  late PageSizeMode _lastPageSizeMode;
+
   String get baseUrl => _settings.baseUrl;
 
+  /// 当前这一轮分页实际用的每页数量。
+  ///
+  /// [PageSizeMode.auto] 在电脑端按窗口大小算（见 [autoPageSizeFor]），手机端仍用
+  /// 设置里的固定值；[PageSizeMode.fixed] 两端都用固定值。
+  int get pageSize {
+    final viewport = _viewport;
+    if (_settings.pageSizeMode == PageSizeMode.auto &&
+        _isDesktop &&
+        viewport != null) {
+      return autoPageSizeFor(viewport);
+    }
+    return _settings.pageSize;
+  }
+
+  bool get _isDesktop {
+    if (kIsWeb) return false;
+    switch (defaultTargetPlatform) {
+      case TargetPlatform.windows:
+      case TargetPlatform.macOS:
+      case TargetPlatform.linux:
+        return true;
+      case TargetPlatform.android:
+      case TargetPlatform.iOS:
+      case TargetPlatform.fuchsia:
+        return false;
+    }
+  }
+
+  /// 更新窗口尺寸。`HomeShell` 在 build 里调用；它只记尺寸，不通知界面 ——
+  /// 分页数量变了才清缓存并合并刷新一次。
+  void updateViewport(Size size) {
+    if (_viewport == size) return;
+    final before = pageSize;
+    _viewport = size;
+    final after = pageSize;
+    if (before == after) return;
+    _invalidateMediaPages();
+    _invalidatePromptPages();
+    _viewportRefresh?.cancel();
+    // 首次进入：页面还没发过请求，直接用新数量发即可，不再多刷一次。
+    if (media.items.isEmpty &&
+        prompts.items.isEmpty &&
+        !loadingMedia &&
+        !loadingPrompts) {
+      return;
+    }
+    _viewportRefresh = Timer(const Duration(milliseconds: 250), () {
+      if (!_disposed) unawaited(refreshAll());
+    });
+  }
+
   void _onSettingsChanged() {
+    if (_settings.pageSizeMode != _lastPageSizeMode) {
+      _lastPageSizeMode = _settings.pageSizeMode;
+      _invalidateMediaPages();
+      _invalidatePromptPages();
+      unawaited(refreshAll());
+    }
     if (_apiInjected) return;
     if (_settings.baseUrl != _apiBaseUrl) {
       api.dispose();
@@ -122,6 +192,7 @@ class LibraryStore extends ChangeNotifier {
   @override
   void dispose() {
     _disposed = true;
+    _viewportRefresh?.cancel();
     _settings.removeListener(_onSettingsChanged);
     api.dispose();
     super.dispose();
@@ -246,7 +317,7 @@ class LibraryStore extends ChangeNotifier {
     hasMedia: onlyUnlinked ? false : null,
     sort: promptSort,
     page: page,
-    size: _settings.pageSize,
+    size: pageSize,
   );
 
   /// 未关联产物的提示词条数（一键清除入口需要显示将删除的数量）。
@@ -375,7 +446,7 @@ class LibraryStore extends ChangeNotifier {
     // 这一档需要展示"收藏过的图片"，见 [mediaFavoritesFlat]。
     collapse: !mediaFavoritesFlat,
     page: page,
-    size: _settings.pageSize,
+    size: pageSize,
   );
 
   Future<void> refreshTags() async {
