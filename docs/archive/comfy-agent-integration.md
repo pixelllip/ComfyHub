@@ -207,6 +207,6 @@ openapi 里也没有 agent 路由。
 
 ## 7. 附：一处需要连带更新的旧文档
 
-[`comfy-mcp-report.md`](archive/comfy-mcp-report.md) 卷首的"最新决定（2026-09-21）"结论仍然成立
+[`comfy-mcp-report.md`](comfy-mcp-report.md) 卷首的"最新决定（2026-09-21）"结论仍然成立
 （接官方 comfy-mcp、借它的能力），但**它的前提是"MCP 能覆盖 Agent 能做的事"** —— 现在已经不成立：
 Comfy Agent 与 MCP 是两条独立产品线。本文与该报告不冲突，但**引用前先看 §2.1**。

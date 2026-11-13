@@ -76,7 +76,7 @@
 | `kotlin.incremental=false`（C:/D: 跨盘会炸） | 共享模块会把这个跨盘问题扩散到更多 module |
 | `android.newDsl=false`（Flutter 插件仍未迁完新 DSL） | KMP + 旧 DSL + Flutter 插件三方组合没有成熟路径 |
 
-> `AGENTS.md` §4 对这块的要求是**"动 `android/` 之前先读
+> [`environment.md`](environment.md) §1 对这块的要求是**"动 `android/` 之前先读
 > `docs/android-agp9-builtin-kotlin-migration.md`"** —— 上面那张表就是读它的结论。
 >
 > **所以：手机 harness 用 Android Kotlin 写（(a)），但先不要引入 KMP。**
@@ -233,7 +233,7 @@
 
 **要点：**
 
-- **桌面的 `comfy_submit` 一行不改**，所有既有纪律（`AGENTS.md` §10.1：
+- **桌面的 `comfy_submit` 一行不改**，所有既有纪律（[`ai-tools-wiring.md`](ai-tools-wiring.md) §4：
   `comfy_submit` 只认 API 图、必须走 `capture.captureRun()`、结果只认 `mediaIds`）原样保有效。
 - 手机侧的新工具**必须有不同的名字和不同的返回值**，让模型无法混淆。
   系统提示里要写清"排队 ≠ 已提交"。
@@ -295,7 +295,7 @@ CREATE TABLE _outbox (
 
 ## 8. 凭据：桌面 DPAPI → 手机 Android Keystore
 
-**现有设计天然适配**（`AGENTS.md` §10）：`ai_providers.credential_ref` 存的是**名字**，
+**现有设计天然适配**（[`ai-tools-wiring.md`](ai-tools-wiring.md) §1）：`ai_providers.credential_ref` 存的是**名字**，
 **值由平台自己的密钥库保管**（桌面是 DPAPI，`CredentialService.kt`）。
 
 于是：
@@ -326,7 +326,7 @@ CREATE TABLE _outbox (
    对单次 Run 足够，但**不能当常驻同步用**。
 2. **Run 状态落本地库**：进程被杀后重启，能看出"有一个 Run 没跑完"。
 3. **失败/取消时"已经说出去的话一个字都不能丢"** ——
-   直接照搬 `AGENTS.md` §10.1 的三条纪律（正文必须落块、标题缓冲要 flush、
+   直接照搬 [`ai-tools-wiring.md`](ai-tools-wiring.md) §6 的三条纪律（正文必须落块、标题缓冲要 flush、
    重试不要就地重置有内容的回复）。**这三条是现成的，
    必须一起搬到手机 harness，否则用户会亲眼看到"话说了一半就没了"。**
 

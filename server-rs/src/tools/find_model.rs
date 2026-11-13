@@ -1,7 +1,7 @@
 //! 「这个模型去哪儿拿」—— `find_model`（Kotlin `FindModel.kt` + `ToolRegistry.kt` 里那条
 //! 处理体与三段渲染的逐条对照）。
 //!
-//! # 需求原文（`docs/bug and suggestion/bug-and-suggestion-9.22.md` 的 A 表与 K 节）
+//! # 需求原文（`docs/archive/bug-and-suggestion/bug-and-suggestion-9.22.md` 的 A 表与 K 节）
 //!
 //! > "加入 modelscope、huggingface 的查询功能，并与 civitai 合并成'定向查询' tool；
 //! >  **查到的贴链接，由人工下载**"

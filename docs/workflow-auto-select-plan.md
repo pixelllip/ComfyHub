@@ -88,7 +88,7 @@
   目录清单断言。
 - 构造型单测（scratch 库）：造若干 `capture_runs` 行（success/error/empty、不同任务的
   raw 图），断言：只回 success、task 过滤正确、按时间倒序、`modelQuery` 命中、
-  limit 截断。落盘只许 `testpaths::scratch()`（AGENTS.md §1）。
+  limit 截断。落盘只许 `testpaths::scratch()`（[`backend-runtime.md`](backend-runtime.md) §9）。
 
 ### T2 配方"已验证绑定"回写：骨架 × 模型跑通过要记下来 ★经验主义的复利
 
@@ -146,7 +146,7 @@
   回退要如实说；候选 `check_inputs` 不过就跳过；放权档是无人值守的前提。
 - **必须 bump `PROMPT_VERSION`**（`ai/nsfw_prompt.rs`），并同步 `run_kit/tests.rs`
   与 `ai_run_kit.rs` 的版本断言 —— bump 的判据是"模型看到的规则变没变"。
-- 文案按 AGENTS.md §6.2：说人话，不堆内部代号。
+- 文案按 [`ui-conventions.md`](ui-conventions.md) §4：说人话，不堆内部代号。
 
 **防线**：`system_prompt/tests.rs` 的前缀稳定用例不红；`run_kit` 版本断言同步绿。
 
@@ -175,7 +175,7 @@ T4 的提示词按拍板结果写。
    已经存在的能力）；T5 拍板后并入 T4；T6 随 T1。
 2. 开工前先 `git commit` 或 `git stash` 落基线（AGENTS.md 顶部两条底线之一）；
    代码改动只走 edit / write 工具。
-3. 完成后按 AGENTS.md §1 / §10.1 跑回归（都不出网、不花钱）：
+3. 完成后按 [`backend-runtime.md`](backend-runtime.md) / [`ai-tools-wiring.md`](ai-tools-wiring.md) 跑回归（都不出网、不花钱）：
    `cargo test`（受限会话红了的先看 `testpaths::scratch()` 纪律）、
    `pwsh -File scripts\e2e-submit-test.ps1`、`pwsh -File scripts\e2e-capture-test.ps1`、
    `pwsh -File scripts\e2e-recipe-test.ps1`（改了配方链路时）。

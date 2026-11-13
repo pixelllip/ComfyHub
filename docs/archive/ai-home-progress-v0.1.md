@@ -250,7 +250,7 @@ Inkling、LongCat、Nemotron、Ling、Laguna、gpt-oss 等（`VERSION = 2026-09b
 ### 4.6 第二轮：工具循环 + Skills + 退出收尾 + 内置模型目录 + 卡顿（2026-09-16）
 
 这一轮对应 `docs/bug-and-suggestion-9.16.md` 的新内容（用户当天更新的那份）：
-三条 bug + 两条建议。设计说明单独成文：[`docs/ai-tools-and-skills.md`](ai-tools-and-skills.md)，
+三条 bug + 两条建议。设计说明单独成文：[`docs/ai-tools-and-skills.md`](../ai-tools-and-skills.md)，
 DSH 工具层的逐项实测记录在 [`docs/archive/dsh-tool-layer-report.md`](dsh-tool-layer-report.md)。
 
 | 用户报的 | 做法 | 证据 |

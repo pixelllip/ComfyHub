@@ -39,7 +39,7 @@
 | 局域网可达 | ⚠️ **默认不可达，但开关已有**：默认只绑 `127.0.0.1`；`COMFYHUB_ALLOW_REMOTE=1` 时绑 `0.0.0.0` | `Config.kt:29/53-57`（注释里就写着"远程/移动端场景"） |
 | CORS | ✅ 可配：`COMFYHUB_CORS_ORIGINS`（逗号分隔） | `Config.kt` 的 `corsOrigins` |
 | **鉴权** | ❌ **完全没有** —— 整条 API 无 token / 无会话 / 无来源校验 | 全仓 grep `Authorization` 只命中**出网**（Civitai / 上游模型），入站没有 |
-| 移动端构建 | ⚠️ `android/` 是**同一份 Flutter 工程的安卓 target**（AGP 9.4 + 内建 Kotlin） | `AGENTS.md` §4、`docs/android-agp9-builtin-kotlin-migration.md` |
+| 移动端构建 | ⚠️ `android/` 是**同一份 Flutter 工程的安卓 target**（AGP 9.4 + 内建 Kotlin） | `docs/environment.md` §1、`docs/android-agp9-builtin-kotlin-migration.md` |
 | 工具分层（谁能出现在移动端） | ❌ 现在**没有**"这个工具属于哪个端"的概念：`ToolCategory` 只分 skill/files/comfy/memory/web/ask | `ai/tools/ToolModel.kt` |
 
 ### ⚠ 硬缺口：**开放局域网之前必须先有鉴权**

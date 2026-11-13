@@ -191,5 +191,5 @@ pwsh -File scripts\e2e-capture-test.ps1                                  # 捕�
 
 **历史与论证**（只在需要推导细节时查，不作为实施依据）：
 `memory-and-storage-evaluation.md`（为什么换 SQLite、MySQL 方言可移植性）、
-`bug and suggestion/`（早期需求与现场记录）；
+`archive/bug-and-suggestion/`（早期需求与现场记录）；
 一次性的**调研 / 审计 / 进度快照**已归档到 [`archive/`](archive/)（六个同步方案为什么都不用、客户端端点全清单、AIH 需求逐条审计、工作流蓝图调研…）。

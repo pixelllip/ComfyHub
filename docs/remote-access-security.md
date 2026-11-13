@@ -1,6 +1,6 @@
 # 公网远程控制（电脑与手机异地）：可行性、路径与安全底线（2026-09-22）
 
-> 缘起：`docs/bug and suggestion/bug-and-suggestion-9.22.md` 的建议 ⑥ ——
+> 缘起：`docs/archive/bug-and-suggestion/bug-and-suggestion-9.22.md` 的建议 ⑥ ——
 > 用户问："**有可能在完成配对之后，使用公网远程控制电脑（电脑和手机在异地）吗？安全性如何保证？**"
 >
 > 这份文档回答两件事：**能不能**（能，且不需要为用户新写一套远程协议）、
@@ -176,7 +176,7 @@
 | [`inbound-auth-design.md`](inbound-auth-design.md) | **令牌闸门本身**（P0 落地设计、每条决策的代价） | 本文是它的"上公网"应用题：§4 第③层就是它 |
 | [`android-client-plan.md`](android-client-plan.md) | 安卓客户端排期与"能力宿主在桌面"的分工 | 本文对应 §4 第 1 步之后的"跨网段"问题 |
 | `docs/ai-tools-and-skills.md` §10 | 工具清单与权限纪律（真源 `ToolRegistry.kt`） | 本文 §4 第④层引用的就是它 |
-| `AGENTS.md` §10 | 写白名单 / 审批闸门的硬约定 | 本文 §6 的红线不许绕过它 |
+| [`ai-tools-wiring.md`](ai-tools-wiring.md) §1 | 写白名单 / 审批闸门的硬约定 | 本文 §6 的红线不许绕过它 |
 
 ---
 

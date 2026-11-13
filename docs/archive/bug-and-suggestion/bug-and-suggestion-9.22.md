@@ -53,7 +53,7 @@
   其中 `comfy_fit_workflow` 在列（`category=comfy` / `access=allow`），
   也就是"**23 个出厂 + 39 个来自 comfy-mcp**"这个分界仍然成立。
   （⚠️ 本机 8080 落在 Windows 保留端口段里，起后端要加 `-Port 8280` 之类；
-  见 [`pitfalls.md`](../pitfalls.md) 第一行。）
+  见 [`pitfalls.md`](../../pitfalls.md) 第一行。）
 
 * 每次完成选择后，重置工具预算
   → **已做（2026-09-22，提交 `7a9b59f`）**。三件事一起改的：
@@ -76,7 +76,7 @@
   "分析 → 确认 → 执行"三步。昨天那份 rgthree 工作流里 20 个纯前端节点正是典型场景。
 
 * 调研我昨天和ai的对话记录，分析还有哪些值得优化的
-  → **已做（2026-09-22，提交 `0a7da68`）**：见 [`conversation-review-9.21.md`](../archive/conversation-review-9.21.md)。
+  → **已做（2026-09-22，提交 `0a7da68`）**：见 [`conversation-review-9.21.md`](../conversation-review-9.21.md)。
   口径是库里 09-21 的 5 场对话、45 条消息、36 次 Run、91 次工具调用。三条真痛点：
   ① 工具预算（上面那条，已修）；② **上游连接失败 11/13、8 条是 `SSLHandshakeException`，
   而且失败时回复是空的** —— 用户看到的是"四连空气泡"，且错误信息把 cause 链丢了、
@@ -88,12 +88,12 @@
   → **今天没动工，原因是排期**：`docs/android-client-plan.md` 把落地顺序定死了 ——
   **第 1 步必须是入站鉴权**（后端持有 Provider Key、能读写文件、能提交 ComfyUI，
   一开 `COMFYHUB_ALLOW_REMOTE=1` 就是裸奔），设计已在
-  [`inbound-auth-design.md`](inbound-auth-design.md)，分 P0 闸门 / P1 媒体签名 / P2 二维码配对。
+  [`inbound-auth-design.md`](../../inbound-auth-design.md)，分 P0 闸门 / P1 媒体签名 / P2 二维码配对。
   今天的时间用在了建议 ①~⑤ 上（其中 ③④ 是当天可交付、当天能验证的）。
   下一步就按那份文档的 P0 开工 —— `X-ComfyHub-Token` 闸门 + 回环豁免 + 纯函数单测 + 一条 e2e。
 
 * 有可能在完成配对之后，使用公网远程控制电脑（电脑和手机在异地）吗？安全性如何保证？
-  → **已答（2026-09-22）**：见 [`remote-access-security.md`](../remote-access-security.md)。
+  → **已答（2026-09-22）**：见 [`remote-access-security.md`](../../remote-access-security.md)。
   三句结论：① **可能**（后端本来就是个 HTTP 服务，把"能连到它"解决掉就是全部，不用改架构）；
   ② **今天不能用** —— 今天开远程（`COMFYHUB_ALLOW_REMOTE=1`）**一个 token 都没有**，
   `Application.kt` 只打一句 warn 不拦请求，所以**必须先做 `inbound-auth-design.md` 的 P0**；

@@ -1,6 +1,6 @@
 # 接入 comfy mcp：查证报告与结论（2026-09-21）
 
-> 缘起：`docs/bug and suggestion/bug-and-suggestion-9.21.md` 的建议 ④
+> 缘起：`docs/archive/bug-and-suggestion/bug-and-suggestion-9.21.md` 的建议 ④
 > ——「接入 comfy mcp，我们项目里和 mcp 重复的功能就可以删掉了」。
 
 ## ⚠ 最新决定（2026-09-21 晚，用户拍板，**以这一节为准**）
@@ -26,10 +26,10 @@
    工具桥接与权限档，含 **6 例真起子进程的端到端测试**
 3. ✅ 工具注入（提交 `2cb3a8c`）：**实测 22 + 39 = 61 个工具**（日志：`10 个默认 deny / 6 个默认 ask`），
    同名时我们的工具胜出（`comfy_submit` 那条"产物必须入库"的链路必须保住）
-4. ⬜ 安卓客户端预留：见 [`android-client-plan.md`](android-client-plan.md)
+4. ⬜ 安卓客户端预留：见 [`android-client-plan.md`](../android-client-plan.md)
    （桌面 App 当能力宿主、移动端只留不依赖本地工作流的工具；**入站鉴权是开远程的前置条件**）
    —— 入站鉴权的完整设计（威胁模型 / 回环豁免 / 媒体签名 URL / 三阶段落地）见
-   [`inbound-auth-design.md`](inbound-auth-design.md)
+   [`inbound-auth-design.md`](../inbound-auth-design.md)
 
 ### 现状（2026-09-21 实测）
 

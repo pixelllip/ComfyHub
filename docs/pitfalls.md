@@ -4,7 +4,7 @@
 > 它已经长到 50+ 行，留在 README 里把「怎么用」挤得看不见了。内容**原样搬过来**，只加了这段抬头。
 >
 > 换机器 / 重建环境时照着这张表走；本机的硬约束（JDK 21~23、端口、pub 源、
-> Gradle 代理…）在 [AGENTS.md](../AGENTS.md) 第 4 节。脚本侧的约定在第 5 节。
+> Gradle 代理…）在 [environment.md](environment.md)。脚本侧的约定在 [backend-runtime.md](backend-runtime.md) 第 2 节。
 
 ---
 

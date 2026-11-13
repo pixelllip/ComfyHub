@@ -7,7 +7,7 @@
 
 - **一个 App 两种角色**：桌面（Windows）既是 UI 也是后端；手机（Flutter，可选）连桌面的后端干活。
 - **数据全在自己文件夹里**：`<根>\.db`（库）、`<根>\storage`（产物 / 附件 / 缩略图）、`<根>\.run`（端口 / 日志 / 临时）。
-  不许往 `%APPDATA%` / `%LOCALAPPDATA%` / `%TEMP%` 散（AGENTS §13）。
+  不许往 `%APPDATA%` / `%LOCALAPPDATA%` / `%TEMP%` 散（[docs/backend-runtime.md](docs/backend-runtime.md) §7）。
 - **不依赖 JVM / MySQL / Node**：后端是一个静态链接的 Rust 单文件 exe。
 
 ---
@@ -160,7 +160,7 @@ Get-Content .run\api.json          # 后端实际监听的端口（唯一真源�
 | 环境变量 | 作用 |
 | --- | --- |
 | `COMFYHUB_PORT` | 想要固定端口时设（默认 `0` = 让系统挑） |
-| `COMFYHUB_SERVER_EXE` | 指定后端 exe（**把映像挪出受限区**的唯一开关，AGENTS §12） |
+| `COMFYHUB_SERVER_EXE` | 指定后端 exe（**把映像挪出受限区**的唯一开关，[docs/confinement-integrity.md](docs/confinement-integrity.md)） |
 | `COMFYHUB_PROJECT_ROOT` | 覆盖运行根目录（工具白名单 / 库 / 产物都按它算） |
 | `COMFYHUB_COMFY_URL` / `COMFYHUB_COMFY_OUTPUT` | ComfyUI 地址 / 产物目录的环境默认值 |
 | `COMFYHUB_HTTPS_PROXY` | 出网代理（本机与内网强制直连；写 `direct` = 强制直连）。不设就按系统代理 |
@@ -168,7 +168,7 @@ Get-Content .run\api.json          # 后端实际监听的端口（唯一真源�
 要看"这次出网到底走不走代理"：`GET /api/system/outbound`（设置 → 本地服务 → 联网代理；
 加 `?probe=1` 会真的向 Civitai / Danbooru 各发一次请求，5xx 也算"网络通了"）。
 
-**两种运行布局**（改路径解析前必读 AGENTS §7）：源码树（根 = 有 `server-rs/Cargo.toml` 的那层，
+**两种运行布局**（改路径解析前必读 [docs/backend-runtime.md](docs/backend-runtime.md) §3）：源码树（根 = 有 `server-rs/Cargo.toml` 的那层，
 后端用 `server-rs\target\{release,debug}\`）与发布包（根 = `viewer.exe` 所在目录，后端在同级 `backend\`）。
 
 ## 6. 为什么建议放到工作区外
@@ -182,7 +182,7 @@ pwsh -File scripts\pack-release.ps1 -OutDir D:\dist\ComfyHub
 D:\dist\ComfyHub\viewer.exe
 ```
 
-真因、判据与另两条处方见 AGENTS §12；界面右上角受限时会有一条常驻横幅（`GET /api/system/confinement`）。
+真因、判据与另两条处方见 [docs/confinement-integrity.md](docs/confinement-integrity.md)；界面右上角受限时会有一条常驻横幅（`GET /api/system/confinement`）。
 
 ## 7. 脚本速查
 
@@ -318,7 +318,14 @@ pwsh -File scripts\e2e-submit-test.ps1                                # 提交�
 
 | 文档 | 给谁看 |
 | --- | --- |
-| [AGENTS.md](AGENTS.md) | 在这个仓库里干活的人 / AI：纪律、本机硬约束、踩过的坑怎么做才对 |
+| [AGENTS.md](AGENTS.md) | 全局规则与文档索引（动手前必读；细则都在 `docs/`） |
+| [docs/ui-conventions.md](docs/ui-conventions.md) | 界面规范：导航 / 布局断点 / 列表与懒构建 / 文案 / 标题联动 / 翻页 |
+| [docs/perf-measurement.md](docs/perf-measurement.md) | 帧耗时测量（Dart MCP Server；判据是长帧，不是平均帧率） |
+| [docs/desktop-multi-window-plan.md](docs/desktop-multi-window-plan.md) | 桌面多窗口：3.50 官方多窗口为什么还不能用、先拆哪几处、怎么拆 |
+| [docs/backend-runtime.md](docs/backend-runtime.md) | 后端运行时：静默启动 / 路径解析 / 数据目录 / 落盘布局 / Release 装配 |
+| [docs/confinement-integrity.md](docs/confinement-integrity.md) | 受限环境：Low IL 完整性标签的机理、三条处方与四条纪律 |
+| [docs/environment.md](docs/environment.md) | 本机环境硬约束、MCP 运行时、视频插件与 WebView 依赖 |
+| [docs/ai-tools-wiring.md](docs/ai-tools-wiring.md) | AI 工具接线纪律：审批 / 附件 / 提交与产物 / 事件流 / 前缀缓存 / 结果缓存 |
 | [docs/pitfalls.md](docs/pitfalls.md) | 排错表（现象 → 原因 → 处理） |
 | [docs/implementation-master-plan.md](docs/implementation-master-plan.md) | 目标架构现状 + 14 条红线 + 分阶段验收判据 |
 | [docs/ai-tools-and-skills.md](docs/ai-tools-and-skills.md) | AI 工具与 Skills 的接线（含与 DSH 的对照） |

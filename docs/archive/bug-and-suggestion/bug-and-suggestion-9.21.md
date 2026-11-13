@@ -73,7 +73,7 @@ bug：
 - 把目前已有的skill整理成技能树，后续加skill进来用技能树管理和使用？
 - 新增对生成角色的提示词约束skill（占位符，哪天我想起来再实装）
 - 接入comfy mcp，我们项目里和mcp重复的功能就可以删掉了
-  → **决定：接（2026-09-21 晚，用户拍板）**；查证报告见 [`docs/archive/comfy-mcp-report.md`](../../docs/archive/comfy-mcp-report.md)。
+  → **决定：接（2026-09-21 晚，用户拍板）**；查证报告见 [`comfy-mcp-report.md`](../comfy-mcp-report.md)。
   （先查证后决策：拉了官方本地服务端源码读（`Comfy-Org/comfy-mcp` v0.10.0，HEAD `e5f768d`，40 个 `@mcp.tool()`），
   当时的报告结论是"不整条接"（要 Python+comfy-cli、我们的入库链路删不掉、安全面更大）；
   用户随后给出了依赖问题的解法并拍板**用它的**："官方 mcp 它覆盖的功能比我们更多更全，用它的。
@@ -100,7 +100,7 @@ bug：
   与桌面端通信的设计取向是：**移动端 → 桌面 App → 桌面 App 再调 comfy mcp**，
   即"本地工作流能力永远在桌面那一侧"，移动端不直连 ComfyUI 也不装 Python。
 - 设计入站配对令牌鉴权（开远程的前置条件）（用户 2026-09-21 晚提出）
-  → **设计完成（未实施）**：见 [`docs/inbound-auth-design.md`](../../docs/inbound-auth-design.md)。
+  → **设计完成（未实施）**：见 [`docs/inbound-auth-design.md`](../../inbound-auth-design.md)。
   一句话：默认完全关闭（回环 + 无鉴权，行为与今天逐字一致）；打开后**非回环来源**必须带
   `X-ComfyHub-Token`，回环默认豁免（否则桌面 App 的 `NetworkImage` / 视频 / 外部打开那 11 处取字节
   根本带不上头、本机脚本与 ComfyUI 节点也一个头都不带）；绑了 `0.0.0.0` 却没启用令牌 → 非回环一律 `403`。

@@ -68,7 +68,7 @@ class FileClipboard {
   /// 只有 Windows 有这份实现。
   ///
   /// 手机上"复制文件本身"是另一件事（产物是远端 HTTP、本地没有那个文件，
-  /// 而且没有 FileProvider），见 `docs/open-issues-2026-10-18.md` §5.3。
+  /// 而且没有 FileProvider），见 `docs/archive/open-issues-2026-10-18.md` §5.3。
   static bool get supported => Platform.isWindows;
 
   /// 剪贴板里**有没有文件**。
