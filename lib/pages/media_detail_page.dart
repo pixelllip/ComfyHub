@@ -120,6 +120,19 @@ class _MediaDetailPageState extends State<MediaDetailPage> {
   /// 相邻图片的预热计时器：翻页动画结束后再解码，避免和动画抢同一帧。
   Timer? _precacheTimer;
 
+  /// 换页动画期间暂存的新页信息（媒体 / 提示词），动画结束后再应用。
+  ///
+  /// 详情页右侧的提示词面板要排版整段提示词，切换长提示词时单帧可能达到几十毫秒；
+  /// 让它和翻页动画挤在同一帧，动画就会停顿。这里先只换图片，动画结束后再换面板。
+  ({MediaAsset media, Prompt? prompt})? _pendingInfo;
+
+  /// 面板更新的兜底计时器：数据在动画结束后才回来时，`onTransitionEnd` 已经错过。
+  Timer? _pendingInfoTimer;
+
+  /// 信息面板的缓存 widget：`_media` / `_prompt` 没变时复用同一个实例，
+  /// 让 `_siblings` / `_cachedFile` 的更新跳过整棵面板的 build 与排版。
+  Widget? _infoPanelCache;
+
   @override
   void initState() {
     super.initState();
@@ -129,6 +142,7 @@ class _MediaDetailPageState extends State<MediaDetailPage> {
   @override
   void dispose() {
     _precacheTimer?.cancel();
+    _pendingInfoTimer?.cancel();
     // 保存过的大原件在这里回收（此时播放器 / 图片都已经不再用那个文件了）。
     _flushPendingEvict();
     super.dispose();
@@ -154,7 +168,10 @@ class _MediaDetailPageState extends State<MediaDetailPage> {
     }
   }
 
-  Future<void> _load({bool showSpinner = true}) async {
+  Future<void> _load({
+    bool showSpinner = true,
+    bool deferInfo = false,
+  }) async {
     if (!mounted) return;
     final store = context.read<LibraryStore>();
     // 本次要取的那一条。切换时 `_currentId` 会先变，但**旧内容要一直留到新数据回来**；
@@ -219,9 +236,18 @@ class _MediaDetailPageState extends State<MediaDetailPage> {
       }
       if (!mounted || _currentId != id) return;
       siblingMedia[media.id] = media;
+      // 图片换页：面板更新推迟到翻页动画结束（见 [_applyPendingInfo]）。
+      // 视频 / 音频 / 单张没有翻页动画，立即换面板。
+      final defer =
+          deferInfo && media.kind == MediaKind.image && siblings.length > 1;
       setState(() {
-        _media = media;
-        _prompt = prompt;
+        if (defer) {
+          _pendingInfo = (media: media, prompt: prompt);
+        } else {
+          _media = media;
+          _prompt = prompt;
+          _infoPanelCache = null;
+        }
         _siblings = siblings;
         _siblingMedia
           ..clear()
@@ -230,6 +256,7 @@ class _MediaDetailPageState extends State<MediaDetailPage> {
         _autoCacheSkipped = false;
         _loading = false;
       });
+      if (defer) _schedulePendingInfo();
       // 翻页动画（300ms）结束后再预热左右相邻两张：下载 / 解码 / 上传纹理
       // 不跟动画挤在同一帧。失败不打扰界面，翻到那一页时 `Image` 照常报错。
       _schedulePrecache(store, id);
@@ -273,6 +300,28 @@ class _MediaDetailPageState extends State<MediaDetailPage> {
     _precacheTimer?.cancel();
     _precacheTimer = Timer(const Duration(milliseconds: 600), () {
       if (mounted && _currentId == id) _precacheNeighbors(store);
+    });
+  }
+
+  /// 面板更新的兜底：数据在动画结束之后才回来时，`onTransitionEnd` 已经错过。
+  void _schedulePendingInfo() {
+    _pendingInfoTimer?.cancel();
+    _pendingInfoTimer = Timer(
+      const Duration(milliseconds: 450),
+      _applyPendingInfo,
+    );
+  }
+
+  /// 把换页期间暂存的面板信息应用到界面（动画结束或兜底计时器触发）。
+  void _applyPendingInfo() {
+    _pendingInfoTimer?.cancel();
+    final pending = _pendingInfo;
+    if (pending == null || !mounted) return;
+    _pendingInfo = null;
+    setState(() {
+      _media = pending.media;
+      _prompt = pending.prompt;
+      _infoPanelCache = null;
     });
   }
 
@@ -362,16 +411,20 @@ class _MediaDetailPageState extends State<MediaDetailPage> {
   ///  * `showSpinner: false` —— 切换时不闪加载圈，旧图一直显示到新图数据到位
   ///    （`getMedia` 是本机后端，通常几十毫秒）。
   ///
-  /// ⚠ **不许清 `_prompt`**：清掉会让"关联的提示词"那张卡**空一下**再填上，
-  /// 表现为整块闪烁（"图片切换时整个界面闪烁"的一部分）。
-  /// 留着旧值也不会串 —— `_media` 与 `_prompt` 是**同一次 setState** 一起换的，
-  /// 所以"图换了词还是旧的"这个中间态根本不存在。
+  /// ⚠ **面板更新推迟到翻页动画结束**：`_load` 先把新的 `_media` / `_prompt` 暂存
+  /// 到 `_pendingInfo`，动画结束（或 450ms 兜底）后再用**同一次 setState** 应用。
+  /// 图片先滑入，右侧提示词面板在动画结束后一次换好；否则长提示词的排版会和翻页
+  /// 挤在同一帧，动画中途出现长帧。
+  ///
+  /// 旧 `_prompt` 在过渡期间保持原样，不清空 —— 清空会让面板先空一下再填上。
   void _goTo(int id) {
     if (id == _currentId) return;
     // 上一条保存过的大原件在这一刻回收（页面马上换内容，那个文件没人再用了）
     _flushPendingEvict();
+    _pendingInfo = null;
+    _pendingInfoTimer?.cancel();
     setState(() => _currentId = id);
-    _load(showSpinner: false);
+    _load(showSpinner: false, deferInfo: true);
   }
 
   /// 「复制文件本身」：把磁盘上的原件放进系统剪贴板（资源管理器里能直接粘出文件）。
@@ -772,7 +825,10 @@ class _MediaDetailPageState extends State<MediaDetailPage> {
                 child: LayoutBuilder(
                   builder: (context, constraints) {
                     final wide = constraints.maxWidth >= 1000;
-                    final info = _InfoPanel(
+                    // 面板只在 `_media` / `_prompt` 真的换了时重建。`_siblings`、
+                    // `_cachedFile` 这些更新复用同一个 widget 实例，整棵面板的
+                    // build 与长提示词排版都跳过。
+                    final info = _infoPanelCache ??= _InfoPanel(
                       media: m,
                       prompt: _prompt,
                       onChanged: _load,
@@ -901,8 +957,11 @@ class _MediaDetailPageState extends State<MediaDetailPage> {
                   final id = _siblings[page - 1];
                   _goTo(id);
                 },
-                // 换页动画结束后再预热左右相邻两张：不跟动画抢帧。
-                onTransitionEnd: () => _schedulePrecache(store, _currentId),
+                // 换页动画结束后：应用推迟的面板信息，再预热左右相邻两张。
+                onTransitionEnd: () {
+                  _applyPendingInfo();
+                  _schedulePrecache(store, _currentId);
+                },
               )
             : _Preview(
                 media: m,
