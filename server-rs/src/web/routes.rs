@@ -267,7 +267,12 @@ pub fn router(state: AppState) -> Router {
         .route("/api/prompts/{id}/media", get(prompt_media))
         // 预设的"关联产物"：按**归一化后的提示词**匹配，所以能把自动捕获那条对上（2026-10-11）
         .route("/api/presets/{id}/media", get(preset_media))
-        .route("/api/media/upload", axum::routing::post(media_upload))
+        .route(
+            "/api/media/upload",
+            axum::routing::post(media_upload).layer(axum::extract::DefaultBodyLimit::max(
+                crate::media::media_upload::MAX_BODY_BYTES,
+            )),
+        )
         // 捕获配置（本地那一半：读写 app_settings 里的一行 JSON）
         .route(
             "/api/capture/config",
@@ -2134,6 +2139,13 @@ impl ApiError {
 
     pub fn internal(message: impl Into<String>) -> Self {
         Self::new(StatusCode::INTERNAL_SERVER_ERROR, message, None)
+    }
+
+    /// **`413 Payload Too Large`** —— 请求体或单个文件超过上限。
+    ///
+    /// 上传端点必须给这个码：客户端据此说"文件太大"，而不是把连接中断当成"后端没起"。
+    pub fn payload_too_large(message: impl Into<String>) -> Self {
+        Self::new(StatusCode::PAYLOAD_TOO_LARGE, message, None)
     }
 
     pub fn bad_request(message: impl Into<String>) -> Self {

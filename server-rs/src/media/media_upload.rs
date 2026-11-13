@@ -20,9 +20,11 @@
 //! 而不是写了一半个文件才发现 `promptId` 是错的。
 
 use axum::extract::Multipart;
+use axum::http::StatusCode;
 use rusqlite::params;
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
+use tokio::io::AsyncWriteExt;
 
 use crate::library::repo::{self, WriteError};
 use crate::media::media;
@@ -30,6 +32,29 @@ use crate::web::models::MediaDto;
 use crate::web::routes::{ApiError, AppState};
 
 pub const KINDS: [&str; 3] = ["IMAGE", "VIDEO", "AUDIO"];
+
+/// 单个产物文件的上限（与 Kotlin `MediaRoutes` 的 4GB 那一档一致）。
+pub const MAX_FILE_BYTES: u64 = 4 * 1024 * 1024 * 1024;
+
+/// 整个 multipart 请求体的上限：一个 4GB 文件 + 字段头的余量。
+///
+/// ⚠ **这条路由必须显式挂上它**（`DefaultBodyLimit` 默认只有 2MB）：
+/// axum 的 `Multipart` 走 `with_limited_body()`，默认上限一到就把请求体掐断，
+/// 客户端正在写的那个连接随即被关，Dart 侧只看到 `Write failed` ——
+/// 2026-11-13 传视频时踩到的就是这条（界面提示"无法连接后端"，但后端明明是通的）。
+pub const MAX_BODY_BYTES: usize = MAX_FILE_BYTES as usize + 64 * 1024 * 1024;
+
+/// 把 multipart 的读取错误翻成人话；请求体撞上限时必须是 **413**，不能混成 400。
+fn multipart_error(e: axum::extract::multipart::MultipartError, prefix: &str) -> ApiError {
+    if e.status() == StatusCode::PAYLOAD_TOO_LARGE {
+        ApiError::payload_too_large(format!(
+            "上传内容太大，一次上传不能超过 {} GB。",
+            MAX_FILE_BYTES / 1024 / 1024 / 1024
+        ))
+    } else {
+        ApiError::bad_request(format!("{prefix}：{e}"))
+    }
+}
 
 /// 扩展名 → MIME（与 Kotlin `MediaFiles.MIME` 同一张表）。
 fn mime_table() -> &'static [(&'static str, &'static str)] {
@@ -193,10 +218,10 @@ pub async fn upload(
     std::fs::create_dir_all(&tmp_dir)
         .map_err(|e| ApiError::internal(format!("临时目录不可用：{e}")))?;
 
-    while let Some(field) = multipart
+    while let Some(mut field) = multipart
         .next_field()
         .await
-        .map_err(|e| ApiError::bad_request(format!("上传解析失败：{e}")))?
+        .map_err(|e| multipart_error(e, "上传解析失败"))?
     {
         let name = field.name().unwrap_or_default().to_string();
         let file_name = field.file_name().map(|f| f.to_string());
@@ -231,21 +256,62 @@ pub async fn upload(
                 };
                 let tmp = tmp_dir.join(format!("upload-{}.part", uuid_hex()));
                 let mime = field.content_type().map(|m| m.to_string());
-                let bytes = match field.bytes().await {
-                    Ok(b) => b,
+                // 流式落盘：4GB 的视频不能整个读进内存（`field.bytes()` 会那么干，
+                // 而且它先受 axum 默认 2MB 上限约束 —— 见 `MAX_BODY_BYTES`）。
+                let mut file = match tokio::fs::File::create(&tmp).await {
+                    Ok(f) => f,
                     Err(e) => {
                         failed.push(FailedInfo {
                             file_name: original_name,
-                            reason: format!("读取上传内容失败：{e}"),
+                            reason: format!("创建临时文件失败：{e}"),
                         });
                         continue;
                     }
                 };
-                let size = bytes.len() as i64;
-                if let Err(e) = std::fs::write(&tmp, &bytes) {
+                let mut size: u64 = 0;
+                let mut read_error: Option<String> = None;
+                loop {
+                    match field.chunk().await {
+                        Ok(Some(chunk)) => {
+                            size += chunk.len() as u64;
+                            if size > MAX_FILE_BYTES {
+                                drop(file);
+                                let _ = tokio::fs::remove_file(&tmp).await;
+                                for item in &incoming {
+                                    let _ = tokio::fs::remove_file(&item.tmp).await;
+                                }
+                                return Err(ApiError::payload_too_large(format!(
+                                    "文件太大，单个文件不能超过 {} GB。",
+                                    MAX_FILE_BYTES / 1024 / 1024 / 1024
+                                )));
+                            }
+                            if let Err(e) = file.write_all(&chunk).await {
+                                read_error = Some(format!("写入临时文件失败：{e}"));
+                                break;
+                            }
+                        }
+                        Ok(None) => break,
+                        Err(e) => {
+                            if e.status() == StatusCode::PAYLOAD_TOO_LARGE {
+                                drop(file);
+                                let _ = tokio::fs::remove_file(&tmp).await;
+                                for item in &incoming {
+                                    let _ = tokio::fs::remove_file(&item.tmp).await;
+                                }
+                                return Err(multipart_error(e, "上传解析失败"));
+                            }
+                            read_error = Some(format!("读取上传内容失败：{e}"));
+                            break;
+                        }
+                    }
+                }
+                let _ = file.flush().await;
+                drop(file);
+                if let Some(reason) = read_error {
+                    let _ = tokio::fs::remove_file(&tmp).await;
                     failed.push(FailedInfo {
                         file_name: original_name,
-                        reason: format!("写入临时文件失败：{e}"),
+                        reason,
                     });
                     continue;
                 }
@@ -253,7 +319,7 @@ pub async fn upload(
                     original_name,
                     tmp,
                     mime,
-                    size,
+                    size: size as i64,
                 });
             }
         }
@@ -286,6 +352,14 @@ pub async fn upload(
     let mut created: Vec<MediaDto> = Vec::new();
     let mut duplicates: Vec<DuplicateInfo> = Vec::new();
     let media_dir = state.media_dir().to_path_buf();
+    // 首次运行 / 换过数据目录时 `storage\media` 可能还不存在：
+    // 不建目录的话下面的 `rename` 会以"系统找不到指定的路径"整批失败。
+    if let Err(e) = std::fs::create_dir_all(&media_dir) {
+        incoming.iter().for_each(|i| {
+            let _ = std::fs::remove_file(&i.tmp);
+        });
+        return Err(ApiError::internal(format!("产物目录不可用：{e}")));
+    }
 
     for item in incoming {
         let stored_name = new_stored_name(&item.original_name);

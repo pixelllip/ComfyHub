@@ -684,7 +684,16 @@ class ApiClient {
         Map<String, dynamic>.from(_decode(res) as Map),
       );
     } on SocketException catch (e) {
-      throw ApiException(0, '无法连接后端 $baseUrl', e.message);
+      // 上传是唯一会长时间写请求体的调用：服务端提前关连接（例如超过上限、后端被重启）
+      // 时 Dart 报的是 `Write failed`，说成"无法连接后端"会把人带偏 —— 后端明明还在。
+      final writeFailed = e.message.toLowerCase().contains('write failed');
+      throw ApiException(
+        0,
+        writeFailed
+            ? '上传中断，后端在接收文件时关闭了连接。文件可能太大，或后端已停止。'
+            : '无法连接后端 $baseUrl',
+        writeFailed ? null : e.message,
+      );
     }
   }
 
