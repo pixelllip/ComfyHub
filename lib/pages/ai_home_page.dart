@@ -1177,6 +1177,7 @@ class _MessageBubbleSlotState extends State<_MessageBubbleSlot> {
     _cached = RepaintBoundary(
       child: _MessageBubble(
         message: message,
+        store: store,
         sending: store.sending,
         // 「AI 正在生成」的转圈动画只绘制在**正在流式生成的那一条**上
         generating: generating,
@@ -1238,6 +1239,9 @@ class _MessageBubbleSlotState extends State<_MessageBubbleSlot> {
 /// 早就不变的历史气泡不会被重新解析。
 class _MessageBubble extends StatelessWidget {
   final AiMessage message;
+
+  /// 会话状态：结尾提问卡要在这里记录作答并发出下一条消息。
+  final AiWorkspaceStore store;
   final bool sending;
 
   /// 表示**正在流式生成**的那一条：
@@ -1312,6 +1316,7 @@ class _MessageBubble extends StatelessWidget {
 
   const _MessageBubble({
     required this.message,
+    required this.store,
     required this.sending,
     this.generating = false,
     this.permissionLabel = '',
@@ -1595,16 +1600,28 @@ class _MessageBubble extends StatelessWidget {
     // 提问渲染为**提问卡而非工具卡**：一个是"等待批准"，
     // 一个是"等待回答"，混在一起会被理解为点击即批准。
     child: call.allQuestions.isNotEmpty
-        ? _AskCard(
-            key: ValueKey('${message.id}-${call.callId}'),
-            // 整张卡（同组的所有题）——多问改造后只给一题会让别的题在界面上消失
-            questions: call.allQuestions,
-            apiBase: apiBase,
-            onAnswer: onAnswerQuestion,
-            onSkip: onSkipQuestion,
-            // "自己输入答案"一行将焦点交给底部被接管的输入框
-            onFocusAnswer: onFocusAskAnswer,
-          )
+        // 结尾提问（`ask_follow_up`）：非阻塞的变种 —— 问题贴在这一轮末尾，
+        // 卡片自己就是作答入口；提交后拼一条用户消息、开下一轮。
+        ? (call.name == 'ask_follow_up'
+              ? _AskFollowUpCard(
+                  key: ValueKey('ask-follow-up-${message.id}-${call.callId}'),
+                  questions: call.allQuestions,
+                  apiBase: apiBase,
+                  store: store,
+                  submitText: call.submitText,
+                  // 这一轮还在生成 / 还在发送时不能提交（要等它结束）
+                  enabled: !sending,
+                )
+              : _AskCard(
+                  key: ValueKey('${message.id}-${call.callId}'),
+                  // 整张卡（同组的所有题）——多问改造后只给一题会让别的题在界面上消失
+                  questions: call.allQuestions,
+                  apiBase: apiBase,
+                  onAnswer: onAnswerQuestion,
+                  onSkip: onSkipQuestion,
+                  // "自己输入答案"一行将焦点交给底部被接管的输入框
+                  onFocusAnswer: onFocusAskAnswer,
+                ))
         : _ToolCallCard(
             key: ValueKey('${message.id}-${call.callId}'),
             call: call,
@@ -1964,76 +1981,84 @@ class _ToolCallCardState extends State<_ToolCallCard> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            children: [
-              Icon(_icon, size: 14, color: color),
-              const SizedBox(width: 6),
-              // 标题独占"扣掉状态、耗时、展开键之后"的整行宽度。
-              // 标题与 `Spacer` 同为 flex 1 时，剩余空间按 1:1 分给两者，
-              // 长标题只能用到一半就被省略号截断，右边却空着一大片；
-              // 去掉 `Spacer` 后展开键也回到耗时旁边，不再被推到行的另一端。
-              Expanded(
-                child: Text(
-                  // 主标题是"这次在干什么"（模型写的 reason，或用途名），不是机器名。
-                  call.name.isEmpty ? '未知工具' : call.displayTitle,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: theme.textTheme.labelMedium,
-                ),
-              ),
-              const SizedBox(width: 6),
-              _StatusChip(label: call.status.label, color: color),
-              if (call.elapsedLabel.isNotEmpty) ...[
-                const SizedBox(width: 6),
-                Text(
-                  call.elapsedLabel,
-                  style: theme.textTheme.labelSmall?.copyWith(
-                    color: theme.colorScheme.outline,
+          // 展开判定区：**整条标题行 + 副标题**都能点。
+          //
+          // 以前只有箭头那个 16px 图标接手势，命中区小到"点了没反应"；
+          // 现在标题 / 状态 / 耗时 / 副标题整块都是同一块命中区。
+          // 没有明细的卡不接手势：点了也不会展开，比不能点更让人困惑。
+          _expandTarget(
+            Tooltip(
+              // 带工具名的 tooltip：便于定位"展开哪一个工具的结果"
+              message: '${_expanded ? '收起' : '展开'} ${call.displayTitle} 的结果',
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Icon(_icon, size: 14, color: color),
+                      const SizedBox(width: 6),
+                      // 标题独占"扣掉状态、耗时、展开键之后"的整行宽度。
+                      // 标题与 `Spacer` 同为 flex 1 时，剩余空间按 1:1 分给两者，
+                      // 长标题只能用到一半就被省略号截断，右边却空着一大片；
+                      // 去掉 `Spacer` 后展开键也回到耗时旁边，不再被推到行的另一端。
+                      Expanded(
+                        child: Text(
+                          // 主标题是"这次在干什么"（模型写的 reason，或用途名），不是机器名。
+                          call.name.isEmpty ? '未知工具' : call.displayTitle,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: theme.textTheme.labelMedium,
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                      _StatusChip(label: call.status.label, color: color),
+                      if (call.elapsedLabel.isNotEmpty) ...[
+                        const SizedBox(width: 6),
+                        Text(
+                          call.elapsedLabel,
+                          style: theme.textTheme.labelSmall?.copyWith(
+                            color: theme.colorScheme.outline,
+                          ),
+                        ),
+                      ],
+                      if (call.isRunning) ...[
+                        const SizedBox(width: 6),
+                        const SizedBox(
+                          width: 12,
+                          height: 12,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        ),
+                      ],
+                      if (call.hasDetail) ...[
+                        const SizedBox(width: 4),
+                        Padding(
+                          padding: const EdgeInsets.all(2),
+                          child: Icon(
+                            _expanded ? Icons.expand_less : Icons.expand_more,
+                            size: 16,
+                            color: theme.colorScheme.outline,
+                          ),
+                        ),
+                      ],
+                    ],
                   ),
-                ),
-              ],
-              if (call.isRunning) ...[
-                const SizedBox(width: 6),
-                const SizedBox(
-                  width: 12,
-                  height: 12,
-                  child: CircularProgressIndicator(strokeWidth: 2),
-                ),
-              ],
-              if (call.hasDetail) ...[
-                const SizedBox(width: 4),
-                Tooltip(
-                  // 带工具名的 tooltip：便于定位"展开哪一个工具的结果"
-                  message:
-                      '${_expanded ? '收起' : '展开'} ${call.displayTitle} 的结果',
-                  child: InkWell(
-                    onTap: () => setState(() => _expanded = !_expanded),
-                    child: Padding(
-                      padding: const EdgeInsets.all(2),
-                      child: Icon(
-                        _expanded ? Icons.expand_less : Icons.expand_more,
-                        size: 16,
-                        color: theme.colorScheme.outline,
+                  // 副标题：`用途 · 机器名`。机器名保留在界面上，但不是首要信息。
+                  if (call.displaySubtitle.isNotEmpty)
+                    Padding(
+                      padding: const EdgeInsets.only(left: 20, top: 1),
+                      child: Text(
+                        call.displaySubtitle,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: theme.textTheme.labelSmall?.copyWith(
+                          color: theme.colorScheme.outline,
+                        ),
                       ),
                     ),
-                  ),
-                ),
-              ],
-            ],
-          ),
-          // 副标题：`用途 · 机器名`。机器名保留在界面上，但不是首要信息。
-          if (call.displaySubtitle.isNotEmpty)
-            Padding(
-              padding: const EdgeInsets.only(left: 20, top: 1),
-              child: Text(
-                call.displaySubtitle,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: theme.textTheme.labelSmall?.copyWith(
-                  color: theme.colorScheme.outline,
-                ),
+                ],
               ),
             ),
+          ),
           // 待批准：气泡里直接给按钮（后端 ToolApprovalGate 已经开着，点了才算数）
           if (call.needsApproval)
             Padding(
@@ -2083,6 +2108,22 @@ class _ToolCallCardState extends State<_ToolCallCard> {
               ),
             ),
         ],
+      ),
+    );
+  }
+
+  /// 把"可展开的头部"包成整块可点：命中区从 16px 的箭头扩大到整行。
+  ///
+  /// 只有真有明细（`hasDetail`）时才接手势：没有明细的卡点了也不会展开，
+  /// 那比不能点更让人困惑。
+  Widget _expandTarget(Widget child) {
+    if (!widget.call.hasDetail) return child;
+    return Material(
+      type: MaterialType.transparency,
+      child: InkWell(
+        onTap: () => setState(() => _expanded = !_expanded),
+        borderRadius: BorderRadius.circular(6),
+        child: child,
       ),
     );
   }
@@ -2656,35 +2697,64 @@ class _ReasoningPanelState extends State<_ReasoningPanel> {
     final label = theme.textTheme.labelSmall?.copyWith(
       color: theme.colorScheme.outline,
     );
+    final summary = widget.text.trim().isEmpty
+        ? ''
+        // 生成中看"末尾一行"（现在想到哪了）；结束后看开头（这段在讲什么）。
+        : summaryOf(widget.text, fromEnd: widget.streaming);
     return Padding(
       padding: const EdgeInsets.only(bottom: 6),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          // 整行可点：命中区从"思考过程 思考中…"这几个字扩大到整行 + 摘要。
+          // 以前只有那一小截文字接手势，下面写着"点击展开完整思考过程"却点不动。
           InkWell(
             onTap: () => setState(() => _expanded = !_expanded),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(
-                  _expanded ? Icons.expand_less : Icons.expand_more,
-                  size: 16,
-                  color: theme.colorScheme.outline,
-                ),
-                Icon(
-                  Icons.psychology_outlined,
-                  size: 14,
-                  color: theme.colorScheme.outline,
-                ),
-                const SizedBox(width: 4),
-                Text('思考过程', style: label),
-                if (widget.streaming) ...[
-                  const SizedBox(width: 6),
-                  // 这里**不用** CircularProgressIndicator：无限动画会让
-                  // `pumpAndSettle` 永远等下去，而且一屏好几个转圈也很吵。
-                  Text('思考中…', style: label),
+            borderRadius: BorderRadius.circular(6),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 4),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    mainAxisSize: MainAxisSize.max,
+                    children: [
+                      Icon(
+                        _expanded ? Icons.expand_less : Icons.expand_more,
+                        size: 16,
+                        color: theme.colorScheme.outline,
+                      ),
+                      Icon(
+                        Icons.psychology_outlined,
+                        size: 14,
+                        color: theme.colorScheme.outline,
+                      ),
+                      const SizedBox(width: 4),
+                      Text('思考过程', style: label),
+                      if (widget.streaming) ...[
+                        const SizedBox(width: 6),
+                        // 这里**不用** CircularProgressIndicator：无限动画会让
+                        // `pumpAndSettle` 永远等下去，而且一屏好几个转圈也很吵。
+                        Text('思考中…', style: label),
+                      ],
+                    ],
+                  ),
+                  if (!_expanded && summary.isNotEmpty)
+                    Padding(
+                      padding: const EdgeInsets.only(left: 20, top: 2),
+                      child: Text(
+                        summary,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: theme.textTheme.labelSmall?.copyWith(
+                          color: theme.colorScheme.outline.withValues(
+                            alpha: 0.85,
+                          ),
+                        ),
+                      ),
+                    ),
                 ],
-              ],
+              ),
             ),
           ),
           if (_expanded)
@@ -2695,22 +2765,6 @@ class _ReasoningPanelState extends State<_ReasoningPanel> {
               child: _StreamingReasoning(
                 text: widget.text,
                 streaming: widget.streaming,
-              ),
-            )
-          else if (widget.text.trim().isNotEmpty)
-            Padding(
-              padding: const EdgeInsets.only(left: 20, top: 2),
-              child: Tooltip(
-                message: '点击展开完整思考过程',
-                child: Text(
-                  // 生成中看"末尾一行"（现在想到哪了）；结束后看开头（这段在讲什么）。
-                  summaryOf(widget.text, fromEnd: widget.streaming),
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: theme.textTheme.labelSmall?.copyWith(
-                    color: theme.colorScheme.outline.withValues(alpha: 0.85),
-                  ),
-                ),
               ),
             ),
         ],

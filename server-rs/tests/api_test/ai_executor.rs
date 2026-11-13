@@ -972,6 +972,72 @@ async fn ask_user_question_waits_then_continues_the_same_run() {
     gateway.abort();
 }
 
+/// 结尾提问（非阻塞的变种，2026-11-13）：工具跑完**这一轮就结束**——
+/// 不再向上游要下一轮（否则卡片后面还会多一段正文），Run 照样是 completed；
+/// 提问不随 Run 收尾失效，也不进「有人等着」总览。
+#[tokio::test]
+async fn ask_follow_up_ends_the_run_and_keeps_questions_pending() {
+    let arguments = serde_json::json!({
+        "questions": [
+            { "question": "跑哪一份？", "options": ["应用内提交的那份", "ComfyUI 里跑的那份"], "header": "工作流" }
+        ],
+        "submitText": "按这个继续"
+    })
+    .to_string();
+    let (base_url, gateway) = scripted_tool_gateway(vec![vec![(
+        "ask_follow_up",
+        Box::leak(arguments.into_boxed_str()),
+    )]])
+    .await;
+    let state = state();
+    seed_provider_and_model(&state);
+    point_at_gateway(&state, &base_url);
+    set_policy(
+        &state,
+        serde_json::json!({ "permissionMode": "ask", "overrides": {} }),
+    );
+
+    let (_, body) = send_json(
+        router_for(state.clone()),
+        "POST",
+        "/api/ai/conversations/conv-0/runs",
+        serde_json::json!({ "text": "用我最近的工作流画一张", "providerId": "goat", "modelId": "m1" }),
+    )
+    .await;
+    let run_id = body["runId"].as_str().unwrap().to_string();
+    let assistant_id = body["assistantMessageId"].as_str().unwrap().to_string();
+
+    let run = wait_for_run(&state, &run_id).await;
+    assert_eq!(run["status"], "completed", "{run}");
+
+    // 脚本第 2 轮会回"收口了"：结尾提问若没有结束这一轮，这段话就会被写进正文。
+    let messages = comfyhub_server_rs::ai::conversations::list_messages(&state, "conv-0").unwrap();
+    let assistant = messages.iter().find(|m| m.id == assistant_id).unwrap();
+    assert!(
+        !assistant.text.contains("收口了"),
+        "结尾提问之后不许再向上游要下一轮：{}",
+        assistant.text
+    );
+    let last = assistant.parts.last().expect("至少要有工具结果块");
+    assert_eq!(last.r#type, "tool_result");
+    let payload = last.json_payload.as_ref().expect("工具结果要有结构");
+    assert_eq!(payload["submitText"], "按这个继续");
+    assert_eq!(payload["askedAll"].as_array().unwrap().len(), 1);
+
+    // 提问**不随 Run 收尾失效**（用户下次打开会话还能答）。
+    let group = comfyhub_server_rs::ai::questions::pending_group_for(&state, &run_id).unwrap();
+    assert_eq!(group.len(), 1, "结尾提问要留成 pending：{group:?}");
+
+    // 也不进「有人等着」总览（它不是闸门，没有 Run 挂在它上面）。
+    let (_, pending) = get_json(router_for(state.clone()), "/api/ai/pending").await;
+    assert!(
+        pending["asks"].as_array().unwrap().is_empty(),
+        "{pending}"
+    );
+
+    gateway.abort();
+}
+
 /// **跳过**整张卡：模型收到的是"未回答"（不是阻塞），Run 照样收口 ——
 /// 且不得伪装为已作答。
 #[tokio::test]

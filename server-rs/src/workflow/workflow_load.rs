@@ -255,14 +255,14 @@ pub async fn load_from_file(
     let sha = sha256_hex(&bytes);
     let run_key = format!("file:{sha}");
     let raw = json!({ "prompt": Value::Object(api_graph.clone()) });
-    let claim = capture_ingest::begin_run(state, &run_key, SOURCE, Some(&raw), false)
+    let claim = capture_ingest::begin_run(state, &run_key, SOURCE, "ComfyUI", Some(&raw), false)
         .map_err(|e| LoadFailure::new("CONFIG_ERROR", e.human()))?;
     let retried = if !claim.claimed
         && claim.existing_prompt_id.is_none()
         && claim.existing_status.as_deref() == Some("success")
     {
         // 库中的提示词已被删除（`prompt_id` 置空）→ 该文件不应一直显示"正在加载"
-        capture_ingest::begin_run(state, &run_key, SOURCE, Some(&raw), true)
+        capture_ingest::begin_run(state, &run_key, SOURCE, "ComfyUI", Some(&raw), true)
             .map_err(|e| LoadFailure::new("CONFIG_ERROR", e.human()))?
     } else {
         claim

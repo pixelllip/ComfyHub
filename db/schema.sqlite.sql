@@ -174,6 +174,9 @@ CREATE TABLE IF NOT EXISTS capture_runs (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
   run_key     TEXT    NOT NULL,
   source      TEXT    NOT NULL DEFAULT 'ComfyUI',
+  -- 这一跑是谁提交的：'ComfyHub' = 应用内提交；'ComfyUI' = 用户在 ComfyUI 里自己跑的
+  -- （含自动捕获）。「查找最近工作流」按它分成两组，不要拿 source / source_kind 代替。
+  submitted_by TEXT   NOT NULL DEFAULT 'ComfyUI',
   source_kind TEXT    NOT NULL DEFAULT 'ComfyUI',
   recipe_id   INTEGER NULL,
   prompt_id   INTEGER NULL REFERENCES prompts(id) ON DELETE SET NULL,
@@ -396,6 +399,10 @@ CREATE TABLE IF NOT EXISTS ai_questions (
   allow_free_text INTEGER NOT NULL DEFAULT 1 CHECK (allow_free_text IN (0,1)),
   multi_select    INTEGER NOT NULL DEFAULT 0 CHECK (multi_select IN (0,1)),
   header          TEXT    NULL,
+  -- 1 = 阻塞式提问（`ask_user_question`：模型在同一个 Run 里等答案）；
+  -- 0 = 结尾提问（`ask_follow_up`：问题抛在回复末尾，这一轮结束，用户提交后作为下一条消息）。
+  -- 收尾 / 重启只清阻塞式那些 —— 结尾提问要能留到用户下次打开再答。
+  blocking        INTEGER NOT NULL DEFAULT 1 CHECK (blocking IN (0,1)),
   status          TEXT    NOT NULL DEFAULT 'pending',
   answer          TEXT    NULL,
   option_index    INTEGER NULL,

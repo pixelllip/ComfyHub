@@ -296,6 +296,473 @@ class _AskCardState extends State<_AskCard> {
   }
 }
 
+// ---------------------------------------------------------------------------
+//  结尾提问卡（`ask_follow_up`，非阻塞的变种）
+// ---------------------------------------------------------------------------
+
+/// 回复末尾的**分页提问卡**：问题贴在这一轮最后，提交后把选择拼成一条用户消息发出。
+///
+/// 与 [`_AskCard`]（阻塞式 `ask_user_question`）的区别：
+///  · 这里是**作答入口本身**（气泡里那张卡直接点选），不接管底部输入框；
+///  · 提交 = 记录答案 + **发出一条用户消息**（新一轮），不依赖模型原地等待；
+///  · 每题都可以不选，最后一页的「提交」始终可点（没选的按"没有选择"发回去）。
+class _AskFollowUpCard extends StatefulWidget {
+  /// 整张卡（同一 `groupId` 的所有题，按题号排）。
+  final List<AiQuestion> questions;
+
+  /// 后端根地址（题目 / 选项图是相对路径）。
+  final String apiBase;
+
+  final AiWorkspaceStore store;
+
+  /// 模型写的"提交后我会……"（可空）。
+  final String? submitText;
+
+  /// 本轮还在生成 / 正在发送时禁用（提交要在这一轮结束之后）。
+  final bool enabled;
+
+  const _AskFollowUpCard({
+    super.key,
+    required this.questions,
+    required this.apiBase,
+    required this.store,
+    this.submitText,
+    this.enabled = true,
+  });
+
+  @override
+  State<_AskFollowUpCard> createState() => _AskFollowUpCardState();
+}
+
+class _AskFollowUpCardState extends State<_AskFollowUpCard> {
+  int _page = 0;
+  bool _busy = false;
+
+  /// 单选选了第几个 / 多选勾了哪几个 / 自己写的字（都按 questionId）。
+  final Map<String, int> _single = {};
+  final Map<String, Set<int>> _multi = {};
+  final Map<String, TextEditingController> _texts = {};
+  final TextEditingController _supplement = TextEditingController();
+
+  @override
+  void dispose() {
+    for (final controller in _texts.values) {
+      controller.dispose();
+    }
+    _supplement.dispose();
+    super.dispose();
+  }
+
+  TextEditingController _textOf(AiQuestion q) =>
+      _texts.putIfAbsent(q.questionId, TextEditingController.new);
+
+  int get _pageIndex => _page.clamp(0, widget.questions.length - 1);
+
+  bool get _isLast => _pageIndex >= widget.questions.length - 1;
+
+  bool get _allAnswered => widget.questions.every((q) => q.answered);
+
+  /// 当前这份本地选择（每题一条；`null` = 这题之前已经答过）。
+  List<AiFollowUpChoice?> _choices() => [
+    for (final q in widget.questions)
+      if (q.answered)
+        null
+      else
+        AiFollowUpChoice(
+          optionIndex: _single[q.questionId],
+          optionIndexes: _multi[q.questionId] ?? const {},
+          text: _texts[q.questionId]?.text ?? '',
+        ),
+  ];
+
+  void _go(int delta) {
+    final next = (_pageIndex + delta).clamp(0, widget.questions.length - 1);
+    if (next != _pageIndex) setState(() => _page = next);
+  }
+
+  /// 跳过本题：清掉这一页的选择，翻到下一题（最后一页就停在原地）。
+  void _skipPage() {
+    final q = widget.questions[_pageIndex];
+    _single.remove(q.questionId);
+    _multi.remove(q.questionId);
+    _textOf(q).clear();
+    setState(() {
+      if (!_isLast) _page = _pageIndex + 1;
+    });
+  }
+
+  Future<void> _submit() async {
+    if (_busy || !widget.enabled) return;
+    setState(() => _busy = true);
+    final r = await widget.store.submitFollowUp(
+      widget.questions,
+      _choices(),
+      supplement: _supplement.text,
+      submitText: widget.submitText ?? '',
+    );
+    if (!mounted) return;
+    setState(() => _busy = false);
+    if (!r.ok) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(r.message)));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    if (_allAnswered) return _recordCard(theme);
+    final q = widget.questions[_pageIndex];
+    final total = widget.questions.length;
+    final paged = total > 1;
+    final answered = q.answered;
+    final picked = _multi[q.questionId] ?? const <int>{};
+    final single = _single[q.questionId];
+    final controller = _textOf(q);
+    final color = theme.colorScheme.tertiary;
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 6),
+      padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: color.withValues(alpha: 0.55)),
+        color: theme.colorScheme.surface,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.help_outline, size: 15, color: color),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                  q.header?.isNotEmpty == true
+                      ? q.header!
+                      : (paged ? 'AI 想确认 $total 件事' : 'AI 想确认一件事'),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: theme.textTheme.labelMedium?.copyWith(color: color),
+                ),
+              ),
+              Text(
+                paged ? '第 ${_pageIndex + 1}/$total 题' : '选完提交',
+                key: const Key('ask-follow-up-page'),
+                style: theme.textTheme.labelSmall?.copyWith(color: color),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          _AskQuestionHead(
+            question: q.question,
+            imageUrl: q.imageUrl == null
+                ? null
+                : absoluteBackendUrl(widget.apiBase, q.imageUrl!),
+            compact: MediaQuery.sizeOf(context).height < 700,
+          ),
+          if (answered)
+            Padding(
+              padding: const EdgeInsets.only(top: 4),
+              child: Text(
+                (q.answer ?? '').isEmpty
+                    ? '（这一题已跳过，模型会当作"用户没有回答"）'
+                    : '已作答，${q.answer}',
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.primary,
+                ),
+              ),
+            )
+          else
+            ConstrainedBox(
+              // 选项多时**只有选项区**内部滚动；下面的"自己输入答案"永远看得见。
+              constraints: BoxConstraints(
+                maxHeight: MediaQuery.sizeOf(context).height < 700 ? 130 : 240,
+              ),
+              child: SingleChildScrollView(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    for (var i = 0; i < q.options.length; i++) ...[
+                      const SizedBox(height: 6),
+                      _AskOptionRow(
+                        key: Key('ask-follow-up-option-$i'),
+                        index: i,
+                        label: q.options[i],
+                        imageUrl: q.optionImageAt(i) == null
+                            ? null
+                            : absoluteBackendUrl(
+                                widget.apiBase,
+                                q.optionImageAt(i)!,
+                              ),
+                        selected: q.multiSelect
+                            ? picked.contains(i)
+                            : single == i,
+                        enabled: !_busy && !answered,
+                        trailing: q.multiSelect
+                            ? Icon(
+                                picked.contains(i)
+                                    ? Icons.check_box
+                                    : Icons.check_box_outline_blank,
+                                size: 18,
+                                color: picked.contains(i)
+                                    ? theme.colorScheme.primary
+                                    : theme.colorScheme.outline,
+                              )
+                            : null,
+                        onTap: () {
+                          setState(() {
+                            if (q.multiSelect) {
+                              final set = _multi.putIfAbsent(
+                                q.questionId,
+                                () => <int>{},
+                              );
+                              set.contains(i) ? set.remove(i) : set.add(i);
+                            } else {
+                              _single[q.questionId] = i;
+                            }
+                            // 两条路只能走一条：选了项就把手打的字清掉
+                            controller.clear();
+                          });
+                        },
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ),
+          // --- 自己输入答案（固定最后一行） ---
+          if (!answered) ...[
+            const SizedBox(height: 6),
+            _customAnswerRow(theme, q, controller),
+          ],
+          // --- 最后一页：补充一句 + 模型写的"提交后我会……" ---
+          if (_isLast && !answered) ...[
+            const SizedBox(height: 8),
+            TextField(
+              key: const Key('ask-follow-up-supplement'),
+              controller: _supplement,
+              enabled: !_busy,
+              minLines: 1,
+              maxLines: 2,
+              decoration: InputDecoration(
+                isDense: true,
+                border: const OutlineInputBorder(),
+                labelText: '还要交代什么（可选）',
+                hintText: '例如：给我具体的 YAML 配置',
+                hintStyle: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.outline,
+                ),
+              ),
+            ),
+            if ((widget.submitText ?? '').trim().isNotEmpty) ...[
+              const SizedBox(height: 4),
+              Text(
+                '提交后会把以上选择发出去，并附上：${widget.submitText!.trim()}',
+                style: theme.textTheme.labelSmall?.copyWith(
+                  color: theme.colorScheme.outline,
+                ),
+              ),
+            ],
+          ],
+          const SizedBox(height: 4),
+          Row(
+            children: [
+              if (paged)
+                TextButton(
+                  key: const Key('ask-follow-up-prev'),
+                  onPressed: (_busy || _pageIndex == 0) ? null : () => _go(-1),
+                  style: TextButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(horizontal: 8),
+                    minimumSize: const Size(0, 36),
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  ),
+                  child: const Text('上一题'),
+                ),
+              TextButton(
+                key: const Key('ask-follow-up-skip'),
+                onPressed: _busy ? null : _skipPage,
+                style: TextButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                  minimumSize: const Size(0, 36),
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
+                child: const Text('跳过本题'),
+              ),
+              const Spacer(),
+              FilledButton(
+                key: const Key('ask-follow-up-submit'),
+                onPressed: (_busy || !widget.enabled)
+                    ? null
+                    : () {
+                        if (_isLast) {
+                          unawaited(_submit());
+                        } else {
+                          _go(1);
+                        }
+                      },
+                style: FilledButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(horizontal: 14),
+                  minimumSize: const Size(0, 36),
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
+                child: Text(_isLast ? '提交' : '下一题'),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 已回答：卡片收成一条记录（问了什么、选了什么），与阻塞式提问卡的记录形态一致。
+  Widget _recordCard(ThemeData theme) {
+    final color = theme.colorScheme.primary;
+    return Container(
+      margin: const EdgeInsets.only(bottom: 6),
+      padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: color.withValues(alpha: 0.55)),
+        color: theme.colorScheme.surface,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.question_answer_outlined, size: 15, color: color),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                  'AI 问过 ${widget.questions.length} 件事',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: theme.textTheme.labelMedium?.copyWith(color: color),
+                ),
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                decoration: BoxDecoration(
+                  color: color.withValues(alpha: 0.15),
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: Text(
+                  '已回答',
+                  style: theme.textTheme.labelSmall?.copyWith(color: color),
+                ),
+              ),
+            ],
+          ),
+          for (var i = 0; i < widget.questions.length; i++) ...[
+            const SizedBox(height: 6),
+            Text(
+              '第 ${i + 1} 题',
+              style: theme.textTheme.labelSmall?.copyWith(
+                color: theme.colorScheme.outline,
+              ),
+            ),
+            const SizedBox(height: 2),
+            Text(
+              widget.questions[i].question,
+              style: theme.textTheme.bodyMedium,
+            ),
+            const SizedBox(height: 2),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Icon(
+                  Icons.subdirectory_arrow_right,
+                  size: 15,
+                  color: theme.colorScheme.outline,
+                ),
+                const SizedBox(width: 4),
+                Expanded(
+                  child: Text(
+                    (widget.questions[i].answer ?? '').isEmpty
+                        ? '（已跳过，没有回答）'
+                        : widget.questions[i].answer!,
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.colorScheme.outline,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  /// "自己输入答案"：序号接着选项走，输入框就在卡片里（不接管底部）。
+  Widget _customAnswerRow(
+    ThemeData theme,
+    AiQuestion q,
+    TextEditingController controller,
+  ) {
+    return Material(
+      color: theme.colorScheme.surfaceContainerHighest,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(10),
+        side: BorderSide(color: theme.dividerColor),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(8, 6, 8, 6),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Container(
+              width: 20,
+              height: 20,
+              margin: const EdgeInsets.only(top: 6),
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                color: theme.colorScheme.surfaceContainerHighest,
+                borderRadius: BorderRadius.circular(6),
+              ),
+              child: Text(
+                '${q.options.length + 1}',
+                style: theme.textTheme.labelSmall?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: TextField(
+                key: Key('ask-follow-up-text-${q.questionId}'),
+                controller: controller,
+                enabled: !_busy,
+                minLines: 1,
+                maxLines: 3,
+                onChanged: (_) => setState(() {
+                  // 手打答案与勾选项互斥
+                  _single.remove(q.questionId);
+                  _multi.remove(q.questionId);
+                }),
+                decoration: InputDecoration(
+                  isDense: true,
+                  border: InputBorder.none,
+                  hintText: '自己输入答案（可选）',
+                  hintStyle: theme.textTheme.bodyMedium?.copyWith(
+                    color: theme.colorScheme.outline,
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 /// 提问卡 / 提问输入区里的一行选项。
 ///
 /// 抽出来是为了两处（气泡里的卡片、底部被接管的输入区）**长得一样**：

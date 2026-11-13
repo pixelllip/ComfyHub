@@ -184,6 +184,22 @@ const NEW_COLUMNS: &[(&str, &str, &str)] = &[
         "source_kind",
         "ALTER TABLE capture_runs ADD COLUMN source_kind TEXT NOT NULL DEFAULT 'ComfyUI'",
     ),
+    // 提问是否阻塞（2026-11-13）：1 = `ask_user_question`（模型原地等）；
+    // 0 = `ask_follow_up`（抛在回复末尾、这一轮结束，用户提交后作为下一条消息）。
+    // 带默认值 1 → 老库里的提问全是阻塞式的，行为不变。
+    (
+        "ai_questions",
+        "blocking",
+        "ALTER TABLE ai_questions ADD COLUMN blocking INTEGER NOT NULL DEFAULT 1",
+    ),
+    // 这一跑是谁提交的（2026-11-13）：'ComfyHub' = 应用内提交，'ComfyUI' = 用户在
+    // ComfyUI 里自己跑的（含自动捕获）。带默认值 'ComfyUI' → 老库里那些应用提交的行
+    // 会落进 ComfyUI 那组（历史无法追溯，只能从这次起分清）。
+    (
+        "capture_runs",
+        "submitted_by",
+        "ALTER TABLE capture_runs ADD COLUMN submitted_by TEXT NOT NULL DEFAULT 'ComfyUI'",
+    ),
     // 这一跑用的是哪条配方（`workflow_recipes.id`）。可空 → 符合加列规矩；外部捕获为 NULL。
     (
         "capture_runs",

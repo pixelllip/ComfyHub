@@ -1182,9 +1182,17 @@ pub async fn capture_run(
     // `make_title` 会退回保存节点的 `filename_prefix`（界面显示为 `test · seed …`）。
     title: Option<&str>,
 ) -> Result<crate::comfy::capture_ingest::IngestResult, String> {
-    let claim =
-        crate::comfy::capture_ingest::begin_run(state, run_key, "ComfyUI", Some(entry), false)
-            .map_err(|e| e.human().to_string())?;
+    let claim = crate::comfy::capture_ingest::begin_run(
+        state,
+        run_key,
+        "ComfyUI",
+        // 这是应用内提交的那一跑 —— 「查找最近工作流」靠这一列把它和用户在
+        // ComfyUI 里自己跑的分开。
+        "ComfyHub",
+        Some(entry),
+        false,
+    )
+    .map_err(|e| e.human().to_string())?;
     if !claim.claimed {
         let prompt_id = claim.existing_prompt_id;
         let media_ids = match prompt_id {

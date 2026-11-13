@@ -56,8 +56,14 @@ pub async fn ingest_json(state: &AppState, body: &Value) -> Result<Value, ApiErr
         .unwrap_or("ComfyUI")
         .to_string();
     let raw = body.get("raw").cloned().unwrap_or_else(|| body.clone());
-    let claim =
-        crate::comfy::capture_ingest::begin_run(state, &run_key, &source, Some(&raw), false)?;
+    let claim = crate::comfy::capture_ingest::begin_run(
+        state,
+        &run_key,
+        &source,
+        "ComfyUI",
+        Some(&raw),
+        false,
+    )?;
     if !claim.claimed {
         return Ok(json!({
             "runKey": run_key,
@@ -382,6 +388,7 @@ async fn import_one(
                 state,
                 &run_key,
                 "ComfyUI-Import",
+                "ComfyUI",
                 None,
                 true,
             )?;

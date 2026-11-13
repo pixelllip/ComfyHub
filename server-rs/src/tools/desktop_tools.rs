@@ -49,6 +49,19 @@ pub struct DesktopToolSpec {
 /// ⚠ **按 name 升序**：与手机清单合并之后仍要保持有序（系统提示里那两行的顺序要稳定）。
 pub const DESKTOP_TOOLS: &[DesktopToolSpec] = &[
     DesktopToolSpec {
+        name: "ask_follow_up",
+        description: r#"**把问题抛在回复的末尾，让用户挑下一步** —— 这一轮到此结束，用户提交后会把选择作为**下一条用户消息**发来，你在下一轮接着做。
+与 `ask_user_question` 的分工：**动手前缺一条信息、你要在同一个回复里等答案** → 用 `ask_user_question`（那是闸门，会卡住这一轮）；**话已经说完了，只是让用户挑下一步 / 选哪份工作流** → 用这一条（不卡，问题就贴在回复末尾）。
+**不是每次都要问**：没有值得让用户拍板的分叉（只有一种合理做法、或用户已经点名）时，直接做完就好。值得问的典型场景：`comfy_recent_successes` 回了两组（应用内提交的 / ComfyUI 里自己跑的），两套都合适而用户没点名；要选画风路线、参考图、成品给谁看。
+怎么写：每题给 `question` + `options`（2~5 个**具体**选项，第一个放你推荐的；界面会补「自己输入答案」）；要多选加 `multiSelect=true`；题目可带 `image`、选项可带示意图（与 `ask_user_question` 同一套写法）。
+界面上是一张卡**分页**（第 N/M 题、上一题 / 下一题 / 跳过本题，最后一页是「提交」）；**每题都可以不选**，提交时没选的按"用户没有选择"发给你。`submitText` 可选，写"提交后我会……"那一句，会附在生成的用户消息末尾。
+⚠ 先把这一轮的正文写完，**再**调用它 —— 它一返回这一轮就结束，你在这之后写的任何内容都不会出现。"#,
+        input_schema: r#"{"type":"object","properties":{"questions":{"type":"array","description":"要问的问题（最多 5 个，一次问完；界面是一张卡分页）","items":{"type":"object","properties":{"question":{"type":"string","description":"这一题要问什么（说清要决定什么）"},"options":{"type":"array","description":"可选：2~5 个具体选项（第一个放你推荐的）；字符串或 {\"text\",\"imageUrl\"|\"attachmentId\",\"region\"} 对象","items":{"anyOf":[{"type":"string"},{"type":"object","properties":{"text":{"type":"string","description":"选项文字（答案就是它）"},"imageUrl":{"type":"string","description":"可选：示意图的 http(s) 直链（只贴真找到的图片文件，不要编）"},"attachmentId":{"type":"string","description":"可选：从这张图片附件上裁示意图"},"region":{"type":"string","description":"可选：归一化裁剪区 x,y,w,h（0~1，左上角原点）；不给则用整张图"}},"required":["text"],"additionalProperties":false}]}},"image":{"type":"object","description":"可选：题目配图（通常是设定图上裁下来的一块）","properties":{"attachmentId":{"type":"string","description":"图片附件 id（用户消息里的设定图）"},"region":{"type":"string","description":"归一化裁剪区 x,y,w,h（0~1）"},"url":{"type":"string","description":"或者：http(s) 图片直链"}},"additionalProperties":false},"multiSelect":{"type":"boolean","description":"可选：true = 这一题可多选（界面画复选框）"},"header":{"type":"string","description":"可选：这一题的小标题（例如「参考图」「输出尺寸」）"}},"required":["question"],"additionalProperties":false}},"question":{"type":"string","description":"（单问的快捷写法）等价于 questions 里只有一条"},"options":{"type":"array","description":"（单问时的选项）","items":{"anyOf":[{"type":"string"},{"type":"object","properties":{"text":{"type":"string"},"imageUrl":{"type":"string"},"attachmentId":{"type":"string"},"region":{"type":"string"}},"required":["text"],"additionalProperties":false}]}},"image":{"type":"object","properties":{"attachmentId":{"type":"string"},"region":{"type":"string"},"url":{"type":"string"}},"additionalProperties":false},"header":{"type":"string","description":"（单问时的标题）"},"submitText":{"type":"string","description":"可选：附在生成的用户消息末尾的一句（例如「请按这个继续」「给我具体的 YAML 配置」）"}},"additionalProperties":false}"#,
+        scope: "DESKTOP",
+        access: "ALLOW",
+        mutating: false,
+    },
+    DesktopToolSpec {
         name: "comfy_audit_workflow",
         description: r#"**审一份工作流**：跑之前先看它有没有"跑不起来"或"大概率白跑"的问题。
 七项检查（全部只报事实，可复现）：① 纯前端节点（rgthree 的 Label / Bookmark / Fast Groups Bypasser、Set/Get、Anything Everywhere）—— 服务端没有这些类，带着它们会在验证阶段整片丢节点（0.01 秒空跑）；② 与当前节点包**版本不兼容**的节点（WidgetToString / SystemNotification 那类 IS_CHANGED 崩）；③ **输出前缀 + 固定 seed**：每次跑都落同一个文件名，会被去重吞掉（跑完 mediaCount: 0，白跑一轮）；④ 参数档位与该模型的官方档位不符（Krea2 Turbo 8 步/cfg 1、Anima er_sde）；⑤ 显存风险（大尺寸 / 放大节点 / 多 LoRA）；⑥ 提示词风格与模型不匹配（给 Krea 2 堆 Danbooru tag、给 Anima 写整段自然语言）；⑦ 加载器与目录不匹配（UNETLoader 去读 checkpoints/ 里的文件）。
@@ -261,12 +274,14 @@ pub const DESKTOP_TOOLS: &[DesktopToolSpec] = &[
     },
     DesktopToolSpec {
         name: "comfy_recent_successes",
-        description: r#"**按任务 / 模型族查「最近一次成功跑过」的工作流**。
+        description: r#"**按任务 / 模型族查「最近成功跑过」的工作流，结果分两组**。
+第 1 组 `appItems` = **应用内提交**的成功运行；第 2 组 `comfyItems` = **在 ComfyUI 里自己跑的**（自动捕获来的；`submitted_by` 不是应用）。
 用途：用户说"上次那张 anima 的图怎么跑的""用上次成功的那条再来一张"时，先来这里拿 runKey / promptId / 模型文件名；不要靠 `comfy_get_status` 的标题猜，也不要逐条 `comfy_get_run` 自己分类。
+⚠ **两组都要看**：应用刚跑完的那条永远是最新的，只挑最近一条等于永远用应用那份。两套都合适、用户又没点名时，在回复末尾用 `ask_follow_up` 让他选（选项写清标题、时间，以及哪一套是应用内提交的）；他会进蓝图看具体接线。
 只认真的成功过的：`capture_runs.status='success'` 且留下完整 API 图；`empty` / `error` 不算（那两种是可重试状态，见 `capture_ingest::can_reclaim`）。
-`task` 按任务过滤（t2i / i2i / edit / inpaint / upscale / video / audio）；`modelQuery` 按 raw 图里出现的模型文件名子串过滤（用于"同族"：anima / krea2 / moss）；`limit` 默认 3、最多 8。
-返回每条带 runKey / promptId / title / capturedAt / task / 模型文件名清单 / skeletonHash，另外带回**当前实例地址** `instanceUrl`：这些记录不区分实例，换过实例（或来回换了两台机器）时先确认它还能跑再照抄。**同任务 + 同族优先**：挑最近的那条，用 `comfy_submit(overrides=…)` 只改提示词与 seed，不要重搭工作流。"#,
-        input_schema: r#"{"type":"object","properties":{"task":{"type":"string","description":"只列这一类任务：t2i / i2i / edit / inpaint / upscale / video / audio；不填就全列"},"modelQuery":{"type":"string","description":"按 raw 图里的模型文件名子串过滤（大小写不敏感），例如 anima / krea2 / moss"},"limit":{"type":"integer","description":"最多几条，默认 3，最多 8"}},"additionalProperties":false}"#,
+`task` 按任务过滤（t2i / i2i / edit / inpaint / upscale / video / audio）；`modelQuery` 按 raw 图里出现的模型文件名子串过滤（用于"同族"：anima / krea2 / moss）；`limit` 是**每组**最多几条，默认 3、最多 8。
+每条带 runKey / promptId / title / capturedAt / task / 模型文件名清单 / skeletonHash / origin；正文里另有**当前实例地址** `instanceUrl`：这些记录不区分实例，换过实例（或来回换了两台机器）时先确认它还能跑再照抄。选定那份之后，用 `comfy_submit(overrides=…)` 只改提示词与 seed，不要重搭工作流。"#,
+        input_schema: r#"{"type":"object","properties":{"task":{"type":"string","description":"只列这一类任务：t2i / i2i / edit / inpaint / upscale / video / audio；不填就全列"},"modelQuery":{"type":"string","description":"按 raw 图里的模型文件名子串过滤（大小写不敏感），例如 anima / krea2 / moss"},"limit":{"type":"integer","description":"**每组**最多几条，默认 3，最多 8"}},"additionalProperties":false}"#,
         scope: "DESKTOP",
         access: "ALLOW",
         mutating: false,

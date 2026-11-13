@@ -171,7 +171,7 @@ pub struct Answer {
     pub option_indexes: Vec<i64>,
 }
 
-/// 新开一条提问（`ask_user_question` 用）。
+/// 新开一条提问（`ask_user_question` / `ask_follow_up` 用）。
 pub struct NewQuestion {
     pub question_id: String,
     pub run_id: String,
@@ -185,6 +185,8 @@ pub struct NewQuestion {
     pub image_url: Option<String>,
     pub multi_select: bool,
     pub header: Option<String>,
+    /// 1 = 阻塞式（模型原地等答案）；0 = 结尾提问（这一轮结束，用户提交后另起一条消息）。
+    pub blocking: bool,
 }
 
 /// 一行的列 → JSON（**`pending.rs` 与这里共用**，所以形状只有一份）。
@@ -340,14 +342,15 @@ pub fn insert(state: &AppState, q: &NewQuestion) -> Result<(), ApiError> {
         image_url: q.image_url.clone(),
         multi_select: q.multi_select,
         header: q.header.clone(),
+        blocking: q.blocking,
     };
     state.write(move |tx| {
         tx.execute(
             "INSERT INTO ai_questions
                (question_id, run_id, conversation_id, group_id, card_index, total, question,
                 options_json, option_images_json, image_url, allow_free_text, multi_select,
-                header, status, asked_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 1, ?11, ?12, 'pending',
+                header, blocking, status, asked_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 1, ?11, ?12, ?13, 'pending',
                      strftime('%Y-%m-%dT%H:%M:%fZ','now'))",
             rusqlite::params![
                 q.question_id,
@@ -361,7 +364,8 @@ pub fn insert(state: &AppState, q: &NewQuestion) -> Result<(), ApiError> {
                 q.option_images,
                 q.image_url,
                 if q.multi_select { 1 } else { 0 },
-                q.header
+                q.header,
+                if q.blocking { 1 } else { 0 }
             ],
         )?;
         Ok(())
@@ -382,6 +386,7 @@ struct NewQuestionRow {
     image_url: Option<String>,
     multi_select: bool,
     header: Option<String>,
+    blocking: bool,
 }
 
 /// 按 questionId 查（**任何状态**都查得到 —— 历史卡片回放要用）。
@@ -421,7 +426,7 @@ pub fn find_stored(
 pub fn list_pending(conn: &Connection) -> rusqlite::Result<Vec<Value>> {
     let mut stmt = conn.prepare(&format!(
         "SELECT {COLS} FROM ai_questions
-          WHERE status = 'pending'
+          WHERE status = 'pending' AND blocking = 1
           ORDER BY asked_at, question_id"
     ))?;
     let rows = stmt
@@ -494,6 +499,98 @@ pub fn find_same_question(
     })
 }
 
+/// 把作答回写进消息里的提问卡（`tool_result` 块的 `question` / `askedAll`）。
+///
+/// 结尾提问（`ask_follow_up`）的工具结果在**作答之前**就落库了 —— 只改 `ai_questions`
+/// 的话，重开会话时卡片还写着"待回答"，用户能再答一次。
+fn sync_part_answer(
+    tx: &rusqlite::Transaction<'_>,
+    question_id: &str,
+    answer: Option<&Answer>,
+) -> rusqlite::Result<()> {
+    let pattern = format!("%{question_id}%");
+    let mut stmt = tx.prepare(
+        "SELECT message_id, ordinal, json_payload FROM ai_message_parts \
+          WHERE type = 'tool_result' AND json_payload IS NOT NULL AND json_payload LIKE ?1",
+    )?;
+    let rows = stmt
+        .query_map(rusqlite::params![pattern], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    drop(stmt);
+    for (message_id, ordinal, text) in rows {
+        let Ok(mut value) = serde_json::from_str::<Value>(&text) else {
+            continue;
+        };
+        let mut changed = false;
+        for key in ["question", "askedAll"] {
+            if let Some(target) = value.get_mut(key) {
+                match target {
+                    Value::Array(list) => {
+                        for item in list.iter_mut() {
+                            changed |= apply_answer(item, question_id, answer);
+                        }
+                    }
+                    Value::Object(_) => {
+                        changed |= apply_answer(target, question_id, answer);
+                    }
+                    _ => {}
+                }
+            }
+        }
+        if changed {
+            tx.execute(
+                "UPDATE ai_message_parts SET json_payload = ?1 \
+                  WHERE message_id = ?2 AND ordinal = ?3",
+                rusqlite::params![value.to_string(), message_id, ordinal],
+            )?;
+        }
+    }
+    Ok(())
+}
+
+/// 在一份 `asked` 对象上写答案；不是这一题就返回 `false`（不改）。
+fn apply_answer(item: &mut Value, question_id: &str, answer: Option<&Answer>) -> bool {
+    let Some(obj) = item.as_object_mut() else {
+        return false;
+    };
+    if obj.get("questionId").and_then(Value::as_str) != Some(question_id) {
+        return false;
+    }
+    obj.insert("answered".into(), Value::Bool(true));
+    match answer {
+        // 有内容的作答
+        Some(a) if !a.answer.is_empty() => {
+            obj.insert("answer".into(), Value::String(a.answer.clone()));
+            match a.option_index {
+                Some(index) => {
+                    obj.insert("optionIndex".into(), Value::from(index));
+                }
+                None => {
+                    obj.remove("optionIndex");
+                }
+            }
+            if a.option_indexes.is_empty() {
+                obj.remove("optionIndexes");
+            } else {
+                obj.insert("optionIndexes".into(), Value::from(a.option_indexes.clone()));
+            }
+        }
+        // 跳过 = 已回答但内容为空（界面显示"已跳过"）
+        _ => {
+            obj.insert("answer".into(), Value::String(String::new()));
+            obj.remove("optionIndex");
+            obj.remove("optionIndexes");
+        }
+    }
+    true
+}
+
 /// 完成作答：**只修改仍为 pending 的那一行**，返回是否被采纳。
 ///
 /// `false` = 这条提问已经不在等待（早就答过 / 超时收尾了），界面要如实说
@@ -516,8 +613,16 @@ pub fn record_answer(
                 SET status = 'answered', answer = ?1, option_index = ?2, option_indexes = ?3,
                     answered_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
               WHERE question_id = ?4 AND status = 'pending'",
-            rusqlite::params![answer.answer, answer.option_index, indexes, question_id],
+            rusqlite::params![
+                &answer.answer,
+                answer.option_index,
+                &indexes,
+                question_id
+            ],
         )?;
+        if n > 0 {
+            sync_part_answer(tx, &question_id, Some(&answer))?;
+        }
         Ok(n > 0)
     })
 }
@@ -538,16 +643,21 @@ pub fn finalize_if_pending(
             "UPDATE ai_questions
                 SET status = ?1, answered_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
               WHERE question_id = ?2 AND status = 'pending'",
-            rusqlite::params![status, question_id],
+            rusqlite::params![&status, &question_id],
         )?;
+        // 「跳过」也要落到卡片上（已回答但内容为空）：结尾提问的工具结果早于作答落库。
+        // `expired` 不写 —— 那是阻塞式提问收尾，卡片由工具结果自己带答案。
+        if n > 0 && status == "skipped" {
+            sync_part_answer(tx, &question_id, None)?;
+        }
         Ok(n)
     })
 }
 
-/// Run 收尾：这个 Run 上还没答的提问一律按 `status`（一般是 `expired`）收尾。
+/// Run 收尾：这个 Run 上还没答的**阻塞式**提问一律按 `status`（一般是 `expired`）收尾。
 ///
-/// 少了这一步，那些行会永远停在 pending：`/api/ai/pending` 一直把它们列出来，
-/// 而点进去谁也答不了（Run 已经结束了）。
+/// 结尾提问（`blocking = 0`）**不收**：它们本来就活在这次 Run 之外 ——
+/// 用户下次打开会话仍然可以作答。
 pub fn finalize_run(state: &AppState, run_id: &str, status: &str) -> Result<usize, ApiError> {
     let run_id = run_id.to_string();
     let status = status.to_string();
@@ -555,21 +665,22 @@ pub fn finalize_run(state: &AppState, run_id: &str, status: &str) -> Result<usiz
         let n = tx.execute(
             "UPDATE ai_questions
                 SET status = ?1, answered_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
-              WHERE run_id = ?2 AND status = 'pending'",
+              WHERE run_id = ?2 AND status = 'pending' AND blocking = 1",
             rusqlite::params![status, run_id],
         )?;
         Ok(n)
     })
 }
 
-/// 后端重启恢复：库里还标着 pending 的行都是"再也不会有人来回答"的了（Kotlin
-/// `AiQuestionRepo.expireStalePending`，调用点在 `fail_stale_running` 之后）。
+/// 后端重启恢复：库里还标着 pending 的**阻塞式**提问都是"再也不会有人来回答"的了
+/// （Kotlin `AiQuestionRepo.expireStalePending`，调用点在 `fail_stale_running` 之后）。
+/// 结尾提问（`blocking = 0`）留着 —— 它们的目的就是等用户下次回来作答。
 pub fn expire_stale(state: &AppState) -> Result<usize, ApiError> {
     state.write(|tx| {
         let n = tx.execute(
             "UPDATE ai_questions SET status = 'expired',
                     answered_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
-              WHERE status = 'pending'",
+              WHERE status = 'pending' AND blocking = 1",
             [],
         )?;
         Ok(n)

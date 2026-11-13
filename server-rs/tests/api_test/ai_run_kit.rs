@@ -41,8 +41,8 @@ async fn run_kit_ships_every_rule_the_phone_needs() {
     // v69（2026-11-11）：模型侧核对闭环 —— verify 结果正文带规范化框表，comfy_submit
     //   的本次产物自动附图，第 25 条要求出图后逐项对照。
     // v70（2026-11-11）：开工顺序（命中技能先 load_skill）+ 出图后必须核对构图。
-    // v72（2026-11-12）：移除 2D 布局 —— 删掉 `layout_propose` 与第 25 条。
-    assert_eq!(body["promptVersion"], "v72");
+    // v73（2026-11-13）：新增非阻塞的结尾提问 `ask_follow_up`（桌面专属）。
+    assert_eq!(body["promptVersion"], "v73");
     assert_eq!(body["nsfwEnabled"], false, "夹具里没开 NSFW");
     assert_eq!(body["inlineBudget"]["perImageBytes"], 8388608, "单图 8MB");
     assert_eq!(body["inlineBudget"]["totalBytes"], 20971520, "合计 20MB");
@@ -478,6 +478,8 @@ async fn tool_policy_and_nsfw_endpoints() {
     assert_eq!(
         names,
         vec![
+            // 结尾提问（2026-11-13）：不阻塞，问题抛在回复末尾；桌面专属
+            "ask_follow_up",
             "ask_user_question",
             // 联网三件（P4 第 64 步）：Kotlin 给它们写的是 `BOTH`，所以它们住在
             // `mobile_tools.rs`（机器抽取的那份），但**实现**是这一步才落地的

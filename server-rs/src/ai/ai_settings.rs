@@ -97,7 +97,7 @@ pub fn list_tools(state: &AppState) -> Result<Value, ApiError> {
 /// 而漂移的后果是**预算形同虚设**、且不会有任何用例变红 —— 所以只有这一份。
 pub(crate) fn category_of(name: &str) -> &'static str {
     match name {
-        "ask_user_question" => "ask",
+        "ask_user_question" | "ask_follow_up" => "ask",
         "list_skills" | "load_skill" | "register_skill" | "delete_skill" => "skill",
         "remember" => "memory",
         // 联网（Kotlin `ToolCategory.WEB`）：**`danbooru_lookup` 与 `find_model` 也在这里**

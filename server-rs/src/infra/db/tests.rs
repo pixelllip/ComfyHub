@@ -43,6 +43,10 @@ fn 老库补_capture_runs_的_provenance_两列_且重复打开不炸() {
         "要补 source_kind"
     );
     assert!(cols.contains(&"recipe_id".to_string()), "要补 recipe_id");
+    assert!(
+        cols.contains(&"submitted_by".to_string()),
+        "要补 submitted_by"
+    );
     let kind: String = conn
         .query_row(
             "SELECT source_kind FROM capture_runs WHERE run_key = 'old-run'",
@@ -51,6 +55,17 @@ fn 老库补_capture_runs_的_provenance_两列_且重复打开不炸() {
         )
         .unwrap();
     assert_eq!(kind, "ComfyUI", "老行要拿到列默认值（外部捕获）");
+    let submitted_by: String = conn
+        .query_row(
+            "SELECT submitted_by FROM capture_runs WHERE run_key = 'old-run'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        submitted_by, "ComfyUI",
+        "老行一律当 ComfyUI 侧（历史无法追溯谁提交的）"
+    );
     drop(conn);
     // 第二次打开：补列流程重复执行不报错
     let conn = open_or_create(&path).expect("第二次打开不炸");

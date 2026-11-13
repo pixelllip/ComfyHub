@@ -79,15 +79,18 @@ pub fn begin_run(
     state: &AppState,
     run_key: &str,
     source: &str,
+    submitted_by: &str,
     raw: Option<&Value>,
     force: bool,
 ) -> Result<RunClaim, ApiError> {
     let raw_text = raw.map(|value| value.to_string());
     let run_key = run_key.trim().to_string();
+    let submitted_by = submitted_by.trim().to_string();
     state.write(|tx| {
         let inserted = tx.execute(
-            "INSERT OR IGNORE INTO capture_runs (run_key, source, status, raw) VALUES (?1,?2,'running',?3)",
-            params![run_key, source, raw_text],
+            "INSERT OR IGNORE INTO capture_runs (run_key, source, submitted_by, status, raw) \
+             VALUES (?1,?2,?3,'running',?4)",
+            params![run_key, source, &submitted_by, raw_text],
         )?;
         if inserted > 0 {
             return Ok(RunClaim { claimed: true, existing_prompt_id: None, existing_status: None });
@@ -109,17 +112,31 @@ pub fn begin_run(
         let status = status.unwrap_or_default();
         let age = age.unwrap_or(0);
         if !can_reclaim(&status, age, force) {
+            // 抢不到也**可以升级** `submitted_by`：应用提交的那一跑可能先被轮询收走
+            // （那一行是 success，不能让 `begin_run` 重抢），但"谁提交的"仍然可以记上。
+            if submitted_by == "ComfyHub" {
+                tx.execute(
+                    "UPDATE capture_runs SET submitted_by = 'ComfyHub' WHERE run_key = ?1",
+                    params![run_key],
+                )?;
+            }
             return Ok(RunClaim {
                 claimed: false,
                 existing_prompt_id: prompt_id,
                 existing_status: Some(status),
             });
         }
+        // ⚠ `submitted_by` 只许**升级**成 'ComfyHub'，不许被轮询改回 'ComfyUI'：
+        // 应用提交的那一跑可能先被轮询抢到（4 秒一轮），之后再被 `comfy_submit` 认领 ——
+        // 那时若按调用方传的值覆盖，这条运行就会从"应用内提交"掉进"ComfyUI 里跑的"。
         tx.execute(
             &format!(
-                "UPDATE capture_runs SET status = 'running', error = NULL, created_at = {NOW_SQL} WHERE run_key = ?1"
+                "UPDATE capture_runs SET status = 'running', error = NULL, \
+                   submitted_by = CASE WHEN ?2 = 'ComfyHub' THEN 'ComfyHub' ELSE submitted_by END, \
+                   created_at = {NOW_SQL} \
+                 WHERE run_key = ?1"
             ),
-            params![run_key],
+            params![run_key, submitted_by],
         )?;
         Ok(RunClaim { claimed: true, existing_prompt_id: None, existing_status: None })
     })
@@ -1269,7 +1286,15 @@ pub async fn poll_once(state: &AppState, config: &CaptureConfig) -> Value {
             .and_then(|s| s.get("status_str"))
             .and_then(Value::as_str)
             .map(str::to_string);
-        let claim = match begin_run(state, run_key, "ComfyUI", Some(entry), false) {
+        // 应用自己提交的那一跑（`comfy_submit` 记在内存里的提交清单）要如实标成
+        // `ComfyHub`：轮询可能比提交方先看到 `/history`，先插进去的那一行决定了
+        // 「查找最近工作流」把它归到哪一组。
+        let submitted_by = if state.submissions.find(run_key).is_some() {
+            "ComfyHub"
+        } else {
+            "ComfyUI"
+        };
+        let claim = match begin_run(state, run_key, "ComfyUI", submitted_by, Some(entry), false) {
             Ok(claim) => claim,
             Err(_) => continue,
         };

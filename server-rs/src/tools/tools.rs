@@ -84,6 +84,10 @@ pub struct ToolOutcome {
     pub preview: String,
     /// 结构化负载（落进 `ai_message_parts.json_payload` 的 `mediaIds` 等，界面按它渲染卡片）
     pub payload: Value,
+    /// 这个工具跑完就把**这一轮**结束掉（不再向上游要下一轮）。
+    ///
+    /// 只有 `ask_follow_up` 会置它：问题要落在回复的最后，模型不能在这之后再写正文。
+    pub ends_turn: bool,
 }
 
 impl ToolOutcome {
@@ -96,7 +100,14 @@ impl ToolOutcome {
             content,
             preview,
             payload,
+            ends_turn: false,
         }
+    }
+
+    /// 标记"这一轮到此结束"（见 [`ToolOutcome::ends_turn`]）。
+    pub fn end_turn(mut self) -> Self {
+        self.ends_turn = true;
+        self
     }
 }
 
@@ -394,35 +405,90 @@ fn add_reason_property(parameters: &mut Value) {
 /// 不改变任何工具自己的校验。
 ///
 /// 纪律：
-/// * **只解"只有一个 `arguments` / `args` 键"的对象**（正常参数里不会只有一个 `arguments`）；
+/// * **只解"除包装键以外没有别的参数键"的对象**：`arguments` / `args` 之外只允许
+///   `reason`（见下一节）。正常参数（`path` / `query` …）里出现 `arguments` 键时
+///   **不许解** —— 那可能是某个工具真的叫这个名字；
 /// * 最多解 4 层（字符串 → 对象 → 字符串…实际见过 2 层）；
 /// * 解不出来 / 解完不是对象 → **原样返回**，让工具自己报错（不许吞成 `{}`）。
+///
+/// # 为什么 `reason` 必须放行（2026-11-12 的现场）
+///
+/// `reason` 是 harness **自己**加进每个工具 schema 的显示字段（`add_reason_property`），
+/// 系统提示要求模型"每次调用都写"。于是模型很自然地把整包参数和它写在同一个对象里：
+///
+/// ```text
+/// {"arguments": "{\"workflowPath\": \"D:\\\\…json\"}", "reason": "先跑一张试通"}
+/// ```
+///
+/// 旧判据是"对象只有一个键才解"。这类对象有两个键，于是**整包放过**；紧接着
+/// `take_reason` 把 `reason` 摘掉、重新序列化成 `{"arguments": …}` —— 工具层看到
+/// "有 `arguments`、没有 `workflowPath`"，就报了那句让人莫名其妙的
+/// 「要么给 promptId…要么给 workflowPath」（现场：`comfy_submit` 连报 8 次，参数其实
+/// 一个都不缺）。判据放宽到"只多一个 `reason`"，这条链就断了。
 pub fn normalize_arguments_text(raw: &str) -> String {
-    let Ok(mut value) = serde_json::from_str::<Value>(raw) else {
+    let Ok(value) = serde_json::from_str::<Value>(raw) else {
         return raw.to_string();
     };
+    serde_json::to_string(&normalize_arguments_value(&value)).unwrap_or_else(|_| raw.to_string())
+}
+
+/// 包装键：模型把整份参数塞进它下面。
+const WRAPPER_KEYS: [&str; 2] = ["arguments", "args"];
+
+/// 允许和包装键**共存**的键（harness 自己加的显示字段，不是工具参数）。
+const WRAPPER_COMPANIONS: [&str; 1] = ["reason"];
+
+/// 解一层包装，返回 `(解出来的值, 外层捎带的 reason)`。
+///
+/// `reason` 要带回去：解包发生在 `take_reason` **之前**，丢掉它工具卡就没标题了。
+fn unwrap_one_layer(value: &Value) -> Option<(Value, Option<Value>)> {
+    match value {
+        // 顶层就是字符串：上一轮解出来的 `"{\"path\":…}"` 还要再解一次
+        Value::String(text) => serde_json::from_str::<Value>(text.trim())
+            .ok()
+            .map(|inner| (inner, None)),
+        Value::Object(map) => {
+            // 除了包装键与放行键之外还有别的键 → 这是正常参数，不许动
+            if map.keys().any(|key| {
+                !WRAPPER_KEYS.contains(&key.as_str()) && !WRAPPER_COMPANIONS.contains(&key.as_str())
+            }) {
+                return None;
+            }
+            let inner = WRAPPER_KEYS.iter().find_map(|key| map.get(*key))?;
+            let unwrapped = match inner {
+                Value::String(text) => serde_json::from_str::<Value>(text.trim()).ok()?,
+                Value::Object(_) => inner.clone(),
+                _ => return None,
+            };
+            Some((unwrapped, map.get("reason").cloned()))
+        }
+        _ => None,
+    }
+}
+
+/// [`normalize_arguments_text`] 的对象版（执行入口拿到的已经是 `Value`）。
+pub fn normalize_arguments_value(value: &Value) -> Value {
+    let mut current = value.clone();
+    let mut carried_reason: Option<Value> = None;
     for _ in 0..4 {
-        let next = match &value {
-            Value::Object(map) if map.len() == 1 => map
-                .get("arguments")
-                .or_else(|| map.get("args"))
-                .and_then(|inner| match inner {
-                    Value::String(text) => serde_json::from_str::<Value>(text.trim()).ok(),
-                    Value::Object(_) => Some(inner.clone()),
-                    _ => None,
-                }),
-            // 顶层就是字符串：上一轮解出来的 `"{\"path\":…}"` 还要再解一次
-            Value::String(text) => serde_json::from_str::<Value>(text.trim()).ok(),
-            _ => None,
+        let Some((next, reason)) = unwrap_one_layer(&current) else {
+            break;
         };
-        match next {
-            // 字符串也要继续：真实形状是 `{"arguments": "\"{\\\"path\\\":…}\""}`
-            // —— 第一层解出来还是个字符串，再解一次才是对象。
-            Some(next) if next.is_object() || next.is_string() => value = next,
-            _ => break,
+        if carried_reason.is_none() {
+            carried_reason = reason;
+        }
+        // 字符串也要继续：真实形状是 `{"arguments": "\"{\\\"path\\\":…}\""}`
+        // —— 第一层解出来还是个字符串，再解一次才是对象。
+        if next.is_object() || next.is_string() {
+            current = next;
+        } else {
+            break;
         }
     }
-    serde_json::to_string(&value).unwrap_or_else(|_| raw.to_string())
+    if let (Some(reason), Value::Object(map)) = (carried_reason, &mut current) {
+        map.entry("reason".to_string()).or_insert(reason);
+    }
+    current
 }
 
 /// 一个工具在"清单"这一层的借用视图（两种来源的公共形状）。
@@ -523,7 +589,8 @@ pub fn implemented() -> Vec<ToolView<'static>> {
 /// + **配方三件**（`comfy_learn_workflow` / `comfy_list_recipes` / `comfy_bind_recipe`，
 ///   见 [`crate::workflow::workflow_recipe`]，P4 第 67 步；学与绑都与
 ///   `POST /api/ai/workflow-recipes*` 共用一份实现）。
-pub const IMPLEMENTED: [&str; 46] = [
+pub const IMPLEMENTED: [&str; 47] = [
+    "ask_follow_up",
     "ask_user_question",
     "civitai_search",
     "comfy_audit_workflow",
@@ -671,6 +738,8 @@ pub async fn execute(
         "ask_user_question" => {
             ask_user_question(state, run_id, conversation_id, arguments, session).await
         }
+        // 非阻塞的变种：问题抛在回复末尾，这一轮就此结束（用户提交后另起一条消息）。
+        "ask_follow_up" => ask_follow_up(state, run_id, conversation_id, arguments),
         // ---- 桌面文件工具五件（P4 第 40 步）--------------------------------
         "list_dir" => list_dir(policy, arguments),
         "read_file" => read_file(policy, arguments),
@@ -1799,7 +1868,12 @@ fn comfy_list_workflows(state: &AppState, arguments: &Value) -> Result<ToolOutco
     Ok(ToolOutcome::new(json.to_string(), json))
 }
 
-/// `comfy_recent_successes`：按任务 / 模型族查**最近成功**的捕获记录（T1，2026-11-08）。
+/// `comfy_recent_successes`：按任务 / 模型族查**最近成功**的捕获记录（T1，2026-11-08；
+/// 2026-11-13 起分两组）。
+///
+/// **两组**：`submitted_by='ComfyHub'` 的是应用内提交的运行；其余（自动捕获，含用户在
+/// ComfyUI 界面里自己跑的那一批）是 ComfyUI 侧的运行。两组各自按时间倒序取 `limit` 条 ——
+/// 只留一组时，应用刚提交的那条会永远把"用户自己跑的"挤掉。
 ///
 /// 只认 `capture_runs.status='success'` 且 `raw` 非空：`empty` / `error` 是
 /// 可重试状态（见 `capture_ingest::can_reclaim`），不算"成功过"。
@@ -1833,14 +1907,25 @@ fn comfy_recent_successes(state: &AppState, arguments: &Value) -> Result<ToolOut
     let limit = int_arg(arguments, "limit").unwrap_or(3).clamp(1, 8) as usize;
 
     // 多扫一些再过滤：task / modelQuery 都要拿到 raw 才判得出。
-    // 200 与 `capture::recent_runs` 的上限同档，扫满也只是一次小查询。
+    // 300 与 `auto_select::SCAN_RECENT` 同档，扫满也只是一次小查询。
+    //
+    // 「应用内提交的」= `submitted_by='ComfyHub'`，或者**本进程这次**提交过的那几跑
+    // （`state.submissions`）。后者是为了刚升级上来的老库：那些行的 `submitted_by`
+    // 还是默认值 `ComfyUI`，但本次会话里提交过的运行一样要归到应用那一组。
+    let app_prompt_ids: std::collections::HashSet<String> = state
+        .submissions
+        .list(crate::workflow::workflow_submit::MAX_TRACKED)
+        .iter()
+        .filter_map(|item| item.get("promptId").and_then(Value::as_str))
+        .map(str::to_string)
+        .collect();
     let rows = state
         .with(|conn| {
             let mut stmt = conn.prepare(
-                "SELECT run_key, prompt_id, title, raw, created_at \
+                "SELECT run_key, prompt_id, title, raw, created_at, submitted_by \
                  FROM capture_runs \
                  WHERE status = 'success' AND raw IS NOT NULL AND TRIM(raw) <> '' \
-                 ORDER BY created_at DESC, id DESC LIMIT 200",
+                 ORDER BY created_at DESC, id DESC LIMIT 300",
             )?;
             let rows = stmt.query_map([], |row| {
                 Ok((
@@ -1849,6 +1934,7 @@ fn comfy_recent_successes(state: &AppState, arguments: &Value) -> Result<ToolOut
                     row.get::<_, Option<String>>(2)?,
                     row.get::<_, Option<String>>(3)?.unwrap_or_default(),
                     row.get::<_, Option<String>>(4)?,
+                    row.get::<_, Option<String>>(5)?.unwrap_or_default(),
                 ))
             })?;
             let mut out = Vec::new();
@@ -1859,11 +1945,12 @@ fn comfy_recent_successes(state: &AppState, arguments: &Value) -> Result<ToolOut
         })
         .map_err(capture_failure)?;
 
-    let mut items: Vec<Value> = Vec::new();
+    let mut app_items: Vec<Value> = Vec::new();
+    let mut comfy_items: Vec<Value> = Vec::new();
     let mut scanned = 0usize;
     let mut skipped = 0usize;
-    for (run_key, prompt_id, title, raw, created_at) in rows {
-        if items.len() >= limit {
+    for (run_key, prompt_id, title, raw, created_at, submitted_by) in rows {
+        if app_items.len() >= limit && comfy_items.len() >= limit {
             break;
         }
         scanned += 1;
@@ -1896,6 +1983,17 @@ fn comfy_recent_successes(state: &AppState, arguments: &Value) -> Result<ToolOut
             }
         }
 
+        let is_app =
+            submitted_by == "ComfyHub" || app_prompt_ids.contains(run_key.as_str());
+        // 每一组各自限 `limit` 条：应用那组再新，也不能把用户在 ComfyUI 里跑的那条挤掉。
+        if is_app {
+            if app_items.len() >= limit {
+                continue;
+            }
+        } else if comfy_items.len() >= limit {
+            continue;
+        }
+
         let mut item = serde_json::Map::new();
         item.insert("runKey".into(), json!(run_key));
         if let Some(id) = prompt_id {
@@ -1910,8 +2008,34 @@ fn comfy_recent_successes(state: &AppState, arguments: &Value) -> Result<ToolOut
         item.insert("task".into(), json!(recipe.task.wire()));
         item.insert("models".into(), json!(models));
         item.insert("skeletonHash".into(), json!(recipe.skeleton_hash));
-        items.push(Value::Object(item));
+        item.insert(
+            "origin".into(),
+            json!(if is_app { "app" } else { "comfyui" }),
+        );
+        let item = Value::Object(item);
+        if is_app {
+            app_items.push(item);
+        } else {
+            comfy_items.push(item);
+        }
     }
+
+    // `items` = 两组合并（仍是时间倒序）：老调用方与用例读这一个键。
+    let mut items: Vec<Value> = app_items
+        .iter()
+        .chain(comfy_items.iter())
+        .cloned()
+        .collect();
+    items.sort_by(|a, b| {
+        b.get("capturedAt")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .cmp(
+                a.get("capturedAt")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default(),
+            )
+    });
 
     let count = items.len();
     // T6（2026-11-09）：把**当前实例**的地址带出去。
@@ -1942,37 +2066,65 @@ fn comfy_recent_successes(state: &AppState, arguments: &Value) -> Result<ToolOut
             "先确认这条工作流真的跑通过一次，或用 comfy_list_workflows 找现成的；不要凭标题猜。",
         );
     } else {
-        text.push_str(&format!("最近 {count} 条成功运行（同任务 + 同族优先）：\n"));
-        for item in &items {
-            let obj = item.as_object().expect("item 是对象");
-            let title = obj
-                .get("title")
-                .and_then(Value::as_str)
-                .unwrap_or("(没有标题)");
-            let task = obj.get("task").and_then(Value::as_str).unwrap_or("unknown");
-            let models = obj
-                .get("models")
-                .and_then(Value::as_array)
-                .map(|list| {
-                    list.iter()
-                        .filter_map(Value::as_str)
-                        .collect::<Vec<_>>()
-                        .join("、")
-                })
-                .unwrap_or_default();
-            let at = obj.get("capturedAt").and_then(Value::as_str).unwrap_or("");
-            let run_key = obj.get("runKey").and_then(Value::as_str).unwrap_or("");
-            text.push_str(&format!(
-                "- {title}（{task}；模型：{}；{at}；runKey {run_key}）\n",
-                if models.is_empty() {
-                    "没记录"
-                } else {
-                    &models
-                }
-            ));
+        /// 一组里每条一行（标题 / 任务 / 模型 / 时间 / runKey）。
+        fn render_items(list: &[Value]) -> String {
+            let mut out = String::new();
+            for item in list {
+                let obj = item.as_object().expect("item 是对象");
+                let title = obj
+                    .get("title")
+                    .and_then(Value::as_str)
+                    .unwrap_or("(没有标题)");
+                let task = obj.get("task").and_then(Value::as_str).unwrap_or("unknown");
+                let models = obj
+                    .get("models")
+                    .and_then(Value::as_array)
+                    .map(|list| {
+                        list.iter()
+                            .filter_map(Value::as_str)
+                            .collect::<Vec<_>>()
+                            .join("、")
+                    })
+                    .unwrap_or_default();
+                let at = obj.get("capturedAt").and_then(Value::as_str).unwrap_or("");
+                let run_key = obj.get("runKey").and_then(Value::as_str).unwrap_or("");
+                out.push_str(&format!(
+                    "- {title}（{task}；模型：{}；{at}；runKey {run_key}）\n",
+                    if models.is_empty() {
+                        "没记录"
+                    } else {
+                        &models
+                    }
+                ));
+            }
+            out
+        }
+
+        text.push_str(&format!(
+            "最近成功运行分两组（同任务 + 同族优先；每组最多 {limit} 条）。两组都要看：\n"
+        ));
+        text.push_str(&format!("【应用内提交】{} 条\n", app_items.len()));
+        if app_items.is_empty() {
+            text.push_str("- 没有记录：应用里还没有成功跑过，或者那几条记录被删了。\n");
+        } else {
+            text.push_str(&render_items(&app_items));
+        }
+        text.push_str(&format!("【ComfyUI 里运行的】{} 条\n", comfy_items.len()));
+        if comfy_items.is_empty() {
+            text.push_str(
+                "- 没有记录：自动捕获可能没开、盯的不是你在用的那个实例，或者最近确实没跑过。\
+                 别据此说\"你没在 ComfyUI 里跑过\"，先让用户确认自动捕获与实例地址。\n",
+            );
+        } else {
+            text.push_str(&render_items(&comfy_items));
         }
         text.push_str(
-            "用法：挑最近这一条，用 comfy_submit(overrides=… ) 只改提示词与 seed；不要重搭工作流，也别逐条 comfy_get_run 自己分类。",
+            "用法：**不要默认挑最近的那一条** —— 「应用内提交」是应用替你跑的那份；\
+             「ComfyUI 里运行的」才是用户在 ComfyUI 界面里自己跑的那份（自动捕获来的，\
+             可能晚几秒出现）。选定之后由你写进 comfy_submit(overrides=…)，只改提示词与 seed；\
+             不要重搭工作流，也别逐条 comfy_get_run 自己分类。\
+             两套都说得通、用户又没点名时，在回复末尾用 ask_follow_up 让他选：\
+             选项写清标题、时间，以及哪一套是应用内提交的（他可以进蓝图看具体接线）。",
         );
         let instance_note = match &instance_url {
             Some(url) => format!(
@@ -1986,7 +2138,12 @@ fn comfy_recent_successes(state: &AppState, arguments: &Value) -> Result<ToolOut
     }
 
     let mut payload = serde_json::Map::new();
-    payload.insert("items".into(), json!(items));
+    payload.insert(
+        "items".into(),
+        json!(items),
+    );
+    payload.insert("appItems".into(), json!(app_items));
+    payload.insert("comfyItems".into(), json!(comfy_items));
     payload.insert("count".into(), json!(count));
     payload.insert("scanned".into(), json!(scanned));
     if let Some(url) = &instance_url {
@@ -2525,6 +2682,70 @@ async fn wait_for_answers(
     }
 }
 
+/// 把提问规格落库 + 逐题发 `user.question`（`ask_user_question` / `ask_follow_up` 共用）。
+///
+/// 返回 `(groupId, records)`；`records` 是落库后又读回来的那一行 —— 与
+/// `GET /api/ai/questions/{id}` 的形状完全一致（少一次"手拼一份 JSON 与库里那份不一致"）。
+fn create_question_card(
+    state: &AppState,
+    run_id: &str,
+    conversation_id: &str,
+    specs: &[AskSpec],
+    blocking: bool,
+) -> Result<(String, Vec<crate::ai::questions::StoredQuestion>), ToolFailure> {
+    let group_id = crate::ai::conversations::uuid_v4().map_err(failure_of)?;
+    let total = specs.len() as i64;
+    let mut records: Vec<crate::ai::questions::StoredQuestion> =
+        Vec::with_capacity(specs.len());
+    for (index, spec) in specs.iter().enumerate() {
+        let question_id = crate::ai::conversations::uuid_v4().map_err(failure_of)?;
+        crate::ai::questions::insert(
+            state,
+            &crate::ai::questions::NewQuestion {
+                question_id: question_id.clone(),
+                run_id: run_id.to_string(),
+                conversation_id: conversation_id.to_string(),
+                group_id: group_id.clone(),
+                index: index as i64,
+                total,
+                question: spec.question.clone(),
+                options: spec.options.clone(),
+                option_images: spec.option_images.clone(),
+                image_url: spec.image_url.clone(),
+                multi_select: spec.multi_select,
+                header: spec.header.clone(),
+                blocking,
+            },
+        )
+        .map_err(failure_of)?;
+        let Some(row) =
+            crate::ai::questions::find_stored(state, &question_id).map_err(failure_of)?
+        else {
+            return Err(ToolFailure::new(
+                "QUESTION_WRITE_FAILED",
+                "提问落库后读不回来",
+            ));
+        };
+        records.push(row);
+        // ⚠ 形状必须是**嵌套**的 `question` 对象（历史问题根因之一）：
+        // 客户端读的是 `event.data['question']`；平铺的话那个键是**问题文字**（字符串），
+        // 界面解不出提问 → 输入区不接管、工具卡一直"运行中"。
+        // 一题一条事件，界面按 `groupId` 归组成同一张卡的那几页。
+        state
+            .bus
+            .emit(
+                state,
+                run_id,
+                crate::ai::events::event_type::USER_QUESTION,
+                &json!({ "runId": run_id, "question": records.last().unwrap().to_json() }),
+            )
+            .map_err(failure_of)?;
+    }
+    // 提问是**闸门类事件**：立即落库（另一台设备靠它发现"有东西在等人"，M1 的纪律）
+    state.bus.flush(state, run_id).map_err(failure_of)?;
+    Ok((group_id, records))
+}
+
 /// `ask_user_question`：**提交提问并原地等待作答**（不结束这一轮）。
 ///
 /// 与审批闸门（`ToolAccess::ASK`）是两件事：审批是"允不允许"，提问是"缺的那条信息是什么"。
@@ -2577,56 +2798,8 @@ async fn ask_user_question(
         }
     }
 
-    let group_id = crate::ai::conversations::uuid_v4().map_err(failure_of)?;
-    let total = specs.len() as i64;
-    let mut records: Vec<crate::ai::questions::StoredQuestion> = Vec::new();
-    for (index, spec) in specs.iter().enumerate() {
-        let question_id = crate::ai::conversations::uuid_v4().map_err(failure_of)?;
-        crate::ai::questions::insert(
-            state,
-            &crate::ai::questions::NewQuestion {
-                question_id: question_id.clone(),
-                run_id: run_id.to_string(),
-                conversation_id: conversation_id.to_string(),
-                group_id: group_id.clone(),
-                index: index as i64,
-                total,
-                question: spec.question.clone(),
-                options: spec.options.clone(),
-                option_images: spec.option_images.clone(),
-                image_url: spec.image_url.clone(),
-                multi_select: spec.multi_select,
-                header: spec.header.clone(),
-            },
-        )
-        .map_err(failure_of)?;
-        // 落库之后**再读回**那一行：发给界面的形状与 `GET /api/ai/questions/{id}` 完全一致
-        // （少一次"手拼一份 JSON 与库里那份不一致"的机会）
-        let Some(row) =
-            crate::ai::questions::find_stored(state, &question_id).map_err(failure_of)?
-        else {
-            return Err(ToolFailure::new(
-                "QUESTION_WRITE_FAILED",
-                "提问落库后读不回来",
-            ));
-        };
-        records.push(row);
-        // ⚠ 形状必须是**嵌套**的 `question` 对象（历史问题根因之一）：
-        // 客户端读的是 `event.data['question']`；平铺的话那个键是**问题文字**（字符串），
-        // 界面解不出提问 → 输入区不接管、工具卡一直"运行中"。
-        // 一题一条事件，界面按 `groupId` 归组成同一张卡的那几页。
-        state
-            .bus
-            .emit(
-                state,
-                run_id,
-                crate::ai::events::event_type::USER_QUESTION,
-                &json!({ "runId": run_id, "question": records.last().unwrap().to_json() }),
-            )
-            .map_err(failure_of)?;
-    }
-    // 提问是**闸门类事件**：立即落库（另一台设备靠它发现"有东西在等人"，M1 的纪律）
-    state.bus.flush(state, run_id).map_err(failure_of)?;
+    let (group_id, records) =
+        create_question_card(state, run_id, conversation_id, &specs, true)?;
     session.ask_cards_in_window += 1;
 
     // 在此等待：Run **不结束**
@@ -2779,6 +2952,77 @@ async fn ask_user_question(
     };
 
     Ok(ToolOutcome::new(content, Value::Object(payload)))
+}
+
+/// `ask_follow_up`：把问题抛在**回复末尾** —— 这一轮到此结束，用户提交后作为下一条消息回来。
+///
+/// 与 [`ask_user_question`] 的分工：
+/// * `ask_user_question` = 动手前缺一条信息，模型在**同一个 Run** 里等（阻塞）；
+/// * `ask_follow_up` = 这一轮已经说完，让用户挑下一步（不阻塞，工具结果 `ends_turn`）。
+///
+/// 工具结果里的 `asked` / `askedAll` 随消息落库，界面据此把整张卡画出来（一张卡分页）。
+/// `submitText` 是模型写给用户的那句"提交后我会……"，界面上作为提示，并附在生成的用户消息末尾。
+fn ask_follow_up(
+    state: &AppState,
+    run_id: &str,
+    conversation_id: &str,
+    arguments: &Value,
+) -> Result<ToolOutcome, ToolFailure> {
+    let specs = question_specs(state, arguments)?;
+    if specs.is_empty() {
+        return Err(ToolFailure::new(
+            "INVALID_ARGUMENT",
+            format!(
+                "要问什么：给 questions（最多 {} 个）或 question（单个）",
+                crate::ai::questions::MAX_QUESTIONS_PER_CARD
+            ),
+        ));
+    }
+    // 同一件事问两遍：只挡"这个 Run 里还在等"的那张卡（run 结束后另起一轮就可以再问）
+    for spec in &specs {
+        if let Some((question_id, _)) =
+            crate::ai::questions::find_same_question(state, run_id, &spec.question)
+                .map_err(failure_of)?
+        {
+            return Err(ToolFailure::new(
+                "QUESTION_ALREADY_ASKED",
+                format!(
+                    "这个问题已经问过、还在等用户回答（questionId={question_id}）：「{}」。\
+                     不要重复开卡片，等那一条的答案即可",
+                    spec.question
+                ),
+            ));
+        }
+    }
+    let submit_text = arguments
+        .get("submitText")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .map(|text| text.chars().take(400).collect::<String>());
+
+    let (group_id, records) =
+        create_question_card(state, run_id, conversation_id, &specs, false)?;
+
+    let mut payload = serde_json::Map::new();
+    payload.insert("groupId".into(), json!(group_id));
+    payload.insert("askedCount".into(), json!(records.len()));
+    payload.insert("pending".into(), json!(true));
+    payload.insert("endsTurn".into(), json!(true));
+    if let Some(text) = &submit_text {
+        payload.insert("submitText".into(), json!(text));
+    }
+    payload.insert("asked".into(), records[0].to_json());
+    payload.insert(
+        "askedAll".into(),
+        Value::Array(records.iter().map(|record| record.to_json()).collect()),
+    );
+
+    // 这段是给**下一轮**的模型看的（本轮已经收尾）：它会在历史里看到自己问过什么。
+    let content = "问题已经放到回复末尾，**这一轮到此结束**。用户提交后会把选择作为\
+                   下一条用户消息发来，你在下一轮看到；本轮不要再调用工具、也不要再输出正文。"
+        .to_string();
+    Ok(ToolOutcome::new(content, Value::Object(payload)).end_turn())
 }
 
 /// 把 `ApiError` 折成工具失败（工具层的任何异常都只该让**这一次调用**失败，

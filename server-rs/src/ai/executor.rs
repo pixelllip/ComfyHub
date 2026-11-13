@@ -750,6 +750,7 @@ async fn run_once(
         // "assistant(tool_calls) → tool…" 的邻接关系（OpenAI 直接 400，
         // Anthropic 的 tool_result 也要求紧跟着 tool_use）。
         let mut reference_batches: Vec<crate::ai::reference_attach::Batch> = Vec::new();
+        let mut ends_turn = false;
         for (call_id, call) in &calls {
             let outcome = handle_call(
                 state,
@@ -764,6 +765,10 @@ async fn run_once(
                 max_calls,
             )
             .await?;
+            // `ask_follow_up` 明确要求"这一轮到此结束"（问题要落在回复最后）。
+            if outcome.ok && outcome.ends_turn {
+                ends_turn = true;
+            }
             // ⚠ **只有真的跑成功才消耗额度**（Kotlin `spendCall` 只在 handler 返回之后调）：
             // 越界被拒、参数错误、批准被拒、工具自身报错 —— 那些调用未产生实际动作，
             // 让它们占额度会表现为"什么都没干就说预算不足"。
@@ -831,6 +836,14 @@ async fn run_once(
                 images,
                 ..Default::default()
             });
+        }
+
+        // 结尾提问：问题已经落成卡片，这一轮到此结束 —— 不再向上游要下一轮。
+        // 少了这一下，模型会在卡片之后再写一段话，卡片就不在"回复最后"了。
+        if ends_turn {
+            // 这一轮工具调用是**真的跑过**的，轮数要照记（`message.completed.steps`）。
+            step += 1;
+            break;
         }
 
         step += 1;
@@ -1073,6 +1086,9 @@ struct CallOutcome {
     /// 用途只有一个：额度那边要分开记（[`crate::tools::tools::ToolSession::spend_cached_call`]）——
     /// 命中不发任何真实请求，就不该占"联网 / ComfyUI 查询"那两份额度。
     cached: bool,
+    /// 这个工具成功后**这一轮就结束**（不再向上游要下一轮）。只有 `ask_follow_up` 会置它：
+    /// 问题必须落在回复的最后，模型不能在这之后再写正文。
+    ends_turn: bool,
 }
 
 impl CallOutcome {
@@ -1089,6 +1105,7 @@ impl CallOutcome {
             elapsed_ms,
             // 失败**从不**走缓存（`tool_cache` 纪律 6），所以这里恒为 false
             cached: false,
+            ends_turn: false,
         }
     }
 }
@@ -1394,6 +1411,7 @@ async fn handle_call(
                 result: payload,
                 elapsed_ms: started.elapsed().as_millis() as i64,
                 cached: true,
+                ends_turn: false,
             }
         }
         None => {
@@ -1434,6 +1452,7 @@ async fn handle_call(
                         result: meta,
                         elapsed_ms,
                         cached: false,
+                        ends_turn: out.ends_turn,
                     }
                 }
                 Err(failure) => {
@@ -1727,6 +1746,10 @@ impl Sink {
             // 裁图与选项示意图也跟着一起丢（`askedAll` 是后端给整组的那一份）。
             if let Some(asked_all) = outcome.result.get("askedAll") {
                 map.insert("askedAll".into(), asked_all.clone());
+            }
+            // 结尾提问的那句"提交后我会……"：卡片上显示为提示，提交时附在用户消息末尾。
+            if let Some(submit_text) = outcome.result.get("submitText") {
+                map.insert("submitText".into(), submit_text.clone());
             }
         }
         self.parts.push((

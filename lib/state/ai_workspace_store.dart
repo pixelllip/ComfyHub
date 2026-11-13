@@ -528,6 +528,9 @@ class AiWorkspaceStore extends ChangeNotifier {
   AiQuestion? get pendingQuestion {
     AiQuestion? best;
     void consider(AiToolCallState call, {required bool byName}) {
+      // 结尾提问（`ask_follow_up`）**不接管输入区**：它属于"这一轮已经结束、等用户
+      // 下一条消息"，不是"模型原地等答案"。接管了就会把普通输入框占掉。
+      if (call.name == 'ask_follow_up') return;
       // 名字只在流式那一条路上可靠（`tool.requested` 给的名字），历史消息里可能缺失 ——
       // 所以第二遍兜底时**不看名字**，只看"有没有一条还没回答的提问"。
       if (byName && call.name != 'ask_user_question') return;
@@ -1264,7 +1267,7 @@ class AiWorkspaceStore extends ChangeNotifier {
       // 按 **callId** 定位（提问卡挂在模型那条调用上，见 `user.question` 的注释）；
       // 拿不到 callId（历史消息里答过了）就退回 questionId。
       _patchToolCall(
-        _liveAskCallIdHere() ?? questionId,
+        _callIdForQuestion(questionId) ?? _liveAskCallIdHere() ?? questionId,
         (call) => _applyLocalAnswer(
           call,
           questionId,
@@ -1288,7 +1291,7 @@ class AiWorkspaceStore extends ChangeNotifier {
     try {
       await _api.skipQuestion(questionId);
       _patchToolCall(
-        _liveAskCallIdHere() ?? questionId,
+        _callIdForQuestion(questionId) ?? _liveAskCallIdHere() ?? questionId,
         (call) => _applyLocalAnswer(call, questionId, answer: ''),
       );
       notifyListeners();
@@ -1323,6 +1326,77 @@ class AiWorkspaceStore extends ChangeNotifier {
     );
   }
 
+  /// 提交**结尾提问**（`ask_follow_up`）：逐题记录答案，再把选择拼成一条用户消息发出去。
+  ///
+  /// 与 [answerQuestion] 的区别：那个是阻塞式提问（模型在**同一个 Run** 里等答案）；
+  /// 这一条是回复末尾的选择题 —— 提交就开启**下一轮**，模型在下一条消息里看到答案。
+  /// 没选的题按"跳过"记录，拼进消息时写「没有选择」（不许替他补一个答案）。
+  Future<({bool ok, String message})> submitFollowUp(
+    List<AiQuestion> questions,
+    List<AiFollowUpChoice?> choices, {
+    String supplement = '',
+    String submitText = '',
+  }) async {
+    final blocked = sendBlockReason();
+    if (blocked != null) return (ok: false, message: blocked);
+    var failed = 0;
+    for (var i = 0; i < questions.length; i++) {
+      final q = questions[i];
+      if (q.answered) continue;
+      final choice = i < choices.length ? choices[i] : null;
+      final answer = choice?.answerFor(q);
+      final bool ok;
+      if (answer == null || answer.isEmpty) {
+        ok = (await skipQuestion(q.questionId)).ok;
+      } else {
+        ok = (await answerQuestion(q.questionId, text: answer)).ok;
+      }
+      if (!ok) failed++;
+    }
+    final text = composeFollowUpMessage(
+      questions,
+      choices,
+      supplement: supplement,
+      submitText: submitText,
+    );
+    if (text.trim().isEmpty) {
+      return (ok: false, message: '没有可以发送的内容。');
+    }
+    // 发送会一直等到整轮结束；这里不能 await（卡片要立刻收起来）。
+    unawaited(sendMessage(OutgoingMessage.plain(text)));
+    return (
+      ok: true,
+      message: failed == 0 ? '已发送' : '有 $failed 题没有记录成功，但选择已经发出。',
+    );
+  }
+
+  /// 把结尾提问的选择拼成一条**用户消息**（`题目标签：答案`，一行一题）。
+  ///
+  /// 没作答的题写「没有选择」：模型据此知道那几条**不是**它以为的默认值。
+  /// `supplement` 是用户在卡片里补的一句；`submitText` 是模型写在卡片上的
+  /// "提交后我会……"（附在最后）。
+  String composeFollowUpMessage(
+    List<AiQuestion> questions,
+    List<AiFollowUpChoice?> choices, {
+    String supplement = '',
+    String submitText = '',
+  }) {
+    final lines = <String>[];
+    for (var i = 0; i < questions.length; i++) {
+      final q = questions[i];
+      final header = q.header?.trim() ?? '';
+      final label = header.isNotEmpty ? header : q.question.trim();
+      final choice = i < choices.length ? choices[i] : null;
+      final String? answer = q.answered
+          ? ((q.answer ?? '').trim().isEmpty ? null : q.answer)
+          : choice?.answerFor(q);
+      lines.add('$label：${answer ?? '没有选择'}');
+    }
+    if (supplement.trim().isNotEmpty) lines.add(supplement.trim());
+    if (submitText.trim().isNotEmpty) lines.add(submitText.trim());
+    return lines.join('\n');
+  }
+
   /// 这个 `ask_user_question` 调用**是否仍在等待回答**。
   ///
   /// ⚠ 空 `questions` 也算"还在等"：`tool.requested` 先到、问题后到，那段窗口里
@@ -1342,6 +1416,27 @@ class AiWorkspaceStore extends ChangeNotifier {
     for (final list in _liveToolCalls.values) {
       for (final call in list) {
         if (_askPending(call)) return call.callId;
+      }
+    }
+    return null;
+  }
+
+  /// 这个 `questionId` 挂在**哪条工具调用**上（阻塞式 / 结尾提问都认）。
+  ///
+  /// 结尾提问（`ask_follow_up`）不在 [pendingQuestion] 里（它不接管输入区），
+  /// 所以不能只靠 `_liveAskCallIdHere`：按问题号反查，才能让那张卡在答完后
+  /// 立刻切成"已回答"。
+  String? _callIdForQuestion(String questionId) {
+    bool has(AiToolCallState call) =>
+        call.allQuestions.any((q) => q.questionId == questionId);
+    for (final list in _liveToolCalls.values) {
+      for (final call in list) {
+        if (has(call)) return call.callId;
+      }
+    }
+    for (final m in messages) {
+      for (final call in AiToolCallState.listFromParts(m.parts)) {
+        if (has(call)) return call.callId;
       }
     }
     return null;
@@ -2771,7 +2866,7 @@ class AiWorkspaceStore extends ChangeNotifier {
             // 输入区永远不接管（而 `tool.completed` / `tool.failed` 也按 `callId` 更新，
             // 结果就是"工具卡一直在运行中、提问卡根本不出现"）。
             final askCallId =
-                _liveAskCallId(assistantMessageId) ??
+                _liveQuestionCallId(assistantMessageId) ??
                 event.callId ??
                 q.questionId;
             _upsertToolCall(
@@ -2784,7 +2879,9 @@ class AiWorkspaceStore extends ChangeNotifier {
                             name: 'ask_user_question',
                           ))
                       .copyWith(
-                        name: 'ask_user_question',
+                        // 保留 `tool.requested` 给的名字：结尾提问叫 `ask_follow_up`，
+                        // 写成 `ask_user_question` 会让卡片画成阻塞式那张（输入区还会被接管）。
+                        name: prev?.name ?? 'ask_user_question',
                         status: AiToolCallStatus.pendingApproval,
                         // 把调用号一起记进问题里：答题 / 切状态都要按它定位
                         // 多问（2026-09-22）：一题一条事件、都挂同一个 `callId`，
@@ -2839,6 +2936,11 @@ class AiWorkspaceStore extends ChangeNotifier {
                         promptId: AiToolCallState.promptIdOf(
                           event.data['result'],
                         ),
+                        // 结尾提问的"提交后我会……"：卡片上显示为提示，提交时附在消息末尾
+                        submitText: event.data['result'] is Map
+                            ? (event.data['result'] as Map)['submitText']
+                                  ?.toString()
+                            : prev?.submitText,
                       ),
             );
             // 提交任务后：立即刷新进度，右侧栏马上显示"排队中 / 正在生成"
@@ -3265,6 +3367,27 @@ class AiWorkspaceStore extends ChangeNotifier {
       }
     }
     return null;
+  }
+
+  /// 这条助手消息里**哪条工具调用在等提问**（阻塞式与结尾提问都算）。
+  ///
+  /// `user.question` 事件**不带 `callId`**，必须贴回 `tool.requested` 那条调用；
+  /// 只认 `ask_user_question` 时，结尾提问会另开一条名为 `ask_user_question` 的假调用，
+  /// 于是卡片画错、`tool.completed` 也对不上。
+  String? _liveQuestionCallId(String messageId) {
+    AiToolCallState? fallback;
+    for (final call in _liveToolCalls[messageId] ?? const <AiToolCallState>[]) {
+      if (call.name != 'ask_user_question' && call.name != 'ask_follow_up') {
+        continue;
+      }
+      // 优先挑"还没有题 / 正在等回答"的那条：它才是 `user.question` 要找的调用。
+      if (call.status == AiToolCallStatus.pendingApproval ||
+          call.allQuestions.isEmpty) {
+        return call.callId;
+      }
+      fallback ??= call;
+    }
+    return fallback?.callId;
   }
 
   /// 流式状态只对"还在列表里的消息"有意义：换会话 / 刷新后清掉孤儿，避免内存只增不减。

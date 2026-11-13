@@ -2144,6 +2144,49 @@ class AiQuestion {
   );
 }
 
+/// 结尾提问（`ask_follow_up`）里**用户当前这一页的作答草稿**（还没提交）。
+///
+/// 与 [AiQuestion.answer] 的区别：那个是"已经发回去的答案"，这个是本地勾选。
+/// 三种作答形式互斥：勾选项（单选 / 多选）或自己写一段。
+class AiFollowUpChoice {
+  /// 单选选了第几个（没选 / 多选 / 自己写时为 null）。
+  final int? optionIndex;
+
+  /// 多选勾了哪几个。
+  final Set<int> optionIndexes;
+
+  /// "自己输入答案"里写的字。
+  final String text;
+
+  const AiFollowUpChoice({
+    this.optionIndex,
+    this.optionIndexes = const {},
+    this.text = '',
+  });
+
+  /// 这一题用户什么都没选（提交时按"没有选择"发回）。
+  bool get isEmpty =>
+      text.trim().isEmpty && optionIndex == null && optionIndexes.isEmpty;
+
+  /// 拼成给模型看的答案文字（没作答返回 null）。
+  String? answerFor(AiQuestion question) {
+    final typed = text.trim();
+    if (typed.isNotEmpty) return typed;
+    if (question.multiSelect && optionIndexes.isNotEmpty) {
+      final sorted = optionIndexes.toList()..sort();
+      return sorted
+          .where((i) => i >= 0 && i < question.options.length)
+          .map((i) => question.options[i])
+          .join('、');
+    }
+    final index = optionIndex;
+    if (index != null && index >= 0 && index < question.options.length) {
+      return question.options[index];
+    }
+    return null;
+  }
+}
+
 /// 一次工具调用的状态机。
 enum AiToolCallStatus {
   running('running', '运行中'),
@@ -2225,6 +2268,12 @@ class AiToolCallState {
   /// [question] 仍是"第一条"：历史回放与旧用例照旧读它。
   final List<AiQuestion> questions;
 
+  /// 结尾提问（`ask_follow_up`）写给用户的那句"提交后我会……"。
+  ///
+  /// 卡片上显示为提示，用户提交时附在生成的用户消息末尾。阻塞式的
+  /// `ask_user_question` 没有这个键。
+  final String? submitText;
+
   /// 这张卡要画几题：优先用 [questions]，没有就退回 [question]。
   List<AiQuestion> get allQuestions => questions.isNotEmpty
       ? questions
@@ -2238,6 +2287,7 @@ class AiToolCallState {
     'comfy_load_workflow' => '读取工作流',
     'comfy_list_workflows' => '查看本机工作流',
     'comfy_find_workflow' => '查找工作流',
+    'comfy_recent_successes' => '查找最近工作流',
     'comfy_submit' => '提交出图',
     'comfy_get_status' => '查看 ComfyUI 状态',
     'comfy_get_run' => '查看这次运行',
@@ -2277,6 +2327,7 @@ class AiToolCallState {
     'web_search' => '联网搜索',
     'web_fetch' => '读取网页',
     'ask_user_question' => '询问你',
+    'ask_follow_up' => '问你下一步',
     'todo_write' => '更新任务清单',
     _ => name.isEmpty ? '工具调用' : name,
   };
@@ -2324,6 +2375,7 @@ class AiToolCallState {
     this.promptId,
     this.question,
     this.questions = const [],
+    this.submitText,
   });
 
   factory AiToolCallState.fromJson(Map<String, dynamic> json) =>
@@ -2356,6 +2408,7 @@ class AiToolCallState {
               )
             : null,
         questions: _questionsOf(json['questions']),
+        submitText: json['submitText']?.toString(),
       );
 
   /// 解析一组提问（`questions[]`；没有就是空表）。
@@ -2489,6 +2542,7 @@ class AiToolCallState {
           promptId: AiToolCallState.promptIdOf(map),
           question: asked ?? prev?.question,
           questions: askedGroup,
+          submitText: map['submitText']?.toString() ?? prev?.submitText,
         );
         if (i == null) {
           indexOf[id] = out.length;
@@ -2515,6 +2569,7 @@ class AiToolCallState {
     int? promptId,
     AiQuestion? question,
     List<AiQuestion>? questions,
+    String? submitText,
   }) => AiToolCallState(
     callId: callId,
     name: name ?? this.name,
@@ -2530,6 +2585,7 @@ class AiToolCallState {
     promptId: promptId ?? this.promptId,
     question: question ?? this.question,
     questions: questions ?? this.questions,
+    submitText: submitText ?? this.submitText,
   );
 
   /// 等待批准：气泡上显示「批准 / 拒绝」。

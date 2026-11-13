@@ -126,6 +126,7 @@ async fn real_db_spot_check_replay_ingest() {
         &state,
         &run_key,
         "ComfyUI",
+        "ComfyUI",
         Some(&entry),
         false,
     )
@@ -158,6 +159,7 @@ async fn real_db_spot_check_replay_ingest() {
     let claim = comfyhub_server_rs::comfy::capture_ingest::begin_run(
         &state,
         &run_key,
+        "ComfyUI",
         "ComfyUI",
         Some(&entry),
         false,

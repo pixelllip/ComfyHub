@@ -50,6 +50,8 @@ fn 只列真搬过来了的那些() {
     assert_eq!(
         names,
         vec![
+            // 结尾提问（2026-11-13）：与 `ask_user_question` 不同，它不阻塞，问题抛在回复末尾
+            "ask_follow_up",
             "comfy_audit_workflow",
             // 配方三件（P4 第 67 步）：学 → 列 → 绑。绑的那件按 name 升序排在体检之前
             "comfy_bind_recipe",

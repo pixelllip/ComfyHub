@@ -418,6 +418,43 @@ fn 参数被多包一层时在入口解开() {
     assert_eq!(normalize_arguments_text(broken), broken);
 }
 
+/// 2026-11-12 的现场：模型把整包参数和 `reason` 写在**同一个对象**里。
+///
+/// 旧判据是"对象只有一个键才解"，这种两个键的对象会被整包放过；紧接着
+/// `take_reason` 摘掉 `reason` 并重新序列化，工具层就只看到 `{"arguments": …}` ——
+/// 于是 `comfy_submit` 明明收到了 `workflowPath`，却报「要么给 promptId…要么给
+/// workflowPath」（同一次 Run 里连报 8 次）。
+#[test]
+fn 参数被多包一层时带着_reason_也要解开() {
+    use crate::tools::tools::normalize_arguments_text;
+
+    // ① 库里的真实形状：`{"arguments":"{\"promptId\":1705}","reason":"…"}`
+    let raw = r#"{"arguments":"{\"promptId\":1705}","reason":"最小参数再试一次"}"#;
+    let parsed: Value = serde_json::from_str(&normalize_arguments_text(raw)).unwrap();
+    assert_eq!(parsed["promptId"], 1705, "promptId 必须回来：{parsed}");
+    assert_eq!(
+        parsed["reason"], "最小参数再试一次",
+        "reason 要跟着解出来的对象一起回去（工具卡标题靠它）：{parsed}"
+    );
+
+    // ② 再套一层字符串的写法（`"\"{…}\""`）同样要解开
+    let inner = json!({ "workflowPath": "D:\\Comfy-Desktop\\ComfyUI\\krea2 t2i workflow.json" });
+    let raw = serde_json::to_string(&json!({
+        "arguments": serde_json::to_string(&serde_json::to_string(&inner).unwrap()).unwrap(),
+        "reason": "先跑一张试通",
+    }))
+    .unwrap();
+    let parsed: Value = serde_json::from_str(&normalize_arguments_text(&raw)).unwrap();
+    assert_eq!(parsed["workflowPath"], inner["workflowPath"]);
+    assert_eq!(parsed["reason"], "先跑一张试通");
+
+    // ③ 正常参数里出现 `arguments` 这个**键名**时不许解（工具可能真叫这个名字）
+    let legit = r#"{"arguments":"x","path":"a.md"}"#;
+    let parsed: Value = serde_json::from_str(&normalize_arguments_text(legit)).unwrap();
+    assert_eq!(parsed["path"], "a.md");
+    assert_eq!(parsed["arguments"], "x");
+}
+
 /// 节点契约查询（`nodes` 一族）走**独立档**：不占"别把 ComfyUI 当轮询器"的 9 次额度。
 ///
 /// 现场（2026-10-25 第二轮）：查了两次节点类型，`comfy_submit` 之前就撞上
@@ -663,6 +700,243 @@ fn comfy_recent_successes_只回成功且可按任务与模型族过滤() {
     // 非法 task 如实报错
     let error = comfy_recent_successes(&state, &json!({"task": "nope"})).unwrap_err();
     assert_eq!(error.code, "INVALID_ARGUMENT");
+
+    std::fs::remove_dir_all(dir).ok();
+}
+
+/// 2026-11-13：`comfy_recent_successes` 必须分两组 —— 「应用内提交的」与
+/// 「在 ComfyUI 里自己跑的」。只按时间取最近 N 条时，应用刚跑完的那条永远把用户
+/// 自己跑的那条挤掉（用户原话："只会查找由应用提交的最近一条"）。
+///
+/// 另钉一条兜底：老库里的应用提交行 `submitted_by` 还是默认值，但本进程提交过的那几跑
+/// （`state.submissions`）也要归到应用那组。
+#[test]
+fn comfy_recent_successes_按提交方分两组() {
+    use crate::web::routes::AppState;
+
+    fn graph(model: &str) -> serde_json::Value {
+        json!({
+            "1": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": model}},
+            "2": {"class_type": "CLIPTextEncode", "inputs": {"text": "a cat", "clip": ["1", 1]}},
+            "3": {"class_type": "KSampler", "inputs": {"seed": 1, "model": ["1", 0], "positive": ["2", 0], "negative": ["2", 0], "latent_image": ["4", 0]}},
+            "4": {"class_type": "EmptyLatentImage", "inputs": {"width": 512, "height": 512, "batch_size": 1}},
+            "5": {"class_type": "VAEDecode", "inputs": {"samples": ["3", 0], "vae": ["1", 2]}},
+            "6": {"class_type": "SaveImage", "inputs": {"filename_prefix": "t", "images": ["5", 0]}}
+        })
+    }
+    fn insert(
+        conn: &rusqlite::Connection,
+        key: &str,
+        model: &str,
+        at: &str,
+        submitted_by: &str,
+    ) {
+        conn.execute(
+            "INSERT INTO capture_runs (run_key, status, title, raw, created_at, submitted_by) \
+             VALUES (?1, 'success', ?1, ?2, ?3, ?4)",
+            rusqlite::params![key, graph(model).to_string(), at, submitted_by],
+        )
+        .unwrap();
+    }
+
+    let dir = crate::infra::testpaths::scratch("recent-successes-groups");
+    std::fs::create_dir_all(dir.join("media")).unwrap();
+    let conn = crate::infra::db::open_memory().unwrap();
+    let schema = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("db")
+            .join("schema.sqlite.sql"),
+    )
+    .unwrap();
+    conn.execute_batch(&schema).unwrap();
+
+    // 应用刚跑完（最新）、用户在 ComfyUI 里跑的（更早）
+    insert(
+        &conn,
+        "app-new",
+        "anima-base.safetensors",
+        "2026-11-13T10:05:00.000Z",
+        "ComfyHub",
+    );
+    insert(
+        &conn,
+        "comfy-user",
+        "krea2.safetensors",
+        "2026-11-13T10:00:00.000Z",
+        "ComfyUI",
+    );
+    // 老行（列默认值）+ 本进程提交过：按内存里的提交清单归到应用组
+    insert(
+        &conn,
+        "memory-app",
+        "anima-base.safetensors",
+        "2026-11-13T09:30:00.000Z",
+        "ComfyUI",
+    );
+
+    let state = AppState::new(conn, ":memory:", dir.join("media"));
+    state.submissions.record(json!({
+        "promptId": "memory-app",
+        "submittedAt": "2026-11-13T09:30:00.000Z",
+    }));
+
+    let out = comfy_recent_successes(&state, &json!({})).unwrap();
+    let app = out.payload["appItems"].as_array().unwrap();
+    let comfy = out.payload["comfyItems"].as_array().unwrap();
+    let keys = |list: &[serde_json::Value]| -> Vec<String> {
+        list.iter()
+            .map(|item| item["runKey"].as_str().unwrap().to_string())
+            .collect()
+    };
+    assert_eq!(keys(app), vec!["app-new", "memory-app"], "{}", out.content);
+    assert_eq!(keys(comfy), vec!["comfy-user"], "{}", out.content);
+    assert_eq!(app[0]["origin"], "app");
+    assert_eq!(comfy[0]["origin"], "comfyui");
+    assert!(
+        out.content.contains("【应用内提交】") && out.content.contains("【ComfyUI 里运行的】"),
+        "正文要分两组写清楚：{}",
+        out.content
+    );
+
+    std::fs::remove_dir_all(dir).ok();
+}
+
+/// 2026-11-13：结尾提问（`ask_follow_up`）是**非阻塞的变种** ——
+/// ① 工具结果要求结束这一轮（`ends_turn`）；② 提问落库为 `blocking=0`；
+/// ③ Run 收尾 / 后端重启都**不许**把它清成 expired（用户下次回来还能答）；
+/// ④ 作答会回写进消息里的卡（重开会话不能又显示"待回答"）。
+#[test]
+fn ask_follow_up_是收尾提问_不阻塞也不随_run_失效() {
+    use crate::web::routes::AppState;
+
+    let dir = crate::infra::testpaths::scratch("ask-follow-up");
+    std::fs::create_dir_all(dir.join("media")).unwrap();
+    let conn = crate::infra::db::open_memory().unwrap();
+    let schema = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("db")
+            .join("schema.sqlite.sql"),
+    )
+    .unwrap();
+    conn.execute_batch(&schema).unwrap();
+    let state = AppState::new(conn, ":memory:", dir.join("media"));
+    state
+        .write(|tx| {
+            tx.execute("INSERT INTO ai_conversations (id) VALUES ('c1')", [])?;
+            tx.execute(
+                "INSERT INTO ai_runs (id, conversation_id, status) VALUES ('r1','c1','running')",
+                [],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+
+    let out = ask_follow_up(
+        &state,
+        "r1",
+        "c1",
+        &json!({
+            "questions": [
+                {"question": "跑哪一份？", "header": "工作流", "options": ["应用内提交的那份", "ComfyUI 里跑的那份"]},
+                {"question": "要几张？", "options": ["1", "4"], "multiSelect": true},
+            ],
+            "submitText": "请按这个继续",
+        }),
+    )
+    .unwrap();
+    assert!(out.ends_turn, "结尾提问必须结束这一轮");
+    assert_eq!(out.payload["pending"], true);
+    assert_eq!(out.payload["submitText"], "请按这个继续");
+    assert_eq!(out.payload["askedAll"].as_array().unwrap().len(), 2);
+
+    let row: (i64, String) = state
+        .with(|conn| {
+            Ok(conn.query_row(
+                "SELECT blocking, status FROM ai_questions WHERE run_id = 'r1' \
+                  ORDER BY card_index LIMIT 1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )?)
+        })
+        .unwrap();
+    assert_eq!(row.0, 0, "结尾提问不是阻塞式");
+    assert_eq!(row.1, "pending");
+
+    // Run 收尾与后端重启只清阻塞式那批
+    crate::ai::questions::finalize_run(&state, "r1", "expired").unwrap();
+    crate::ai::questions::expire_stale(&state).unwrap();
+    let status: String = state
+        .with(|conn| {
+            Ok(conn.query_row(
+                "SELECT status FROM ai_questions WHERE run_id = 'r1' ORDER BY card_index LIMIT 1",
+                [],
+                |row| row.get(0),
+            )?)
+        })
+        .unwrap();
+    assert_eq!(status, "pending", "结尾提问要留到用户下次回来作答");
+    let pending = state.with(crate::ai::questions::list_pending).unwrap();
+    assert!(pending.is_empty(), "结尾提问不进「有人等着」总览");
+
+    // 作答回写进消息里的卡：先造一条与真库同形的 tool_result 块
+    let question_id: String = state
+        .with(|conn| {
+            Ok(conn.query_row(
+                "SELECT question_id FROM ai_questions WHERE run_id = 'r1' ORDER BY card_index LIMIT 1",
+                [],
+                |row| row.get(0),
+            )?)
+        })
+        .unwrap();
+    let part_payload = json!({
+        "name": "ask_follow_up",
+        "ok": true,
+        "askedAll": [{
+            "questionId": question_id,
+            "question": "跑哪一份？",
+            "options": ["应用内提交的那份", "ComfyUI 里跑的那份"],
+            "answered": false,
+        }],
+    });
+    state
+        .write(|tx| {
+            tx.execute(
+                "INSERT INTO ai_messages (id, conversation_id, role) VALUES ('m1','c1','assistant')",
+                [],
+            )?;
+            tx.execute(
+                "INSERT INTO ai_message_parts (message_id, ordinal, type, text, tool_call_id, json_payload) \
+                 VALUES ('m1', 0, 'tool_result', '', 'call-1', ?1)",
+                rusqlite::params![part_payload.to_string()],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+    let accepted = crate::ai::questions::record_answer(
+        &state,
+        &question_id,
+        &crate::ai::questions::Answer {
+            answer: "应用内提交的那份".into(),
+            option_index: Some(0),
+            option_indexes: Vec::new(),
+        },
+    )
+    .unwrap();
+    assert!(accepted);
+    let payload_text: String = state
+        .with(|conn| {
+            Ok(conn.query_row(
+                "SELECT json_payload FROM ai_message_parts WHERE message_id = 'm1'",
+                [],
+                |row| row.get(0),
+            )?)
+        })
+        .unwrap();
+    let payload: serde_json::Value = serde_json::from_str(&payload_text).unwrap();
+    assert_eq!(payload["askedAll"][0]["answered"], true);
+    assert_eq!(payload["askedAll"][0]["answer"], "应用内提交的那份");
 
     std::fs::remove_dir_all(dir).ok();
 }
