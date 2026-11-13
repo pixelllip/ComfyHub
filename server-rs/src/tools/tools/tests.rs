@@ -19,6 +19,21 @@ fn comfy_recent_successes_是只读的_allow_工具() {
     );
 }
 
+/// 看卡片示例图（2026-11-13）必须是**已实现、只读、出厂 ALLOW** 的桌面工具：
+/// 它只读本机库、把缩图交给执行器；看一张示例不该让用户先点一次批准。
+#[test]
+fn view_card_examples_是只读的_allow_工具() {
+    assert!(IMPLEMENTED.contains(&"view_card_examples"));
+    assert_eq!(default_access("view_card_examples"), "ALLOW");
+    assert!(!is_mutating("view_card_examples"));
+    assert!(
+        crate::tools::desktop_tools::DESKTOP_TOOLS
+            .iter()
+            .any(|tool| tool.name == "view_card_examples"),
+        "目录里必须有它，否则 implemented() 收不到"
+    );
+}
+
 #[test]
 fn specs_only_include_implemented_tools() {
     let policy = crate::tools::policy::ToolPolicy::new(
@@ -47,6 +62,8 @@ fn specs_only_include_implemented_tools() {
         );
     }
     assert!(specs.iter().any(|s| s.name == "list_skills"));
+    // 看卡片示例图（2026-11-13）：要与卡片查询一起下发，模型才知道能看画面。
+    assert!(specs.iter().any(|s| s.name == "view_card_examples"));
     assert!(
         specs.iter().any(|s| s.name == "ask_user_question"),
         "提问闸门已搬，应当下发"
@@ -724,13 +741,7 @@ fn comfy_recent_successes_按提交方分两组() {
             "6": {"class_type": "SaveImage", "inputs": {"filename_prefix": "t", "images": ["5", 0]}}
         })
     }
-    fn insert(
-        conn: &rusqlite::Connection,
-        key: &str,
-        model: &str,
-        at: &str,
-        submitted_by: &str,
-    ) {
+    fn insert(conn: &rusqlite::Connection, key: &str, model: &str, at: &str, submitted_by: &str) {
         conn.execute(
             "INSERT INTO capture_runs (run_key, status, title, raw, created_at, submitted_by) \
              VALUES (?1, 'success', ?1, ?2, ?3, ?4)",

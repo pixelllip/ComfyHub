@@ -137,8 +137,9 @@ Markdown 代码块（系统提示第 24 条，围栏语言 `text`），聊天气
 - **入口**：「预设库」页**顶部导航**直接切到「角色卡」/「画风卡」（与「常规预设」同级，
   不再是右上角的「卡片库」子页）；点卡片本体 = 编辑，示例缩略图仍单独可点。
   刻意不做成第六个一级导航项 —— 窄屏上六个图标会挤成两行。
-- **AI 四条工具**：`search_character_cards` / `save_character_card`、
-  `search_style_cards` / `save_style_card`。两个正面字段都是**整段替换**：想在已有内容上补两句，
+- **AI 五条工具**：`search_character_cards` / `save_character_card`、
+  `search_style_cards` / `save_style_card`，以及 `view_card_examples`（按卡名 / id
+  看卡上挂的示例图，核对新产物有没有还原画面元素）。两个正面字段都是**整段替换**：想在已有内容上补两句，
   先把卡读出来、再给完整的那一份（追加会把两段风格不同的提示词粘成一条）。
 - **端点**：
   - `GET/POST /api/ai/{character,style}-cards`、`GET/PUT/DELETE /api/ai/{character,style}-cards/{id}`

@@ -108,9 +108,11 @@ pub fn freshness(name: &str) -> Option<Freshness> {
         "read_file" | "list_dir" => File(secs(30)),
 
         // ---- 本机库 / 本机目录：读取开销低，但可能被其他进程或设备随时修改 ----
-        "list_skills" | "search_prompts" | "search_character_cards" | "search_style_cards" => {
-            Ttl(secs(20))
-        }
+        "list_skills"
+        | "search_prompts"
+        | "search_character_cards"
+        | "search_style_cards"
+        | "view_card_examples" => Ttl(secs(20)),
         "comfy_list_workflows"
         | "comfy_find_workflow"
         | "comfy_list_recipes"

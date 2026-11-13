@@ -113,6 +113,8 @@ pub(crate) fn category_of(name: &str) -> &'static str {
         | "save_character_card"
         | "search_style_cards"
         | "save_style_card"
+        // 看某张卡的示例图（2026-11-13）：读本机库，不碰 ComfyUI，归资料库
+        | "view_card_examples"
         // 看画廊产物（2026-10-29）：读的是本机库，**不碰 ComfyUI** —— 落到下面的
         // `_ => "comfy"` 会让它白吃"不许把 ComfyUI 当轮询器"那 9 次额度。
         | "comfy_view_outputs" => "library",

@@ -568,7 +568,7 @@ pub fn implemented() -> Vec<ToolView<'static>> {
 /// ⚠ 加一个名字之前先确认 [`execute`] 里真的有那条分支 —— 两个清单漂移的后果是
 /// **模型会去调一个必然失败的工具**（`TOOL_NOT_FOUND`），而界面上看不出为什么。
 ///
-/// 当前四十七个：手机那四个只碰本机的（Skills 两个 + 长期记忆 + 提问）+ 桌面文件工具五件
+/// 当前四十八个：手机那四个只碰本机的（Skills 两个 + 长期记忆 + 提问）+ 桌面文件工具五件
 /// （`list_dir` / `read_file` / `write_file` / `register_skill` / `delete_skill`，P4 第 40 步）
 /// + 联网三件（`web_search` / `web_fetch` / `civitai_search`，见 [`crate::tools::web_tools`] 与
 ///   [`crate::tools::civitai`]，P4 第 64 步；它们本来就是 `BOTH` 档，只是**实现**在这一步才落地）
@@ -576,7 +576,8 @@ pub fn implemented() -> Vec<ToolView<'static>> {
 /// + `comfy_load_workflow` / `comfy_submit` / `comfy_sync_history`
 /// + **看产物**（`comfy_view_outputs`；需求："能否让 AI 查看直接在 ComfyUI
 ///   运行的产物"：读画廊最近的图片并交给执行器自动附图，见 [`crate::comfy::media_view`]）
-/// + 资料库四件（角色卡 + 画风卡：`search/save_character_card`、`search/save_style_card`）
+/// + 资料库五件（角色卡 + 画风卡：`search/save_character_card`、`search/save_style_card`，
+///   外加 `view_card_examples` —— 把某张卡的示例图附给模型，用来核对新产物画面元素）
 /// + **图像编辑三件**（`comfy_use_media` / `comfy_use_attachment` /
 ///   `comfy_make_mask`，见 [`crate::comfy::image_edit`]）
 /// + **体检两件**（`comfy_check_inputs` / `comfy_fit_workflow`，见 [`crate::workflow::workflow_fit`]，
@@ -589,7 +590,7 @@ pub fn implemented() -> Vec<ToolView<'static>> {
 /// + **配方三件**（`comfy_learn_workflow` / `comfy_list_recipes` / `comfy_bind_recipe`，
 ///   见 [`crate::workflow::workflow_recipe`]，P4 第 67 步；学与绑都与
 ///   `POST /api/ai/workflow-recipes*` 共用一份实现）。
-pub const IMPLEMENTED: [&str; 47] = [
+pub const IMPLEMENTED: [&str; 48] = [
     "ask_follow_up",
     "ask_user_question",
     "civitai_search",
@@ -634,6 +635,7 @@ pub const IMPLEMENTED: [&str; 47] = [
     "search_character_cards",
     "search_prompts",
     "search_style_cards",
+    "view_card_examples",
     "web_fetch",
     "web_search",
     "write_file",
@@ -850,6 +852,9 @@ pub async fn execute(
         // 画风卡与角色卡同等地位：写画风 / 复刻画风之前先查这里。
         "search_style_cards" => crate::library::style_cards::tool_search(state, arguments),
         "save_style_card" => crate::library::style_cards::tool_save(state, arguments),
+        // 看某张卡挂着的示例图：把缩图交给执行器的 `reference_attach`（附图预算 /
+        // 去重共用一份）。只读本机库，不碰 ComfyUI —— 与 `comfy_view_outputs` 同档。
+        "view_card_examples" => crate::library::cards::tool_view_examples(state, arguments),
         // `search_prompts`：同一个落点的另一半 —— 库里可能已经有那个角色的完整 tag 栈
         "search_prompts" => search_prompts(state, arguments),
         // ---- 联网三件 + 定向查询（P4 第 64 步）------
@@ -1983,8 +1988,7 @@ fn comfy_recent_successes(state: &AppState, arguments: &Value) -> Result<ToolOut
             }
         }
 
-        let is_app =
-            submitted_by == "ComfyHub" || app_prompt_ids.contains(run_key.as_str());
+        let is_app = submitted_by == "ComfyHub" || app_prompt_ids.contains(run_key.as_str());
         // 每一组各自限 `limit` 条：应用那组再新，也不能把用户在 ComfyUI 里跑的那条挤掉。
         if is_app {
             if app_items.len() >= limit {
@@ -2138,10 +2142,7 @@ fn comfy_recent_successes(state: &AppState, arguments: &Value) -> Result<ToolOut
     }
 
     let mut payload = serde_json::Map::new();
-    payload.insert(
-        "items".into(),
-        json!(items),
-    );
+    payload.insert("items".into(), json!(items));
     payload.insert("appItems".into(), json!(app_items));
     payload.insert("comfyItems".into(), json!(comfy_items));
     payload.insert("count".into(), json!(count));
@@ -2695,8 +2696,7 @@ fn create_question_card(
 ) -> Result<(String, Vec<crate::ai::questions::StoredQuestion>), ToolFailure> {
     let group_id = crate::ai::conversations::uuid_v4().map_err(failure_of)?;
     let total = specs.len() as i64;
-    let mut records: Vec<crate::ai::questions::StoredQuestion> =
-        Vec::with_capacity(specs.len());
+    let mut records: Vec<crate::ai::questions::StoredQuestion> = Vec::with_capacity(specs.len());
     for (index, spec) in specs.iter().enumerate() {
         let question_id = crate::ai::conversations::uuid_v4().map_err(failure_of)?;
         crate::ai::questions::insert(
@@ -2798,8 +2798,7 @@ async fn ask_user_question(
         }
     }
 
-    let (group_id, records) =
-        create_question_card(state, run_id, conversation_id, &specs, true)?;
+    let (group_id, records) = create_question_card(state, run_id, conversation_id, &specs, true)?;
     session.ask_cards_in_window += 1;
 
     // 在此等待：Run **不结束**
@@ -3001,8 +3000,7 @@ fn ask_follow_up(
         .filter(|text| !text.is_empty())
         .map(|text| text.chars().take(400).collect::<String>());
 
-    let (group_id, records) =
-        create_question_card(state, run_id, conversation_id, &specs, false)?;
+    let (group_id, records) = create_question_card(state, run_id, conversation_id, &specs, false)?;
 
     let mut payload = serde_json::Map::new();
     payload.insert("groupId".into(), json!(group_id));

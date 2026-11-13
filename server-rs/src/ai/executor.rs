@@ -1132,12 +1132,13 @@ fn take_reason(arguments: &mut String) -> Option<String> {
 /// 哪些工具的结果允许触发"把图附进下一轮"。
 ///
 /// 只认我们自己产出的这几条：`comfy_load_workflow`（工作流里绑定的参考图）、
-/// `comfy_view_outputs`（画廊里的产物）、`comfy_submit`（本次刚生成的产物）。
+/// `comfy_view_outputs`（画廊里的产物）、`comfy_submit`（本次刚生成的产物）、
+/// `view_card_examples`（角色卡 / 画风卡的示例图）。
 /// 别把 MCP / 其它工具也算进来 —— 那等于让外来结果决定读本机哪个文件、发给上游。
 fn may_attach_reference_images(name: &str) -> bool {
     matches!(
         name,
-        "comfy_load_workflow" | "comfy_view_outputs" | "comfy_submit"
+        "comfy_load_workflow" | "comfy_view_outputs" | "comfy_submit" | "view_card_examples"
     )
 }
 

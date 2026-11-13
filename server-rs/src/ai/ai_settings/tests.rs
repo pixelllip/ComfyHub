@@ -25,6 +25,9 @@ fn 类别与权限档的线上字与_kotlin_一致() {
     assert_eq!(category_of("save_character_card"), "library");
     assert_eq!(category_of("search_style_cards"), "library");
     assert_eq!(category_of("save_style_card"), "library");
+    // 看某张卡的示例图（2026-11-13）：读本机库，不是 ComfyUI；落到 comfy 会白吃查询额度。
+    assert_eq!(category_of("view_card_examples"), "library");
+    assert!(!is_comfy_query("view_card_examples"));
     assert_eq!(category_of("comfy_submit"), "comfy");
     // 看画廊产物（2026-10-29）：读的是本机库，**不是** ComfyUI —— 落到 comfy 会白吃
     // "不许把 ComfyUI 当轮询器"那 9 次额度（改了这里不会有别的用例变红）。

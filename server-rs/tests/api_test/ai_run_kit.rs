@@ -42,7 +42,9 @@ async fn run_kit_ships_every_rule_the_phone_needs() {
     //   的本次产物自动附图，第 25 条要求出图后逐项对照。
     // v70（2026-11-11）：开工顺序（命中技能先 load_skill）+ 出图后必须核对构图。
     // v73（2026-11-13）：新增非阻塞的结尾提问 `ask_follow_up`（桌面专属）。
-    assert_eq!(body["promptVersion"], "v73");
+    // v74（2026-11-13）：新增只读的 `view_card_examples`（看角色卡 / 画风卡的示例图，
+    //   核对新产物画面元素；桌面专属，手机工具清单不变）。
+    assert_eq!(body["promptVersion"], "v74");
     assert_eq!(body["nsfwEnabled"], false, "夹具里没开 NSFW");
     assert_eq!(body["inlineBudget"]["perImageBytes"], 8388608, "单图 8MB");
     assert_eq!(body["inlineBudget"]["totalBytes"], 20971520, "合计 20MB");
@@ -550,6 +552,8 @@ async fn tool_policy_and_nsfw_endpoints() {
             "search_character_cards",
             "search_prompts",
             "search_style_cards",
+            // 看卡片示例图（2026-11-13）：只读，把示例缩图交给执行器自动附给能看图的模型
+            "view_card_examples",
             "web_fetch",
             "web_search",
             "write_file",

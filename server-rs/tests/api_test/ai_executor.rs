@@ -1030,10 +1030,7 @@ async fn ask_follow_up_ends_the_run_and_keeps_questions_pending() {
 
     // 也不进「有人等着」总览（它不是闸门，没有 Run 挂在它上面）。
     let (_, pending) = get_json(router_for(state.clone()), "/api/ai/pending").await;
-    assert!(
-        pending["asks"].as_array().unwrap().is_empty(),
-        "{pending}"
-    );
+    assert!(pending["asks"].as_array().unwrap().is_empty(), "{pending}");
 
     gateway.abort();
 }
@@ -1681,8 +1678,9 @@ async fn load_workflow_auto_attaches_the_reference_image_to_the_next_round() {
 /// **看产物时自动带图**（2026-10-29）：`comfy_view_outputs` 读画廊最近的图片并回
 /// `referenceImages`，执行器把它挂到下一轮的 user 轮上 —— 与工作流参考图**同一条链路**。
 ///
-/// 这条用例盯的是执行器里的**工具白名单**：只有 `comfy_load_workflow` 与
-/// `comfy_view_outputs` 的结果允许触发附图（别让外来工具结果决定读哪个文件）。
+/// 这条用例盯的是执行器里的**工具白名单**：只有我们自己产出的四条
+/// （`comfy_load_workflow` / `comfy_view_outputs` / `comfy_submit` /
+/// `view_card_examples`）的结果允许触发附图（别让外来工具结果决定读哪个文件）。
 #[tokio::test]
 async fn view_outputs_auto_attaches_the_gallery_image_to_the_next_round() {
     let state = state();
@@ -1764,6 +1762,76 @@ async fn view_outputs_auto_attaches_the_gallery_image_to_the_next_round() {
         "{payload}"
     );
 
+    gateway.abort();
+}
+
+/// **看卡片示例时自动带图**（2026-11-13）：`view_card_examples` 把角色卡 / 画风卡挂着的
+/// 示例图放进 `referenceImages`，执行器按与 `comfy_view_outputs` 同一条链路附到下一轮 ——
+/// 这样模型才能拿"卡上的示例"去核对新产物的画面元素。
+#[tokio::test]
+async fn view_card_examples_auto_attaches_the_card_sample_to_the_next_round() {
+    let state = state();
+    seed_provider_and_model(&state);
+    // 与看产物那条同一档：模型得声明识图能力，否则按准入一条图都不发。
+    state
+        .write(|tx| {
+            tx.execute(
+                "UPDATE ai_models SET input_modalities = '[\"text\",\"image\"]' WHERE model_id = 'm1'",
+                [],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+    write_test_png(&state.media_dir().join("card-sample.png"), 1200, 800);
+    state
+        .write(|tx| {
+            tx.execute(
+                "INSERT INTO media_assets
+                   (id, kind, original_name, stored_name, width, height, created_at, source)
+                 VALUES (301, 'IMAGE', 'card-sample.png', 'card-sample.png', 1200, 800,
+                         '2026-11-13T10:00:00.000Z', 'capture')",
+                [],
+            )?;
+            tx.execute(
+                "INSERT INTO style_cards (id, name, normalized, prompt)
+                 VALUES (301, '赛博国风', '赛博国风', 'semi-thick line work')",
+                [],
+            )?;
+            tx.execute(
+                "INSERT INTO style_card_examples (card_id, media_id) VALUES (301, 301)",
+                [],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+
+    let (base_url, gateway, seen) = tool_call_then_reply_gateway(
+        "view_card_examples",
+        serde_json::json!({ "kind": "style", "cardId": 301 }).to_string(),
+    )
+    .await;
+    point_at_gateway(&state, &base_url);
+
+    let (_run_id, _assistant_id, run) =
+        start_run_and_wait(&state, "对照画风卡看一眼示例，新图该像它").await;
+    assert_eq!(run["status"], "completed", "{run}");
+
+    let bodies = seen.lock().unwrap().clone();
+    assert_eq!(bodies.len(), 2, "两轮：看示例 → 附图 → 收口");
+    assert!(
+        !bodies[0].contains("image_url"),
+        "调用之前不该有图：{}",
+        bodies[0]
+    );
+    let second = &bodies[1];
+    assert!(
+        second.contains(r#""type":"image_url""#),
+        "第二轮必须把示例图挂上：{second}"
+    );
+    assert!(
+        second.contains("原图 1200×800"),
+        "原始分辨率要告诉模型：{second}"
+    );
     gateway.abort();
 }
 

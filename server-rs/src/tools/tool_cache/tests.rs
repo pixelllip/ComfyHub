@@ -138,6 +138,7 @@ fn 会改世界的工具一律不进缓存() {
         "find_model",
         "search_character_cards",
         "search_style_cards",
+        "view_card_examples",
     ] {
         assert!(freshness(name).is_some(), "{name} 应当进缓存");
         assert!(!invalidates(name), "{name} 不该清缓存");

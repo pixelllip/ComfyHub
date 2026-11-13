@@ -277,11 +277,13 @@ fn 首条用户消息兜底成标题且去掉卡片标记() {
 }
 
 #[test]
-fn 只有我们自己产出的三条工具结果能把图附进下一轮() {
+fn 只有我们自己产出的四条工具结果能把图附进下一轮() {
     assert!(may_attach_reference_images("comfy_load_workflow"));
     assert!(may_attach_reference_images("comfy_view_outputs"));
     // 2026-11-11：本次刚生成的图也要附上，否则模型只能看到 mediaId、看不到画面。
     assert!(may_attach_reference_images("comfy_submit"));
+    // 2026-11-13：角色卡 / 画风卡的示例图（`view_card_examples`）也是我们自己的结果。
+    assert!(may_attach_reference_images("view_card_examples"));
     // 外来工具（MCP / 其它）的结果不许决定读本机哪个文件。
     assert!(!may_attach_reference_images("mcp__whatever"));
     assert!(!may_attach_reference_images("read_file"));

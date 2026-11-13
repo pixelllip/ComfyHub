@@ -102,6 +102,8 @@ fn 只列真搬过来了的那些() {
             "search_character_cards",
             "search_prompts",
             "search_style_cards",
+            // 看某张卡的示例图（2026-11-13）：只读；把缩图交给执行器的 reference_attach
+            "view_card_examples",
             "write_file",
         ]
     );

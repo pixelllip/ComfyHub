@@ -436,6 +436,76 @@ fn 工具_save_可以顺手挂示例产物() {
 }
 
 #[test]
+fn 工具_view_examples_把示例图交给执行器附给模型() {
+    let conn = conn();
+    let media_id = media(&conn, "example.png");
+    // 示例要能附给模型，文件必须真的在 storage 里（`resolve_media` 只认磁盘）。
+    let dir = crate::infra::testpaths::scratch("cards-view-examples");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("example.png"), b"fake-image-bytes").unwrap();
+    let state = AppState::new(conn, ":memory:", dir);
+
+    let saved = tool_save(
+        &state,
+        CardKind::Style,
+        &serde_json::json!({
+            "name": "赛博国风",
+            "prompt": "semi-thick line work, low-chroma blue-gray field",
+            "exampleMediaIds": [media_id]
+        }),
+    )
+    .unwrap();
+    let card_id = saved.payload["id"].as_i64().unwrap();
+
+    // ① 按 id：正文说明 + referenceImages（执行器据此附图）
+    let out = tool_view_examples(
+        &state,
+        &serde_json::json!({ "kind": "style", "cardId": card_id }),
+    )
+    .unwrap();
+    assert!(out.content.contains("画风卡"), "{}", out.content);
+    assert!(
+        out.content.contains(&format!("示例 #{media_id}")),
+        "{}",
+        out.content
+    );
+    assert_eq!(out.payload["count"], 1);
+    assert_eq!(
+        out.payload["referenceImages"][0]["nodeId"],
+        media_id.to_string()
+    );
+    assert!(out.payload["referenceImages"][0]["label"]
+        .as_str()
+        .unwrap()
+        .contains("画风卡示例"));
+
+    // ② 按卡名（中文 kind 也认）
+    let by_name = tool_view_examples(
+        &state,
+        &serde_json::json!({ "kind": "画风", "name": "赛博国风" }),
+    )
+    .unwrap();
+    assert_eq!(by_name.payload["count"], 1);
+
+    // ③ 卡不存在 / 参数不完整：如实报错，不编造示例
+    let err = tool_view_examples(
+        &state,
+        &serde_json::json!({ "kind": "style", "name": "没有这张" }),
+    )
+    .unwrap_err();
+    assert_eq!(err.code, "NOT_FOUND");
+    assert!(
+        err.message.contains("search_style_cards"),
+        "{}",
+        err.message
+    );
+    let err = tool_view_examples(&state, &serde_json::json!({ "kind": "未知" })).unwrap_err();
+    assert_eq!(err.code, "INVALID_ARGUMENT");
+    let err = tool_view_examples(&state, &serde_json::json!({ "kind": "style" })).unwrap_err();
+    assert_eq!(err.code, "INVALID_ARGUMENT");
+}
+
+#[test]
 fn 工具_搜索查不到时给对下一步() {
     let state = test_state();
     let err = tool_search(

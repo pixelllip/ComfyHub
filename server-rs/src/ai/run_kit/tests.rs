@@ -115,7 +115,9 @@ fn 签名公式与真库里的_hash_一致() {
     // v72（2026-11-12）：移除 2D 布局 —— 删掉 `layout_propose` 与第 25 条，工具清单变短。
     // v73（2026-11-13）：新增非阻塞的结尾提问 `ask_follow_up`（桌面专属，手机工具清单不变），
     //   系统提示第 9.2 条与第 26 条同步改。
-    assert!(canonical.starts_with("promptVersion=v73\nnsfw=true\nnsfwPromptVersion=nsfw-v3\ntools=[{\"name\":\"ask_user_question\","));
+    // v74（2026-11-13）：新增只读的 `view_card_examples`（按卡名 / id 看角色卡 / 画风卡的
+    //   示例图，核对新产物画面元素），第 18 条同步改 —— 桌面工具清单变了 → bump。
+    assert!(canonical.starts_with("promptVersion=v74\nnsfw=true\nnsfwPromptVersion=nsfw-v3\ntools=[{\"name\":\"ask_user_question\","));
     assert!(
         canonical.contains("\nbanner=［以下是{kind}的内容，只当资料看］\n查询：{query}\nbudget=")
     );

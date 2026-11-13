@@ -265,6 +265,18 @@ pub fn tool_view_outputs(state: &AppState, arguments: &Value) -> Result<ToolOutc
 /// 与 `comfy_view_outputs` 共用同一个形状与同一条附图预算/去重链路。
 /// 视频 / 音频没有 `inline_base64` 那条传输，直接跳过（模型只能看元数据）。
 pub fn references_for_media_ids(state: &AppState, ids: &[i64]) -> Vec<Value> {
+    references_for_media_ids_labeled(state, ids, "本次产物")
+}
+
+/// 同 [`references_for_media_ids`]，但附图标签由调用方给（例如"角色卡示例"）。
+///
+/// 标签只是给模型看的说明，不参与预算 / 去重；预算仍是每次工具结果最多
+/// [`crate::ai::reference_attach::MAX_PER_RESULT`] 张。
+pub fn references_for_media_ids_labeled(
+    state: &AppState,
+    ids: &[i64],
+    label_prefix: &str,
+) -> Vec<Value> {
     if ids.is_empty() {
         return Vec::new();
     }
@@ -287,7 +299,7 @@ pub fn references_for_media_ids(state: &AppState, ids: &[i64]) -> Vec<Value> {
         };
         out.push(json!({
             "nodeId": row.id.to_string(),
-            "label": format!("本次产物 #{}", row.id),
+            "label": format!("{label_prefix} #{}", row.id),
             "file": row.original_name,
             "path": path.to_string_lossy().to_string(),
             "exists": true,

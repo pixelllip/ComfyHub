@@ -381,6 +381,8 @@ async fn desktop_tools_are_declared_for_desktop_but_never_sent_to_the_phone() {
         // 看画廊产物（2026-10-29）：只读、不吃 ComfyUI 查询额度
         "comfy_view_outputs",
         "search_prompts",
+        // 看卡片示例图（2026-11-13）：只读，附图交给执行器；桌面专属
+        "view_card_examples",
         "danbooru_lookup",
         // 体检两件（P4 第 62 步）
         "comfy_check_inputs",
