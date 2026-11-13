@@ -293,12 +293,6 @@ class AppMotion {
   /// 大块内容（页面切换、面板）。
   static const Duration long = Duration(milliseconds: 400);
 
-  /// 主页面切换（五页之间的交叉淡化）。
-  ///
-  /// 320ms 在 60Hz 下约 19 帧、120Hz 下约 38 帧：整段过程肉眼可见，又不会慢到
-  /// "点了没反应"。比 [medium] 长、比 [long] 短，是换页专用的档位。
-  static const Duration page = Duration(milliseconds: 320);
-
   /// M3 的 emphasized decelerate 近似值（进场）。
   static const Curve emphasized = Cubic(0.2, 0.0, 0.0, 1.0);
 

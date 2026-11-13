@@ -453,38 +453,18 @@ class _HomeShellState extends State<HomeShell> {
   /// 又没有"启动时全量初始化"的代价。
   final Set<int> _visited = {0};
 
-  /// 已标记访问、但还没切过去的页（首次访问时先建好、下一帧再开始淡入）。
-  ///
-  /// 用于作废过期的切换：用户连着点了两页时，只让**最后一次**点击生效。
-  int? _pendingPage;
-
-  /// 未访问页的占位（每一格都要有 child：五个页面的位置必须固定）。
+  /// 未访问页的占位（`IndexedStack` 要求每个位置都有 child）。
   static const _placeholder = SizedBox.shrink();
 
   /// 切页：**唯一的入口**（导航栏 / 横幅 / 预设"运行"都走它）。
   ///
   /// 同时把目标页标记为"已访问"—— 这样它才会被实际创建（见 [`_visited`]）。
   /// 散着写 `setState(() => _index = i)` 的后果是：页面切过去了，但那一格还是占位。
-  ///
-  /// **首次访问分两帧**：先建页（这一帧还在旧页上），下一帧才开始淡入。重页面第一次
-  /// `build` / `initState` 可能吃掉几十到几百毫秒，和动画挤在同一帧里，动画就只剩
-  /// "几帧"（用户 2026-11-13 反馈）。分开之后：旧页短暂停留，随后是一段完整、
-  /// 按 vsync 推进的 320ms 交叉淡化。
   void _goToPage(int index) {
-    if (index == _index) return;
-    // 任何新的点击都作废上一张"待切页"，避免过期的回调把界面抢回去。
-    _pendingPage = null;
-    if (!_visited.contains(index)) {
-      _pendingPage = index;
-      setState(() => _visited.add(index));
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (!mounted || _pendingPage != index) return;
-        _pendingPage = null;
-        if (_index != index) setState(() => _index = index);
-      });
-      return;
-    }
-    setState(() => _index = index);
+    setState(() {
+      _index = index;
+      _visited.add(index);
+    });
   }
 
   @override
@@ -623,16 +603,15 @@ class _HomeShellState extends State<HomeShell> {
         // **页面常驻、仅切换可见性**（"桌面端 UI 应始终保留主界面
         // 侧边栏置顶，更换页面的时候把右边界面换掉即可"）。
         //
-        // 五页**全部保持挂载**，只显示 `_index` 那一页：
+        // `IndexedStack` 把五页**全部保持挂载**，只显示 `_index` 那一页：
         //   · 换页**不重建**任何页面 —— 画廊的滚动位置、预设的搜索词、设置里填了一半的
         //     表单都不会丢失（这是同一问题的另一部分）；
-        //   · 换页是 **320ms 的交叉淡化**（`_FadingIndexedStack`）：旧页淡出、新页淡入，
-        //     动画由 `AnimationController` 按 vsync 推进，不是硬切；
-        //   · 首次访问的页面**先在离屏帧里建好**再切（见 [`_goToPage`]），
-        //     重页面的第一次 build 不会把动画的前几帧吃掉。
+        //   · 代价：五页的 `initState` 在启动时就都跑了（各自拉一次数据）。
+        //     这是可接受的 —— 切到任意页都需要拉取，而"换页丢状态"属于明确缺陷。
         Expanded(
-          child: _FadingIndexedStack(
+          child: IndexedStack(
             index: _index,
+            sizing: StackFit.expand,
             children: [
               for (var i = 0; i < _pages.length; i++)
                 _visited.contains(i) ? _pages[i] : _placeholder,
@@ -719,106 +698,6 @@ class _HomeShellState extends State<HomeShell> {
         label: d.label,
       ),
   ];
-}
-
-/// 五个主页面之间的**交叉淡化**（保留每一页的 State）。
-///
-/// 为什么不用 `AnimatedSwitcher`：它换页时会把旧页**销毁** —— 画廊滚动位置、预设
-/// 搜索词、设置里填了一半的表单都会丢。这里和 `IndexedStack` 一样把五页**始终挂在
-/// 树上**，只用 `Offstage` 控制画不画，所以换页不重建、状态全在。
-///
-/// 切换过程：旧页从 1 淡到 0、新页从 0 淡到 1，两页同时在树里，动画由
-/// `AnimationController` 按 vsync 推进（320ms ≈ 60Hz 19 帧 / 120Hz 38 帧）。
-/// 动画结束后旧页重新 `Offstage`，不参与绘制。
-///
-/// 三条容易踩的：
-///   ① **五个位置必须固定**（不能按状态增删 children）：列表长度一变，Flutter 会按
-///      索引重新配对 Element，页面的 State 就丢了；
-///   ② 非当前页一律 `TickerMode(enabled: false)`：否则后台页里的循环动画照样在跑；
-///   ③ 淡出中的旧页 `IgnorePointer`：动画期间点到的必须是新页。
-class _FadingIndexedStack extends StatefulWidget {
-  final int index;
-  final List<Widget> children;
-
-  const _FadingIndexedStack({
-    required this.index,
-    required this.children,
-  });
-
-  @override
-  State<_FadingIndexedStack> createState() => _FadingIndexedStackState();
-}
-
-class _FadingIndexedStackState extends State<_FadingIndexedStack>
-    with SingleTickerProviderStateMixin {
-  late final AnimationController _controller = AnimationController(
-    vsync: this,
-    duration: AppMotion.page,
-  )..value = 1;
-
-  late int _current = widget.index;
-  late int _previous = widget.index;
-
-  @override
-  void didUpdateWidget(covariant _FadingIndexedStack oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (widget.index != _current) {
-      _previous = _current;
-      _current = widget.index;
-      // 从 0 重新跑：旧页与新页同时在树里（见 build）。
-      _controller.forward(from: 0);
-    }
-  }
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return AnimatedBuilder(
-      animation: _controller,
-      builder: (context, _) {
-        final t = Curves.easeInOutCubic.transform(_controller.value);
-        // 用 `value < 1` 而不是 `isAnimating`：控制器跑完最后一条 tick 时
-        // `isAnimating` 仍为真、但 value 已经是 1 —— 那时必须把旧页重新 Offstage，
-        // 否则它会一直留在树上（finder 也能找到，测试里就是"旧页还在"）。
-        final animating = _controller.value < 1.0;
-        return Stack(
-          fit: StackFit.expand,
-          children: [
-            for (var i = 0; i < widget.children.length; i++)
-              _page(i, t, animating),
-          ],
-        );
-      },
-    );
-  }
-
-  Widget _page(int i, double t, bool animating) {
-    final isCurrent = i == _current;
-    final isLeaving = animating && i == _previous && !isCurrent;
-    final visible = isCurrent || isLeaving;
-    // 新页按 t 淡入；旧页按 1 - t 淡出。动画结束后当前页恒为 1。
-    final opacity = !visible
-        ? 0.0
-        : (isCurrent ? (animating ? t : 1.0) : 1.0 - t);
-    return Offstage(
-      offstage: !visible,
-      child: IgnorePointer(
-        ignoring: !isCurrent,
-        child: Opacity(
-          opacity: opacity,
-          child: TickerMode(
-            enabled: isCurrent,
-            child: widget.children[i],
-          ),
-        ),
-      ),
-    );
-  }
 }
 
 /// **内容区自己的路由栈**：让次级页面只替换右边，不许盖住侧边栏。

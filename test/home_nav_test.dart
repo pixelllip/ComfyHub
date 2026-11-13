@@ -169,44 +169,6 @@ void main() {
     );
   });
 
-  // 用户反馈 2026-11-13：换页动画"肉眼只有几帧"。现在五页之间是 320ms 的交叉淡化，
-  // 且**首次访问的页面先在离屏帧里建好**再开始淡入 —— 重页面的第一次 build 不会
-  // 把动画的前几帧吃掉。这条用例钉住"过渡中两页同时在树里、结束后旧页重新离屏"。
-  testWidgets('换页是交叉淡化：过渡中两页同时在树里，结束后旧页离屏', (tester) async {
-    tester.view.physicalSize = const Size(1600, 1100);
-    tester.view.devicePixelRatio = 1.0;
-    addTearDown(tester.view.reset);
-
-    await tester.pumpWidget(await _makeShell());
-    await tester.pumpAndSettle();
-
-    await tester.tap(find.text('画廊'));
-    // 第一帧：先建画廊页（还没切过去，所以它是 Offstage 的）
-    await tester.pump();
-    expect(
-      find.byType(GalleryPage, skipOffstage: false),
-      findsOneWidget,
-      reason: '首次访问的页要在离屏帧里先建好',
-    );
-    expect(find.byType(AiHomePage), findsOneWidget, reason: '这一帧还没开始切换');
-
-    // 第二帧：开始淡入，两页同时可见
-    await tester.pump();
-    expect(find.byType(GalleryPage), findsOneWidget);
-    expect(find.byType(AiHomePage), findsOneWidget, reason: '过渡中两页同时在树里');
-
-    await tester.pump(const Duration(milliseconds: 160));
-    expect(find.byType(AiHomePage), findsOneWidget, reason: '半途仍在过渡');
-
-    await tester.pumpAndSettle();
-    expect(
-      find.byType(AiHomePage),
-      findsNothing,
-      reason: '动画结束后旧页重新 Offstage，不再参与绘制',
-    );
-    expect(find.byType(GalleryPage), findsOneWidget);
-  });
-
   // ★ **后端重启时外壳不得被替换**（"让后端能够静默重启，
   // 不显示那个加载中界面，导致整个前端热重启；我要的桌面端侧边栏常驻呢？"）
   //
