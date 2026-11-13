@@ -617,7 +617,11 @@ class _HomeShellState extends State<HomeShell> {
             sizing: StackFit.expand,
             children: [
               for (var i = 0; i < _pages.length; i++)
-                _visited.contains(i) ? _pages[i] : _placeholder,
+                // 每页各自一层缓存：来回切页时直接复用上一帧的图层，不把整页
+                // （画廊几十张卡片）重新画一遍。
+                RepaintBoundary(
+                  child: _visited.contains(i) ? _pages[i] : _placeholder,
+                ),
             ],
           ),
         ),

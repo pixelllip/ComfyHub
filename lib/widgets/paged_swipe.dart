@@ -216,9 +216,17 @@ class _SwipePageViewState extends State<SwipePageView>
     }
 
     // 动画途中父级重建：进入的那一页内容跟着更新（收藏 / 选择态等）。
+    // 内容版本没变就不重建 —— 快速连点时父级每来一次通知都重建整张网格，
+    // 正是"快速切页更卡"的来源。
     if (_transitioning) {
-      final refreshed = widget.builder(_toPage);
-      if (refreshed != null) _pages[_toPage] = refreshed;
+      final version = widget.pageVersion?.call(_toPage);
+      if (widget.pageVersion == null || _pageVersions[_toPage] != version) {
+        final refreshed = widget.builder(_toPage);
+        if (refreshed != null) {
+          _pages[_toPage] = refreshed;
+          _pageVersions[_toPage] = version;
+        }
+      }
     }
   }
 
@@ -233,17 +241,24 @@ class _SwipePageViewState extends State<SwipePageView>
   //  页缓存 / 预取
   // -------------------------------------------------------------------------
 
-  void _refreshPages() {
+  Set<int> _wantedPages() {
     final wanted = <int>{
       _shownPage,
       widget.page,
       if (_transitioning) _fromPage,
       if (_transitioning) _toPage,
-      if (_shownPage > 1) _shownPage - 1,
-      if (_shownPage < widget.pages) _shownPage + 1,
-      if (widget.page > 1) widget.page - 1,
-      if (widget.page < widget.pages) widget.page + 1,
     };
+    // 只在"目标页就在旁边"时预建左右邻居。快速连点跳到远处时，把两边的
+    // 邻居都挂上会同时保活四五页网格，反而更慢。
+    if ((widget.page - _shownPage).abs() <= 1) {
+      if (widget.page > 1) wanted.add(widget.page - 1);
+      if (widget.page < widget.pages) wanted.add(widget.page + 1);
+    }
+    return wanted;
+  }
+
+  void _refreshPages() {
+    final wanted = _wantedPages();
     for (final page in wanted) {
       if (page < 1 || page > widget.pages) {
         _pages.remove(page);
