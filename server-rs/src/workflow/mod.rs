@@ -13,6 +13,7 @@ pub mod workflow_convert;
 pub mod workflow_fit;
 pub mod workflow_frontend;
 pub mod workflow_load;
+pub mod workflow_params;
 pub mod workflow_prune;
 pub mod workflow_recipe;
 pub mod workflow_search;

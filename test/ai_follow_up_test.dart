@@ -66,10 +66,15 @@ List<Map<String, dynamic>> _askedAll() => [
 ///
 /// 流里的 `message.completed` 与假后端 `/messages` 必须给同一份 ——
 /// 否则一次「与服务端对齐」就会把提问卡（只在 `parts` 里）擦掉。
-List<Map<String, dynamic>> _a1Parts() {
+///
+/// `step`：在调用之前插入一个环节块（`step`）。真机上模型常常先写
+/// `[步骤]…[/步骤]`、调几个工具、最后才 `ask_follow_up` —— 提问卡就落在
+/// 那个环节组里（见下面「提问卡不进环节组」那条用例）。
+List<Map<String, dynamic>> _a1Parts({String? step}) {
   final all = _askedAll();
   return [
     {'type': 'text', 'text': '看两套都合适，你挑一份。'},
+    if (step != null) {'type': 'step', 'text': step},
     {
       'type': 'tool_call',
       'toolCallId': _callId,
@@ -95,7 +100,7 @@ List<Map<String, dynamic>> _a1Parts() {
 
 /// 一次结尾提问的完整事件流（与真后端同形）：
 /// `tool.requested → tool.started → user.question ×2 → tool.completed → message.completed → run.completed`。
-String _stream({bool secondRun = false}) {
+String _stream({bool secondRun = false, String? step}) {
   final all = _askedAll();
   if (secondRun) {
     // 提交之后开启的新一轮：只要一个正常收尾，用例不关心它写了什么。
@@ -159,7 +164,7 @@ String _stream({bool secondRun = false}) {
           'messageId': 'a1',
           'text': '看两套都合适，你挑一份。',
           'steps': 1,
-          'parts': _a1Parts(),
+          'parts': _a1Parts(step: step),
         }),
       ) +
       _sse(8, 'run.completed', '{"runId":"r1"}');
@@ -167,6 +172,11 @@ String _stream({bool secondRun = false}) {
 
 /// 假后端（只实现这条用例用到的几路）。
 class _Fake {
+  _Fake({this.step});
+
+  /// 非空时：在结尾提问卡之前插一个环节块（复现"提问卡被折进操作组"那个现场）。
+  final String? step;
+
   /// 第二轮（用户提交后）真的发出的那条消息正文。
   String? sentText;
 
@@ -174,7 +184,9 @@ class _Fake {
   ///
   /// a1 的 `parts` 必须和流里的 `message.completed` 是同一份 —— 对齐时
   /// 提问卡只活在 parts 里，给一份缺了调用块的 parts 会把它擦掉。
-  final List<Map<String, dynamic>> messages = [
+  ///
+  /// `late`：`parts` 里要用构造参数 `step`（字段初始化器读不到 `this`）。
+  late final List<Map<String, dynamic>> messages = [
     {
       'id': 'u1',
       'conversationId': 'c1',
@@ -193,7 +205,7 @@ class _Fake {
       'role': 'assistant',
       'status': 'complete',
       'text': '看两套都合适，你挑一份。',
-      'parts': _a1Parts(),
+      'parts': _a1Parts(step: step),
     },
   ];
 
@@ -280,7 +292,7 @@ class _Fake {
       }
     } else if (path == '/api/ai/runs/r1/events') {
       return http.Response.bytes(
-        utf8.encode(_stream()),
+        utf8.encode(_stream(step: step)),
         200,
         headers: {'content-type': 'text/event-stream; charset=utf-8'},
       );
@@ -358,6 +370,21 @@ void main() {
     expect(find.text('工作流'), findsOneWidget);
     expect(find.text('跑哪一份？'), findsOneWidget);
     expect(find.text('下一题'), findsOneWidget);
+
+    // 收起 / 展开的命中区是**整条标题行**（与工具卡同一套）：以前只有最右边
+    // 那个 28px 的箭头能点，点标题没有任何反应。
+    final toggle = find.byKey(const Key('ask-follow-up-toggle'));
+    expect(
+      tester.getSize(toggle).height,
+      greaterThanOrEqualTo(40),
+      reason: '整行可点时命中高度不该只有箭头那么一小块',
+    );
+    await tester.tap(find.text('工作流'));
+    await tester.pump();
+    expect(find.text('跑哪一份？'), findsNothing, reason: '点标题就该收起');
+    await tester.tap(find.text('工作流'));
+    await tester.pump();
+    expect(find.text('跑哪一份？'), findsOneWidget, reason: '再点标题就该展开');
   });
 
   testWidgets('提交：逐题记录答案 + 拼成一条用户消息（没选的写「没有选择」）', (tester) async {
@@ -444,6 +471,38 @@ void main() {
     expect(find.text('（已跳过，没有回答）'), findsOneWidget);
   });
 
+  // 用户反馈（2026-11-13）：记录卡收起后只有最右边那个小箭头能点，命中区太小，
+  // 点标题没有任何反应。与工具卡同一套规矩：整条标题行都是命中区。
+  testWidgets('记录卡整行可点：点标题就展开 / 收起', (tester) async {
+    final fake = _Fake();
+    await _open(tester, fake);
+
+    await tester.tap(find.byKey(const Key('ask-follow-up-option-0')));
+    await tester.pump();
+    await tester.tap(find.text('下一题'));
+    await tester.pump();
+    await tester.tap(find.byKey(const Key('ask-follow-up-submit')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
+    await tester.pumpAndSettle();
+
+    // ① 命中区是整条标题行（撑满卡片宽度、高度够手指点），不是箭头那 28px
+    final toggle = find.byKey(const Key('ask-follow-up-record-toggle'));
+    final toggleRect = tester.getRect(toggle);
+    expect(toggleRect.height, greaterThanOrEqualTo(40));
+    expect(toggleRect.width, greaterThan(200), reason: '命中区要撑满整张卡，不能只包住箭头');
+
+    // ② 点标题（不是箭头）就展开
+    await tester.tap(find.text('AI 问过 2 件事'));
+    await tester.pumpAndSettle();
+    expect(find.text('跑哪一份？'), findsOneWidget);
+
+    // ③ 再点一次收起
+    await tester.tap(find.text('AI 问过 2 件事'));
+    await tester.pumpAndSettle();
+    expect(find.text('跑哪一份？'), findsNothing);
+  });
+
   // 用户要求：**不管**新提问是打字发的还是点卡片提交的，旧提问都要自动折叠。
   testWidgets('用户自己发一条新消息：旧提问卡自动收起，仍可展开继续答', (tester) async {
     final fake = _Fake();
@@ -474,10 +533,25 @@ void main() {
       reason: '收起后仍留一个展开入口',
     );
 
-    // ② 展开后仍能看到（并继续作答）当时的选项
-    await tester.tap(find.byKey(const Key('ask-follow-up-toggle')));
+    // ② 展开后仍能看到（并继续作答）当时的选项 —— 点标题就行
+    await tester.tap(find.text('工作流'));
     await tester.pump();
     expect(find.text('跑哪一份？'), findsOneWidget);
     expect(find.byKey(const Key('ask-follow-up-submit')), findsOneWidget);
+  });
+
+  // 用户反馈（2026-11-14）：模型在一个环节里先调工具、最后才 `ask_follow_up` 时，
+  // 提问卡被折进了「环节 · N 个操作」那一组（**默认收起**）—— 界面上根本看不到问题，
+  // 用户以为"AI 没问"。作答入口不是一次操作，永远不许进折叠组。
+  testWidgets('提问卡不会被折进「环节 · N 个操作」组里', (tester) async {
+    await _open(tester, _Fake(step: '正在挑工作流'));
+
+    expect(
+      find.text('跑哪一份？'),
+      findsOneWidget,
+      reason: '提问卡必须默认可见，不能藏进默认收起的环节组',
+    );
+    expect(find.byKey(const Key('ask-follow-up-submit')), findsOneWidget);
+    expect(find.byKey(const Key('ask-follow-up-toggle')), findsOneWidget);
   });
 }

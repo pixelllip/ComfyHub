@@ -1812,6 +1812,13 @@ fn skill_failure(failure: crate::ai::skills::SkillFailure) -> ToolFailure {
 /// 两个入口都认（Kotlin 那边为这个专门加了 `findRunByPromptId`）：UUID 形式的 `run_key`，
 /// 以及**数字**的 `capture_runs.prompt_id`。只认 UUID 的话，模型拿 `comfy_submit` 结果里的
 /// 数字来查就会"刚提交完却说没这次运行"（真实对话里发生过）。
+///
+/// 2026-11-14 起**正文与 JSON 都带 `params`**（[`crate::workflow::workflow_params`]）：
+/// 用户说"最新那张图怎么跑的 / 参数是多少"时，模型要的是**那一跑真实用的值**
+/// （尤其是他在 ComfyUI 界面里自己跑、参数与上次应用提交不是一套的时候）。
+/// 只回状态与产物数时，模型只能拿自己上次提交的 overrides 当现状 —— 那次就是这么答错的。
+/// `includeGraph=true` 再把那张 API 图原样带上（`comfy_audit_workflow` 等几件的描述里
+/// 说的"comfy_get_run 的 raw"就是它）。
 fn comfy_get_run(state: &AppState, arguments: &Value) -> Result<ToolOutcome, ToolFailure> {
     let key = string_arg(arguments, "runKey")?;
     let trimmed = key.trim();
@@ -1834,8 +1841,73 @@ fn comfy_get_run(state: &AppState, arguments: &Value) -> Result<ToolOutcome, Too
             ),
         ));
     };
-    let payload = info.to_json();
-    Ok(ToolOutcome::new(payload.to_string(), payload))
+
+    let include_graph = arguments
+        .get("includeGraph")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let raw = crate::comfy::capture::run_raw(state, &info.run_key)
+        .map_err(capture_failure)?
+        .filter(|text| !text.trim().is_empty());
+    let graph = raw
+        .as_deref()
+        .and_then(crate::workflow::auto_select::graph_of_raw);
+    let params = raw
+        .as_deref()
+        .and_then(crate::workflow::workflow_params::from_raw);
+
+    let mut text = String::new();
+    text.push_str(&format!(
+        "运行 {}（{}，产物 {} 张{}）\n",
+        info.run_key,
+        info.status,
+        info.media_count,
+        info.title
+            .as_deref()
+            .filter(|t| !t.trim().is_empty())
+            .map(|t| format!("，标题「{t}」"))
+            .unwrap_or_default()
+    ));
+    if let Some(id) = info.prompt_id {
+        text.push_str(&format!(
+            "提示词 #{id}（看提示词全文用 search_prompts(id={id})）\n"
+        ));
+    }
+    if let Some(error) = info.error.as_deref().filter(|e| !e.trim().is_empty()) {
+        text.push_str(&format!("错误：{error}\n"));
+    }
+    match &params {
+        Some(params) => {
+            text.push_str(
+                "这一跑实际用的参数（从捕获的 raw 图里读，不是应用上次提交的那份；\
+                 键可以直接抄进 comfy_submit(overrides=…)）：\n",
+            );
+            text.push_str(&params.render("  "));
+        }
+        None => text.push_str(
+            "这条没有完整 API 图，读不出当时用的参数。**不要**拿应用上次提交的那份参数当它 —— \
+             要让参数可查，下次在 ComfyUI 里跑的时候确认自动捕获把这一跑收进来了。\n",
+        ),
+    }
+    if include_graph {
+        match &graph {
+            Some(_) => {
+                text.push_str("（raw 已放在返回 JSON 的 `raw` 里，可原样传给 comfy_audit_workflow / comfy_fit_workflow）\n");
+            }
+            None => text.push_str("（这条没有可用的 raw，includeGraph 拿不到图）\n"),
+        }
+    }
+
+    let mut payload = info.to_json();
+    if let Some(params) = &params {
+        payload["params"] = params.to_json();
+    }
+    if include_graph {
+        if let Some(graph) = &graph {
+            payload["raw"] = Value::Object(graph.clone());
+        }
+    }
+    Ok(ToolOutcome::new(text, payload))
 }
 
 /// `search_prompts`：搜**本机的提示词库**，或按 id 取一条完整的（Kotlin `search_prompts`）。
@@ -2167,6 +2239,14 @@ fn comfy_recent_successes(state: &AppState, arguments: &Value) -> Result<ToolOut
         item.insert("task".into(), json!(recipe.task.wire()));
         item.insert("models".into(), json!(models));
         item.insert("skeletonHash".into(), json!(recipe.skeleton_hash));
+        // 2026-11-14：每条都带**这一跑自己的参数**。只给标题 / 模型名时，
+        // 模型分不清"应用上次提交的 overrides"与"用户在 ComfyUI 里自己跑的那份自带的参数"——
+        // 它就会照抄前者（现场：应用提交的是 tanihara 0.45 / Enhancer 关，
+        // 用户在 ComfyUI 里跑的是 0.8 / 开，AI 却答"参数和上一版一样：0.45、关"）。
+        item.insert(
+            "params".into(),
+            crate::workflow::workflow_params::from_recipe(&recipe).to_json(),
+        );
         item.insert(
             "origin".into(),
             json!(if is_app { "app" } else { "comfyui" }),
@@ -2225,7 +2305,7 @@ fn comfy_recent_successes(state: &AppState, arguments: &Value) -> Result<ToolOut
             "先确认这条工作流真的跑通过一次，或用 comfy_list_workflows 找现成的；不要凭标题猜。",
         );
     } else {
-        /// 一组里每条一行（标题 / 任务 / 模型 / 时间 / runKey）。
+        /// 一组里每条一行（标题 / 任务 / 模型 / 时间 / runKey）+ 这一跑自己的参数。
         fn render_items(list: &[Value]) -> String {
             let mut out = String::new();
             for item in list {
@@ -2255,6 +2335,11 @@ fn comfy_recent_successes(state: &AppState, arguments: &Value) -> Result<ToolOut
                         &models
                     }
                 ));
+                if let Some(params) = obj.get("params") {
+                    out.push_str(&crate::workflow::workflow_params::render_from_json(
+                        params, "  ",
+                    ));
+                }
             }
             out
         }
@@ -2280,10 +2365,12 @@ fn comfy_recent_successes(state: &AppState, arguments: &Value) -> Result<ToolOut
         text.push_str(
             "用法：**不要默认挑最近的那一条** —— 「应用内提交」是应用替你跑的那份；\
              「ComfyUI 里运行的」才是用户在 ComfyUI 界面里自己跑的那份（自动捕获来的，\
-             可能晚几秒出现）。选定之后由你写进 comfy_submit(overrides=…)，只改提示词与 seed；\
-             不要重搭工作流，也别逐条 comfy_get_run 自己分类。\
-             两套都说得通、用户又没点名时，在回复末尾用 ask_follow_up 让他选：\
-             选项写清标题、时间，以及哪一套是应用内提交的（他可以进蓝图看具体接线）。",
+             可能晚几秒出现）。每条下面的「采样/尺寸 / 其它开关 / 模型」就是**那一跑真实的参数**\
+             （LoRA 强度、ComfyUI-Krea2T-Enhancer 之类都在里面）—— 用户在 ComfyUI 里改过的值\
+             只会出现在这里，**不许**拿应用上次提交的那份当现状。选定之后照那一条的参数写\
+             comfy_submit(overrides=…)：只改提示词与 seed，别重搭工作流；要改其它值必须有\
+             用户这一轮的话作依据。两套都说得通、用户又没点名时，在回复末尾用 ask_follow_up\
+             让他选（选项写清标题、时间，以及哪一套是应用内提交的）。",
         );
         let instance_note = match &instance_url {
             Some(url) => format!(

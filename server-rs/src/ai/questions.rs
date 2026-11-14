@@ -578,7 +578,10 @@ fn apply_answer(item: &mut Value, question_id: &str, answer: Option<&Answer>) ->
             if a.option_indexes.is_empty() {
                 obj.remove("optionIndexes");
             } else {
-                obj.insert("optionIndexes".into(), Value::from(a.option_indexes.clone()));
+                obj.insert(
+                    "optionIndexes".into(),
+                    Value::from(a.option_indexes.clone()),
+                );
             }
         }
         // 跳过 = 已回答但内容为空（界面显示"已跳过"）
@@ -613,12 +616,7 @@ pub fn record_answer(
                 SET status = 'answered', answer = ?1, option_index = ?2, option_indexes = ?3,
                     answered_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
               WHERE question_id = ?4 AND status = 'pending'",
-            rusqlite::params![
-                &answer.answer,
-                answer.option_index,
-                &indexes,
-                question_id
-            ],
+            rusqlite::params![&answer.answer, answer.option_index, &indexes, question_id],
         )?;
         if n > 0 {
             sync_part_answer(tx, &question_id, Some(&answer))?;

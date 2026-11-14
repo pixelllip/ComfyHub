@@ -43,6 +43,10 @@ struct MediaRow {
     height: Option<i64>,
     created_at: Option<String>,
     source: Option<String>,
+    /// 这一张属于哪条提示词（= 哪次捕获运行）
+    prompt_id: Option<i64>,
+    /// 那次运行的 `capture_runs.run_key`（可由 `comfy_get_run` 查真实参数）
+    run_key: Option<String>,
     prompt_title: Option<String>,
     positive_prompt: Option<String>,
 }
@@ -169,6 +173,17 @@ pub fn tool_view_outputs(state: &AppState, arguments: &Value) -> Result<ToolOutc
                 .unwrap_or_default(),
         ));
         text.push_str(&format!("   文件：{}\n", row.original_name));
+        // 2026-11-14：把"这张图是哪一跑"交回去。用户问"最新那张怎么跑的 / 人呢"时，
+        // 模型以前只能凭自己上次提交的那份推（现场就是这么答错的）。有了 runKey，
+        // 它就能 `comfy_get_run(runKey=…)` 读那一跑真实用的参数。
+        if let Some(run_key) = row.run_key.as_deref().filter(|k| !k.trim().is_empty()) {
+            text.push_str(&format!(
+                "   runKey：{run_key}（要看这一跑的实际参数与提示词全文，用 comfy_get_run(runKey={run_key})）\n"
+            ));
+        }
+        if let Some(prompt_id) = row.prompt_id {
+            text.push_str(&format!("   提示词：#{prompt_id}\n"));
+        }
         if let Some(prompt) = row
             .positive_prompt
             .as_deref()
@@ -213,6 +228,8 @@ pub fn tool_view_outputs(state: &AppState, arguments: &Value) -> Result<ToolOutc
             "height": row.height,
             "source": row.source,
             "createdAt": row.created_at,
+            "promptId": row.prompt_id,
+            "runKey": row.run_key,
             "promptTitle": row.prompt_title,
             "path": path.as_ref().map(|p| p.to_string_lossy().to_string()),
         }));
@@ -367,7 +384,9 @@ fn load(
 }
 
 const SELECT: &str = "SELECT m.id, m.kind, m.original_name, m.stored_name, m.width, m.height,
-        m.created_at, m.source,
+        m.created_at, m.source, m.prompt_id,
+        (SELECT c.run_key FROM capture_runs c WHERE c.prompt_id = m.prompt_id
+          ORDER BY c.id DESC LIMIT 1) AS run_key,
         p.title AS prompt_title, p.positive_prompt AS positive_prompt
    FROM media_assets m LEFT JOIN prompts p ON p.id = m.prompt_id";
 
@@ -385,6 +404,8 @@ fn row_of(row: &rusqlite::Row<'_>) -> rusqlite::Result<MediaRow> {
             row.get::<_, Option<String>>("created_at")?.as_deref(),
         ),
         source: row.get("source")?,
+        prompt_id: row.get("prompt_id")?,
+        run_key: row.get("run_key")?,
         prompt_title: row.get("prompt_title")?,
         positive_prompt: row.get("positive_prompt")?,
     })
@@ -397,4 +418,60 @@ fn clip(text: &str, max_chars: usize) -> String {
         out.push('…');
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::tool_view_outputs;
+    use crate::web::routes::AppState;
+
+    /// 2026-11-14：产物条目要带 `runKey` / `promptId` —— 用户问"最新那张怎么跑的"时，
+    /// 模型得能从图追到那一跑，再 `comfy_get_run` 读真实参数。
+    /// 以前只给标题与提示词开头，它只能拿自己上次提交的那份推（现场就是这么答错的）。
+    #[test]
+    fn 产物条目带_run_key_与_prompt_id() {
+        let dir = crate::infra::testpaths::scratch("media-view-run-key");
+        std::fs::create_dir_all(dir.join("media")).unwrap();
+        let conn = crate::infra::db::open_memory().unwrap();
+        let schema = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("..")
+                .join("db")
+                .join("schema.sqlite.sql"),
+        )
+        .unwrap();
+        conn.execute_batch(&schema).unwrap();
+        conn.execute(
+            "INSERT INTO prompts (id, title, positive_prompt, source) VALUES (7, 'test · seed 1', 'a lakeshore', 'ComfyUI')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO capture_runs (run_key, status, title, created_at, prompt_id) \
+             VALUES ('run-abc', 'success', 'test · seed 1', '2026-11-14T03:41:53.000Z', 7)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO media_assets (prompt_id, kind, original_name, stored_name, source, created_at) \
+             VALUES (7, 'IMAGE', 'test_01635_.png', 'missing-on-purpose.png', 'ComfyUI', '2026-11-14T03:41:53.780Z')",
+            [],
+        )
+        .unwrap();
+        let state = AppState::new(conn, ":memory:", dir.join("media"));
+
+        let out = tool_view_outputs(&state, &json!({"limit": 1})).unwrap();
+        let item = &out.payload["items"][0];
+        assert_eq!(item["runKey"], "run-abc");
+        assert_eq!(item["promptId"], 7);
+        assert!(
+            out.content.contains("comfy_get_run(runKey=run-abc)"),
+            "正文要告诉模型怎么查这一跑的参数：{}",
+            out.content
+        );
+
+        std::fs::remove_dir_all(dir).ok();
+    }
 }

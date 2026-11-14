@@ -559,8 +559,15 @@ async fn comfy_get_run_accepts_both_keys_and_reformats_time() {
     // 可空键**整个不出现**（Kotlin 的 explicitNulls = false）
     assert!(out.payload.get("title").is_none(), "{}", out.payload);
     assert!(out.payload.get("error").is_none(), "{}", out.payload);
-    // 正文就是同一份 JSON（模型读正文、界面读 meta，两边形状一致）
-    assert_eq!(out.content, out.payload.to_string());
+    // 2026-11-14：正文不再等于 payload 序列化 —— 它要说清状态，并把"这一跑真实用的参数"
+    // 从 raw 图里读出来（模型据此照抄 overrides，而不是拿自己上次提交的那份推）。
+    assert!(
+        out.content.starts_with("运行 run:abc")
+            && out.content.contains("这一跑实际用的参数")
+            && out.content.contains("3.seed=1"),
+        "正文要把状态与参数说清楚：{}",
+        out.content
+    );
 
     // 数字 prompt_id 那个入口也认（模型很自然会把 capturedPromptId 拿来查）。
     // ⚠ `capture_runs.prompt_id` 上有外键 → 只能指向真实存在的提示词（夹具里是 10/11）；

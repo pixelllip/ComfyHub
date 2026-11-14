@@ -904,6 +904,18 @@ fn comfy_recent_successes_按提交方分两组() {
     assert_eq!(keys(comfy), vec!["comfy-user"], "{}", out.content);
     assert_eq!(app[0]["origin"], "app");
     assert_eq!(comfy[0]["origin"], "comfyui");
+    // 2026-11-14：每条都带这一跑自己的参数（只有标题 / 模型名时，AI 分不清
+    // "应用上次提交的 overrides"与"用户在 ComfyUI 里自己跑的").
+    assert_eq!(app[0]["params"]["sampling"]["3.seed"], "1");
+    assert_eq!(
+        comfy[0]["params"]["models"]["1.ckpt_name"],
+        "krea2.safetensors"
+    );
+    assert!(
+        out.content.contains("3.seed=1"),
+        "正文里要能看到那一跑的采样参数：{}",
+        out.content
+    );
     assert!(
         out.content.contains("【应用内提交】") && out.content.contains("【ComfyUI 里运行的】"),
         "正文要分两组写清楚：{}",
@@ -1109,6 +1121,100 @@ fn comfy_recent_successes_认得真库里的_history_形状() {
     assert_eq!(items[0]["runKey"], "history-shape");
     assert_eq!(items[0]["promptId"], 7);
     assert_eq!(items[0]["models"][0], "anima-base-v1.0.safetensors");
+    // history 形状同样要读出参数（别只在裸图上有效）
+    assert_eq!(items[0]["params"]["sampling"]["3.seed"], "1");
+
+    std::fs::remove_dir_all(dir).ok();
+}
+
+/// 2026-11-14：`comfy_get_run` 必须带回**那一跑真实用的参数**，而不是只有状态。
+///
+/// 现场（用户原话："AI 非常固执地只认用软件内最近提交的工作流的参数，完全不理 ComfyUI 里
+/// 最新跑通的工作流参数"）：用户在 ComfyUI 里自己跑的是 tanihara 0.8 / 增强器开，
+/// 应用上次提交的是 0.45 / 关；`comfy_get_run` 只回状态与产物数，AI 就照抄了后者。
+///
+/// 这里钉四件事：① 参数从 raw 图里读出来（采样 / 开关 / 提示词节点）；
+/// ② 正文与 JSON 说同一件事；③ `includeGraph=true` 才带 `raw`；
+/// ④ 没有 raw 时如实说"读不出"，不许拿别的运行顶上。
+#[test]
+fn comfy_get_run_带回那一跑的真实参数() {
+    use crate::web::routes::AppState;
+
+    let graph = json!({
+        "3": {"class_type": "KSampler", "inputs": {"seed": 42, "steps": 8, "cfg": 1.0}},
+        "5": {"class_type": "ComfyUI-Krea2T-Enhancer", "inputs": {"enabled": true, "strength": 1.25}},
+        "6": {"class_type": "CLIPTextEncode", "inputs": {"text": "a lakeshore"}},
+        "9": {"class_type": "SaveImage", "inputs": {"images": ["3", 0]}}
+    });
+
+    let dir = crate::infra::testpaths::scratch("get-run-params");
+    std::fs::create_dir_all(dir.join("media")).unwrap();
+    let conn = crate::infra::db::open_memory().unwrap();
+    let schema = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("db")
+            .join("schema.sqlite.sql"),
+    )
+    .unwrap();
+    conn.execute_batch(&schema).unwrap();
+    conn.execute(
+        "INSERT INTO prompts (id, title, positive_prompt, source) VALUES (12, 'test', 'a lakeshore', 'ComfyUI')",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO capture_runs (run_key, status, title, raw, created_at, prompt_id) \
+         VALUES ('run-1', 'success', 'test · seed 42', ?1, '2026-11-14T03:41:53.000Z', 12)",
+        rusqlite::params![graph.to_string()],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO capture_runs (run_key, status, title, raw, created_at) \
+         VALUES ('run-no-raw', 'success', '老记录', NULL, '2026-11-13T00:00:00.000Z')",
+        [],
+    )
+    .unwrap();
+    let state = AppState::new(conn, ":memory:", dir.join("media"));
+
+    let out = comfy_get_run(&state, &json!({"runKey": "run-1"})).unwrap();
+    assert_eq!(out.payload["params"]["sampling"]["3.steps"], "8");
+    assert_eq!(out.payload["params"]["sampling"]["3.seed"], "42");
+    assert_eq!(out.payload["params"]["others"]["5.enabled"], "true");
+    assert_eq!(out.payload["params"]["others"]["5.strength"], "1.25");
+    assert_eq!(out.payload["params"]["prompts"][0]["key"], "6.text");
+    assert!(
+        out.content.contains("5.enabled=true") && out.content.contains("6.text"),
+        "正文要把参数写出来：{}",
+        out.content
+    );
+    assert!(
+        out.content.contains("不是应用上次提交的那份"),
+        "正文要说清参数来源：{}",
+        out.content
+    );
+    assert!(
+        out.payload.get("raw").is_none(),
+        "没开 includeGraph 时不该带整张图"
+    );
+
+    // 数字 promptId 也认（与 run_key 等价）
+    let out = comfy_get_run(&state, &json!({"runKey": "12"})).unwrap();
+    assert_eq!(out.payload["runKey"], "run-1");
+
+    // includeGraph=true 才带 raw，且能直接传给体检工具
+    let out = comfy_get_run(&state, &json!({"runKey": "run-1", "includeGraph": true})).unwrap();
+    assert_eq!(out.payload["raw"]["3"]["class_type"], "KSampler");
+    assert!(out.content.contains("includeGraph") || out.content.contains("raw"));
+
+    // 没有 raw：如实说，不编参数
+    let out = comfy_get_run(&state, &json!({"runKey": "run-no-raw"})).unwrap();
+    assert!(out.payload.get("params").is_none(), "{}", out.payload);
+    assert!(
+        out.content.contains("读不出当时用的参数"),
+        "没有 raw 时要如实说：{}",
+        out.content
+    );
 
     std::fs::remove_dir_all(dir).ok();
 }

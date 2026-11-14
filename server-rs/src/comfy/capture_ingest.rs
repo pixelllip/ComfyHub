@@ -93,7 +93,11 @@ pub fn begin_run(
             params![run_key, source, &submitted_by, raw_text],
         )?;
         if inserted > 0 {
-            return Ok(RunClaim { claimed: true, existing_prompt_id: None, existing_status: None });
+            return Ok(RunClaim {
+                claimed: true,
+                existing_prompt_id: None,
+                existing_status: None,
+            });
         }
         // 僵尸 Run 的年龄：时间列是 ISO-8601 UTC 文本，`julianday` 认
         let existing: Option<(Option<i64>, Option<String>, Option<i64>)> = tx
@@ -107,7 +111,11 @@ pub fn begin_run(
             .ok();
         let Some((prompt_id, status, age)) = existing else {
             // 行刚被别人删了（并发）——按"可以抢"处理，下面的 UPDATE 会再插一次
-            return Ok(RunClaim { claimed: true, existing_prompt_id: None, existing_status: None });
+            return Ok(RunClaim {
+                claimed: true,
+                existing_prompt_id: None,
+                existing_status: None,
+            });
         };
         let status = status.unwrap_or_default();
         let age = age.unwrap_or(0);
@@ -138,7 +146,11 @@ pub fn begin_run(
             ),
             params![run_key, submitted_by],
         )?;
-        Ok(RunClaim { claimed: true, existing_prompt_id: None, existing_status: None })
+        Ok(RunClaim {
+            claimed: true,
+            existing_prompt_id: None,
+            existing_status: None,
+        })
     })
 }
 

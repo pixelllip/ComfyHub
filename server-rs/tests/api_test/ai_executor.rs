@@ -114,6 +114,11 @@ async fn executor_streams_a_reply_and_persists_parts_in_order() {
 }
 
 /// **R6 的现场**：上游说了两段之后**连接被掐断** —— 已经说出去的话一个字都不能丢。
+///
+/// 2026-11-14 起还多一条：断流**不再是终态**。执行器会把已经说出去的那半段交回上游、
+/// 要它"紧接中断处继续写"（最多 [`MAX_STREAM_RESTARTS`] 次）。这个假网关每次都断，
+/// 所以三次之后仍然失败 —— 但三段的正文一个字都不许少，码也要是**断流**那一档
+/// （`STREAM_INTERRUPTED`：改配置解决不了，界面不该让人去核对 Base URL）。
 #[tokio::test]
 async fn executor_keeps_what_was_already_said_when_the_stream_breaks() {
     let (base_url, gateway) = fake_gateway().await;
@@ -134,9 +139,12 @@ async fn executor_keeps_what_was_already_said_when_the_stream_breaks() {
 
     let run = wait_for_run(&state, &run_id).await;
     assert_eq!(run["status"], "failed", "{run}");
-    assert!(run["errorCode"].is_string());
+    assert_eq!(
+        run["errorCode"], "STREAM_INTERRUPTED",
+        "断流是传输层问题，不能报成「端点或协议不匹配」：{run}"
+    );
 
-    // ★ 这一条就是 R6：**已经说出去的两段话必须还在**（正文 + 有序块都得有）
+    // ★ 这一条就是 R6：**已经说出去的每一段话都必须还在**（正文 + 有序块都得有）
     let (_, messages) = get_json(
         router_for(state.clone()),
         "/api/ai/conversations/conv-0/messages",
@@ -149,15 +157,16 @@ async fn executor_keeps_what_was_already_said_when_the_stream_breaks() {
         .find(|m| m["id"] == assistant_id.as_str())
         .unwrap();
     assert_eq!(assistant["status"], "failed");
+    let expected = "你好".repeat(1 + comfyhub_server_rs::ai::executor::MAX_STREAM_RESTARTS);
     assert_eq!(
-        assistant["text"], "你好",
-        "断流前已经说出去的话不许丢（R6）：{assistant}"
+        assistant["text"], expected,
+        "断流前已经说出去的话不许丢，续写也要接在同一段里（R6）：{assistant}"
     );
     let parts = assistant["parts"].as_array().unwrap();
     assert!(
         parts
             .iter()
-            .any(|p| p["type"] == "text" && p["text"] == "你好"),
+            .any(|p| p["type"] == "text" && p["text"] == expected),
         "正文必须**同时**落进有序块（前端在 parts 非空时只渲染 parts）：{assistant}"
     );
     assert!(
@@ -169,6 +178,62 @@ async fn executor_keeps_what_was_already_said_when_the_stream_breaks() {
     let types = event_types(&state, &run_id);
     assert_eq!(types.last().unwrap(), "run.failed");
     assert_eq!(types.first().unwrap(), "run.started");
+
+    gateway.abort();
+}
+
+/// **断流之后能自己接上**（2026-11-14 用户报："等不到最后的追加提问"）。
+///
+/// 现场：中转网关在长回复中途 close（`error decoding response body`，
+/// 真正的原因 `connection closed before message completed`），一个已经说了几分钟的
+/// 回复就此判失败。现在执行器把断点之前的那半段作为 assistant 轮交回去、再要一轮
+/// "紧接中断处继续写" —— 回复照常收尾，Run 是 `completed`，正文是**接起来的一整段**。
+#[tokio::test]
+async fn executor_continues_the_reply_after_the_upstream_hangs_up() {
+    let (base_url, gateway) = fake_gateway().await;
+    let state = state();
+    seed_provider_and_model(&state);
+    point_at_gateway(&state, &format!("{base_url}?upstream=break-then-ok"));
+
+    let (status, body) = send_json(
+        router_for(state.clone()),
+        "POST",
+        "/api/ai/conversations/conv-0/runs",
+        serde_json::json!({ "text": "写一段长的", "providerId": "goat", "modelId": "m1" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+    let run_id = body["runId"].as_str().unwrap().to_string();
+    let assistant_id = body["assistantMessageId"].as_str().unwrap().to_string();
+
+    let run = wait_for_run(&state, &run_id).await;
+    assert_eq!(
+        run["status"], "completed",
+        "上游掐断一次不该把这一轮判死（会自动接着写）：{run}"
+    );
+    assert!(run["errorCode"].is_null(), "{run}");
+
+    let (_, messages) = get_json(
+        router_for(state.clone()),
+        "/api/ai/conversations/conv-0/messages",
+    )
+    .await;
+    let assistant = messages
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["id"] == assistant_id.as_str())
+        .unwrap();
+    assert_eq!(assistant["status"], "complete");
+    assert_eq!(
+        assistant["text"], "你好接着写",
+        "断点前的正文 + 续写要拼成**同一段**（不重开、不覆盖）：{assistant}"
+    );
+
+    // 续写那一轮真的把断点交回去了（假网关只有在请求里看到续写指令时才回「接着写」，
+    // 否则回的是「没有收到续写指令」—— 上面那条正文断言就会当场失败）。
+    let types = event_types(&state, &run_id);
+    assert_eq!(types.last().unwrap(), "run.completed");
 
     gateway.abort();
 }

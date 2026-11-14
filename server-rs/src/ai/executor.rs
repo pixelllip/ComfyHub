@@ -510,6 +510,8 @@ async fn run_once(
     let mut total_usage: Option<TokenUsage> = None;
     let mut last_provider_response_id: Option<String> = None;
     let mut step = 0usize;
+    // 上游把连接掐断过几次（**只用于断流续写**，与工具轮数 / 输出上限续写分开计）。
+    let mut stream_restarts = 0usize;
     let mut budget_exhausted = false;
     // 思考被上游逼停（`effort=none` 重发过一次）之后，本次 Run 余下的每一轮都要沿用 ——
     // 那些轮次同样没有思维链可回传，换回思考模式就是一轮一次 400（见 `stream_chat`）。
@@ -690,6 +692,64 @@ async fn run_once(
                         last_provider_response_id.as_deref(),
                         total_usage,
                     );
+                }
+                // ★ **上游把连接掐断了：接着写完，不要把这一轮判死**（2026-11-14 用户报）。
+                //
+                // 现场：中转网关在长回复中途 close（`error decoding response body`，
+                // 真正的原因是 `connection closed before message completed`），
+                // 一个已经说了两百秒的回复就此判失败，用户"等不到最后的追加提问"。
+                // 断点之前的内容本来就在 `sink` 里，缺的只是后半段 —— 把它作为一条 assistant 轮、
+                // 再要一轮"紧接中断处继续写"（与"被输出长度上限截断"同一条套路）。
+                //
+                // 只处理**传输层断流**：429 / 400 / 配置错误照旧立刻失败（那些重试没有意义）。
+                // 续写次数有上限；用户点了停止就不续（取消不是失败）。
+                if e.error == crate::provider::upstream::STREAM_INTERRUPTED
+                    && stream_restarts < MAX_STREAM_RESTARTS
+                    && !state.executor.is_cancelled(run_id)
+                {
+                    stream_restarts += 1;
+                    // 两个摘标记状态机里可能还压着没确认的可见文字：先放出来，
+                    // 它们既不能丢，也不能漏进下一轮的上下文。
+                    let (pending, phases) = drain_strippers(&stripper, &steps);
+                    let (partial, partial_reasoning) = {
+                        let mut guard = sink.lock().unwrap_or_else(|e| e.into_inner());
+                        for phase in phases {
+                            guard.push_step(&phase);
+                        }
+                        if !pending.is_empty() {
+                            guard.push_text(&pending);
+                        }
+                        // 这一段的思考归属刚刚那一轮：取走，别挂到下一轮的助手轮上（重复回传）
+                        (guard.text.clone(), guard.seal_reasoning())
+                    };
+                    // 一个字都还没说出去（比如模型还在思考）：没有可续写的前半段，
+                    // 直接重发同一次请求就是正确动作 —— 不要凭空塞一条"继续"的用户消息。
+                    let partial_chars = partial.chars().count();
+                    let empty = partial.trim().is_empty();
+                    if !empty {
+                        trailing.push(ChatTurn {
+                            role: "assistant".into(),
+                            content: partial,
+                            reasoning: Some(partial_reasoning).filter(|r| !r.trim().is_empty()),
+                            ..Default::default()
+                        });
+                        trailing.push(ChatTurn {
+                            role: "user".into(),
+                            content: crate::ai::nsfw_prompt::STREAM_BROKEN_INSTRUCTION.to_string(),
+                            ..Default::default()
+                        });
+                    }
+                    eprintln!(
+                        "[run {run_id}] 上游把连接掐断了（第 {stream_restarts}/{MAX_STREAM_RESTARTS} \
+                         次）：已收到 {partial_chars} 个正文字符，{}｜原始原因：{}",
+                        if empty {
+                            "重发这一次请求"
+                        } else {
+                            "紧接中断处继续写"
+                        },
+                        e.human()
+                    );
+                    continue;
                 }
                 // **失败也要把已经说出去的话落下来**（R6 第 2 条）——
                 // 一次 429 不应使已显示的回复内容消失。
@@ -1043,6 +1103,14 @@ pub const APPROVAL_TIMEOUT_SECONDS: u64 = 300;
 
 /// "接着写"最多来几轮（Kotlin `HarnessRunner.MAX_CONTINUATIONS`）。
 pub const MAX_CONTINUATIONS: usize = 3;
+
+/// 上游把连接掐断之后，**自动接着写**最多来几次。
+///
+/// 这不是"重发同一个请求"：断点之前已经说出去的内容照旧留在这一条回复里，
+/// 补的是**后半段**（见主循环里 `STREAM_INTERRUPTED` 那一段）。
+/// 上限 2 是折中：中转网关/代理掐长连接往往是偶发的，一次续写常常就接上了；
+/// 真断网时连试三次也还是断，再试只是白等（每次都要等它先开口）。
+pub const MAX_STREAM_RESTARTS: usize = 2;
 
 /// 上游给的结束原因里，哪些表示"是被输出长度上限截断的"
 /// （与 Kotlin `isTruncatedByOutputLimit` 逐字一致）。

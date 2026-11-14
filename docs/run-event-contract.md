@@ -131,6 +131,7 @@ data: <payload 的 JSON 单行>
 | --- | --- |
 | Flutter `RunEventSource` 抽象（远端 SSE / 本地 channel 两个实现） | 整个信封 |
 | R6 三条失败纪律（正文落块 / 标题缓冲 flush / 不许就地重置有内容的回复） | `text.delta` + `message.completed` + `run.failed`/`run.cancelled` |
+| 上游把连接掐断（`STREAM_INTERRUPTED`）**不是**终态 | 执行器先自动"接着写"（最多 `MAX_STREAM_RESTARTS = 2` 次，断点前正文留在同一条消息里），仍然断才发 `run.failed`；客户端不需要为它做任何事 |
 | 产物入口卡（只认后端给的 `mediaIds`） | `tool.completed.payload.result.mediaIds` |
 | 审批卡 / 提问卡 | `tool.requested` / `user.question` |
 | 会话列表刷新 | `conversation.updated` |

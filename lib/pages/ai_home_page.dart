@@ -2714,7 +2714,20 @@ class _StepCollector {
   }
 
   /// 一张工具卡：有开着的环节就收进去，否则直接排在正文里（老样子）。
+  ///
+  /// **提问卡（阻塞式 / 结尾提问）永远不进环节组**。它是"等你作答"的入口，
+  /// 不是这一环节里的一次操作；折进默认收起的组里，用户在界面上根本看不到问题
+  /// （2026-11-14 现场：模型在一个环节里先调工具、最后 `ask_follow_up`，
+  /// 提问卡被收进「正在出图 · N 个操作」那一组里，用户以为 AI 没问）。
+  /// 顺序仍然是到达顺序：先把已经攒下的工具卡交出去，提问卡自己排在正文里，
+  /// 环节继续开着（后面再来工具卡会另起一组，标「续」）。
   void addCall(AiToolCallState call) {
+    if (call.allQuestions.isNotEmpty) {
+      flush();
+      if (_phase != null) _continued = true;
+      out.add(buildCard(call));
+      return;
+    }
     if (_phase == null) {
       out.add(buildCard(call));
       return;
@@ -2754,6 +2767,9 @@ class _StepCollector {
 ///  ② **有待处理项时不得折叠**（待批准 / 失败 / 被拒）：批准按钮位于折叠区时，
 ///     无法确定点击位置（呈现为"AI 卡住"）；
 ///  ③ 同一环节名的第二次开组标「续」，让人看出这是同一个环节的第二段操作（见 [`_StepCollector`]）。
+///
+/// ⚠ **提问卡（`ask_user_question` / `ask_follow_up`）不在这组里**：它是作答入口，
+/// 不是一次操作 —— 见 [`_StepCollector.addCall`]。
 class _StepGroup extends StatefulWidget {
   final String phase;
   final bool continued;

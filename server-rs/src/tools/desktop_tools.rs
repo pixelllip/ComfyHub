@@ -51,8 +51,8 @@ pub const DESKTOP_TOOLS: &[DesktopToolSpec] = &[
     DesktopToolSpec {
         name: "ask_follow_up",
         description: r#"**把问题抛在回复的末尾，让用户挑下一步** —— 这一轮到此结束，用户提交后会把选择作为**下一条用户消息**发来，你在下一轮接着做。
-与 `ask_user_question` 的分工：**动手前缺一条信息、你要在同一个回复里等答案** → 用 `ask_user_question`（那是闸门，会卡住这一轮）；**话已经说完了，只是让用户挑下一步 / 选哪份工作流** → 用这一条（不卡，问题就贴在回复末尾）。
-**不是每次都要问**：没有值得让用户拍板的分叉（只有一种合理做法、或用户已经点名）时，直接做完就好。值得问的典型场景：`comfy_recent_successes` 回了两组（应用内提交的 / ComfyUI 里自己跑的），两套都合适而用户没点名；要选画风路线、参考图、成品给谁看。
+与 `ask_user_question` 的分工：**动手前缺一条信息、你要在同一个回复里等答案** → 用 `ask_user_question`（那是闸门，会卡住这一轮）；**话已经说完了，接下来有两种以上都说得通的做法** → 用这一条（不卡，问题就贴在回复末尾）。
+**默认该问就问，但只在真有分叉时问**：出图之后挑哪张 / 接着改哪张、写完提示词之后挑路线、查完两组工作流之后挑哪一套、一件事收尾之后挑下一步 —— 给 2~5 个具体选项让用户点。**别用"还需要我做什么吗 / 要不要继续"这类开放式问句收尾**（那等于把选择丢回给用户打字）。只有一种合理做法、或用户已经点名时，直接做完。
 怎么写：每题给 `question` + `options`（2~5 个**具体**选项，第一个放你推荐的；界面会补「自己输入答案」）；要多选加 `multiSelect=true`；题目可带 `image`、选项可带示意图（与 `ask_user_question` 同一套写法）。
 界面上是一张卡**分页**（第 N/M 题、上一题 / 下一题 / 跳过本题，最后一页是「提交」）；**每题都可以不选**，提交时没选的按"用户没有选择"发给你。`submitText` 可选，写"提交后我会……"那一句，会附在生成的用户消息末尾。
 ⚠ 先把这一轮的正文写完，**再**调用它 —— 它一返回这一轮就结束，你在这之后写的任何内容都不会出现。"#,
@@ -158,8 +158,10 @@ pub const DESKTOP_TOOLS: &[DesktopToolSpec] = &[
     },
     DesktopToolSpec {
         name: "comfy_get_run",
-        description: r#"按 runKey 查一次已捕获运行的状态、错误与产物数。runKey 可以用三样中的任何一个：ComfyUI 的 prompt_id（UUID，comfy_submit 结果里的 runKey）、捕获记录里的数字 id（capturedPromptId），或 import:<sha256>。"#,
-        input_schema: r#"{"type":"object","properties":{"runKey":{"type":"string","description":"ComfyUI prompt_id（UUID）/ 数字 prompt_id / import:<sha256>"}},"required":["runKey"],"additionalProperties":false}"#,
+        description: r#"按 runKey 查一次已捕获运行的状态、错误、产物数与**那一跑真实用的参数**。runKey 可以用三样中的任何一个：ComfyUI 的 prompt_id（UUID，comfy_submit 结果里的 runKey）、捕获记录里的数字 id（capturedPromptId），或 import:<sha256>。
+**用户问"最新那张图是怎么跑的 / 参数是多少 / 我明明改过设置"时用它**：正文的 `params` 是从这次运行捕获的 raw 图里读出来的（提示词节点与开头、采样 / 种子 / 尺寸、模型、其它开关如 LoRA 强度与增强器），**不是**应用上次提交的那份 —— 用户在 ComfyUI 界面里自己跑时，参数往往是那套工作流里记着的值。读完照抄进 `comfy_submit(overrides=…)` 就好。
+`includeGraph=true` 再把完整 API 图放进返回 JSON 的 `raw`（`comfy_audit_workflow` / `comfy_fit_workflow` / `comfy_prune_workflow` 描述里说的"comfy_get_run 的 raw"就是它）。没开时只回参数摘要，省上下文。"#,
+        input_schema: r#"{"type":"object","properties":{"runKey":{"type":"string","description":"ComfyUI prompt_id（UUID）/ 数字 prompt_id / import:<sha256>"},"includeGraph":{"type":"boolean","description":"可选：连完整 API 节点图一起返回（默认 false；只有要改节点 / 查接线时才开）"}},"required":["runKey"],"additionalProperties":false}"#,
         scope: "DESKTOP",
         access: "ALLOW",
         mutating: false,
@@ -280,7 +282,7 @@ pub const DESKTOP_TOOLS: &[DesktopToolSpec] = &[
 ⚠ **两组都要看**：应用刚跑完的那条永远是最新的，只挑最近一条等于永远用应用那份。两套都合适、用户又没点名时，在回复末尾用 `ask_follow_up` 让他选（选项写清标题、时间，以及哪一套是应用内提交的）；他会进蓝图看具体接线。
 只认真的成功过的：`capture_runs.status='success'` 且留下完整 API 图；`empty` / `error` 不算（那两种是可重试状态，见 `capture_ingest::can_reclaim`）。
 `task` 按任务过滤（t2i / i2i / edit / inpaint / upscale / video / audio）；`modelQuery` 按 raw 图里出现的模型文件名子串过滤（用于"同族"：anima / krea2 / moss）；`limit` 是**每组**最多几条，默认 3、最多 8。
-每条带 runKey / promptId / title / capturedAt / task / 模型文件名清单 / skeletonHash / origin；正文里另有**当前实例地址** `instanceUrl`：这些记录不区分实例，换过实例（或来回换了两台机器）时先确认它还能跑再照抄。选定那份之后，用 `comfy_submit(overrides=…)` 只改提示词与 seed，不要重搭工作流。"#,
+每条带 runKey / promptId / title / capturedAt / task / 模型文件名清单 / skeletonHash / origin，以及 `params` —— **这一跑自己真实的参数**（提示词节点与开头、采样 / 种子 / 尺寸、模型、LoRA 强度与增强器这类开关）。正文里另有**当前实例地址** `instanceUrl`：这些记录不区分实例，换过实例（或来回换了两台机器）时先确认它还能跑再照抄。选定那份之后，照那一条的 `params` 写 `comfy_submit(overrides=…)`：只改提示词与 seed，不要重搭工作流；**用户在 ComfyUI 里改过的值只在 `params` 里，不许拿应用上次提交的那份当现状**。"#,
         input_schema: r#"{"type":"object","properties":{"task":{"type":"string","description":"只列这一类任务：t2i / i2i / edit / inpaint / upscale / video / audio；不填就全列"},"modelQuery":{"type":"string","description":"按 raw 图里的模型文件名子串过滤（大小写不敏感），例如 anima / krea2 / moss"},"limit":{"type":"integer","description":"**每组**最多几条，默认 3，最多 8"}},"additionalProperties":false}"#,
         scope: "DESKTOP",
         access: "ALLOW",
@@ -356,6 +358,7 @@ pub const DESKTOP_TOOLS: &[DesktopToolSpec] = &[
         name: "comfy_view_outputs",
         description: r#"**看画廊里的产物**：列出图片产物并把图附给模型。用户说"看看我刚在 ComfyUI 里跑的图 / 这张哪里不对 / 帮我评估一下效果"时用它 —— **不要让用户再把图发一遍**。
 默认按"新的在前"列最近 8 张（`limit` 上限 50）；更早的用 `offset` 往后翻，也可以 `promptId` 只看某一次运行、`collectionId` 只看某个产物集合、`mediaId` 只看一条。结果里有 `total` 与 `hasMore` —— **不要只看第一页就说"就这些"**。
+每条都带 `runKey` 与 `promptId`：**要判断这张图是怎么跑出来的（参数 / 接线 / 提示词全文），拿 `runKey` 调 `comfy_get_run`** —— 不要凭"上次提交的那份"推，用户在 ComfyUI 里自己跑的时候参数往往不是同一套。
 能看图的模型会自动收到这一页里最多 4 张的缩图（长边 ≤1024、原图尺寸写在正文里）；要逐张细看就传 `mediaId` 单独调用。看不到图的模型只会拿到元数据，**不许凭文件名编画面内容**。
 自动捕获有延迟：刚跑完的那张可能还没入库 —— 结果为空时稍等几秒再调用，或请用户从画廊拖图进对话。
 **只读**：不改库、不复制文件、不碰 ComfyUI。"#,

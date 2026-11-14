@@ -54,6 +54,18 @@ pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(600);
 /// 上游报错正文的截断上限（超过就没什么信息量了，还会把界面刷屏）。
 pub const ERROR_BODY_MAX: usize = 1200;
 
+/// **流在传输层断掉了**（不是协议 / 配置问题，也不是 HTTP 状态码拒绝）。
+///
+/// 两种现场都归这一档：① `bytes_stream()` 吐出一个 `reqwest::Error`（对端在回复中途
+/// 把连接掐掉、代理 RST、读超时）；② 流"干净地"结束了，但既没有 `finish_reason`
+/// 也没有 `[DONE]`（有的网关最后不发终止帧就 close）。
+///
+/// 单独一个码的理由：这两件事**改配置解决不了**，而界面上的 `PROTOCOL_ERROR` 会让人
+/// 去核对 Base URL（2026-11-14 用户看到的正是这个误导，真正的原文是
+/// `error decoding response body: connection closed before message completed`）。
+/// 执行器认这个码决定"接着写"（见 [`crate::ai::executor`] 的断流续写）。
+pub const STREAM_INTERRUPTED: &str = "STREAM_INTERRUPTED";
+
 /// 一次上游请求的全部输入。
 pub struct ChatRequest<'a> {
     pub state: &'a AppState,
@@ -428,7 +440,7 @@ where
         ..Default::default()
     };
     let mut stream = response.bytes_stream();
-    let mut buffer = String::new();
+    let mut buffer: Vec<u8> = Vec::new();
     let mut seen_done = false;
 
     loop {
@@ -444,15 +456,22 @@ where
             return Err(cancelled_error());
         }
         let chunk = chunk.map_err(|e| {
+            // reqwest 的 `Display` 只有 "error decoding response body" 这一句 —— 真正的原因
+            // （对端关连接 / 读超时 / 代理 RST）在 `source()` 链上。不打出来，现场就只剩一句
+            // 没有下文的英文，谁也判断不出该改哪儿（2026-11-14 的排查卡在这里）。
+            let cause = error_chain(&e);
+            eprintln!("上游流读取失败：{cause}");
             ApiError::ai(
-                "PROTOCOL_ERROR",
-                format!("读上游流失败：{}", trim_error(&e.to_string())),
+                STREAM_INTERRUPTED,
+                format!("上游在回复中途把连接断开了（已经收到的内容保留）｜{cause}"),
             )
         })?;
-        buffer.push_str(&String::from_utf8_lossy(&chunk));
+        // ⚠ 缓冲按**字节**攒：SSE 行是 UTF-8，一个汉字可能正好横跨两个分片，
+        // 逐片 `String::from_utf8_lossy` 会把它拆成两个替换字符（正文里就冒出乱码）。
+        buffer.extend_from_slice(&chunk);
         // 按**行**处理：一条 SSE 行可能被 TCP 切成两半，所以只处理到最后一个换行为止
-        while let Some(index) = buffer.find('\n') {
-            let line = buffer[..index].to_string();
+        while let Some(index) = buffer.iter().position(|byte| *byte == b'\n') {
+            let line = String::from_utf8_lossy(&buffer[..index]).to_string();
             buffer.drain(..=index);
             if line.trim() == "data: [DONE]" || line.trim() == "data:[DONE]" {
                 seen_done = true;
@@ -478,7 +497,7 @@ where
     // **一句话说到一半就没了，而界面上没有任何异常标记**。
     if !seen_done && outcome.finish_reason.is_none() {
         return Err(ApiError::ai(
-            "PROTOCOL_ERROR",
+            STREAM_INTERRUPTED,
             "上游的流在中途断掉了（没有 finish_reason，也没有 [DONE]）—— 这条回复不完整，\
              已经收到的部分保留在这次 Run 里",
         ));
@@ -767,6 +786,31 @@ pub fn host_of(url: &str) -> Option<String> {
 fn trim_error(raw: &str) -> String {
     let one_line = raw.split_whitespace().collect::<Vec<_>>().join(" ");
     one_line.chars().take(300).collect()
+}
+
+/// 把错误链摊成一句话（`外层：里层：根因`）。
+///
+/// # 为什么必须有它
+///
+/// `reqwest::Error` 的 `Display` **只有一句**：`error decoding response body` /
+/// `error sending request`。真正的 `connection closed before message completed` /
+/// `operation timed out` 挂在 `source()` 链上，`to_string()` 拿不到。
+/// 2026-11-14 现场看到的就是那句没有下文的英文 —— 界面上只写"读上游流失败：
+/// error decoding response body"，日志里也没有别的，排查时等于什么都没说。
+///
+/// 去重是为了容忍"外层只是在复述内层"的错误类型（避免 `a：a：b`）。
+pub fn error_chain(err: &(dyn std::error::Error + 'static)) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    let mut current: Option<&(dyn std::error::Error + 'static)> = Some(err);
+    while let Some(e) = current {
+        let text = e.to_string();
+        let text = text.trim();
+        if !text.is_empty() && !parts.iter().any(|seen| seen == text) {
+            parts.push(text.to_string());
+        }
+        current = e.source();
+    }
+    parts.join("：")
 }
 
 #[cfg(test)]

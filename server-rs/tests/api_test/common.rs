@@ -602,7 +602,9 @@ fn content_length_of(head: &[u8]) -> Option<usize> {
 /// * `upstream=usage-then-die`：第一轮**正常跑完**（但 finish_reason=length，触发"接着写"），
 ///   第二轮直接 429 —— 测"未完成的对话也要统计已消耗的 token"；
 /// * `upstream=partial`：**先正常吐出两段正文，然后把连接掐掉** ——
-///   R6"已经说出去的话一个字都不能丢"的现场（真·中途断流，而不是事后报错）。
+///   R6"已经说出去的话一个字都不能丢"的现场（真·中途断流，而不是事后报错）；
+/// * `upstream=break-then-ok`：**第 1 次**吐两段就掐断，第 2 次（执行器自动"接着写"）
+///   正常收尾 —— 测"上游掐断连接之后，这一轮能不能自己接上"。
 pub(crate) async fn fake_gateway() -> (String, tokio::task::JoinHandle<()>) {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use tokio::io::AsyncWriteExt;
@@ -619,7 +621,9 @@ pub(crate) async fn fake_gateway() -> (String, tokio::task::JoinHandle<()>) {
             tokio::spawn(async move {
                 // 读干净（含 body）再回 —— 不读就 close 会回 RST，客户端把它读成
                 // "连不上上游"。理由与代价见 [`read_request`]。
-                let request_line = request_line_of(&read_request(&mut socket).await);
+                let raw = read_request(&mut socket).await;
+                let request_line = request_line_of(&raw);
+                let request_text = String::from_utf8_lossy(&raw);
                 let reply_429 = |mut socket: tokio::net::TcpStream| async move {
                     // ⚠ 这里**不再读请求**：调用点已经用 `read_request` 把 body 收干净了
                     // （不读就 close 会回 RST，客户端报的是"连不上上游"）。
@@ -635,12 +639,16 @@ pub(crate) async fn fake_gateway() -> (String, tokio::task::JoinHandle<()>) {
                 if request_line.contains("upstream=http429") {
                     return reply_429(socket).await;
                 }
+                // 需要按"第几次请求"分岔的两种模式共用一个计数器
+                let break_then_ok = request_line.contains("upstream=break-then-ok");
+                let hit = if break_then_ok || request_line.contains("upstream=usage-then-die") {
+                    hits.fetch_add(1, Ordering::SeqCst)
+                } else {
+                    0
+                };
                 // 第一轮跑完、第二轮 429：分岔靠**请求计数**（"接着写"是一次新的上游请求）
-                if request_line.contains("upstream=usage-then-die") {
-                    let hit = hits.fetch_add(1, Ordering::SeqCst);
-                    if hit > 0 {
-                        return reply_429(socket).await;
-                    }
+                if request_line.contains("upstream=usage-then-die") && hit > 0 {
+                    return reply_429(socket).await;
                 }
                 let partial = request_line.contains("upstream=partial");
                 let _ = socket
@@ -654,6 +662,21 @@ pub(crate) async fn fake_gateway() -> (String, tokio::task::JoinHandle<()>) {
                 ];
                 if partial {
                     // `partial`：**不说 DONE、直接断** —— 上游中途死掉的样子
+                } else if break_then_ok && hit == 0 {
+                    // 第 1 次：同样不说 DONE、直接断（执行器据此判 STREAM_INTERRUPTED）
+                } else if break_then_ok {
+                    // 第 2 次：执行器"接着写"那一轮。**只有请求里带上了续写指令**才接着答 ——
+                    // 执行器要是没把断点交回去，这里回一句"没有收到续写指令"，用例一眼能看出来。
+                    // 前面那两段正文是"第一次请求"的内容，这一轮只回续写，免得把假网关自己的
+                    // 吐字当成执行器的重复。
+                    frames.clear();
+                    frames.push(if request_text.contains("紧接中断处继续写") {
+                        r#"{"choices":[{"delta":{"content":"接着写"}}]}"#
+                    } else {
+                        r#"{"choices":[{"delta":{"content":"没有收到续写指令"}}]}"#
+                    });
+                    frames.push(r#"{"choices":[{"finish_reason":"stop"}]}"#);
+                    frames.push("[DONE]");
                 } else if truncated {
                     // 第一轮"被输出长度截断"：usage 已给（这轮的账已经发生），但话没说完
                     frames.push(r#"{"choices":[{"finish_reason":"length"}]}"#);

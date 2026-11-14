@@ -334,6 +334,26 @@ pub fn find_run_by_prompt_id(
     })
 }
 
+/// 一条捕获记录的**原始** `raw`（裸 API 图，或整条 `/history` 条目 —— 两种存法真库里都有）。
+///
+/// `comfy_get_run` 靠它把"这一跑当时到底用了什么参数"交还给模型（2026-11-14：
+/// 以前只回状态与产物数，模型只能拿自己上次提交的 overrides 当现状）。
+/// 空串 / 空白按"没有 raw"处理（别把空文本当成一张空图）。
+pub fn run_raw(state: &AppState, run_key: &str) -> Result<Option<String>, ApiError> {
+    let key = run_key.to_string();
+    state.with(|conn| {
+        Ok(conn
+            .query_row(
+                "SELECT raw FROM capture_runs WHERE run_key = ?1 ORDER BY id DESC LIMIT 1",
+                rusqlite::params![key],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .optional()?
+            .flatten()
+            .filter(|text| !text.trim().is_empty()))
+    })
+}
+
 fn row_to_run_info(row: &rusqlite::Row<'_>) -> rusqlite::Result<CaptureRunInfo> {
     let created: Option<String> = row.get(6)?;
     Ok(CaptureRunInfo {

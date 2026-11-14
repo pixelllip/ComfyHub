@@ -276,3 +276,70 @@ fn safe_endpoint_strips_query_and_credentials() {
         Some("api.deepseek.com")
     );
 }
+
+/// 一条带 `source()` 链的假错误（`reqwest` 那套"外层一句话、根因在里层"的形状）。
+#[derive(Debug)]
+struct ChainError {
+    message: &'static str,
+    source: Option<Box<ChainError>>,
+}
+
+impl std::fmt::Display for ChainError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.message)
+    }
+}
+
+impl std::error::Error for ChainError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        self.source
+            .as_ref()
+            .map(|inner| inner.as_ref() as &(dyn std::error::Error + 'static))
+    }
+}
+
+/// 2026-11-14 现场：界面只写"读上游流失败：error decoding response body"，
+/// **真正的原因在 `source()` 链上**（`reqwest` 的 `Display` 不带它）。
+/// 这一条盯的就是"断流要能说出人话"。
+#[test]
+fn error_chain_walks_sources_and_drops_repeats() {
+    let outer = ChainError {
+        message: "error decoding response body",
+        source: Some(Box::new(ChainError {
+            message: "error reading a body from connection",
+            source: Some(Box::new(ChainError {
+                message: "connection closed before message completed",
+                source: None,
+            })),
+        })),
+    };
+    assert_eq!(
+        error_chain(&outer),
+        "error decoding response body：error reading a body from connection：\
+         connection closed before message completed"
+    );
+
+    // 外层复述内层时不许出现 `a：a`
+    let repeated = ChainError {
+        message: "operation timed out",
+        source: Some(Box::new(ChainError {
+            message: "operation timed out",
+            source: None,
+        })),
+    };
+    assert_eq!(error_chain(&repeated), "operation timed out");
+
+    // 只有一层也照常工作
+    let single = ChainError {
+        message: "error decoding response body",
+        source: None,
+    };
+    assert_eq!(error_chain(&single), "error decoding response body");
+}
+
+/// 断流用的是**独立的稳定码**：它不是"端点 / 协议不对"，界面不该让人去核对 Base URL。
+#[test]
+fn stream_interruptions_use_their_own_code() {
+    assert_eq!(STREAM_INTERRUPTED, "STREAM_INTERRUPTED");
+    assert_ne!(STREAM_INTERRUPTED, "PROTOCOL_ERROR");
+}

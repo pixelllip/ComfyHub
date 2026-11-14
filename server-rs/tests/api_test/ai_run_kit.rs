@@ -46,7 +46,10 @@ async fn run_kit_ships_every_rule_the_phone_needs() {
     //   核对新产物画面元素；桌面专属，手机工具清单不变）。
     // v75（2026-11-14）：长期记忆改成"全量存、按需取"（写入 5 万字符 / 注入最新 8000），
     //   新增桌面只读工具 `recall_memory`。
-    assert_eq!(body["promptVersion"], "v75");
+    // v76（2026-11-14）：收尾提问从"可选"改成"默认该问就问"（`ask_follow_up` 描述同步）。
+    // v77（2026-11-14）：`comfy_recent_successes` / `comfy_get_run` 带 `params`，
+    //   `comfy_get_run` 新增 `includeGraph`，`comfy_view_outputs` 每条带 `runKey` / `promptId`。
+    assert_eq!(body["promptVersion"], "v77");
     assert_eq!(body["nsfwEnabled"], false, "夹具里没开 NSFW");
     assert_eq!(body["inlineBudget"]["perImageBytes"], 8388608, "单图 8MB");
     assert_eq!(body["inlineBudget"]["totalBytes"], 20971520, "合计 20MB");
