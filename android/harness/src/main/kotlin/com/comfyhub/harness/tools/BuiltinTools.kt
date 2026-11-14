@@ -67,7 +67,9 @@ object ToolResults {
 class MemoryFile(private val file: File) {
 
     companion object {
-        const val MAX_CHARS = 8000
+        /** = 100 条 × 单条 500 字（含条间换行），与桌面 `memory::MAX_CHARS` 同值。
+         *  桌面 2026-11-14 从 8000 提上来（"上限是 100 条，8000 字符很快就撞上了"）。 */
+        const val MAX_CHARS = 100 * 500 + 99
         const val MAX_ENTRY_CHARS = 500
         const val MAX_ENTRIES = 100
         const val MAX_ENTRIES_PER_RUN = 4

@@ -5,6 +5,7 @@
 //! | 工具 | 端 | 说明 |
 //! | --- | --- | --- |
 //! | `list_skills` / `load_skill` / `remember` / `ask_user_question` | `BOTH` | 第 31/32 步（只碰本机） |
+//! | `recall_memory` | `DESKTOP` | 2026-11-14：长期记忆"全量存、按需取"的取那一半 —— 系统提示只放最新一截，更早的条目在这里按关键词 / 翻页查 |
 //! | `list_dir` / `read_file` / `write_file` / `register_skill` / `delete_skill` | `DESKTOP` | 第 40 步，路径准入在 [`crate::tools::policy`] |
 //! | `comfy_get_run` / `comfy_list_workflows` / `comfy_get_status` | `DESKTOP` | 第 41/42 步；前两条只碰本机库与磁盘，`get_status` 会真问一次 ComfyUI 的 `/queue` |
 //! | `comfy_sync_history` | `DESKTOP` | 第 43 步；**会写库**（建提示词 + 产物入库），出厂档 `ASK` |
@@ -568,8 +569,9 @@ pub fn implemented() -> Vec<ToolView<'static>> {
 /// ⚠ 加一个名字之前先确认 [`execute`] 里真的有那条分支 —— 两个清单漂移的后果是
 /// **模型会去调一个必然失败的工具**（`TOOL_NOT_FOUND`），而界面上看不出为什么。
 ///
-/// 当前四十八个：手机那四个只碰本机的（Skills 两个 + 长期记忆 + 提问）+ 桌面文件工具五件
+/// 当前四十九个：手机那四个只碰本机的（Skills 两个 + 长期记忆 + 提问）+ 桌面文件工具五件
 /// （`list_dir` / `read_file` / `write_file` / `register_skill` / `delete_skill`，P4 第 40 步）
+/// + **长期记忆的读侧**（`recall_memory`，2026-11-14：提示词只放最新一截，其余按需检索）
 /// + 联网三件（`web_search` / `web_fetch` / `civitai_search`，见 [`crate::tools::web_tools`] 与
 ///   [`crate::tools::civitai`]，P4 第 64 步；它们本来就是 `BOTH` 档，只是**实现**在这一步才落地）
 /// + comfy 查询三件（`comfy_get_run` / `comfy_list_workflows` / `comfy_get_status`）
@@ -590,7 +592,7 @@ pub fn implemented() -> Vec<ToolView<'static>> {
 /// + **配方三件**（`comfy_learn_workflow` / `comfy_list_recipes` / `comfy_bind_recipe`，
 ///   见 [`crate::workflow::workflow_recipe`]，P4 第 67 步；学与绑都与
 ///   `POST /api/ai/workflow-recipes*` 共用一份实现）。
-pub const IMPLEMENTED: [&str; 48] = [
+pub const IMPLEMENTED: [&str; 49] = [
     "ask_follow_up",
     "ask_user_question",
     "civitai_search",
@@ -627,6 +629,7 @@ pub const IMPLEMENTED: [&str; 48] = [
     "load_skill",
     "read_file",
     "read_skill_file",
+    "recall_memory",
     "reference_image_search",
     "register_skill",
     "remember",
@@ -737,6 +740,8 @@ pub async fn execute(
         "list_skills" => list_skills(state),
         "load_skill" => load_skill(state, arguments, session),
         "remember" => remember(state, arguments, session),
+        // 长期记忆的**读侧**：提示词里只放最新一截，更早的按关键词 / 翻页在这里查
+        "recall_memory" => recall_memory(state, arguments),
         "ask_user_question" => {
             ask_user_question(state, run_id, conversation_id, arguments, session).await
         }
@@ -1325,6 +1330,156 @@ fn remember(
             session.memory_writes
         ),
         payload,
+    ))
+}
+
+// ---------------------------------------------------------------------------
+//  长期记忆的读侧（2026-11-14）
+// ---------------------------------------------------------------------------
+
+/// 一条记忆的正文（去掉行首的 `- ` / `* `；顺序号由调用方另给）。
+fn memory_body(line: &str) -> String {
+    line.trim()
+        .strip_prefix("- ")
+        .or_else(|| line.trim().strip_prefix("* "))
+        .unwrap_or(line.trim())
+        .trim()
+        .to_string()
+}
+
+/// 把选中的几条拼成给模型看的正文（**新的在前**，每条带自己的顺序号）。
+fn memory_rows(entries: &[String], indices: &[usize]) -> String {
+    indices
+        .iter()
+        .map(|&i| format!("#{} {}", i + 1, memory_body(&entries[i])))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// `recall_memory`：按关键词检索 / 从最新往回翻**整篇**长期记忆（2026-11-14）。
+///
+/// 为什么要有它：`memory.md` 现在能存到 [`crate::ai::memory::MAX_CHARS`]
+/// （100 条 × 单条 500 字），而系统提示只放最新 [`crate::ai::memory::PROMPT_CHARS`] ——
+/// 少了这一件，被省略的旧条目就变成"记了却读不到"（用户 2026-11-14 报的正是它）。
+///
+/// 两种用法共用"**新的在前**"的顺序：`remember` 追加在末尾，所以最新的在最后；
+/// 用户说"以前说过"时，最近记的那几条最可能相关。
+fn recall_memory(state: &AppState, arguments: &Value) -> Result<ToolOutcome, ToolFailure> {
+    const DEFAULT_LIMIT: i64 = 10;
+    const MAX_LIMIT: i64 = 30;
+
+    let dir = memory_dir(state);
+    let entries = crate::ai::memory::entries(&dir);
+    let total = entries.len() as i64;
+    let limit = int_arg(arguments, "limit")
+        .unwrap_or(DEFAULT_LIMIT)
+        .clamp(1, MAX_LIMIT);
+    let query = arguments
+        .get("query")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|text| !text.is_empty());
+
+    if total == 0 {
+        return Ok(ToolOutcome::new(
+            "长期记忆还是空的（一条都没有）。用户明确说过跨对话成立的偏好时，用 remember 记一条。",
+            json!({ "totalEntries": 0, "returned": 0, "hasMore": false, "entries": [] }),
+        ));
+    }
+
+    // ---- 带关键词：整篇按"全部词都命中"过滤（中文没有词边界，直接子串匹配）----
+    if let Some(query) = query {
+        let needles: Vec<String> = query
+            .split_whitespace()
+            .map(|word| word.to_lowercase())
+            .collect();
+        let hits: Vec<usize> = (0..entries.len())
+            .rev()
+            .filter(|&i| {
+                let line = entries[i].to_lowercase();
+                needles.iter().all(|needle| line.contains(needle))
+            })
+            .collect();
+        let matched = hits.len() as i64;
+        let shown = &hits[..hits.len().min(limit as usize)];
+        let rows: Vec<Value> = shown
+            .iter()
+            .map(|&i| json!({ "index": i as i64 + 1, "text": memory_body(&entries[i]) }))
+            .collect();
+        let content = if matched == 0 {
+            format!(
+                "没有匹配「{query}」的记忆（长期记忆共 {total} 条）。换个关键词再查，或者不带 query 从最新往回翻。"
+            )
+        } else {
+            format!(
+                "长期记忆共 {total} 条，匹配「{query}」的有 {matched} 条；下面是其中最新的 {} 条（新的在前）：\n{}",
+                shown.len(),
+                memory_rows(&entries, shown),
+            )
+        };
+        return Ok(ToolOutcome::new(
+            content,
+            json!({
+                "query": query,
+                "totalEntries": total,
+                "matched": matched,
+                "returned": shown.len(),
+                "hasMore": matched > shown.len() as i64,
+                "entries": rows,
+            }),
+        ));
+    }
+
+    // ---- 不带关键词：从最新一条往回翻 ----
+    let offset = int_arg(arguments, "offset").unwrap_or(0).max(0);
+    if offset >= total {
+        return Ok(ToolOutcome::new(
+            format!(
+                "已经翻到头了（长期记忆共 {total} 条，offset 从 0 开始）。要按内容找就给 query。"
+            ),
+            json!({
+                "totalEntries": total,
+                "offset": offset,
+                "returned": 0,
+                "hasMore": false,
+                "entries": [],
+            }),
+        ));
+    }
+    let indices: Vec<usize> = (0..entries.len())
+        .rev()
+        .skip(offset as usize)
+        .take(limit as usize)
+        .collect();
+    let returned = indices.len() as i64;
+    let rows: Vec<Value> = indices
+        .iter()
+        .map(|&i| json!({ "index": i as i64 + 1, "text": memory_body(&entries[i]) }))
+        .collect();
+    let next_offset = offset + returned;
+    let tail = if next_offset < total {
+        format!(
+            "还有更早的 {left} 条：把 offset 设成 {next_offset} 再查一次。",
+            left = total - next_offset
+        )
+    } else {
+        "这已经是全部了。".to_string()
+    };
+    let content = format!(
+        "长期记忆共 {total} 条，这里是从最新往回第 {}–{} 条（新的在前）：\n{}\n{tail}",
+        offset + 1,
+        offset + returned,
+        memory_rows(&entries, &indices),
+    );
+    Ok(ToolOutcome::new(
+        content,
+        json!({
+            "totalEntries": total,
+            "offset": offset,
+            "returned": returned,
+            "hasMore": next_offset < total,
+            "entries": rows,
+        }),
     ))
 }
 

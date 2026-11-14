@@ -21,6 +21,15 @@ fn render_with(policy: &ToolPolicy, nsfw: bool, memory_text: &str) -> String {
     render_on(TODAY, policy, nsfw, memory_text)
 }
 
+/// 把"正文"当成整篇记忆来渲染（条数按正文里的非空行数，和文件口径一致）。
+fn memory_of(text: &str) -> memory::PromptMemory {
+    memory::PromptMemory {
+        text: text.trim().to_string(),
+        total_entries: memory::count_entries(text),
+        omitted_entries: 0,
+    }
+}
+
 fn render_with_skills(skills: &[SkillEntry]) -> String {
     let tools: Vec<ToolView<'_>> = MOBILE_TOOLS.iter().map(ToolView::from).collect();
     render(
@@ -31,7 +40,7 @@ fn render_with_skills(skills: &[SkillEntry]) -> String {
         &tools,
         skills,
         &policy("{}"),
-        "",
+        &memory_of(""),
         false,
         true,
         false,
@@ -48,7 +57,29 @@ fn skill(name: &str, description: &str) -> SkillEntry {
 }
 
 fn render_on(today: &str, policy: &ToolPolicy, nsfw: bool, memory_text: &str) -> String {
-    let tools: Vec<ToolView<'_>> = MOBILE_TOOLS.iter().map(ToolView::from).collect();
+    render_memory_on(today, policy, nsfw, &memory_of(memory_text))
+}
+
+fn render_memory_on(
+    today: &str,
+    policy: &ToolPolicy,
+    nsfw: bool,
+    memory: &memory::PromptMemory,
+) -> String {
+    render_with_tools(today, policy, nsfw, memory, &[])
+}
+
+/// 指定工具清单的渲染（要在提示词里验证"只有这一端有某工具时才说的话"）。
+fn render_with_tools(
+    today: &str,
+    policy: &ToolPolicy,
+    nsfw: bool,
+    memory: &memory::PromptMemory,
+    extra_tools: &[ToolView<'_>],
+) -> String {
+    let mut tools: Vec<ToolView<'_>> = MOBILE_TOOLS.iter().map(ToolView::from).collect();
+    tools.extend_from_slice(extra_tools);
+    tools.sort_by_key(|tool| tool.name);
     render(
         "Command Code Goat",
         "openai-completions",
@@ -57,7 +88,7 @@ fn render_on(today: &str, policy: &ToolPolicy, nsfw: bool, memory_text: &str) ->
         &tools,
         &[],
         policy,
-        memory_text,
+        memory,
         false,
         // 视觉能力：这份夹具当"模型能收图"处理；"本轮没图"由上一行的 false 表达。
         true,
@@ -164,6 +195,68 @@ fn 长期记忆带条数与数据声明() {
     // 没有记忆时整段不出现（别留一个空壳）
     let empty = render_with(&policy("{}"), false, "   ");
     assert!(!empty.contains("**长期记忆**"));
+}
+
+/// 标题里的条数必须是**文件里的真数**：发生省略时注入正文只有一小截，
+/// 拿它去数会少报，模型就会以为还有额度（旧实现：真库 28 条，提示词写 16/100）。
+#[test]
+fn 长期记忆省略时标题仍报真实条数() {
+    let memory = memory::PromptMemory {
+        text: "- 最新的那条\n…上面只放了最新的记忆；更早的 12 条没有放进来。".to_string(),
+        total_entries: 28,
+        omitted_entries: 12,
+    };
+    let text = render_memory_on(TODAY, &policy("{}"), false, &memory);
+    assert!(
+        text.contains("现有 28/100 条，这里只放了最新的 16 条"),
+        "条数要报文件里的真数，并说清这次只放了多少：\n{text}"
+    );
+    assert!(text.contains("最新的那条"));
+    // 正常情况（没有省略）**一个字节都不许多**：那半句只在真的省略时出现。
+    let full = render_with(&policy("{}"), false, "- 甲\n- 乙\n");
+    assert!(full.contains("现有 2/100 条）："));
+    assert!(!full.contains("这里只放了最新的"));
+}
+
+fn recall_memory_tool() -> ToolView<'static> {
+    ToolView {
+        name: "recall_memory",
+        description: "按需查长期记忆的全文",
+        input_schema: r#"{"type":"object","properties":{}}"#,
+        access: "allow",
+        mutating: false,
+    }
+}
+
+/// 提示词里的记忆只是**最新一截**：省略过就必须告诉模型去哪查 ——
+/// 而且只在**这一端真的下发**了 `recall_memory` 时说（手机那份 kit 里没有它）。
+#[test]
+fn 记忆被省略时告诉模型去查_且只在有那个工具时说() {
+    let memory = memory::PromptMemory {
+        text: "- 最新的那条\n…上面只放了最新的记忆；更早的 12 条没有放进来。".to_string(),
+        total_entries: 28,
+        omitted_entries: 12,
+    };
+    let desktop = render_with_tools(
+        TODAY,
+        &policy("{}"),
+        false,
+        &memory,
+        &[recall_memory_tool()],
+    );
+    assert!(
+        desktop.contains("更早的 12 条用 `recall_memory` 查"),
+        "省略时必须给出取回的办法：\n{desktop}"
+    );
+    assert!(desktop.contains("没看到不等于没有"));
+
+    // 手机那份 kit 里没有这个工具：不许让它去调一个不存在的工具
+    let phone = render_memory_on(TODAY, &policy("{}"), false, &memory);
+    assert!(!phone.contains("recall_memory"));
+
+    // 没有省略时这半句根本不出现（正常提示词逐字节不变）
+    let full = render_with(&policy("{}"), false, "- 甲\n- 乙\n");
+    assert!(!full.contains("recall_memory"));
 }
 
 trait NsfwNote {

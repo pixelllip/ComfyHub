@@ -19,6 +19,106 @@ fn comfy_recent_successes_是只读的_allow_工具() {
     );
 }
 
+/// 读侧 `recall_memory`（2026-11-14）：只读、出厂 ALLOW —— 查自己记过什么不该先点批准。
+#[test]
+fn recall_memory_是只读的_allow_工具() {
+    assert!(IMPLEMENTED.contains(&"recall_memory"));
+    assert_eq!(default_access("recall_memory"), "ALLOW");
+    assert!(!is_mutating("recall_memory"));
+    assert!(
+        crate::tools::desktop_tools::DESKTOP_TOOLS
+            .iter()
+            .any(|tool| tool.name == "recall_memory"),
+        "目录里必须有它，否则 implemented() 收不到"
+    );
+}
+
+/// `recall_memory`：系统提示只放最新一截，它是"取回剩下那一半"的唯一入口。
+///
+/// 判据四条：① 关键词检索（多词取交集）；② 从最新往回翻页 + 翻到头要说清楚；
+/// ③ 无命中说人话、不许空着；④ 顺序号与界面「长期记忆」列表的行序一致。
+#[test]
+fn recall_memory_按关键词与翻页取回被省略的条目() {
+    use crate::web::routes::AppState;
+
+    let dir = crate::infra::testpaths::scratch("recall-memory");
+    let memory_dir = dir.join("ai");
+    std::fs::create_dir_all(&memory_dir).unwrap();
+    std::fs::create_dir_all(dir.join("media")).unwrap();
+    // 30 条：偶数条是"画风校准"，第 27 条起多一个"光影"
+    let lines: Vec<String> = (1..=30)
+        .map(|i| {
+            let tag = if i % 2 == 0 {
+                "画风校准"
+            } else {
+                "工作流笔记"
+            };
+            let extra = if i >= 27 { " 光影" } else { "" };
+            format!("- [2026-11-14] 第{i:02}条 {tag}{extra}")
+        })
+        .collect();
+    std::fs::write(memory_dir.join("memory.md"), lines.join("\n") + "\n").unwrap();
+
+    let state = AppState::new(
+        crate::infra::db::open_memory().unwrap(),
+        ":memory:",
+        dir.join("media"),
+    );
+
+    // 关键词：只回命中的（新的在前），匹配数与顺序号都是真的
+    let out = recall_memory(&state, &json!({ "query": "画风" })).unwrap();
+    assert_eq!(out.payload["totalEntries"].as_i64(), Some(30));
+    assert_eq!(out.payload["matched"].as_i64(), Some(15));
+    let first = &out.payload["entries"][0];
+    assert_eq!(first["index"].as_i64(), Some(30), "新的在前");
+    assert!(first["text"].as_str().unwrap().contains("第30条"));
+    assert!(
+        !out.content.contains("第29条"),
+        "没命中的条目不该混进来：{}",
+        out.content
+    );
+    assert!(out.content.contains("匹配「画风」的有 15 条"));
+
+    // 多词 = 交集（都命中才算）
+    let out = recall_memory(&state, &json!({ "query": "画风 光影" })).unwrap();
+    assert_eq!(out.payload["matched"].as_i64(), Some(2), "第 28 / 30 条");
+
+    // 无命中：说人话，不许空着
+    let out = recall_memory(&state, &json!({ "query": "不存在的词" })).unwrap();
+    assert_eq!(out.payload["matched"].as_i64(), Some(0));
+    assert!(
+        out.content.contains("没有匹配「不存在的词」的记忆"),
+        "{}",
+        out.content
+    );
+
+    // 不带 query：从最新往回翻；offset 接着上一页；到头要说明
+    let out = recall_memory(&state, &json!({ "limit": 10 })).unwrap();
+    assert_eq!(out.payload["returned"].as_i64(), Some(10));
+    assert_eq!(out.payload["hasMore"].as_bool(), Some(true));
+    assert_eq!(out.payload["entries"][0]["index"].as_i64(), Some(30));
+    assert!(out.content.contains("第 1–10 条"), "{}", out.content);
+    let out = recall_memory(&state, &json!({ "limit": 10, "offset": 20 })).unwrap();
+    assert_eq!(out.payload["returned"].as_i64(), Some(10));
+    assert_eq!(out.payload["hasMore"].as_bool(), Some(false));
+    assert!(out.content.contains("这已经是全部了"), "{}", out.content);
+    let out = recall_memory(&state, &json!({ "offset": 30 })).unwrap();
+    assert_eq!(out.payload["returned"].as_i64(), Some(0));
+    assert!(out.content.contains("已经翻到头了"), "{}", out.content);
+
+    // 一次最多 30 条（别让一次调用把整篇 5 万字全灌回上下文）
+    let out = recall_memory(&state, &json!({ "limit": 500 })).unwrap();
+    assert_eq!(out.payload["returned"].as_i64(), Some(30));
+
+    // 空记忆：如实说，并给下一步
+    std::fs::write(memory_dir.join("memory.md"), "").unwrap();
+    let out = recall_memory(&state, &json!({})).unwrap();
+    assert!(out.content.contains("还是空的"), "{}", out.content);
+    assert_eq!(out.payload["totalEntries"].as_i64(), Some(0));
+
+    std::fs::remove_dir_all(dir).ok();
+}
+
 /// 看卡片示例图（2026-11-13）必须是**已实现、只读、出厂 ALLOW** 的桌面工具：
 /// 它只读本机库、把缩图交给执行器；看一张示例不该让用户先点一次批准。
 #[test]

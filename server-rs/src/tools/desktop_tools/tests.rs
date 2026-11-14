@@ -94,6 +94,8 @@ fn 只列真搬过来了的那些() {
             "list_dir",
             "read_file",
             "read_skill_file",
+            // 长期记忆的读侧（2026-11-14）：提示词只放最新一截，其余按需检索
+            "recall_memory",
             // 参考图搜索（2026-11-04）：按 Danbooru tag 找真实图片、下载成本机附件
             "reference_image_search",
             "register_skill",

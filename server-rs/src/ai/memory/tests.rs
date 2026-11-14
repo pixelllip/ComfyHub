@@ -33,7 +33,141 @@ fn 读不到文件就是空而不是报错() {
     // ⚠ 这一支要的就是"**读不到**"：只拼路径、不许创建
     let dir = crate::infra::testpaths::root().join("memory-没有这个目录");
     assert_eq!(read(&dir), "");
-    assert_eq!(prompt_text(&dir), "");
+    let memory = prompt(&dir);
+    assert_eq!(memory.text, "");
+    assert!(memory.is_empty());
+    assert_eq!(memory.total_entries, 0);
+    assert_eq!(memory.omitted_entries, 0);
+}
+
+/// 两条上限各管一件事，而且**都能被钉住**：
+/// * 写入上限 = 条数上限 × 单条上限（含换行）= 100 条满长条目**真的写得下**；
+/// * 注入上限 8000 —— 提示词只放最新一截，其余靠 `recall_memory` 查。
+///
+/// 只改其中一个常量、或者把"留最新"写成"留最新一条"，这条都会红
+/// （2026-11-14 用户报"8000 字符很快就撞到 100 条上限"的回归）。
+#[test]
+fn 写入上限装得下_100_条满长条目() {
+    assert_eq!(MAX_CHARS, MAX_ENTRIES as usize * MAX_ENTRY_CHARS + 99);
+    // 注入上限必须**小于**写入上限（下面那条"write 收下、prompt 只留一截"就是它的判据）
+
+    let dir = crate::infra::testpaths::scratch("memory-two-tier");
+    // 每条**正好 500 字**（`- 第NNN条` 占 7 个，补 493 个"字"），共 100 条：
+    // 连换行算进去正好等于写入上限 —— 差一个字符就写不进去，这条判据很硬。
+    let entries: Vec<String> = (0..MAX_ENTRIES as usize)
+        .map(|i| format!("- 第{i:03}条{}", "字".repeat(MAX_ENTRY_CHARS - 7)))
+        .collect();
+    let content = entries.join("\n");
+    assert_eq!(content.encode_utf16().count(), MAX_CHARS);
+    let dto = write(&dir, &content).unwrap();
+    assert_eq!(dto.entry_count, MAX_ENTRIES);
+
+    let memory = prompt(&dir);
+    assert_eq!(memory.total_entries, MAX_ENTRIES);
+    assert!(memory.text.encode_utf16().count() <= PROMPT_CHARS);
+    assert!(memory.text.contains("第099条"), "最新的那条必须在");
+    assert!(!memory.text.contains("第000条"), "最旧的让出额度");
+    // **留得最多**：不是只留最新一条（那是把"留最新"写反了）。
+    let kept = memory
+        .text
+        .lines()
+        .filter(|line| line.starts_with("- "))
+        .count() as i64;
+    assert_eq!(kept, MAX_ENTRIES - memory.omitted_entries);
+    assert!(kept >= 10, "8000 字符至少该装下 10 条满长条目，实际 {kept}");
+    assert!(
+        memory
+            .text
+            .contains(&format!("更早的 {} 条", memory.omitted_entries)),
+        "省略了多少条必须写在正文里"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// 省略发生时：正文留最新、说明写清"更早的 N 条没放进来"、标题条数仍然是真的。
+#[test]
+fn 省略最早若干条时如实报条数() {
+    let dir = crate::infra::testpaths::scratch("memory-prompt-omitted");
+    let entries: Vec<String> = (0..40)
+        .map(|i| format!("- [2026-11-1{}] 第{i:02}条{}", i % 10, "字".repeat(280)))
+        .collect();
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join(FILE_NAME), entries.join("\n") + "\n").unwrap();
+
+    let memory = prompt(&dir);
+    assert!(memory.text.encode_utf16().count() <= PROMPT_CHARS);
+    assert!(memory.omitted_entries > 0, "这段夹具必须真的触发省略");
+    assert_eq!(memory.total_entries, 40);
+    // 每条约 300 字符 → 8000 装得下二十多条；按"只留最新一条"写就会掉到 1。
+    let kept = memory
+        .text
+        .lines()
+        .filter(|line| line.starts_with("- "))
+        .count() as i64;
+    assert!(kept >= 20, "留得最多才对，实际只留了 {kept} 条");
+    assert_eq!(kept, 40 - memory.omitted_entries);
+    assert!(
+        memory.text.contains("第39条"),
+        "最新一条必须在（追加在末尾，截断只能动前面的）"
+    );
+    assert!(
+        !memory.text.contains("第00条"),
+        "最旧的条目应该被省略掉，而不是占着额度"
+    );
+    assert!(
+        memory
+            .text
+            .contains(&format!("更早的 {} 条", memory.omitted_entries)),
+        "省略了多少条必须写在正文里：\n{}",
+        memory.text
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// 手工改出一条比上限还长的**单条**：不许报错、不许返回空，留结尾并说清楚。
+#[test]
+fn 单条超长的手改文件也不丢正文() {
+    let dir = crate::infra::testpaths::scratch("memory-prompt-tail");
+    let long = format!("- 开头{}结尾", "长".repeat(PROMPT_CHARS + 500));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join(FILE_NAME), long).unwrap();
+
+    let memory = prompt(&dir);
+    assert!(memory.text.encode_utf16().count() <= PROMPT_CHARS);
+    assert!(memory.text.contains("结尾"), "留的是结尾（最新内容在末尾）");
+    assert!(memory.text.contains("只放了结尾"), "{}", memory.text);
+    assert_eq!(memory.total_entries, 1);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// 整篇放得下时**一个字节都不许动**（不许加说明、不许改顺序）。
+#[test]
+fn 放得下时正文原样返回() {
+    let dir = crate::infra::testpaths::scratch("memory-prompt-plain");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join(FILE_NAME), "- 第一条\n- 第二条\n").unwrap();
+
+    let memory = prompt(&dir);
+    assert_eq!(memory.text, "- 第一条\n- 第二条");
+    assert_eq!(memory.total_entries, 2);
+    assert_eq!(memory.omitted_entries, 0);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// 只是空行把文件撑过上限时，**没有省略就不许说省略**（说明里那句"更早的 N 条"会变成假话）。
+#[test]
+fn 只有空行超限时不编造省略() {
+    let dir = crate::infra::testpaths::scratch("memory-prompt-blank");
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut text = "- 甲\n- 乙".to_string();
+    text.push_str(&"\n\n".repeat(PROMPT_CHARS)); // 空行把整篇撑到远超上限
+    std::fs::write(dir.join(FILE_NAME), text).unwrap();
+
+    let memory = prompt(&dir);
+    assert_eq!(memory.text, "- 甲\n- 乙");
+    assert_eq!(memory.omitted_entries, 0);
+    assert_eq!(memory.total_entries, 2);
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// 界面那一套：整篇替换 / 追加一条 / 按下标删 / 清空的往返。
@@ -92,7 +226,7 @@ fn 界面写入往返是幂等的() {
 
 /// 三种超限各自回**哪个稳定码** —— 这是界面上"红色提示说什么"的全部依据。
 ///
-/// 为什么不用"拿人话 `contains` 猜码"：`记忆太长（N > 8000 字符）` 里也有"太长"，
+/// 为什么不用"拿人话 `contains` 猜码"：`记忆太长（N > 50099 字符）` 里也有"太长"，
 /// 而它该是 `MEMORY_TOO_LARGE`（单条 501 字符那条才是 `INVALID_ARGUMENT`）——
 /// 靠字符串猜必然把这两档混掉，而"该去清理记忆"和"该把这条拆短"是两种处置。
 #[test]
@@ -111,11 +245,12 @@ fn 三类超限的稳定码各不相同() {
         "INVALID_ARGUMENT"
     );
 
-    // 整篇太长（> 8000）→ MEMORY_TOO_LARGE（**不是** INVALID_ARGUMENT）
+    // 整篇太长（> 上限）→ MEMORY_TOO_LARGE（**不是** INVALID_ARGUMENT）
     let e = write(&dir, &"字".repeat(MAX_CHARS + 1)).unwrap_err();
     assert_eq!(e.code, "MEMORY_TOO_LARGE");
     assert!(
-        e.message.starts_with("记忆太长（8001 > 8000 字符）"),
+        e.message
+            .starts_with(&format!("记忆太长（{} > {MAX_CHARS} 字符）", MAX_CHARS + 1)),
         "{}",
         e.message
     );

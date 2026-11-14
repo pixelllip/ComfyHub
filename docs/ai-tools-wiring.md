@@ -54,7 +54,7 @@
 
 - Skills 正文真源是磁盘（`<storage>\ai\skills` 与 `<项目根>\skills\builtin`），**刻意不做缓存**（"注册完下一次回复就能用、删掉立刻消失"是需求）。
 - **装 skill 只有一条路：投放口**。后端启动与 `POST /api/ai/skills/rescan` 都跑 `SkillStore.autoRegister()`：给**没有 frontmatter** 的文件补 `name` / `description`（正文不动），已有 frontmatter 的**一个字节都不许改**。路径真源是后端（`GET /api/ai/skills/roots`），**别在前端拼这个路径**。`description: |` 这类块标量必须能读。frontmatter 非法**不静默忽略**：照样列进界面并带 `validationError`，但**不进系统提示、不能被 `load_skill` 加载**。
-- **长期记忆（`MemoryStore`）**：真源 `<storage>\ai\memory.md`，一行一条，用户能直接手改；写入**超限一律报错，不许静默截断**；注入系统提示时截断到 `PROMPT_CHARS`，文件本身保留完整内容。
+- **长期记忆（`MemoryStore`）**：真源 `<storage>\ai\memory.md`，一行一条，用户能直接手改；写入**超限一律报错，不许静默截断**（上限 50099 字符 = 100 条 × 单条 500 字，含条间换行；2026-11-14 从 8000 提上来 —— 用户报"上限是 100 条，8000 很快就撞上了"）。注入是"**全量存、按需取**"：系统提示只放**最新** 8000 字符（`PROMPT_CHARS`，`remember` 追加在末尾，所以截断只能动最旧的；从头部截掉刚记下的内容就是 2026-11-14 那次"记了却不回读"），被省略的旧条目由只读工具 `recall_memory` 按关键词 / 翻页取回。⚠ 提示词标题里那个"N/100"必须是**文件里的真实条数**（`PromptMemory::total_entries`）；真省略过时还要写明"这里只放了最新的 M 条"，并在**这一端真的下发了 `recall_memory`** 时告诉模型去哪查（手机那份 kit 里没有这个工具，不能让它去调）。防线：`memory/tests.rs` 的「写入上限装得下 100 条满长条目」「省略最早若干条时如实报条数」+ `system_prompt/tests.rs` 的「记忆被省略时告诉模型去查」+ `api_test` 的 `newest_memory_entries_survive_even_when_the_file_is_oversized` / `recall_memory_reaches_the_oldest_entries_the_prompt_left_out`。
 - **任何运行期代码都不许依赖 `%USERPROFILE%\.dsh`** —— 装我们项目的人可能根本没装 DSH（模型目录同理，见 `AiSeedCatalog` 的 classpath 冻结副本）。
 
 ## 8. 系统提示与前缀缓存

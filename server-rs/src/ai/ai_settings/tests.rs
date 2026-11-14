@@ -11,6 +11,8 @@ fn 类别与权限档的线上字与_kotlin_一致() {
     assert_eq!(category_of("list_skills"), "skill");
     assert_eq!(category_of("load_skill"), "skill");
     assert_eq!(category_of("remember"), "memory");
+    // 读侧（2026-11-14）：与 remember 同一组，落到 `comfy` 兜底会让它白吃 ComfyUI 额度
+    assert_eq!(category_of("recall_memory"), "memory");
     assert_eq!(category_of("civitai_search"), "web");
     // ⚠ `danbooru_lookup` 与 `find_model` 都是 **WEB 档**（Kotlin `ToolRegistry` 那两条
     // 写的就是）—— 改一位，"联网预算"与界面分组会同时走偏，而两者都不会有用例变红：

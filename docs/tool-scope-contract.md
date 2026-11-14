@@ -70,6 +70,7 @@
 | 文件 | `read_file` `write_file` `list_dir` | 写白名单只认**桌面**的 `<项目根>\comfyui`；手机有自己的沙箱 |
 | Skills 写 | `register_skill` `delete_skill` | 投放口在桌面的 `<storage>\ai\skills` |
 | 找模型 | `find_model` | 要读本机模型目录 + 三站定向查，属于桌面能力 |
+| 记忆读侧 | `recall_memory` | 2026-11-14 新增：系统提示只注入最新一截，更早的条目要在桌面端按需查。手机 harness **还没实现这条**（它的本机 `memory.md` 甚至还没进自己的系统提示，见 `mobile-harness-design.md` 的已知边界）—— 所以手机那份 run-kit 里也没有它 |
 
 > ⚠ **手机发起的 Run 若被路由到桌面执行**（桌面在线时），工具全都可达 ——
 > 那是**策略问题**，不是可达性问题。**2026-09-27 用户拍板，见 §3.1。**

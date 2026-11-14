@@ -744,7 +744,7 @@ class _MemoryPanel extends StatelessWidget {
           ],
         ),
         Text(
-          '每次对话都会带上它，AI 也能用 remember 追加一条。点右上角的图标查看 / 编辑内容。',
+          '每次对话会带上最近的一批，更早的条目 AI 需要时会自己查；它也能用 remember 追加一条。点右上角的图标查看 / 编辑内容。',
           style: theme.textTheme.labelSmall?.copyWith(
             color: theme.colorScheme.outline,
           ),

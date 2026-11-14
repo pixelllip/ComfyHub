@@ -1639,7 +1639,9 @@ class AiMemory {
     this.content = '',
     this.path = '',
     this.entryCount = 0,
-    this.maxChars = 8000,
+    // 兜底值与后端 `memory::MAX_CHARS` 同值（= 100 条 × 单条 500 字）；后端每次都会下发，
+    // 这里只防"字段缺失"时界面显示一个过时的数字。
+    this.maxChars = 50099,
     this.maxEntries = 100,
   });
 
@@ -1647,7 +1649,7 @@ class AiMemory {
     content: (json['content'] ?? '').toString(),
     path: (json['path'] ?? '').toString(),
     entryCount: (json['entryCount'] as num?)?.toInt() ?? 0,
-    maxChars: (json['maxChars'] as num?)?.toInt() ?? 8000,
+    maxChars: (json['maxChars'] as num?)?.toInt() ?? 50099,
     maxEntries: (json['maxEntries'] as num?)?.toInt() ?? 100,
   );
 

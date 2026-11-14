@@ -337,7 +337,7 @@ pub fn build(
         &storage.join("ai").join("skills"),
         &skills::disabled_of(state),
     );
-    let memory_text = memory::prompt_text(&storage.join("ai"));
+    let memory = memory::prompt(&storage.join("ai"));
 
     // 这一份 kit 渲染给哪个模型看：**能力取自模型目录**（`ai_models.input_modalities`），
     // 与"这一轮有没有图"无关 —— 两者混在一起就会让模型把"没带图"读成"看不了图"。
@@ -368,7 +368,7 @@ pub fn build(
             .collect::<Vec<_>>(),
         &skill_catalog,
         &policy,
-        &memory_text,
+        &memory,
         // kit 是"取那一刻"的工件：本次请求带没带图由发起 Run 的那一端在请求轮里如实说明
         false,
         model_sees_images,

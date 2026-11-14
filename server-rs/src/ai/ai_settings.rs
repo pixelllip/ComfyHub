@@ -99,7 +99,7 @@ pub(crate) fn category_of(name: &str) -> &'static str {
     match name {
         "ask_user_question" | "ask_follow_up" => "ask",
         "list_skills" | "load_skill" | "register_skill" | "delete_skill" => "skill",
-        "remember" => "memory",
+        "remember" | "recall_memory" => "memory",
         // 联网（Kotlin `ToolCategory.WEB`）：**`danbooru_lookup` 与 `find_model` 也在这里**
         // —— 两者的 Kotlin `ToolRegistry` 条目写的都是 `ToolCategory.WEB`，于是也吃
         // `MAX_WEB_QUERIES_PER_RUN` 那份预算、界面上也归在"联网"组里。

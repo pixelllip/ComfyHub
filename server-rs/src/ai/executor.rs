@@ -341,7 +341,7 @@ async fn run_once(
         &storage.join("ai").join("skills"),
         &crate::ai::skills::disabled_of(state),
     );
-    let memory_text = crate::ai::memory::prompt_text(&storage.join("ai"));
+    let memory = crate::ai::memory::prompt(&storage.join("ai"));
 
     // 工具清单：**只下发这一批真的实现了的**（`declaredTo = 清单 ∩ 本地实现`），
     // 并且按权限策略把 `deny` 的剔掉 —— 系统提示里那段"可调用的工具"读的是**同一个**清单。
@@ -383,7 +383,7 @@ async fn run_once(
         &tool_refs,
         &skills,
         &policy,
-        &memory_text,
+        &memory,
         has_inlined_attachments,
         // 与附件计划**分开**：模型能不能收图，与这一轮有没有图是两件事。
         model.input_modalities.iter().any(|m| m == "image"),

@@ -44,7 +44,9 @@ async fn run_kit_ships_every_rule_the_phone_needs() {
     // v73（2026-11-13）：新增非阻塞的结尾提问 `ask_follow_up`（桌面专属）。
     // v74（2026-11-13）：新增只读的 `view_card_examples`（看角色卡 / 画风卡的示例图，
     //   核对新产物画面元素；桌面专属，手机工具清单不变）。
-    assert_eq!(body["promptVersion"], "v74");
+    // v75（2026-11-14）：长期记忆改成"全量存、按需取"（写入 5 万字符 / 注入最新 8000），
+    //   新增桌面只读工具 `recall_memory`。
+    assert_eq!(body["promptVersion"], "v75");
     assert_eq!(body["nsfwEnabled"], false, "夹具里没开 NSFW");
     assert_eq!(body["inlineBudget"]["perImageBytes"], 8388608, "单图 8MB");
     assert_eq!(body["inlineBudget"]["totalBytes"], 20971520, "合计 20MB");
@@ -541,6 +543,8 @@ async fn tool_policy_and_nsfw_endpoints() {
             "load_skill",
             "read_file",
             "read_skill_file",
+            // 长期记忆的读侧（2026-11-14）：提示词只放最新一截，其余按需查
+            "recall_memory",
             // 参考图搜索（2026-11-04）：按 Danbooru tag 找真实图片、下载成本机附件
             "reference_image_search",
             "register_skill",
@@ -1051,7 +1055,10 @@ async fn memory_endpoints_round_trip_and_report_stable_codes() {
     );
     assert_eq!(body["content"], "");
     assert_eq!(body["entryCount"], 0);
-    assert_eq!(body["maxChars"], 8000);
+    assert_eq!(
+        body["maxChars"], 50099,
+        "写入上限 = 100 条 × 500 字（含换行）"
+    );
     assert_eq!(body["maxEntries"], 100);
     assert!(body["path"].as_str().unwrap().ends_with("memory.md"));
 
@@ -1121,7 +1128,7 @@ async fn memory_endpoints_round_trip_and_report_stable_codes() {
     assert_eq!(body["content"], "- 甲\n- 丙");
 
     // 超限：**报错而不是静默截断**（静默截断等于丢失内容）
-    let too_long = "字".repeat(8001);
+    let too_long = "字".repeat(50100);
     let (status, body) = send_json(
         router_for(state.clone()),
         "PUT",
@@ -1133,7 +1140,7 @@ async fn memory_endpoints_round_trip_and_report_stable_codes() {
     assert_eq!(body["error"], "MEMORY_TOO_LARGE");
     assert_eq!(
         body["detail"],
-        "记忆太长（8001 > 8000 字符），请删掉一些再保存"
+        "记忆太长（50100 > 50099 字符），请删掉一些再保存"
     );
     // 失败之后**原内容还在**（没有半截写坏）
     let (_, body) = get_json(router_for(state.clone()), "/api/ai/memory").await;
@@ -1206,6 +1213,92 @@ async fn memory_written_from_the_ui_shows_up_in_the_run_kit_prompt() {
         prompt.contains("用户喜欢国风"),
         "刚写的记忆必须立刻进提示词（刻意不缓存）"
     );
+}
+
+/// 2026-11-14「记了长期记忆却不回读」的回归：**最新记的必须在提示词里**。
+///
+/// 真库那一幕：28 条 / 6361 字符，旧实现从**头**截 4000，把 11-13、11-14 新记的 12 条
+/// （含三条画风校准）整段切掉，标题还谎报「现有 16/100 条」。
+/// 手工把文件改大仍会超限（写入路径会拒绝，但用户能手改）—— 那时保留**最新**的若干条，
+/// 并在正文里如实说明省略了几条；条数永远报文件里的真数。
+#[tokio::test]
+async fn newest_memory_entries_survive_even_when_the_file_is_oversized() {
+    let state = state();
+    add_provider(&state, "p-kit", Some("KIT_KEY"));
+    state
+        .with(|conn| {
+            conn.execute(
+                "INSERT INTO ai_models (provider_id, model_id, display_name, enabled, tools, reasoning)
+                 VALUES ('p-kit', 'm-1', '夹具模型', 1, 1, 0)",
+                [],
+            )?;
+            Ok(())
+        })
+        .expect("插模型");
+
+    // 40 条 × ~300 字符 = 远超 8000：模拟用户手改大的 memory.md
+    let dir = memory_dir(&state);
+    std::fs::create_dir_all(&dir).unwrap();
+    let entries: Vec<String> = (0..40)
+        .map(|i| format!("- [2026-11-14] 第{i:02}条{}", "字".repeat(288)))
+        .collect();
+    std::fs::write(dir.join("memory.md"), entries.join("\n") + "\n").unwrap();
+
+    let (status, kit) = get_json(
+        router_for(state.clone()),
+        "/api/ai/run-kit?providerId=p-kit&modelId=m-1",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let prompt = kit["systemPrompt"].as_str().unwrap();
+    assert!(
+        prompt.contains("第39条"),
+        "最新记的那条必须在（旧实现留的是最旧的）"
+    );
+    assert!(!prompt.contains("第00条"), "最旧的条目该让出额度");
+    assert!(
+        prompt.contains("更早的 ") && prompt.contains(" 条没有放进来"),
+        "省略了多少条必须写在正文里：\n{prompt}"
+    );
+    assert!(
+        prompt.contains("现有 40/100 条"),
+        "标题报的是文件里的真数，不是注入了多少行"
+    );
+}
+
+/// 提示词里被省略的旧条目必须**取得到**：`recall_memory` 是全量记忆的入口
+/// （提示词只放最新 8000 字符，写入上限已经是 5 万）。
+#[tokio::test]
+async fn recall_memory_reaches_the_oldest_entries_the_prompt_left_out() {
+    let state = state();
+    let dir = memory_dir(&state);
+    std::fs::create_dir_all(&dir).unwrap();
+    let entries: Vec<String> = (0..40)
+        .map(|i| format!("- [2026-11-14] 第{i:02}条{}", "字".repeat(288)))
+        .collect();
+    std::fs::write(dir.join("memory.md"), entries.join("\n") + "\n").unwrap();
+
+    // 最旧的那条（提示词里肯定被省略了）能按关键词取回来
+    let out = call_tool(
+        &state,
+        "recall_memory",
+        serde_json::json!({ "query": "第00条" }),
+    )
+    .await
+    .expect("recall_memory 应当可用（出厂 ALLOW）");
+    assert!(out.content.contains("第00条"), "{}", out.content);
+    assert_eq!(
+        out.payload["entries"][0]["index"], 1,
+        "顺序号与界面列表一致"
+    );
+
+    // 不带关键词：从最新往回翻
+    let out = call_tool(&state, "recall_memory", serde_json::json!({ "limit": 5 }))
+        .await
+        .expect("翻页");
+    assert!(out.content.contains("第39条"), "{}", out.content);
+    assert_eq!(out.payload["returned"], 5);
+    assert_eq!(out.payload["totalEntries"], 40);
 }
 
 /// Skills 两个写侧工具：注册 → 立刻出现在列表里 → 删除；再删报 `SKILL_NOT_FOUND`。
