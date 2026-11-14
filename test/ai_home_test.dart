@@ -1561,6 +1561,11 @@ void main() {
     expect(sent, contains('[STYLE NEGATIVE]\nsoft shading, blurry'));
     // 空负面不写空段（两张角色卡都没有负面）。
     expect(sent, isNot(contains('[CHARACTER NEGATIVE]')));
+    // 卡片来源标记：告诉模型这段正文就是卡片库里的当前版本，不必再 search_* 核对。
+    expect(sent, contains('[卡片来源] 应用内画风卡'));
+    expect(sent, contains('[卡片来源] 应用内角色卡'));
+    expect(sent, contains('search_style_cards'));
+    expect(sent, contains('search_character_cards'));
     // 角色卡按选中顺序排在画风卡之后：凛 → 诗音
     expect(
       sent.indexOf('[CHARACTER CARD]\n凛\n'),
@@ -1602,6 +1607,11 @@ void main() {
       mentions.first['modelText'],
       contains('[STYLE NEGATIVE]\nsoft shading, blurry'),
       reason: 'mention 的 modelText 是模型真正拿到的那段，负面必须在里面',
+    );
+    expect(
+      mentions.first['modelText'],
+      contains('[卡片来源] 应用内画风卡'),
+      reason: '桌面按 mention.modelText 拼模型输入：来源标记必须在这段里，不能只在 text 里',
     );
     expect(
       (mentions[1]['snapshot'] as Map)['prompt'],

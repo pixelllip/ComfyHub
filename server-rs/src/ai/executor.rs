@@ -22,10 +22,15 @@
 //! # 取消
 //!
 //! `POST /runs/{id}/cancel` 立旗标（[`Executor::request_cancel`]），主循环在**安全点**
-//! （每读一个上游分片之前）看到旗标就**收尾**：已经说出去的话照落、终态记 `cancelled`。
+//! 看到旗标就**收尾**：已经说出去的话照落、终态记 `cancelled`。
 //! 直接强杀协程是错的 —— 那会跳过第 2 条纪律。
+//!
+//! 旗标之外还有一条**取消广播**（[`Executor::cancel_watch`]）：主循环等上游开口时
+//! 正卡在网络 I/O 里，光有旗标没人读，点了「停止」要等到上游吐下一个字才有反应
+//! （2026-11-13 现场：等了 10 分钟，直到后端重启）。`stream_chat` 因此用
+//! `select!` 同时等"上游的下一个分片"与"取消通知"，两件事谁先到都立刻收尾。
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
 use serde_json::{json, Value};
@@ -40,12 +45,26 @@ use crate::web::routes::{ApiError, AppState};
 /// 正文超过这个长度就请求"接着写"（Kotlin `HarnessRunner.CONTINUE_INSTRUCTION` 的触发条件）。
 pub const CONTINUE_CHARS: usize = 12_000;
 
+/// 流式正文的落库间隔（"检查点"）。
+///
+/// 收尾一次写是性能上的正确取舍（单 Run 实测上万条 delta），但**进程被强杀 / 崩溃**
+/// 时已经说出去的那一大段只剩内存：库里是一条 `streaming` 的空占位，重新打开会话
+/// 就是一条空气泡（2026-11-14 用户报的现象）。每 2 秒把已经生成的正文写一次，
+/// 崩溃最多丢这 2 秒 —— 而且中途 `GET messages` 也能看到进度，不再依赖内存里的实时段。
+const CHECKPOINT_INTERVAL: std::time::Duration = std::time::Duration::from_secs(2);
+
 /// 正在跑的 Run 的取消旗标。
 ///
 /// 与 Kotlin `HarnessRunner` 的 `cancelled` 集合同一件事：立旗标 → 主循环在安全点自己收尾。
+/// 外加一条**取消广播**（[`Executor::cancel_watch`]）：上游迟迟不开口时，主循环正卡在
+/// `send()` / 等分片里，只靠旗标的话没人去看它 —— 表现是点了「停止」之后界面停在
+/// 「已请求停止…」不动（2026-11-13 现场：等了 10 分钟，直到后端重启才结束）。
 pub struct Executor {
     running: Mutex<HashSet<String>>,
     cancelled: Mutex<HashSet<String>>,
+    /// 每个 Run 一条取消广播。用 `watch` 而不是 `Notify`：后建的接收者也要能读到
+    /// "已经取消了"这个事实 —— 否则"立旗标"与"开始等"之间那一瞬就是永久挂起。
+    wake: Mutex<HashMap<String, tokio::sync::watch::Sender<bool>>>,
 }
 
 impl Default for Executor {
@@ -53,6 +72,7 @@ impl Default for Executor {
         Self {
             running: Mutex::new(HashSet::new()),
             cancelled: Mutex::new(HashSet::new()),
+            wake: Mutex::new(HashMap::new()),
         }
     }
 }
@@ -67,6 +87,11 @@ impl Executor {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .insert(run_id.to_string());
+        let (tx, _) = tokio::sync::watch::channel(false);
+        self.wake
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(run_id.to_string(), tx);
     }
 
     pub fn mark_done(&self, run_id: &str) {
@@ -75,6 +100,10 @@ impl Executor {
             .unwrap_or_else(|e| e.into_inner())
             .remove(run_id);
         self.cancelled
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(run_id);
+        self.wake
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .remove(run_id);
@@ -90,6 +119,16 @@ impl Executor {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .insert(run_id.to_string());
+        // 当场叫醒正卡在上游网络等待里的那一侧。`send_replace` 在**没有接收者**时
+        // 也把值存下来：主循环下一轮建接收者时一读就是 `true`，不会漏掉这次取消。
+        if let Some(tx) = self
+            .wake
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(run_id)
+        {
+            let _ = tx.send_replace(true);
+        }
         true
     }
 
@@ -98,6 +137,18 @@ impl Executor {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .contains(run_id)
+    }
+
+    /// 这条 Run 的取消广播接收者。
+    ///
+    /// 不在跑的 Run（单测直接调 `run_once` 等）给一条**永不触发**的：发送端随返回值一起
+    /// 丢掉，接收者永远等不到变化 —— 与"这一侧没有取消来源"等价。
+    pub fn cancel_watch(&self, run_id: &str) -> tokio::sync::watch::Receiver<bool> {
+        let wake = self.wake.lock().unwrap_or_else(|e| e.into_inner());
+        match wake.get(run_id) {
+            Some(tx) => tx.subscribe(),
+            None => tokio::sync::watch::channel(false).1,
+        }
     }
 }
 
@@ -216,6 +267,45 @@ fn finish_quietly(
     if let Err(e) = finish_run(&state.bus, state, run_id, status, code, message, usage) {
         eprintln!("执行器：收尾失败（Run 可能停在 running）：{}", e.human());
     }
+}
+
+/// 用户点了停止：**如实收尾成 `cancelled`**，已经说出去的话照落（R6 第 2 条）。
+///
+/// 三条路都走这里：轮次之间看到旗标、流式途中被取消、上游一直不开口时被取消。
+/// 与"失败"的区别不只是措辞：界面对 `run.cancelled` 显示「已停止」，对 `run.failed`
+/// 显示错误并给「重试」—— 点停止却收到失败，用户会以为是自己弄坏了什么。
+#[allow(clippy::too_many_arguments)]
+fn finish_cancelled(
+    state: &AppState,
+    run_id: &str,
+    assistant_id: &str,
+    sink: &Arc<Mutex<Sink>>,
+    stripper: &Arc<Mutex<crate::ai::title_strip::TitleStripper>>,
+    steps: &Arc<Mutex<crate::ai::step_mark::StepStripper>>,
+    provider_response_id: Option<&str>,
+    usage: Option<TokenUsage>,
+) -> Result<(), ApiError> {
+    let (pending, phases) = drain_strippers(stripper, steps);
+    let mut sink = sink.lock().unwrap_or_else(|e| e.into_inner());
+    for phase in phases {
+        sink.push_step(&phase);
+    }
+    if !pending.is_empty() {
+        sink.push_text(&pending);
+    }
+    sink_now(state, assistant_id, &sink)?;
+    // 取消也要把**已经消耗的 token** 记录上（「未完成的对话不统计 token 用量」问题）：
+    // 前几轮的 usage 是真金白银，取消只代表"不再继续"，不代表"没花过"。
+    crate::ai::runs::update_message(
+        state,
+        assistant_id,
+        &sink.text_body(),
+        "cancelled",
+        provider_response_id,
+        usage_json(usage).as_ref(),
+    )?;
+    drop(sink);
+    finish_run(&state.bus, state, run_id, "cancelled", None, None, usage)
 }
 
 /// 主循环（同步本体，**测试直接调它**）。
@@ -429,38 +519,23 @@ async fn run_once(
     #[allow(unused_assignments)]
     let mut finish_reason: Option<String> = None;
 
+    // 取消广播：每一轮都拿一份副本交给 `stream_chat`。
+    // 它解决的是"上游一直不开口"那一档 —— 主循环正卡在 `send()` / 等分片里时，
+    // 光有旗标没人去读，界面就停在"已请求停止…"（见 `Executor` 的注释）。
+    let cancel_watch = state.executor.cancel_watch(run_id);
+
     loop {
         if state.executor.is_cancelled(run_id) {
-            let (pending, phases) = drain_strippers(&stripper, &steps);
-            let mut sink = sink.lock().unwrap_or_else(|e| e.into_inner());
-            for phase in phases {
-                sink.push_step(&phase);
-            }
-            if !pending.is_empty() {
-                sink.push_text(&pending);
-            }
-            sink_now(state, &assistant_id, &sink)?;
-            // 取消也要把**已经消耗的 token** 记录上（「未完成的对话不统计 token 用量」问题）：
-            // 前几轮的 usage 是真金白银，取消只代表"不再继续"，不代表"没花过"。
-            crate::ai::runs::update_message(
-                state,
-                &assistant_id,
-                &sink.text_body(),
-                "cancelled",
-                last_provider_response_id.as_deref(),
-                usage_json(total_usage).as_ref(),
-            )?;
-            drop(sink);
-            finish_run(
-                &state.bus,
+            return finish_cancelled(
                 state,
                 run_id,
-                "cancelled",
-                None,
-                None,
+                &assistant_id,
+                &sink,
+                &stripper,
+                &steps,
+                last_provider_response_id.as_deref(),
                 total_usage,
-            )?;
-            return Ok(());
+            );
         }
 
         let mut turns_now = turns.clone();
@@ -507,6 +582,7 @@ async fn run_once(
                 r.echo_all = echo_reasoning;
                 r
             };
+            let mut checkpoint_at = std::time::Instant::now();
             stream_chat(
                 ChatRequest {
                     state,
@@ -557,6 +633,25 @@ async fn run_once(
                                     json!({ "messageId": assistant, "text": visible }),
                                     event_type::TEXT_DELTA,
                                 )?;
+                                // 检查点：每 ~2 秒把已经说出去的正文写进库（不是每条 delta）。
+                                // 写失败**不打断**这一轮（正文还在内存里，收尾会再写一次），
+                                // 但要留日志 —— 静默失败会让"崩溃后还有内容"变成一句空话。
+                                if checkpoint_at.elapsed() >= CHECKPOINT_INTERVAL {
+                                    checkpoint_at = std::time::Instant::now();
+                                    if let Err(e) = crate::ai::runs::update_message(
+                                        &state_for_cb,
+                                        &assistant,
+                                        &sink.text_body(),
+                                        "streaming",
+                                        None,
+                                        None,
+                                    ) {
+                                        eprintln!(
+                                            "[run {run}] 流式正文检查点写库失败：{}",
+                                            e.human()
+                                        );
+                                    }
+                                }
                             }
                         }
                         StreamEvent::ReasoningDelta(chunk) => {
@@ -574,6 +669,7 @@ async fn run_once(
                     Ok(())
                 },
                 || state.executor.is_cancelled(run_id),
+                cancel_watch.clone(),
             )
             .await
         };
@@ -581,6 +677,20 @@ async fn run_once(
         let idle = match outcome {
             Ok(idle) => idle,
             Err(e) => {
+                // 用户点了停止 → **取消不是失败**：终态记 `cancelled`（事件发 `run.cancelled`）。
+                // 以前这里一律走 failed：点停止却显示"失败"，而且 `run.cancelled` 永远等不到。
+                if state.executor.is_cancelled(run_id) || e.error == "RUN_CANCELLED" {
+                    return finish_cancelled(
+                        state,
+                        run_id,
+                        &assistant_id,
+                        &sink,
+                        &stripper,
+                        &steps,
+                        last_provider_response_id.as_deref(),
+                        total_usage,
+                    );
+                }
                 // **失败也要把已经说出去的话落下来**（R6 第 2 条）——
                 // 一次 429 不应使已显示的回复内容消失。
                 // 摘标题 / 环节的两个缓冲里可能还压着东西（还没确认是不是标记），失败时也要放出来。

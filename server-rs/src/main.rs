@@ -414,7 +414,8 @@ async fn main() {
     // ---- 启动恢复（与 Kotlin `Application.module` 的三步同序）----------------
     //
     // 这三步都是"上次进程死得不明不白"留下的残局，**少一步就是界面永远转圈**：
-    // ① 还挂在 `running` 的 Run → `failed`（否则 SSE 一直等一条永远不来的终态事件）；
+    // ① 还挂在 `running` 的 Run → `failed`，**并且把它的助手消息也收尾**（正文从事件流
+    //    拼回来）—— 只改 Run 的话消息永远停在 `streaming`、正文空，重开会话就是空气泡；
     // ② 还挂着 `pending` 的审批行 → `denied`（内存闸门随进程消失，那些审批
     //    "永远不会有人点"，而 `/api/ai/pending` 会一直把它们列出来）；
     // ③ 还挂着 `pending` 的提问行 → `expired`（同上）。
@@ -423,6 +424,13 @@ async fn main() {
         Ok(n) if n > 0 => println!("启动恢复：{n} 个僵死 Run 已标为 failed"),
         Ok(_) => {}
         Err(e) => eprintln!("启动恢复：收尾僵死 Run 失败（{}）", e.human()),
+    }
+    // 旧版本留下的半截账：Run 收尾了、助手消息还停在 streaming（正文空 = 空气泡）。
+    // 每次启动都扫一遍（正常情况 0 条），升级后第一次启动就把坏掉的会话修好。
+    match comfyhub_server_rs::ai::runs::repair_orphan_streaming_messages(&state) {
+        Ok(n) if n > 0 => println!("启动恢复：{n} 条中断的回复已从事件流补回正文"),
+        Ok(_) => {}
+        Err(e) => eprintln!("启动恢复：修补中断的回复失败（{}）", e.human()),
     }
     match comfyhub_server_rs::ai::runs::expire_stale_pending_tool_calls(&state) {
         Ok(n) if n > 0 => println!("启动恢复：{n} 条待审批调用按拒绝收尾"),

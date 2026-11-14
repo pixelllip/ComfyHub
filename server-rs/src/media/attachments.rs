@@ -1073,6 +1073,11 @@ pub fn router() -> Router<AppState> {
             "/api/ai/attachments/{id}/file",
             axum::routing::get(get_file),
         )
+        // 「复制文件」要磁盘绝对路径（DTO 刻意不带存储路径，见模块头「三层职责」）。
+        .route(
+            "/api/ai/attachments/{id}/path",
+            axum::routing::get(get_path),
+        )
         .route(
             "/api/ai/attachments/{id}/thumb",
             axum::routing::get(get_thumb),
@@ -1405,6 +1410,30 @@ async fn get_file(
         &headers,
     )
     .await
+}
+
+/// `GET /api/ai/attachments/{id}/path`：原件在**磁盘上的绝对路径**（2026-11-14）。
+///
+/// 为什么必须有这一条：气泡 / 附件托盘的右键「复制文件」要往剪贴板写 `CF_HDROP`
+/// （资源管理器里能直接粘贴），那需要磁盘绝对路径；而 [`AttachmentDto`] 里只有
+/// `/api/ai/attachments/{id}/file` 这种 **HTTP 地址**。让前端自己拼
+/// `<storage>\ai-attachments\<stored_name>` 是**被禁止的** —— 路径解析只有一份真源
+/// （与 `/api/media/{id}/path` 同一个理由）。
+///
+/// 两个 404 要分得清（界面据此说人话）：附件不存在 / 附件在库里但**文件不在盘上**。
+async fn get_path(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<String>,
+) -> Result<Json<Value>, ApiError> {
+    if get(&state, &id)?.is_none() {
+        return Err(ApiError::not_found(format!("附件 {id} 不存在")));
+    }
+    let Some(path) = file_of(&state, &id)? else {
+        return Err(ApiError::not_found(format!("附件 {id} 的文件不在盘上")));
+    };
+    Ok(Json(
+        serde_json::json!({ "path": path.display().to_string() }),
+    ))
 }
 
 /// 缩略图 / 视频预览帧（**同一张接口**）；没有可看的图回 **204**。

@@ -288,6 +288,152 @@ async fn executor_runs_a_tool_round_trip_and_orders_the_parts() {
     gateway.abort();
 }
 
+/// 取消：**上游一直不开口**时点「停止」也必须在毫秒级收尾成 `cancelled`。
+///
+/// 2026-11-13 现场：模型调完两个工具后，第二个上游请求迟迟不返回；用户点了停止，
+/// 界面一直停在「已请求停止…」，直到 10 分钟后后端重启 —— 因为取消旗标只在
+/// "读下一个分片之前"被看一眼，而那一刻它正卡在等响应头。
+#[tokio::test]
+async fn cancel_interrupts_a_stalled_upstream_and_records_cancelled() {
+    let (base_url, gateway) = fake_stalling_tool_gateway("list_skills", "{}").await;
+    let state = state();
+    seed_provider_and_model(&state);
+    point_at_gateway(&state, &base_url);
+
+    let (status, body) = send_json(
+        router_for(state.clone()),
+        "POST",
+        "/api/ai/conversations/conv-0/runs",
+        serde_json::json!({ "text": "看看有哪些技能", "providerId": "goat", "modelId": "m1" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+    let run_id = body["runId"].as_str().unwrap().to_string();
+    let assistant_id = body["assistantMessageId"].as_str().unwrap().to_string();
+
+    // 等工具那一轮真的跑完（= 第二个上游请求已经发出去、正卡在等响应头）再点停止 ——
+    // 这条用例针对的就是"卡在网络等待里"的那一段。
+    let mut waited = 0;
+    while waited < 200 {
+        if event_types(&state, &run_id)
+            .iter()
+            .any(|t| t == "tool.completed")
+        {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        waited += 1;
+    }
+    // 给第二轮请求一点时间真的发出去（发不发得出去都不影响结论：取消两条路都得管）
+    tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+
+    let (status, cancel) = send_json(
+        router_for(state.clone()),
+        "POST",
+        &format!("/api/ai/runs/{run_id}/cancel"),
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{cancel}");
+    assert_eq!(cancel["cancelled"], true, "{cancel}");
+    assert_eq!(cancel["status"], "cancelling", "{cancel}");
+
+    // 取消必须**当场**收尾：以前这里是无限等（旗标没人读，上游也不说话）
+    let run = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        wait_for_run(&state, &run_id),
+    )
+    .await
+    .expect("取消后 2 秒内必须收尾（取消要能打断等上游的 I/O）");
+    assert_eq!(run["status"], "cancelled", "{run}");
+    assert_eq!(
+        event_types(&state, &run_id).last().map(String::as_str),
+        Some("run.cancelled"),
+        "点停止收 run.cancelled（不是 run.failed）"
+    );
+
+    // 助手消息同样记 cancelled；已经跑完的那一轮工具结果不许丢（R6）
+    let (_, messages) = get_json(
+        router_for(state.clone()),
+        "/api/ai/conversations/conv-0/messages",
+    )
+    .await;
+    let assistant = messages
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["id"] == assistant_id.as_str())
+        .unwrap();
+    assert_eq!(assistant["status"], "cancelled", "{assistant}");
+    assert!(
+        assistant["parts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|p| p["type"] == "tool_result"),
+        "已经跑完的工具结果要留着：{assistant}"
+    );
+
+    gateway.abort();
+}
+
+/// 流式检查点：**收尾之前**，已经生成的那部分就该在库里了。
+///
+/// 2026-11-14 用户报"生成中的回答被打断，切回来只剩空气泡"：正文原先只在收尾时落库，
+/// 进程一死 / 事件流一断，库里那条助手消息的正文还是空的。这里每 ~2 秒写一次检查点。
+#[tokio::test]
+async fn streaming_checkpoints_the_reply_before_it_finishes() {
+    let (base_url, gateway) = fake_slow_gateway().await;
+    let state = state();
+    seed_provider_and_model(&state);
+    point_at_gateway(&state, &base_url);
+
+    let (_, body) = send_json(
+        router_for(state.clone()),
+        "POST",
+        "/api/ai/conversations/conv-0/runs",
+        serde_json::json!({ "text": "慢慢说", "providerId": "goat", "modelId": "m1" }),
+    )
+    .await;
+    let run_id = body["runId"].as_str().unwrap().to_string();
+    let assistant_id = body["assistantMessageId"].as_str().unwrap().to_string();
+
+    // 假网关一共吐 ~3 秒；等到 2.6 秒时这一轮**还没结束**，但检查点（2 秒）已经写过一次。
+    tokio::time::sleep(std::time::Duration::from_millis(2600)).await;
+
+    let (_, messages) = get_json(
+        router_for(state.clone()),
+        "/api/ai/conversations/conv-0/messages",
+    )
+    .await;
+    let assistant = messages
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["id"] == assistant_id.as_str())
+        .unwrap();
+    assert_eq!(
+        assistant["status"], "streaming",
+        "断言写在这里说明这一轮还没收尾：{assistant}"
+    );
+    assert!(
+        !assistant["text"].as_str().unwrap_or_default().is_empty(),
+        "正文必须在收尾之前就能从库里读到（检查点），否则进程一死就是空气泡：{assistant}"
+    );
+
+    // 别把这条 Run 留在后台：取消收尾（顺带再走一次取消路径）
+    let (status, _) = send_json(
+        router_for(state.clone()),
+        "POST",
+        &format!("/api/ai/runs/{run_id}/cancel"),
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    wait_for_run(&state, &run_id).await;
+    gateway.abort();
+}
+
 /// **思考必须逐轮回传**（`openai-responses`，2026-10 的真实 400）：
 /// 工具结果回填的**第二次请求**必须带上这一轮产出的 `reasoning` 项，否则上游回
 /// `The reasoning_text in the thinking mode must be passed back to the API.`、整条 Run 变红。

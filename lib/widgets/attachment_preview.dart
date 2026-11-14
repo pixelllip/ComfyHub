@@ -5,6 +5,8 @@ import 'package:http/http.dart' as http;
 import 'package:url_launcher/url_launcher.dart';
 
 import 'audio_player_view.dart';
+import 'attachment_menu.dart';
+import 'context_menu.dart' show ContextMenuScope;
 import 'video_view.dart';
 import 'zoomable_image_view.dart';
 
@@ -21,24 +23,56 @@ import 'zoomable_image_view.dart';
 ///  · 其它（PDF / Office / 压缩包…）→ **也弹窗**，说明当前不能内嵌渲染，
 ///    并留一个显式的「用系统程序打开」退路（不是自动外跳，也不会悄悄什么都不做）。
 ///
+/// 详情里**右键 = 同一套附件菜单**（复制文件 / 地址 / 文件名）：
+/// 气泡上的小缩略图能右键复制，点进来看大图之后同样能。
+///
+/// [attachmentId] 用于「复制文件」（要问后端磁盘路径）；只拿得到地址的旧入口可以不传，
+/// 菜单里就只留"复制地址 / 文件名"。
 /// [headers] 只在取文本时需要（配对令牌等）；图片 / 视频 / 音频仍由各自控件直连。
 Future<void> showAttachmentPreview(
   BuildContext context, {
   required String url,
   required String name,
+  String? attachmentId,
   String? modality,
   Map<String, String>? headers,
 }) async {
   final kind = _kindOf(modality: modality, name: name, url: url);
   if (kind == _PreviewKind.image) {
-    await showImagePreview(context, url: url);
+    await showImagePreview(
+      context,
+      url: url,
+      onSecondaryTapDown: (dialogContext, position) =>
+          showAttachmentContextMenu(
+            dialogContext,
+            globalPosition: position,
+            name: name,
+            attachmentId: attachmentId,
+            fileUrl: url,
+          ),
+    );
     return;
   }
   if (!context.mounted) return;
   await showDialog<void>(
     context: context,
-    builder: (_) =>
-        _AttachmentDialog(url: url, name: name, kind: kind, headers: headers),
+    builder: (_) => ContextMenuScope(
+      child: Builder(
+        builder: (dialogContext) => _AttachmentDialog(
+          url: url,
+          name: name,
+          kind: kind,
+          headers: headers,
+          onSecondaryTap: (position) => showAttachmentContextMenu(
+            dialogContext,
+            globalPosition: position,
+            name: name,
+            attachmentId: attachmentId,
+            fileUrl: url,
+          ),
+        ),
+      ),
+    ),
   );
 }
 
@@ -162,11 +196,15 @@ class _AttachmentDialog extends StatelessWidget {
   final _PreviewKind kind;
   final Map<String, String>? headers;
 
+  /// 右键（详情里也要能复制文件 / 地址 / 文件名）。
+  final ValueChanged<Offset>? onSecondaryTap;
+
   const _AttachmentDialog({
     required this.url,
     required this.name,
     required this.kind,
     this.headers,
+    this.onSecondaryTap,
   });
 
   @override
@@ -177,40 +215,46 @@ class _AttachmentDialog extends StatelessWidget {
     final maxHeight = (screen.height * 0.9).clamp(260.0, 820.0);
     return Dialog(
       insetPadding: const EdgeInsets.all(16),
-      child: ConstrainedBox(
-        constraints: BoxConstraints(maxWidth: maxWidth, maxHeight: maxHeight),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(14, 8, 6, 6),
-              child: Row(
-                children: [
-                  Icon(
-                    _iconOf(kind),
-                    size: 18,
-                    color: theme.colorScheme.primary,
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      name,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: theme.textTheme.titleSmall,
+      child: GestureDetector(
+        // 只包住弹窗内容：遮罩层的点击（关弹窗）保持原样。
+        onSecondaryTapDown: onSecondaryTap == null
+            ? null
+            : (d) => onSecondaryTap!(d.globalPosition),
+        child: ConstrainedBox(
+          constraints: BoxConstraints(maxWidth: maxWidth, maxHeight: maxHeight),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(14, 8, 6, 6),
+                child: Row(
+                  children: [
+                    Icon(
+                      _iconOf(kind),
+                      size: 18,
+                      color: theme.colorScheme.primary,
                     ),
-                  ),
-                  IconButton(
-                    tooltip: '关闭',
-                    icon: const Icon(Icons.close, size: 18),
-                    onPressed: () => Navigator.of(context).maybePop(),
-                  ),
-                ],
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        name,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: theme.textTheme.titleSmall,
+                      ),
+                    ),
+                    IconButton(
+                      tooltip: '关闭',
+                      icon: const Icon(Icons.close, size: 18),
+                      onPressed: () => Navigator.of(context).maybePop(),
+                    ),
+                  ],
+                ),
               ),
-            ),
-            const Divider(height: 1),
-            Flexible(child: _body(context)),
-          ],
+              const Divider(height: 1),
+              Flexible(child: _body(context)),
+            ],
+          ),
         ),
       ),
     );

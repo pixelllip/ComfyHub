@@ -2,6 +2,8 @@ import 'dart:math' as math;
 
 import 'package:material_ui/material_ui.dart';
 
+import 'context_menu.dart' show ContextMenuScope;
+
 /// 缩略图（右下角）与倍数条（左下角）的 key，测试里用来定位
 const Key zoomableMinimapKey = Key('zoomable-minimap');
 const Key zoomableZoomBarKey = Key('zoomable-zoom-bar');
@@ -681,10 +683,16 @@ class _ZoomBar extends StatelessWidget {
 /// 会启动整个浏览器。查看器已存在，缺少的只是入口。
 ///
 /// 尺寸按窗口的 86% 给（有上下限），这样窄窗口里不会挤出屏幕、宽屏也不会糊成一片。
+///
+/// [onSecondaryTapDown] 非空时，在看图区域右键会回调它（附件详情用它在弹窗里弹
+/// 复制菜单）。弹窗自己挂 `ContextMenuScope` —— 它在根 Navigator 的 overlay 里，
+/// 找不到页面那个 scope。
 Future<void> showImagePreview(
   BuildContext context, {
   required String url,
   Size? imageSize,
+  void Function(BuildContext context, Offset globalPosition)?
+  onSecondaryTapDown,
 }) {
   final screen = MediaQuery.sizeOf(context);
   final width = (screen.width * 0.86).clamp(320.0, 1400.0);
@@ -693,35 +701,49 @@ Future<void> showImagePreview(
     context: context,
     // 看大图时把背后压暗：不然聊天气泡会从四边漏进来抢注意力
     barrierColor: Colors.black.withValues(alpha: 0.82),
-    builder: (context) => Dialog(
-      backgroundColor: Colors.transparent,
-      elevation: 0,
-      insetPadding: const EdgeInsets.all(16),
-      child: SizedBox(
-        width: width,
-        height: height,
-        child: Stack(
-          children: [
-            Positioned.fill(
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(12),
-                child: ZoomableImageView(url: url, imageSize: imageSize),
+    builder: (context) => ContextMenuScope(
+      child: Builder(
+        builder: (dialogContext) => Dialog(
+          backgroundColor: Colors.transparent,
+          elevation: 0,
+          insetPadding: const EdgeInsets.all(16),
+          child: SizedBox(
+            width: width,
+            height: height,
+            child: GestureDetector(
+              // 只包住看图的这块面板：遮罩层的点击 / 关闭按钮保持原样。
+              onSecondaryTapDown: onSecondaryTapDown == null
+                  ? null
+                  : (d) => onSecondaryTapDown(dialogContext, d.globalPosition),
+              child: Stack(
+                children: [
+                  Positioned.fill(
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(12),
+                      child: ZoomableImageView(url: url, imageSize: imageSize),
+                    ),
+                  ),
+                  Positioned(
+                    top: 8,
+                    right: 8,
+                    child: Material(
+                      color: Colors.black.withValues(alpha: 0.45),
+                      shape: const CircleBorder(),
+                      child: IconButton(
+                        tooltip: '关闭',
+                        icon: const Icon(
+                          Icons.close,
+                          size: 18,
+                          color: Colors.white,
+                        ),
+                        onPressed: () => Navigator.of(context).maybePop(),
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ),
-            Positioned(
-              top: 8,
-              right: 8,
-              child: Material(
-                color: Colors.black.withValues(alpha: 0.45),
-                shape: const CircleBorder(),
-                child: IconButton(
-                  tooltip: '关闭',
-                  icon: const Icon(Icons.close, size: 18, color: Colors.white),
-                  onPressed: () => Navigator.of(context).maybePop(),
-                ),
-              ),
-            ),
-          ],
+          ),
         ),
       ),
     ),

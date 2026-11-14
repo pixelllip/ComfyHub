@@ -2569,6 +2569,14 @@ class AiWorkspaceStore extends ChangeNotifier {
       ? null
       : _api.attachmentFileUrl(attachmentId);
 
+  /// 原件在磁盘上的绝对路径（右键「复制文件」写 `CF_HDROP` 用）。
+  ///
+  /// 失败**原样抛**（附件不存在 / 文件不在盘上）：调用方把那句话显示出来，
+  /// 别假装复制成功。只对**本机后端**有意义 —— 菜单项按 `FileClipboard.supported`
+  /// 决定是否出现（手机 / 连别的桌面时不给这一项）。
+  Future<String> attachmentPath(String attachmentId) =>
+      _api.attachmentPath(attachmentId);
+
   /// **画廊产物**（媒体 id）的缩略图 / 视频封面地址。
   ///
   /// 必须与附件那两条分开：`/api/ai/attachments/{id}/...` 和 `/api/media/{id}/...`

@@ -767,6 +767,112 @@ pub(crate) async fn fake_tool_gateway(
     (format!("http://{addr}/v1"), handle)
 }
 
+/// 假网关的第四种形态：第一轮要求调工具，第二轮**收下请求却一个字都不回**
+/// （连响应头都不发）—— 复现 2026-11-13 的现场：点了「停止」，后端正卡在
+/// "等上游开口"里，取消旗标没人读，直到进程重启才结束。
+///
+/// 第二轮那条连接一直开着；客户端一挂断（取消把请求 future 丢掉）这里就读到 EOF，
+/// 任务自己退出，不会留一个空转的 socket。
+pub(crate) async fn fake_stalling_tool_gateway(
+    tool: &'static str,
+    arguments: &'static str,
+) -> (String, tokio::task::JoinHandle<()>) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let handle = tokio::spawn(async move {
+        let mut round = 0;
+        loop {
+            let Ok((mut socket, _)) = listener.accept().await else {
+                break;
+            };
+            round += 1;
+            tokio::spawn(async move {
+                // 读干净再回（理由见 [`read_request`]）—— 第二轮读完之后什么都不写。
+                let _ = read_request(&mut socket).await;
+                if round > 1 {
+                    // 真正的"上游还在想"就长这样：请求收到了，响应头都还没发。
+                    let mut buf = [0u8; 64];
+                    loop {
+                        match socket.read(&mut buf).await {
+                            Ok(0) | Err(_) => return,
+                            Ok(_) => {}
+                        }
+                    }
+                }
+                let _ = socket
+                    .write_all(b"HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\n")
+                    .await;
+                let frames: Vec<String> = vec![
+                    format!(
+                        r#"{{"id":"chatcmpl-tool","choices":[{{"delta":{{"tool_calls":[{{"index":0,"id":"call_1","function":{{"name":"{tool}","arguments":""}}}}]}}}}]}}"#
+                    ),
+                    format!(
+                        r#"{{"choices":[{{"delta":{{"tool_calls":[{{"index":0,"function":{{"arguments":{}}}}}]}}}}]}}"#,
+                        serde_json::to_string(arguments).unwrap()
+                    ),
+                    r#"{"choices":[{"finish_reason":"tool_calls"}]}"#.to_string(),
+                    "[DONE]".to_string(),
+                ];
+                for frame in frames {
+                    let payload = if frame == "[DONE]" {
+                        "data: [DONE]\n\n".to_string()
+                    } else {
+                        format!("data: {frame}\n\n")
+                    };
+                    if socket.write_all(payload.as_bytes()).await.is_err() {
+                        return;
+                    }
+                    let _ = socket.flush().await;
+                }
+                let _ = socket.shutdown().await;
+            });
+        }
+    });
+    (format!("http://{addr}/v1"), handle)
+}
+
+/// 假网关的第五种形态：**慢慢地**吐正文（每 250ms 一段、一共 ~3 秒），
+/// 专门用来验证"流式检查点"—— 收尾之前，已经生成的那部分就该已经在库里了。
+pub(crate) async fn fake_slow_gateway() -> (String, tokio::task::JoinHandle<()>) {
+    use tokio::io::AsyncWriteExt;
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let handle = tokio::spawn(async move {
+        loop {
+            let Ok((mut socket, _)) = listener.accept().await else {
+                break;
+            };
+            tokio::spawn(async move {
+                let _ = read_request(&mut socket).await;
+                let _ = socket
+                    .write_all(b"HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\n")
+                    .await;
+                for i in 0..12 {
+                    let frame = format!(r#"{{"choices":[{{"delta":{{"content":"段{i}。"}}}}]}}"#);
+                    if socket
+                        .write_all(format!("data: {frame}\n\n").as_bytes())
+                        .await
+                        .is_err()
+                    {
+                        return;
+                    }
+                    let _ = socket.flush().await;
+                    tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+                }
+                let _ = socket
+                    .write_all(b"data: {\"choices\":[{\"finish_reason\":\"stop\"}]}\n\n")
+                    .await;
+                let _ = socket.write_all(b"data: [DONE]\n\n").await;
+                let _ = socket.shutdown().await;
+            });
+        }
+    });
+    (format!("http://{addr}/v1"), handle)
+}
+
 /// 写工具权限策略（与 Kotlin `ToolPolicyConfig` 同一份 JSON）。
 pub(crate) fn set_policy(
     state: &comfyhub_server_rs::web::routes::AppState,

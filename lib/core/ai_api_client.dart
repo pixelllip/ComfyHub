@@ -262,11 +262,10 @@ class AiApiClient {
       AiSkill.fromJson(
         Map<String, dynamic>.from(
           await _send(
-                'PUT',
-                '/api/ai/skills/${Uri.encodeComponent(name)}/enabled',
-                {'enabled': enabled},
-              )
-              as Map,
+            'PUT',
+            '/api/ai/skills/${Uri.encodeComponent(name)}/enabled',
+            {'enabled': enabled},
+          ) as Map,
         ),
       );
 
@@ -677,6 +676,16 @@ class AiApiClient {
   /// 原件（点开看大图 / 播视频）。
   String attachmentFileUrl(String attachmentId) =>
       '$baseUrl/api/ai/attachments/$attachmentId/file';
+
+  /// 原件在**磁盘上的绝对路径**（「复制文件」写 `CF_HDROP` 用）。
+  ///
+  /// 只对**本机后端**有意义（手机 / 连别人的桌面时那条路径不在本机）：
+  /// 调用方按 `FileClipboard.supported` 决定要不要给这个菜单项。
+  /// 后端分得清两种失败：附件不存在 / 文件不在盘上，`detail` 原样带回来给人看。
+  Future<String> attachmentPath(String attachmentId) async {
+    final json = await _get('/api/ai/attachments/$attachmentId/path');
+    return (Map<String, dynamic>.from(json as Map)['path'] ?? '').toString();
+  }
 
   /// **画廊产物**（不是附件）的缩略图 / 封面地址。
   ///

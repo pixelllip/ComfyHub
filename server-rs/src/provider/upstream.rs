@@ -213,14 +213,40 @@ pub fn auth_header(api: Api, secret: Option<&str>) -> Vec<(&'static str, String)
     }
 }
 
+/// 等"这次 Run 被取消"：先看广播里已有的值，没有再等变化。
+///
+/// 之所以能当 `select!` 的一支：`watch::Receiver::changed` 是**取消安全**的
+/// （被丢掉不会少收一次通知），而且接收者后建也能读到已经置过的 `true`。
+async fn wait_cancelled(rx: &mut tokio::sync::watch::Receiver<bool>) {
+    loop {
+        if *rx.borrow_and_update() {
+            return;
+        }
+        if rx.changed().await.is_err() {
+            // 发送端没了（执行器已收尾）：不再当成取消，一直等下去 —— 此时这次请求
+            // 本来也已经被丢掉了，不会留在这里空转。
+            std::future::pending::<()>().await;
+        }
+    }
+}
+
+/// 取消这个 Run 的统一错误（执行器按 `RUN_CANCELLED` 记 `cancelled` 终态）。
+fn cancelled_error() -> ApiError {
+    ApiError::ai("RUN_CANCELLED", "Run 已取消")
+}
+
 /// 发一次流式请求，把事件逐个交给 `on_event`。
 ///
-/// `cancelled()` 每个分片读之前问一次：取消要**在安全点收尾**（主循环负责落终态 +
-/// flush 已经说出去的话），直接强杀会把最后那句话丢掉（R6）。
+/// `cancelled()` 是同步旗标（工具循环 / 回调里都能随手问一次）；`cancel` 是**取消广播**
+/// —— 两者都要：只靠旗标时，主循环卡在"等上游开口 / 等下一个分片"里就没人看它，
+/// 点了「停止」也只能等到上游吐下一个字（2026-11-13 现场：等了 10 分钟）。
+/// 取消一律在**安全点**收尾（主循环负责落终态 + flush 已经说出去的话），
+/// 直接强杀会把最后那句话丢掉（R6）。
 pub async fn stream_chat<F>(
     request: ChatRequest<'_>,
     mut on_event: F,
     cancelled: impl Fn() -> bool,
+    mut cancel: tokio::sync::watch::Receiver<bool>,
 ) -> Result<Outcome, ApiError>
 where
     F: FnMut(StreamEvent) -> Result<(), ApiError>,
@@ -298,17 +324,23 @@ where
             crate::infra::outbound::route(&host).describe()
         );
 
-        let response = builder.send().await.map_err(|e| {
-            ApiError::ai(
-                "PROVIDER_UNREACHABLE",
-                format!(
-                    "连不上上游（{}）：{}｜本次路径：{}",
-                    safe_endpoint(&url),
-                    trim_error(&e.to_string()),
-                    crate::infra::outbound::route(&host).describe()
-                ),
-            )
-        })?;
+        // ⚠ 等响应头这一步**也必须能被取消叫醒**：上游迟迟不开口时这里能挂几百秒，
+        // 只等 `send()` 的话"停止"完全没反应（现场就是这么卡住的）。
+        let response = tokio::select! {
+            biased;
+            _ = wait_cancelled(&mut cancel) => return Err(cancelled_error()),
+            response = builder.send() => response.map_err(|e| {
+                ApiError::ai(
+                    "PROVIDER_UNREACHABLE",
+                    format!(
+                        "连不上上游（{}）：{}｜本次路径：{}",
+                        safe_endpoint(&url),
+                        trim_error(&e.to_string()),
+                        crate::infra::outbound::route(&host).describe()
+                    ),
+                )
+            })?,
+        };
 
         let status = response.status().as_u16();
         if (200..=299).contains(&status) {
@@ -399,9 +431,17 @@ where
     let mut buffer = String::new();
     let mut seen_done = false;
 
-    while let Some(chunk) = stream.next().await {
+    loop {
+        // 取消与"下一个分片"同时等：上游想了半分钟没吐字时，点「停止」也当场收尾，
+        // 不用等它先开口（那时旗标没人读 = 界面一直停在「已请求停止…」）。
+        let next = tokio::select! {
+            biased;
+            _ = wait_cancelled(&mut cancel) => return Err(cancelled_error()),
+            next = stream.next() => next,
+        };
+        let Some(chunk) = next else { break };
         if cancelled() {
-            return Err(ApiError::ai("RUN_CANCELLED", "Run 已取消"));
+            return Err(cancelled_error());
         }
         let chunk = chunk.map_err(|e| {
             ApiError::ai(

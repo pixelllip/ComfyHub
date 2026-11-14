@@ -9,6 +9,9 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart'
+    show debugDefaultTargetPlatformOverride;
+import 'package:flutter/gestures.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -561,4 +564,98 @@ void main() {
     expect(uploadCalls, 0);
     expect(store.attachments, isEmpty);
   });
+
+  // -------------------------------------------------------------------------
+  //  附件右键菜单（与画廊详情页同一套复制动作）
+  // -------------------------------------------------------------------------
+
+  testWidgets('托盘附件右键：复制文件名、移除附件', (tester) async {
+    // 桌面形态：右键菜单在真机（Windows）上才能派上用场。
+    debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
+
+    final store = await _pump(
+      tester,
+      client: _backend(uploadItems: [_dto('att-1', 'cat.png', 'image')]),
+    );
+    final copied = _captureClipboard(tester);
+
+    await tester.runAsync(() => store.attachFiles([_tempFile('cat.png')]));
+    await tester.pumpAndSettle();
+
+    final tile = find.byKey(const ValueKey('attach-att-1'));
+    expect(tile, findsOneWidget);
+    await _rightClick(tester, tile);
+    expect(find.text('复制文件地址'), findsOneWidget);
+    expect(find.text('复制文件名'), findsOneWidget);
+    expect(find.text('移除附件'), findsOneWidget);
+
+    await tester.tap(find.text('复制文件名'));
+    await tester.pumpAndSettle();
+    expect(copied.last, 'cat.png');
+
+    // 右键也能移除：不用非去点右上角那个小叉
+    await _rightClick(tester, tile);
+    await tester.tap(find.text('移除附件'));
+    await tester.pumpAndSettle();
+    expect(store.attachments, isEmpty);
+  });
+
+  testWidgets('消息气泡里的附件右键：复制文件地址', (tester) async {
+    // 气泡正文外面包着 `SelectionArea`：桌面平台下右键要落在附件上，
+    // 而不是被文本选择抢走 —— 这条用 Windows 平台跑才算数。
+    debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
+
+    final store = await _pump(
+      tester,
+      client: _backend(uploadItems: [_dto('att-1', 'cat.png', 'image')]),
+    );
+    final copied = _captureClipboard(tester);
+
+    await tester.runAsync(() => store.attachFiles([_tempFile('cat.png')]));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField), '看看这张图');
+    await tester.tap(find.text('发送'));
+    await tester.pumpAndSettle();
+
+    final bubble = find.byKey(const ValueKey('msg-att-att-1'));
+    expect(bubble, findsOneWidget, reason: '发出去之后气泡里仍能看到附件');
+    await _rightClick(tester, bubble);
+    expect(find.text('复制文件地址'), findsOneWidget);
+    expect(find.text('移除附件'), findsNothing, reason: '已经发出去的附件不该从这里移除');
+
+    await tester.tap(find.text('复制文件地址'));
+    await tester.pumpAndSettle();
+    expect(copied.last, endsWith('/api/ai/attachments/att-1/file'));
+  });
+}
+
+/// 在目标控件上按鼠标右键。
+Future<void> _rightClick(WidgetTester tester, Finder finder) async {
+  await tester.ensureVisible(finder);
+  await tester.pumpAndSettle();
+  await tester.tapAt(tester.getCenter(finder), buttons: kSecondaryMouseButton);
+  await tester.pumpAndSettle();
+}
+
+/// 拦下剪贴板写入，返回收集到的文本。
+List<String> _captureClipboard(WidgetTester tester) {
+  final copied = <String>[];
+  tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+    SystemChannels.platform,
+    (call) async {
+      if (call.method == 'Clipboard.setData') {
+        copied.add((call.arguments as Map)['text'] as String);
+      }
+      return null;
+    },
+  );
+  addTearDown(
+    () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+      SystemChannels.platform,
+      null,
+    ),
+  );
+  return copied;
 }

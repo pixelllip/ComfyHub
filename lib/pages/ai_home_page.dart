@@ -22,8 +22,10 @@ import '../models/ai_models.dart';
 import '../state/ai_workspace_store.dart';
 import '../widgets/ai_pending_banner.dart';
 import '../widgets/app_menu.dart';
+import '../widgets/attachment_menu.dart';
 import '../widgets/attachment_preview.dart';
 import '../widgets/common.dart' show FilterChipRow;
+import '../widgets/context_menu.dart' show ContextMenuScope;
 import '../widgets/markdown_view.dart';
 import '../widgets/nsfw_blur.dart';
 import '../widgets/submit_result_card.dart';
@@ -486,7 +488,7 @@ class _AiHomePageState extends State<AiHomePage> {
                   },
                   onDragEnd: _savePaneWidths,
                 ),
-                Expanded(child: thread),
+                Expanded(child: ContextMenuScope(child: thread)),
                 if (showPanel) ...[
                   _PaneResizeHandle(
                     key: const Key('ai-context-resize'),
@@ -523,7 +525,7 @@ class _AiHomePageState extends State<AiHomePage> {
 
     return Scaffold(
       drawer: Drawer(child: SafeArea(child: conversationList)),
-      body: thread,
+      body: ContextMenuScope(child: thread),
     );
   }
 
@@ -1941,6 +1943,8 @@ class _MessageBubble extends StatelessWidget {
                     Padding(
                       padding: const EdgeInsets.only(bottom: 4),
                       child: _MessageAttachment(
+                        key: ValueKey('msg-att-${part.attachmentId}'),
+                        attachmentId: part.attachmentId,
                         name: part.text ?? part.attachmentId ?? '附件',
                         thumbUrl: thumbUrlOf(part.attachmentId),
                         fileUrl: fileUrlOf(part.attachmentId),
@@ -3532,6 +3536,10 @@ class _ComposerState extends State<_Composer> {
   /// 槽位名与 skill `r2i-prompt` 的输入约定逐字一致；卡正文**一个字符都不改**。
   /// 多段 `[CHARACTER CARD]` = 多角色同框，skill 里写清了怎么处理。
   ///
+  /// 每段末尾再带一行 `[卡片来源]`：这段正文取自**应用内卡片库的发送时快照**。
+  /// 少了它模型会把卡正文当成"用户随手贴的一段文本"，先去 `search_style_cards`
+  /// 核对本机有没有存过这张卡（2026-11-13 现场），白跑一次工具、多等几秒。
+  ///
   /// 同时把每张卡的**发送时快照**与 `/技能` 一起交给后端：界面气泡按 mention 块画小卡片，
   /// 模型仍拿到同样顺序的卡正文。
   OutgoingMessage _composeOutgoingMessage(String raw) {
@@ -3562,6 +3570,7 @@ class _ComposerState extends State<_Composer> {
         name: style.name,
         prompt: style.prompt,
         negative: style.negative,
+        style: true,
       );
       blocks.add(block);
       mentions.add(
@@ -3580,6 +3589,7 @@ class _ComposerState extends State<_Composer> {
         name: character.name,
         prompt: character.prompt,
         negative: character.negative,
+        style: false,
       );
       blocks.add(block);
       mentions.add(
@@ -3615,23 +3625,34 @@ class _ComposerState extends State<_Composer> {
     );
   }
 
-  /// 一张卡投给模型的文本：正文逐字，负面单独一段。
+  /// 一张卡投给模型的文本：正文逐字，负面单独一段，末尾一行来源标记。
   ///
   /// 负面**不拼进正文**：skill 要求 `[STYLE SPEC]` / `[CHARACTER CARD]` 的正文
   /// 当固定规格逐字读，混进去会被当成规格的一部分。单独一段，模型才分得清
   /// "要什么"和"不要什么"；空负面不写这一段（与没有负面时的旧文本逐字一致）。
+  ///
+  /// 末尾的 `[卡片来源]` 说明这张卡取自应用内卡片库的发送时快照 —— 模型据此知道
+  /// 不必再 `search_*` 核对"本机有没有存过这张卡"（见 [_composeOutgoingMessage]）。
   String _cardBlock({
     required String marker,
     required String negativeMarker,
     required String name,
     required String? prompt,
     required String? negative,
+    required bool style,
   }) {
     final buffer = StringBuffer('$marker\n$name\n${prompt ?? ''}');
     final neg = (negative ?? '').trim();
     if (neg.isNotEmpty) {
       buffer.write('\n\n$negativeMarker\n$neg');
     }
+    // 来源标记放在整段卡之后：卡正文（含负面）逐字不动，模型读到的是"这段从哪来的"。
+    final kind = style ? '应用内画风卡' : '应用内角色卡';
+    final search = style ? 'search_style_cards' : 'search_character_cards';
+    buffer.write(
+      '\n\n[卡片来源] $kind · 发送时快照'
+      '（正文即卡片库里的当前版本，核对内容不必再调 $search）',
+    );
     return buffer.toString();
   }
 
@@ -4989,100 +5010,112 @@ class _AttachmentTile extends StatelessWidget {
     final blocked = blockers.isNotEmpty;
     final borderColor = blocked ? theme.colorScheme.error : theme.dividerColor;
 
-    return Tooltip(
-      message: blocked
-          ? '这张附件发不出去。\n${blockers.map((b) => '· $b').join('\n')}'
-          : '${attachment.name} · ${attachment.sizeLabel}${attachment.isVideo ? '（已取预览帧）' : ''}'
-                '\n点击在应用内预览（弹窗）',
-      child: SizedBox(
-        width: _size,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            SizedBox(
-              width: _size,
-              height: _size,
-              child: Stack(
-                children: [
-                  Positioned.fill(
-                    child: InkWell(
-                      onTap: fileUrl == null
-                          ? null
-                          : () => showAttachmentPreview(
-                              context,
-                              url: fileUrl!,
-                              name: attachment.name,
-                              modality: attachment.modality,
-                              headers: attachmentPreviewHeaders(),
+    return GestureDetector(
+      // 与消息气泡里的附件同一套右键菜单（外加「移除附件」）。
+      onSecondaryTapDown: (d) => showAttachmentContextMenu(
+        context,
+        globalPosition: d.globalPosition,
+        name: attachment.name,
+        attachmentId: attachment.id,
+        fileUrl: fileUrl,
+        onRemove: onRemove,
+      ),
+      child: Tooltip(
+        message: blocked
+            ? '这张附件发不出去。\n${blockers.map((b) => '· $b').join('\n')}'
+            : '${attachment.name} · ${attachment.sizeLabel}${attachment.isVideo ? '（已取预览帧）' : ''}'
+                  '\n点击在应用内预览（弹窗）\n右键复制文件 / 地址 / 文件名',
+        child: SizedBox(
+          width: _size,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              SizedBox(
+                width: _size,
+                height: _size,
+                child: Stack(
+                  children: [
+                    Positioned.fill(
+                      child: InkWell(
+                        onTap: fileUrl == null
+                            ? null
+                            : () => showAttachmentPreview(
+                                context,
+                                url: fileUrl!,
+                                name: attachment.name,
+                                attachmentId: attachment.id,
+                                modality: attachment.modality,
+                                headers: attachmentPreviewHeaders(),
+                              ),
+                        child: Container(
+                          clipBehavior: Clip.antiAlias,
+                          decoration: BoxDecoration(
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(
+                              color: borderColor,
+                              width: blocked ? 2 : 1,
                             ),
-                      child: Container(
-                        clipBehavior: Clip.antiAlias,
-                        decoration: BoxDecoration(
-                          borderRadius: BorderRadius.circular(8),
-                          border: Border.all(
-                            color: borderColor,
-                            width: blocked ? 2 : 1,
                           ),
-                        ),
-                        child: _preview(context),
-                      ),
-                    ),
-                  ),
-                  // 视频：盖一个播放角标，一眼看出这是"预览帧"而不是一张图片
-                  if (attachment.isVideo && thumbUrl != null)
-                    const Positioned.fill(
-                      child: IgnorePointer(
-                        child: Center(
-                          child: Icon(
-                            Icons.play_circle_fill,
-                            size: 28,
-                            color: Colors.white70,
-                          ),
+                          child: _preview(context),
                         ),
                       ),
                     ),
-                  if (blocked)
-                    const Positioned(
-                      left: 3,
-                      bottom: 3,
-                      child: Icon(Icons.block, size: 15, color: Colors.white),
-                    ),
-                  Positioned(
-                    top: -6,
-                    right: -6,
-                    child: IconButton(
-                      tooltip: '移除附件',
-                      iconSize: 15,
-                      visualDensity: VisualDensity.compact,
-                      padding: EdgeInsets.zero,
-                      constraints: const BoxConstraints.tightFor(
-                        width: 24,
-                        height: 24,
+                    // 视频：盖一个播放角标，一眼看出这是"预览帧"而不是一张图片
+                    if (attachment.isVideo && thumbUrl != null)
+                      const Positioned.fill(
+                        child: IgnorePointer(
+                          child: Center(
+                            child: Icon(
+                              Icons.play_circle_fill,
+                              size: 28,
+                              color: Colors.white70,
+                            ),
+                          ),
+                        ),
                       ),
-                      onPressed: onRemove,
-                      icon: const Icon(Icons.cancel),
+                    if (blocked)
+                      const Positioned(
+                        left: 3,
+                        bottom: 3,
+                        child: Icon(Icons.block, size: 15, color: Colors.white),
+                      ),
+                    Positioned(
+                      top: -6,
+                      right: -6,
+                      child: IconButton(
+                        tooltip: '移除附件',
+                        iconSize: 15,
+                        visualDensity: VisualDensity.compact,
+                        padding: EdgeInsets.zero,
+                        constraints: const BoxConstraints.tightFor(
+                          width: 24,
+                          height: 24,
+                        ),
+                        onPressed: onRemove,
+                        icon: const Icon(Icons.cancel),
+                      ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
-            ),
-            const SizedBox(height: 2),
-            Text(
-              attachment.name,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: theme.textTheme.labelSmall,
-            ),
-            Text(
-              attachment.sizeLabel,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: theme.textTheme.labelSmall?.copyWith(
-                color: theme.colorScheme.outline,
+              const SizedBox(height: 2),
+              Text(
+                attachment.name,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: theme.textTheme.labelSmall,
               ),
-            ),
-          ],
+              Text(
+                attachment.sizeLabel,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: theme.textTheme.labelSmall?.copyWith(
+                  color: theme.colorScheme.outline,
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -5131,11 +5164,14 @@ class _AttachmentTile extends StatelessWidget {
 
 /// 消息气泡里的附件：只读的小缩略图（发送后仍可回看）。
 class _MessageAttachment extends StatelessWidget {
+  final String? attachmentId;
   final String name;
   final String? thumbUrl;
   final String? fileUrl;
 
   const _MessageAttachment({
+    super.key,
+    required this.attachmentId,
     required this.name,
     required this.thumbUrl,
     required this.fileUrl,
@@ -5150,51 +5186,62 @@ class _MessageAttachment extends StatelessWidget {
     // 有缩略图 = 后端认得出这是图片，直接按图片预览。
     final isImage = thumbUrl != null;
     final label = attachmentDisplayName(name, hasPreview: isImage);
-    return Tooltip(
-      message: '$label\n点击在应用内预览（弹窗）',
-      child: InkWell(
-        onTap: fileUrl == null
-            ? null
-            : () => showAttachmentPreview(
-                context,
-                url: fileUrl!,
-                name: name,
-                // 缩略图存在就是图片：别让"没有扩展名"把它判成未知类型
-                modality: isImage ? 'image' : null,
-                headers: attachmentPreviewHeaders(),
-              ),
-        child: Container(
-          width: 96,
-          height: 96,
-          clipBehavior: Clip.antiAlias,
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(8),
-            border: Border.all(color: theme.dividerColor),
-          ),
-          child: thumbUrl == null
-              ? Center(
-                  child: Icon(
-                    Icons.attach_file,
-                    size: 22,
-                    color: theme.colorScheme.outline,
-                  ),
-                )
-              : Image.network(
-                  thumbUrl!,
+    return GestureDetector(
+      // 右键与画廊详情页同一套：复制文件 / 复制文件地址 / 复制文件名。
+      onSecondaryTapDown: (d) => showAttachmentContextMenu(
+        context,
+        globalPosition: d.globalPosition,
+        name: name,
+        attachmentId: attachmentId,
+        fileUrl: fileUrl,
+      ),
+      child: Tooltip(
+        message: '$label\n点击在应用内预览（弹窗）\n右键复制文件 / 地址 / 文件名',
+        child: InkWell(
+          onTap: fileUrl == null
+              ? null
+              : () => showAttachmentPreview(
+                  context,
+                  url: fileUrl!,
+                  name: name,
+                  attachmentId: attachmentId,
+                  // 缩略图存在就是图片：别让"没有扩展名"把它判成未知类型
+                  modality: isImage ? 'image' : null,
                   headers: attachmentPreviewHeaders(),
-                  fit: BoxFit.cover,
-                  cacheWidth: (96 * MediaQuery.devicePixelRatioOf(context))
-                      .round()
-                      .clamp(1, 512),
-                  filterQuality: FilterQuality.low,
-                  errorBuilder: (_, _, _) => Center(
+                ),
+          child: Container(
+            width: 96,
+            height: 96,
+            clipBehavior: Clip.antiAlias,
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: theme.dividerColor),
+            ),
+            child: thumbUrl == null
+                ? Center(
                     child: Icon(
                       Icons.attach_file,
                       size: 22,
                       color: theme.colorScheme.outline,
                     ),
+                  )
+                : Image.network(
+                    thumbUrl!,
+                    headers: attachmentPreviewHeaders(),
+                    fit: BoxFit.cover,
+                    cacheWidth: (96 * MediaQuery.devicePixelRatioOf(context))
+                        .round()
+                        .clamp(1, 512),
+                    filterQuality: FilterQuality.low,
+                    errorBuilder: (_, _, _) => Center(
+                      child: Icon(
+                        Icons.attach_file,
+                        size: 22,
+                        color: theme.colorScheme.outline,
+                      ),
+                    ),
                   ),
-                ),
+          ),
         ),
       ),
     );

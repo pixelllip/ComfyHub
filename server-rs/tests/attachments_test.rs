@@ -270,6 +270,30 @@ async fn 上传只认签名_谎报类型一律拒收() {
         "image/jpeg"
     );
 
+    // ③.5 磁盘路径（「复制文件」要写 CF_HDROP）：DTO 刻意不带存储路径，
+    //      所以单开一条端点 —— 前端不许自己拼 `<storage>\ai-attachments\<stored>`。
+    let (status, body) = get_json(&state, &format!("/api/ai/attachments/{id}/path")).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let path = body["path"].as_str().unwrap().to_string();
+    assert!(
+        std::path::Path::new(&path).is_file(),
+        "返回的路径必须真的在盘上：{path}"
+    );
+    // 不存在的附件：404（与 `/api/media/{id}/path` 同一套语义）
+    let (status, _) = get_json(&state, "/api/ai/attachments/nope/path").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    // 文件不在盘上：同样 404，但人话分得清（界面据此说人话）
+    std::fs::remove_file(&path).unwrap();
+    let (status, body) = get_json(&state, &format!("/api/ai/attachments/{id}/path")).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert!(
+        body["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("不在盘上"),
+        "{body}"
+    );
+
     // ④ 不存在的附件：400 + `CONFIG_ERROR` + detail（与 Kotlin 的 AiException 同一个信封）
     let (status, body) = get_json(&state, "/api/ai/attachments/nope").await;
     assert_eq!(status, StatusCode::BAD_REQUEST);

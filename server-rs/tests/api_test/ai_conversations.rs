@@ -985,6 +985,145 @@ async fn startup_recovery_fails_stale_runs_and_denies_pending_approvals() {
     assert!(denied["error"].as_str().unwrap().contains("重启"));
 }
 
+/// 生成到一半后端被杀：重新打开会话要能看到**已经生成好的那部分**，不是空气泡。
+///
+/// 2026-11-14 用户报的现象：回答生成到一半被打断，切回来内容全没了，只剩一个空泡泡。
+/// 真因：流式正文只走"收尾一次写"，进程一死库里就只剩 `streaming` 的空占位；
+/// 而 `fail_stale_running` 当时**只改 `ai_runs`**，助手消息永远停在 streaming。
+#[tokio::test]
+async fn startup_recovery_restores_the_partial_reply_from_events() {
+    use comfyhub_server_rs::ai::{conversations, runs};
+    let state = state();
+    seed_provider_and_model(&state);
+
+    let assistant_id = runs::insert_assistant_placeholder(&state, "conv-0", "goat", "m1").unwrap();
+    let run = runs::create(
+        &state,
+        runs::NewRun {
+            conversation_id: "conv-0".into(),
+            provider_id: "goat".into(),
+            model_id: "m1".into(),
+            provider_snapshot: serde_json::json!({}),
+            model_snapshot: serde_json::json!({}),
+            prompt_version: "v13".into(),
+            user_message_id: None,
+            assistant_message_id: assistant_id.clone(),
+            retry_of_run_id: None,
+            reasoning_effort: None,
+            skill_snapshot: None,
+        },
+    )
+    .unwrap();
+
+    // 事件是断线重连 / 重启恢复的唯一来源：正文与思考都逐条拼得回来
+    for (seq, kind, payload) in [
+        (1i64, "run.started", serde_json::json!({})),
+        (
+            2,
+            "reasoning.delta",
+            serde_json::json!({ "text": "先看一眼卡" }),
+        ),
+        (3, "text.delta", serde_json::json!({ "text": "这是已经" })),
+        (
+            4,
+            "text.delta",
+            serde_json::json!({ "text": "说出去的前半段。" }),
+        ),
+    ] {
+        runs::append_event(&state, &run.id, seq, kind, &payload).unwrap();
+    }
+
+    assert_eq!(
+        runs::fail_stale_running(&state, "后端重启导致 Run 中断").unwrap(),
+        1
+    );
+
+    let messages = conversations::list_messages(&state, "conv-0").unwrap();
+    let message = messages
+        .iter()
+        .find(|m| m.id == assistant_id)
+        .expect("助手消息在");
+    assert_eq!(
+        message.status, "failed",
+        "不能停在 streaming（界面会一直转圈）"
+    );
+    assert_eq!(
+        message.text, "这是已经说出去的前半段。",
+        "已经生成好的正文必须从事件里补回来"
+    );
+    let kinds: Vec<&str> = message.parts.iter().map(|p| p.r#type.as_str()).collect();
+    assert_eq!(kinds, vec!["reasoning", "text"], "思考在前、正文在后");
+    assert_eq!(message.parts[0].text.as_deref(), Some("先看一眼卡"));
+    assert_eq!(
+        message.parts[1].text.as_deref(),
+        Some("这是已经说出去的前半段。")
+    );
+}
+
+/// 旧版本留下的半截账：Run 已经 `failed`、助手消息还停在 `streaming`（正文空）。
+///
+/// 2026-11-13 及以前的 `fail_stale_running` 只改 `ai_runs`，用户升级前坏掉的会话
+/// 就是这个形状 —— 升级后第一次启动必须把它修好（用户不会去删会话）。
+#[tokio::test]
+async fn startup_repair_fixes_messages_left_streaming_by_an_older_build() {
+    use comfyhub_server_rs::ai::{conversations, runs};
+    let state = state();
+    seed_provider_and_model(&state);
+
+    let assistant_id = runs::insert_assistant_placeholder(&state, "conv-0", "goat", "m1").unwrap();
+    let run = runs::create(
+        &state,
+        runs::NewRun {
+            conversation_id: "conv-0".into(),
+            provider_id: "goat".into(),
+            model_id: "m1".into(),
+            provider_snapshot: serde_json::json!({}),
+            model_snapshot: serde_json::json!({}),
+            prompt_version: "v13".into(),
+            user_message_id: None,
+            assistant_message_id: assistant_id.clone(),
+            retry_of_run_id: None,
+            reasoning_effort: None,
+            skill_snapshot: None,
+        },
+    )
+    .unwrap();
+    runs::append_event(
+        &state,
+        &run.id,
+        1,
+        "text.delta",
+        &serde_json::json!({ "text": "旧版本卡住之前说的话" }),
+    )
+    .unwrap();
+    // 旧版启动恢复只改 Run：Run 已经是 failed，消息还停在 streaming、正文空
+    runs::finish(
+        &state,
+        &run.id,
+        "failed",
+        Some("PROTOCOL_ERROR"),
+        Some("后端重启导致 Run 中断"),
+        None,
+    )
+    .unwrap();
+
+    assert_eq!(
+        runs::repair_orphan_streaming_messages(&state).unwrap(),
+        1,
+        "Run 收尾了、消息还在 streaming 的，每一条都要修"
+    );
+
+    let messages = conversations::list_messages(&state, "conv-0").unwrap();
+    let message = messages
+        .iter()
+        .find(|m| m.id == assistant_id)
+        .expect("助手消息在");
+    assert_eq!(message.status, "failed");
+    assert_eq!(message.text, "旧版本卡住之前说的话", "正文要从事件流补回来");
+    assert_eq!(message.parts.len(), 1, "只有正文可补（没有思考事件）");
+    assert_eq!(message.parts[0].r#type, "text");
+}
+
 /// SSE：`?after=` 续传、帧形状、以及"收尾之后把库里的都发完再结束"。
 #[tokio::test]
 async fn run_events_stream_replays_and_resumes() {

@@ -62,7 +62,7 @@ App 文案本来就是中文，但文本框选择菜单、返回按钮 tooltip �
 
 ## 6. 弹出菜单
 
-统一用 `AppMenuButton`（按钮下拉）/ `showAppContextMenu`（右键），页面根部挂 `ContextMenuScope`（`lib/widgets/app_menu.dart` + `context_menu.dart`，`common.dart` 里转出）。**别改回 `PopupMenuButton` / `showMenu`**：它们铺的 `ModalBarrier` 会把整页滚轮和拖动全吃掉（上游 flutter/flutter#90223）。回归 `test/menu_scroll_test.dart`。传 `context` 要用**在 `ContextMenuScope` 里面**的那一个。
+统一用 `AppMenuButton`（按钮下拉）/ `showAppContextMenu`（右键），页面根部挂 `ContextMenuScope`（`lib/widgets/app_menu.dart` + `context_menu.dart`，`common.dart` 里转出）。**别改回 `PopupMenuButton` / `showMenu`**：它们铺的 `ModalBarrier` 会把整页滚轮和拖动全吃掉（上游 flutter/flutter#90223）。回归 `test/menu_scroll_test.dart`。传 `context` 要用**在 `ContextMenuScope` 里面**的那一个。**弹窗里的右键要自己再挂一个 scope**：对话框在根 Navigator 的 overlay 里，不在页面的 scope 之下（找不到宿主会直接抛）；附件详情就是这么做的（`attachment_preview.dart` + `zoomable_image_view.dart` 的图片弹窗，回归 `test/ai_attachment_preview_test.dart`）。
 
 ## 7. 大标题与顶栏标题的滚动联动
 

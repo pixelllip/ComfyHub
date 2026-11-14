@@ -233,7 +233,32 @@ pub fn finish(
 /// 启动恢复：把库里还挂在 `running` 的 Run 全标成 `failed`（否则界面永远转圈）。
 ///
 /// 返回改了几行 —— 启动日志要如实报出来（"收尾了 N 个僵死 Run"）。
+///
+/// ⚠ **只改 `ai_runs` 是不够的**：助手消息会永远停在 `streaming`、正文为空，
+/// 重新打开会话看到的就是一条空气泡（2026-11-14 用户报的"生成中的回答被打断，
+/// 切回来不显示已经生成好的部分"）。所以每条僵死 Run 还要把它的助手消息一起收尾，
+/// 正文 / 思考从**它自己的事件流**里拼回来（见 [`restore_interrupted_reply`]）。
 pub fn fail_stale_running(state: &AppState, reason: &str) -> Result<usize, ApiError> {
+    // ⚠ 先把这批 Run 捞出来：下面每条都要再读写消息，不能和 `state.with` 的连接锁嵌套。
+    let stale: Vec<(String, Option<String>)> = state.with(|conn| {
+        let mut stmt =
+            conn.prepare("SELECT id, assistant_message_id FROM ai_runs WHERE status = 'running'")?;
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
+        })?;
+        rows.collect()
+    })?;
+
+    for (run_id, assistant_id) in &stale {
+        let Some(message_id) = assistant_id.as_deref().filter(|id| !id.is_empty()) else {
+            continue;
+        };
+        if let Err(e) = restore_interrupted_reply(state, message_id, run_id, "failed") {
+            // 收不回正文也不能让 Run 停在 running：先把状态收掉，日志留给人看。
+            eprintln!("启动恢复：Run {run_id} 的助手消息没收成：{}", e.human());
+        }
+    }
+
     state.write(|tx| {
         let n = tx.execute(
             "UPDATE ai_runs
@@ -244,6 +269,154 @@ pub fn fail_stale_running(state: &AppState, reason: &str) -> Result<usize, ApiEr
         )?;
         Ok(n)
     })
+}
+
+/// 修补**旧版本留下的半截账**：Run 已经收尾，助手消息却还停在 `streaming`。
+///
+/// 2026-11-13 及以前的 `fail_stale_running` 只改 `ai_runs`：后端重启后 Run 是 `failed`，
+/// 助手消息永远停在 `streaming`、正文为空 —— 用户重开会话看到的是一条空气泡
+/// （2026-11-14 报的那条，现场数据就是这样）。新版收尾会一起修；这个补丁再扫一遍
+/// 库里**已经坏掉的**那些（升级后第一次启动就修好，不用用户删会话）。
+///
+/// 每次启动都跑：正常情况下一条都扫不到（`streaming` 只存在于真在跑的 Run 上）。
+pub fn repair_orphan_streaming_messages(state: &AppState) -> Result<usize, ApiError> {
+    // 同一条消息可能挂在两次 Run 上（重试复用同一条气泡）：只认**最新那次**，
+    // 否则先后两次修补会互相覆盖（旧 Run 的正文盖掉重试的）。
+    let orphans: Vec<(String, String, String)> = state.with(|conn| {
+        let mut stmt = conn.prepare(
+            "SELECT r.id, m.id, r.status FROM ai_messages m
+               JOIN ai_runs r ON r.assistant_message_id = m.id
+              WHERE m.status = 'streaming'
+                AND r.status IN ('completed', 'failed', 'cancelled')
+              ORDER BY r.created_at DESC",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })?;
+        rows.collect()
+    })?;
+    let mut seen = std::collections::HashSet::new();
+    let mut repaired = 0;
+    for (run_id, message_id, run_status) in &orphans {
+        if !seen.insert(message_id.clone()) {
+            continue;
+        }
+        let status = if run_status == "completed" {
+            "complete"
+        } else {
+            run_status.as_str()
+        };
+        match restore_interrupted_reply(state, message_id, run_id, status) {
+            Ok(()) => repaired += 1,
+            Err(e) => eprintln!(
+                "启动恢复：修补半截消息 {message_id}（Run {run_id}）失败：{}",
+                e.human()
+            ),
+        }
+    }
+    Ok(repaired)
+}
+
+/// 把一条收尾了的 Run 的助手消息从它自己的事件流里救回来（启动恢复专用）。
+///
+/// 流式正文原先只走"收尾一次写"：进程被强杀 / 崩溃时，已经说出去的那一大段只剩内存，
+/// 库里是一条 `streaming` 的空占位。这里做三件事：
+/// ① `text.delta` / `reasoning.delta` 按 `seq` 顺序拼回正文与思考（SSE 连着时这些事件
+///    早就落库了 —— 它们按 `seq` 批量写，比消息正文更细）；
+/// ② 消息里可能还有**流式检查点**写的正文（`executor::CHECKPOINT_INTERVAL`），取更长的那份；
+/// ③ 正文 / 思考落成有序块（界面的空气泡判据是"正文与块都空"），状态按调用方给的终态写。
+///
+/// 工具卡与工具结果**补不回来**（`tool.completed` 只存了 preview）：这里只保证
+/// "已经生成的回答"不消失。补不回来时也如实写日志，不假装完整。
+fn restore_interrupted_reply(
+    state: &AppState,
+    message_id: &str,
+    run_id: &str,
+    status: &str,
+) -> Result<(), ApiError> {
+    let (event_text, event_reasoning) = state.with(|conn| {
+        let mut stmt = conn.prepare(
+            "SELECT event_type, payload_json FROM ai_run_events
+              WHERE run_id = ?1 AND event_type IN ('text.delta', 'reasoning.delta')
+              ORDER BY seq",
+        )?;
+        let rows = stmt.query_map(rusqlite::params![run_id], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+        let mut text = String::new();
+        let mut reasoning = String::new();
+        for row in rows {
+            let (kind, payload) = row?;
+            let chunk = serde_json::from_str::<Value>(&payload)
+                .ok()
+                .and_then(|v| v.get("text").and_then(Value::as_str).map(str::to_string));
+            let Some(chunk) = chunk else { continue };
+            if kind == "text.delta" {
+                text.push_str(&chunk);
+            } else {
+                reasoning.push_str(&chunk);
+            }
+        }
+        Ok((text, reasoning))
+    })?;
+
+    // 消息里已有的正文（检查点写的）可能比事件更多：取更长的那个。
+    // 行不在了（历史夹具 / 被人删掉）就什么都不用做 —— 别去给不存在的消息插块。
+    let current = state.with(|conn| {
+        use rusqlite::OptionalExtension;
+        conn.query_row(
+            "SELECT text FROM ai_messages WHERE id = ?1",
+            rusqlite::params![message_id],
+            |row| row.get::<_, Option<String>>(0),
+        )
+        .optional()
+    })?;
+    let Some(current) = current else {
+        return Ok(());
+    };
+    let current = current.unwrap_or_default();
+    let text = if current.len() > event_text.len() {
+        current
+    } else {
+        event_text
+    };
+
+    state.write(|tx| {
+        tx.execute(
+            "UPDATE ai_messages SET text = ?1, status = ?2 WHERE id = ?3",
+            rusqlite::params![&text, status, message_id],
+        )?;
+        // 已经有块（极少见：崩在收尾那一瞬）就别动它 —— 那可能是比这里更完整的版本。
+        let has_parts: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM ai_message_parts WHERE message_id = ?1",
+            rusqlite::params![message_id],
+            |row| row.get(0),
+        )?;
+        if has_parts == 0 {
+            let mut ordinal = 0i64;
+            if !event_reasoning.is_empty() {
+                tx.execute(
+                    "INSERT INTO ai_message_parts (message_id, ordinal, type, text)
+                     VALUES (?1, ?2, 'reasoning', ?3)",
+                    rusqlite::params![message_id, ordinal, event_reasoning],
+                )?;
+                ordinal += 1;
+            }
+            if !text.is_empty() {
+                tx.execute(
+                    "INSERT INTO ai_message_parts (message_id, ordinal, type, text)
+                     VALUES (?1, ?2, 'text', ?3)",
+                    rusqlite::params![message_id, ordinal, &text],
+                )?;
+            }
+        }
+        Ok(())
+    })?;
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
