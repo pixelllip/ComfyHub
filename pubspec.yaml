@@ -2,7 +2,7 @@ name: viewer
 description: "ComfyHub — 为 ComfyUI 设计的一站式 AI 助手"
 publish_to: 'none'
 
-version: 0.5.0+1
+version: 0.5.1+1
 
 environment:
   sdk: ^3.13.2
