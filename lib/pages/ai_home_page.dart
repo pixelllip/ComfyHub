@@ -421,8 +421,8 @@ class _AiHomePageState extends State<AiHomePage> {
       // 放进 `surfaceContainerHigh` 的卡片里。这样导航栏、会话列表、右侧栏、
       // 底部输入区四块各有各的底色，不会糊成一片。
       final scheme = Theme.of(context).colorScheme;
-      final conversationPaneColor = scheme.surfaceContainerHigh;
-      final contextPaneColor = scheme.surfaceContainerLow;
+      final conversationPaneColor = AppSurfaces.sidebar(scheme);
+      final contextPaneColor = AppSurfaces.navigation(scheme);
       return Scaffold(
         body: LayoutBuilder(
           builder: (context, constraints) {

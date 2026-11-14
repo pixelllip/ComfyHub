@@ -2,7 +2,7 @@
 //
 // 显示列数大于等于 2 列时，设置项容易出现不同列高度不一，
 // 导致视觉失衡。" —— 设置是"读 + 改"的表单，不是画廊；正文统一单列、限宽居中，
-// 多列只留给首页的等高入口磁贴（见 settings_tile_test.dart）。
+// 多列只留给桌面端左侧的分类栏（见 settings_desktop_shell_test.dart）。
 //
 // 这里钉住三件事：
 //   1) 宽窗口下正文仍然单列，宽度不超过 kSettingsContentMaxWidth；

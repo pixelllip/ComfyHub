@@ -158,6 +158,36 @@ class AppShapes extends ThemeExtension<AppShapes> {
   }
 }
 
+/// **页面分区的底色梯度**（2026-11-14）。
+///
+/// 参照 AI 工作台的做法：不画分隔线，靠 `surfaceContainer*` 的深浅差把
+/// "导航 / 工具条 / 正文 / 侧栏卡片"分成几块。深色主题里越往上越亮，浅色主题里
+/// 越往上越深的灰，两种主题都成立。
+///
+/// 角色固定为四档，页面里不要再各写各的 `surfaceContainerX`：
+///   * [navigation] —— 一级导航栏（`HomeShell` 的侧边栏、底部导航）；
+///   * [band]       —— 正文顶部的工具条 / 筛选栏（搜索、页签、筛选芯片所在的整条）；
+///   * [sidebar]    —— 与正文并排的二级面板（会话列表、设置分类栏、集合面板）；
+///   * [content]    —— 正文底；卡片再用主题里的 `surfaceContainerHigh` 抬一档。
+///
+/// 判据是**分区承担什么职责**，不是"哪一块看起来更高"。同一页里相邻两块的
+/// 底色必须不同；隔了一层的两块可以回到同一档（AI 工作台左右两栏就是 Low）。
+class AppSurfaces {
+  AppSurfaces._();
+
+  /// 一级导航所在的整条（左侧 `NavigationRail` / 手机底部导航）。
+  static Color navigation(ColorScheme scheme) => scheme.surfaceContainerLow;
+
+  /// 正文顶部的工具条（搜索、页签、筛选条件）。
+  static Color band(ColorScheme scheme) => scheme.surfaceContainerLow;
+
+  /// 与正文并排的二级面板（会话列表、设置分类、集合详情）。
+  static Color sidebar(ColorScheme scheme) => scheme.surfaceContainerHigh;
+
+  /// 正文 / 页面主体。
+  static Color content(ColorScheme scheme) => scheme.surface;
+}
+
 /// **语义色**（成功 / 警告 / 信息）。
 ///
 /// `ColorScheme` 只给了 primary / secondary / tertiary / error 四组语义，
@@ -410,7 +440,7 @@ class AppTheme {
     // 背景保持白 / 灰：页面、卡片、侧边栏、手机底部导航使用中性 surface；
     // 强调色只作用于**组件**（按钮、开关、选中胶囊、焦点、进度条等），
     // 不用于底色 / 卡片。
-    final navBackground = scheme.surfaceContainerLow;
+    final navBackground = AppSurfaces.navigation(scheme);
 
     final base = ThemeData(useMaterial3: true, colorScheme: scheme);
     final family = primaryFontFamily();

@@ -48,8 +48,8 @@ String _where(List<String> parts) => parts.join(' › ');
 /// 生成设置索引。
 ///
 /// [isWindowsDesktop] 决定是否收录只在桌面端存在的项（本地服务 / 数据目录 / 导出）。
-/// [homePageBuilder] 用来打开设置首页的某一节（NSFW、产物缓存），由设置页传入 ——
-/// 搜索页不直接依赖首页，避免两个页面互相 import。
+/// [homePageBuilder] 用来打开设置里的状态页（偏好 / NSFW / 产物缓存），
+/// 由设置页传入 —— 搜索页不直接依赖设置首页，避免两个页面互相 import。
 List<SettingsSearchEntry> buildSettingsSearchIndex({
   required bool isWindowsDesktop,
   required Widget Function(String? sectionId) homePageBuilder,
@@ -129,6 +129,13 @@ List<SettingsSearchEntry> buildSettingsSearchIndex({
     icon: Icons.palette_outlined,
     destination: (_) => const InterfaceSettingsPage(),
   );
+  add(
+    title: '偏好',
+    location: _where(['设置']),
+    keywords: const ['NSFW', '成人内容', '模糊', '缓存', '内容策略'],
+    icon: Icons.tune,
+    destination: (_) => homePageBuilder('preferences'),
+  );
   if (isWindowsDesktop) {
     add(
       title: '数据目录',
@@ -146,17 +153,17 @@ List<SettingsSearchEntry> buildSettingsSearchIndex({
     );
   }
 
-  // ---- 设置首页里的状态块 -------------------------------------------------
+  // ---- 偏好里的状态块 -----------------------------------------------------
   add(
     title: 'NSFW 模式',
-    location: _where(['设置', 'NSFW 内容']),
+    location: _where(['设置', '偏好', 'NSFW 内容']),
     keywords: const ['成人内容', '越狱', '提示词', 'NSFW', '开关'],
     icon: Icons.no_adult_content_outlined,
     destination: (_) => homePageBuilder('nsfw'),
   );
   add(
     title: 'NSFW 内容模糊显示',
-    location: _where(['设置', 'NSFW 内容']),
+    location: _where(['设置', '偏好', 'NSFW 内容']),
     keywords: const ['打码', '模糊', '预览图', 'NSFW'],
     icon: Icons.blur_on_outlined,
     destination: (_) => homePageBuilder('nsfw'),
@@ -164,7 +171,7 @@ List<SettingsSearchEntry> buildSettingsSearchIndex({
   if (!isWindowsDesktop) {
     add(
       title: '产物缓存（本机）',
-      location: _where(['设置']),
+      location: _where(['设置', '偏好']),
       keywords: const ['缓存', '缩略图', '原件', '占用', '清理'],
       icon: Icons.photo_library_outlined,
       destination: (_) => homePageBuilder('cache'),

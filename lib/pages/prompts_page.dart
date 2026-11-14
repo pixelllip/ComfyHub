@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import '../core/ai_api_client.dart';
 import '../core/formatting.dart';
 import '../core/settings_store.dart';
+import '../core/theme.dart';
 import '../models/models.dart';
 import '../state/library_store.dart';
 import '../widgets/adaptive_layout.dart';
@@ -221,8 +222,11 @@ class _PromptsPageState extends State<PromptsPage>
           if (!_selectionMode && phone)
             CollapsingPageTitle(title: '预设库', progress: _titleProgress),
           // 详情（列表）**上面**的一条导航：常规预设 / 角色卡 / 画风卡同级
+          //
+          // 页签与下面的筛选栏同属"操作带"，用同一档底色；列表回到正文的
+          // `surface`，卡片再高一档 —— 三层不画分隔线也分得开。
           Material(
-            color: Theme.of(context).colorScheme.surface,
+            color: AppSurfaces.band(Theme.of(context).colorScheme),
             child: TabBar(
               controller: _tabs,
               onTap: _switchSection,
@@ -312,57 +316,64 @@ class _PromptsPageState extends State<PromptsPage>
     final theme = Theme.of(context);
     final settings = context.watch<SettingsStore>();
     final collapsed = settings.promptFiltersCollapsed;
-    return Container(
-      padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // 搜索栏 + **折叠按钮**（与画廊同一套交互，按钮位于搜索栏右侧）
-          Row(
-            children: [
-              Expanded(
-                child: TextField(
-                  controller: _searchController,
-                  textInputAction: TextInputAction.search,
-                  decoration: InputDecoration(
-                    hintText: '搜索标题 / 正向提示词 / 负向提示词 / 模型名…',
-                    prefixIcon: const Icon(Icons.search),
-                    suffixIcon: _searchController.text.isEmpty
-                        ? null
-                        : IconButton(
-                            icon: const Icon(Icons.clear),
-                            onPressed: () {
-                              _searchController.clear();
-                              store.setPromptQuery('');
-                              setState(() {});
-                            },
-                          ),
+    return Material(
+      color: AppSurfaces.band(theme.colorScheme),
+      child: Container(
+        padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // 搜索栏 + **折叠按钮**（与画廊同一套交互，按钮位于搜索栏右侧）
+            Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _searchController,
+                    textInputAction: TextInputAction.search,
+                    decoration: InputDecoration(
+                      hintText: '搜索标题 / 正向提示词 / 负向提示词 / 模型名…',
+                      prefixIcon: const Icon(Icons.search),
+                      suffixIcon: _searchController.text.isEmpty
+                          ? null
+                          : IconButton(
+                              icon: const Icon(Icons.clear),
+                              onPressed: () {
+                                _searchController.clear();
+                                store.setPromptQuery('');
+                                setState(() {});
+                              },
+                            ),
+                    ),
+                    onChanged: (v) {
+                      setState(() {});
+                    },
+                    onSubmitted: store.setPromptQuery,
                   ),
-                  onChanged: (v) {
-                    setState(() {});
-                  },
-                  onSubmitted: store.setPromptQuery,
+                ),
+                const SizedBox(width: 4),
+                IconButton(
+                  tooltip: collapsed ? '展开筛选' : '收起筛选',
+                  icon: Icon(collapsed ? Icons.expand_more : Icons.expand_less),
+                  onPressed: () =>
+                      settings.setPromptFiltersCollapsed(!collapsed),
+                ),
+              ],
+            ),
+            // 收起时显示生效筛选摘要（与画廊一致：否则会误认为"预设数量减少"）
+            if (collapsed)
+              Padding(
+                padding: const EdgeInsets.only(top: 6),
+                child: _FilterSummary(
+                  text: _filterSummary(store),
+                  theme: theme,
                 ),
               ),
-              const SizedBox(width: 4),
-              IconButton(
-                tooltip: collapsed ? '展开筛选' : '收起筛选',
-                icon: Icon(collapsed ? Icons.expand_more : Icons.expand_less),
-                onPressed: () => settings.setPromptFiltersCollapsed(!collapsed),
-              ),
+            if (!collapsed) ...[
+              const SizedBox(height: 10),
+              _filterSections(store, theme),
             ],
-          ),
-          // 收起时显示生效筛选摘要（与画廊一致：否则会误认为"预设数量减少"）
-          if (collapsed)
-            Padding(
-              padding: const EdgeInsets.only(top: 6),
-              child: _FilterSummary(text: _filterSummary(store), theme: theme),
-            ),
-          if (!collapsed) ...[
-            const SizedBox(height: 10),
-            _filterSections(store, theme),
           ],
-        ],
+        ),
       ),
     );
   }

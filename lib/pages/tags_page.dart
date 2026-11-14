@@ -2,6 +2,7 @@ import 'package:material_ui/material_ui.dart';
 import 'package:provider/provider.dart';
 
 import '../core/formatting.dart';
+import '../core/theme.dart';
 import '../models/models.dart';
 import '../state/library_store.dart';
 import '../widgets/adaptive_layout.dart';
@@ -94,75 +95,80 @@ class _TagsPageState extends State<TagsPage> {
       body: Column(
         children: [
           if (phone) CollapsingPageTitle(title: '标签', progress: _titleProgress),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 12, 16, 6),
-            child: Column(
-              children: [
-                TextField(
-                  controller: _searchController,
-                  decoration: const InputDecoration(
-                    hintText: '搜索标签…',
-                    prefixIcon: Icon(Icons.search),
+          // 搜索与分类筛选是一条**操作带**：与卡片列表（正文 surface）分开一档，
+          // 不画分隔线；卡片本身再高两档，三层靠底色深浅区分。
+          Material(
+            color: AppSurfaces.band(Theme.of(context).colorScheme),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 6),
+              child: Column(
+                children: [
+                  TextField(
+                    controller: _searchController,
+                    decoration: const InputDecoration(
+                      hintText: '搜索标签…',
+                      prefixIcon: Icon(Icons.search),
+                    ),
+                    onChanged: (v) => setState(() => _query = v.trim()),
                   ),
-                  onChanged: (v) => setState(() => _query = v.trim()),
-                ),
-                const SizedBox(height: 10),
-                // 分类筛选行**折行显示**（一行放不下时使用两行、三行，
-                // 不要横向滚动）。以前是 `SingleChildScrollView(horizontal)`：
-                // 分类一多 / 窗口一窄，右侧的分类和排序就被切在屏幕外。
-                FilterChipRow(
-                  spacing: 6,
-                  runSpacing: 6,
-                  children: [
-                    ChoiceChip(
-                      label: const Text('全部分类'),
-                      selected: _category == null,
-                      onSelected: (_) => setState(() => _category = null),
-                    ),
-                    for (final c in store.tagCategories)
+                  const SizedBox(height: 10),
+                  // 分类筛选行**折行显示**（一行放不下时使用两行、三行，
+                  // 不要横向滚动）。以前是 `SingleChildScrollView(horizontal)`：
+                  // 分类一多 / 窗口一窄，右侧的分类和排序就被切在屏幕外。
+                  FilterChipRow(
+                    spacing: 6,
+                    runSpacing: 6,
+                    children: [
                       ChoiceChip(
-                        label: Text(c),
-                        selected: _category == c,
-                        onSelected: (_) => setState(() => _category = c),
+                        label: const Text('全部分类'),
+                        selected: _category == null,
+                        onSelected: (_) => setState(() => _category = null),
                       ),
-                    AppMenuButton<String>(
-                      tooltip: '排序',
-                      onSelected: (v) => setState(() => _sort = v),
-                      options: const [
-                        MenuOption(
-                          value: 'popular',
-                          icon: Icons.trending_up,
-                          label: '按使用频率',
+                      for (final c in store.tagCategories)
+                        ChoiceChip(
+                          label: Text(c),
+                          selected: _category == c,
+                          onSelected: (_) => setState(() => _category = c),
                         ),
-                        MenuOption(
-                          value: 'name',
-                          icon: Icons.sort_by_alpha,
-                          label: '按名称',
-                        ),
-                        MenuOption(
-                          value: 'newest',
-                          icon: Icons.schedule,
-                          label: '按创建时间',
-                        ),
-                      ],
-                      button: (context, controller, isOpen) => InkWell(
-                        borderRadius: BorderRadius.circular(8),
-                        onTap: () => controller.isOpen
-                            ? controller.close()
-                            : controller.open(),
-                        child: Chip(
-                          avatar: const Icon(Icons.sort, size: 16),
-                          label: Text(switch (_sort) {
-                            'name' => '按名称',
-                            'newest' => '按创建时间',
-                            _ => '按使用频率',
-                          }),
+                      AppMenuButton<String>(
+                        tooltip: '排序',
+                        onSelected: (v) => setState(() => _sort = v),
+                        options: const [
+                          MenuOption(
+                            value: 'popular',
+                            icon: Icons.trending_up,
+                            label: '按使用频率',
+                          ),
+                          MenuOption(
+                            value: 'name',
+                            icon: Icons.sort_by_alpha,
+                            label: '按名称',
+                          ),
+                          MenuOption(
+                            value: 'newest',
+                            icon: Icons.schedule,
+                            label: '按创建时间',
+                          ),
+                        ],
+                        button: (context, controller, isOpen) => InkWell(
+                          borderRadius: BorderRadius.circular(8),
+                          onTap: () => controller.isOpen
+                              ? controller.close()
+                              : controller.open(),
+                          child: Chip(
+                            avatar: const Icon(Icons.sort, size: 16),
+                            label: Text(switch (_sort) {
+                              'name' => '按名称',
+                              'newest' => '按创建时间',
+                              _ => '按使用频率',
+                            }),
+                          ),
                         ),
                       ),
-                    ),
-                  ],
-                ),
-              ],
+                    ],
+                  ),
+                ],
+              ),
             ),
           ),
           Expanded(

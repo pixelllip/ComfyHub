@@ -6,10 +6,10 @@ import 'scroll_linked_title.dart';
 
 /// **设置正文的宽度上限**（逻辑像素）。
 ///
-/// 2026-11-09 起设置家族**不再分栏**：多列时高度差 2–4 倍的块并排，底边永远
+/// 2026-11-09 起设置**正文内部不再分栏**：多列时高度差 2–4 倍的块并排，底边永远
 /// 参差（就算按估算高度切得再准也一样），而设置是"读 + 改"的表单，不是画廊。
-/// 所以正文统一单列；宽屏多出来的空间交给**行内的控件与首页的等高磁贴**
-/// （[SettingsTileGrid]），而不是再放第二列设置。
+/// 2026-11-14 起桌面端多出来的横向空间交给**左侧分类栏**（[SettingsDesktopShell]），
+/// 正文仍是单列；不在正文里再放第二列设置。
 ///
 /// 超宽屏的规则是"**停在 1680、居中**"，不是继续铺满：
 ///   · 1495 逻辑宽时正文即为全宽（1375），与此前一致；
@@ -18,6 +18,31 @@ import 'scroll_linked_title.dart';
 /// 来回找；而"再宽一列"正是这次要消掉的高度参差。**别再往上抬**，也别在
 /// 超宽屏加第二列设置 —— 那两件事都会把问题带回来。
 const double kSettingsContentMaxWidth = 1680;
+
+/// 标记"这一棵子树位于桌面设置的右侧分栏里"。
+///
+/// 只用来回答一个问题：这是不是**右侧分栏的根页面**。
+///   * 根页面不显示返回箭头（返回键会弹掉整个设置，不是"退回分类栏"）；
+///   * 由它 `push` 出来的次级页仍然显示返回键，且只退回到根页面。
+///
+/// 判断必须同时看两件事：作用域在不在（[SettingsDesktopShell] 里才有）与
+/// 当前路由是不是这一层 `Navigator` 的第一条。单独看 `showBack` 不够 ——
+/// 那些页面在手机上、在搜索页里打开时仍然要返回键。
+class SettingsPaneScope extends InheritedWidget {
+  const SettingsPaneScope({super.key, required super.child});
+
+  /// 当前页面是不是右侧分栏的根页面。
+  static bool isRootOfPane(BuildContext context) {
+    final scope = context
+        .dependOnInheritedWidgetOfExactType<SettingsPaneScope>();
+    if (scope == null) return false;
+    final route = ModalRoute.of(context);
+    return route == null || route.isFirst;
+  }
+
+  @override
+  bool updateShouldNotify(covariant SettingsPaneScope oldWidget) => false;
+}
 
 /// 设置类页面的统一骨架：顶栏 + 可滚动内容。
 ///
@@ -133,7 +158,9 @@ class _SettingsScaffoldState extends State<SettingsScaffold> {
         // 首页没有返回键，标题就当成"内容区的页头"：把它挪到正文那一列的左边缘，
         // 免得宽窗口下标题贴在最左边、正文却居中，中间空出一大截。
         // 有返回键的子页保持"返回键 + 标题"贴左（那是系统级的页头，不跟着正文走）。
-        final indent = (phone || widget.showBack)
+        // 右侧分栏的根页面同理：它的返回箭头会被隐藏，标题要和正文对齐。
+        final paneRoot = SettingsPaneScope.isRootOfPane(context);
+        final indent = (phone || (widget.showBack && !paneRoot))
             ? 0.0
             : math.max(
                 0.0,
@@ -194,10 +221,10 @@ class _SettingsScaffoldState extends State<SettingsScaffold> {
   }
 }
 
-/// 设置家族的**统一顶栏**（首页 / 子页 / 两个自定义正文的页面共用）。
+/// 设置家族的**统一顶栏**（首页 / 子页 / 桌面分栏的根页面 / 两个自定义正文的页面共用）。
 ///
 /// * 返回键**始终在 AppBar 里**，带外圈、40×40 的圆形 `BackButton`
-///   （返回按钮位于 AppBar）；
+///   （返回按钮位于 AppBar）；右侧分栏的根页面没有上一页，不显示返回键；
 /// * 电脑端标题**始终在 AppBar 里**；
 /// * 手机端这条 AppBar 是透明的，标题按 [progress] 淡入 —— 大标题在正文里
 ///   滚走之后，这里才出现同一个名字（AGENTS §6.3）。
@@ -215,9 +242,9 @@ class SettingsAppBar extends StatelessWidget implements PreferredSizeWidget {
 
   /// 标题额外向右缩进（逻辑像素）。
   ///
-  /// 只给"没有返回键的首页"用：宽窗口下正文是居中的一列，标题若仍贴在
-  /// 最左边就会和正文差出一大截。子页保持 0 —— 返回键与标题是一个整体，
-  /// 不跟着正文的列走。
+  /// 只给"没有返回键的首页 / 右侧分栏根页面"用：宽窗口下正文是居中的一列，
+  /// 标题若仍贴在左边就会和正文差出一大截。子页保持 0 —— 返回键与标题是
+  /// 一个整体，不跟着正文的列走。
   final double titleIndent;
 
   const SettingsAppBar({
@@ -237,16 +264,20 @@ class SettingsAppBar extends StatelessWidget implements PreferredSizeWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final phone = useCollapsingPageTitle;
+    // 右侧分栏的根页面没有返回箭头：它上面没有"上一页"可退。
+    // 传入 `onBack` 的页面例外 —— 那是页内虚拟返回（Provider 详情退回列表）。
+    final paneRoot = SettingsPaneScope.isRootOfPane(context);
+    final showLeading = onBack != null || (showBack && !paneRoot);
     return AppBar(
       backgroundColor: phone ? Colors.transparent : null,
       surfaceTintColor: phone ? Colors.transparent : null,
       elevation: phone ? 0 : null,
       scrolledUnderElevation: phone ? 0 : null,
       automaticallyImplyLeading: false,
-      leading: showBack ? _circleBackButton(theme, onPressed: onBack) : null,
+      leading: showLeading ? _circleBackButton(theme, onPressed: onBack) : null,
       // 返回键在 leading 槽里时，标题从槽后开始；首页没有返回键时与正文的左边缘对齐
       // （正文是一列限宽居中的卡片，`titleIndent` 由 SettingsScaffold 按同一个宽度算）。
-      titleSpacing: showBack ? 0 : 16 + titleIndent,
+      titleSpacing: showLeading ? 0 : 16 + titleIndent,
       title: phone
           ? FadingAppBarTitle(title: title, progress: progress)
           : Text(title, maxLines: 1, overflow: TextOverflow.ellipsis),
@@ -399,7 +430,7 @@ class SettingsSection extends StatelessWidget {
               ),
             ),
           );
-    // 首页第一组（入口磁贴）不需要小标题，传空串即可 —— 不渲染空标题行。
+    // 不需要小标题的块（概览状态区）传空串即可 —— 不渲染空标题行。
     if (header == null && !fill) return child;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -420,9 +451,9 @@ const double _sectionGap = 24;
 /// 首页只留这种"能点进去"的行。
 ///
 /// ⚠ **手机 / 窄窗口仍然使用它**（手机端排版保持不变、
-/// 电脑端窄屏恢复为手机排版）。宽屏首页才换成 [SettingsTileGrid]
-/// 的等高磁贴 —— 两套并存的判据在 `settings_page.dart`（宽度 ≥
-/// `kWideLayoutMinWidth`）。
+/// 电脑端窄屏恢复为手机排版）。桌面宽屏改用 [SettingsDesktopShell] 的左侧分类栏，
+/// 入口行不再铺在正文里 —— 两套并存的判据在 `settings_page.dart`
+/// （平台 + 宽度 ≥ `kWideLayoutMinWidth`）。
 class SettingsEntryTile extends StatelessWidget {
   final IconData icon;
   final String title;

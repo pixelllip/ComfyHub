@@ -13,9 +13,10 @@ import '../state/library_store.dart';
 import '../state/nsfw_store.dart';
 import '../widgets/export_dialog.dart';
 import '../widgets/media_cache_card.dart';
+import '../widgets/scroll_linked_title.dart';
+import '../widgets/settings_desktop_shell.dart';
 import '../widgets/settings_scaffold.dart';
 import '../widgets/settings_switch_row.dart';
-import '../widgets/settings_tile.dart';
 import 'ai_provider_settings_page.dart';
 import 'ai_tools_settings_page.dart';
 import 'settings_comfy_capture_page.dart';
@@ -28,17 +29,16 @@ import 'settings_search_page.dart';
 
 /// 设置首页。
 ///
-/// 卡片中有三项及以上选项时收进子界面（例如 AI 模型与凭据）。
+/// 两套形态，判据是**平台 + 宽度**：
+///   * 桌面端且宽度 ≥ `kWideLayoutMinWidth`：左侧只有大项主标题的分类栏，
+///     右侧是该分类的主体界面，次级页面也只替换右侧（[SettingsDesktopShell]）；
+///   * 其余（手机 / 平板 / 桌面窄窗口）：原来的大标题 + 分组入口行，点进子页。
 ///
-/// 于是首页只剩三类东西：
-///   1. **入口行**（本地服务 / 配对 / 模型 / 工具权限 / 自动捕获 / 界面）；
-///   2. **只有一两项、且要"一眼看到当前值"的小卡**（NSFW、产物缓存）；
-///   3. **只读概览**（库统计）与**单个动作**（导出）。
-///
-/// 判断标准别写反：不是"看起来长就拆"，而是**选项 ≥ 3 就进子页**。NSFW 只有
-/// 两个开关、缓存只有一个滑杆，它们留在首页反而更好用。
+/// 分类本身仍是八个大项，首页不再重复罗列入口：
+/// 概览（NSFW / 库统计 / 导出）、本地服务、远程访问与配对、AI 模型与凭据、
+/// AI 工具权限、ComfyUI 自动捕获、外观与布局、数据目录。
 class SettingsPage extends StatefulWidget {
-  /// 设置搜索跳转到首页某一节时传入（例如 `nsfw` / `cache`）。
+  /// 设置搜索跳转到某一项时传入（例如 `nsfw` / `cache`）。
   final String? initialSectionId;
 
   /// 被搜索结果当作独立页面打开时需要返回键；作为导航的一页时不需要。
@@ -51,60 +51,6 @@ class SettingsPage extends StatefulWidget {
 }
 
 class _SettingsPageState extends State<SettingsPage> {
-  /// NSFW 两个开关正在写库（避免连点把两次写入交叉）。
-  bool _nsfwBusy = false;
-
-  /// 产物缓存占用（手机端；null = 还没统计完）。
-  MediaCacheStats? _cacheStats;
-  bool _cacheBusy = false;
-
-  @override
-  void initState() {
-    super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) => _loadCacheStats());
-  }
-
-  Future<void> _loadCacheStats() async {
-    final stats = await MediaCache.instance.stats();
-    if (!mounted) return;
-    setState(() => _cacheStats = stats);
-  }
-
-  /// 换档位：写偏好（[SettingsStore] 会当场把新预算交给缓存并淘汰一次），
-  /// 再等一拍重新统计 —— 淘汰是异步的，紧接着读会读到淘汰前的数字。
-  Future<void> _onBudgetChanged(int mb) async {
-    final settings = context.read<SettingsStore>();
-    await settings.setMediaCacheOrigBudgetMb(mb);
-    await Future<void>.delayed(const Duration(milliseconds: 120));
-    await _loadCacheStats();
-  }
-
-  Future<void> _clearCache() async {
-    setState(() => _cacheBusy = true);
-    final freed = await MediaCache.instance.clear();
-    final failures = MediaCache.instance.lastClearFailures;
-    final listError = MediaCache.instance.lastClearError;
-    final stats = await MediaCache.instance.stats();
-    if (!mounted) return;
-    setState(() {
-      _cacheStats = stats;
-      _cacheBusy = false;
-    });
-    // **不把"没删掉"说成"清干净了"**：列目录失败 / 有文件删不掉都要如实写。
-    final String message;
-    if (listError != null) {
-      message = '没能列完缓存目录，只清掉了 ${formatSize(freed)}。';
-    } else if (failures > 0) {
-      message = '已清理 ${formatSize(freed)}，还有 $failures 个文件删不掉（可能正被播放器占用）。';
-    } else if (freed > 0) {
-      message = '已清理 ${formatSize(freed)}';
-    } else {
-      message = '缓存本来就是空的';
-    }
-    ScaffoldMessenger.of(context)
-        .showSnackBar(SnackBar(content: Text(message)));
-  }
-
   void _push(BuildContext context, Widget page) {
     Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => page));
   }
@@ -113,25 +59,41 @@ class _SettingsPageState extends State<SettingsPage> {
   void _openSearch(BuildContext context, bool isWindowsDesktop) {
     Navigator.of(context).push(
       MaterialPageRoute<void>(
-        builder: (_) => SettingsSearchPage(
-          isWindowsDesktop: isWindowsDesktop,
-          homePageBuilder: (sectionId) =>
-              SettingsPage(initialSectionId: sectionId, showBack: true),
-        ),
+        builder: (_) => _searchPage(isWindowsDesktop),
       ),
     );
   }
 
+  /// 搜索结果页。它被推到**当前分类的右侧 Navigator** 里（桌面端），
+  /// 所以左侧分类栏保持可见；窄屏才落到整页。
+  Widget _searchPage(bool isWindowsDesktop) => SettingsSearchPage(
+    isWindowsDesktop: isWindowsDesktop,
+    homePageBuilder: (sectionId) => PreferencesSettingsPage(
+      // 顶层的「偏好」条目没有具体小节；NSFW / 缓存才按 id 定位。
+      initialSectionId: sectionId == 'preferences' ? null : sectionId,
+      showBack: true,
+    ),
+  );
+
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final store = context.watch<LibraryStore>();
-    final launcher = context.watch<BackendLauncher>();
     // 判据只有一份：`isWindowsDesktopHost`（带单测用的平台 override）。
     final isWindowsDesktop = isWindowsDesktopHost;
     // 宽窄与导航形态用**同一个数字**：< 900 就是手机形态，电脑端窄屏也一样。
-    // 电脑端窄屏恢复为手机端排版。
     final wide = MediaQuery.sizeOf(context).width >= kWideLayoutMinWidth;
+
+    // 桌面端宽屏重做为"分类栏 + 右侧正文"。
+    // 手机 / 平板即使窗口够宽也不换这套：大标题随滚动的形态由**平台**决定
+    // （`useCollapsingPageTitle`），不是窗口宽度。
+    if (wide && !useCollapsingPageTitle) {
+      return SettingsDesktopShell(
+        items: _desktopItems(isWindowsDesktop),
+        initialId: 'overview',
+        showBack: widget.showBack,
+        searchPageBuilder: (_) => _searchPage(isWindowsDesktop),
+        onBack: () => Navigator.of(context).maybePop(),
+      );
+    }
 
     return SettingsScaffold(
       // 首页在 `HomeShell` 的内容区里，不需要返回箭头。
@@ -141,148 +103,89 @@ class _SettingsPageState extends State<SettingsPage> {
       header: SettingsSearchBar(
         onTap: () => _openSearch(context, isWindowsDesktop),
       ),
-      sections: wide
-          ? _wideSections(context, theme, store, launcher, isWindowsDesktop)
-          : _narrowSections(context, theme, store, launcher, isWindowsDesktop),
+      sections: _narrowSections(isWindowsDesktop),
     );
   }
 
-  /// 宽屏首页：**等高磁贴** + 单列状态卡。
+  /// 桌面分类栏：**只有大项主标题**（图标 + 一行字，没有副标题）。
   ///
-  /// 磁贴自己就写着是哪一项，不再加"服务 / AI / 采集 / 界面"这层分类标题 ——
-  /// 加了只会把首页拉长。分类只在窄 / 手机那套里保留（见 [_narrowSections]）。
-  List<SettingsSection> _wideSections(
-    BuildContext context,
-    ThemeData theme,
-    LibraryStore store,
-    BackendLauncher launcher,
-    bool isWindowsDesktop,
-  ) {
-    final entries = <Widget>[
-      // 「本地服务（后端 + 数据库）」仅在 Windows 桌面端适用：
-      // 手机连接的是桌面后端，本机没有可启动的 Rust exe，也没有
-      // 盘符 / 资源管理器。
-      //
-      // 手机端使用对应功能：本机库 + 上行队列 + 桌面连接 + 立即同步/拉取。
+  /// 顺序与手机端的入口顺序一致；平台差异只在"本地服务 / 本机数据"与
+  /// "数据目录"两项上（手机连的是桌面后端，本机没有可拉起的服务）。
+  List<SettingsNavItem> _desktopItems(bool isWindowsDesktop) {
+    return [
+      SettingsNavItem(
+        id: 'overview',
+        label: '概览',
+        icon: Icons.space_dashboard_outlined,
+        builder: (_) => const _SettingsOverviewPane(),
+      ),
       if (isWindowsDesktop)
-        SettingsTile(
+        SettingsNavItem(
+          id: 'services',
+          label: '本地服务',
           icon: Icons.dns_outlined,
-          title: '本地服务（后端 + 数据库）',
-          subtitle: '启动、停止、日志与后端地址',
-          onTap: () => _push(context, const LocalServicesSettingsPage()),
+          builder: (_) => const LocalServicesSettingsPage(),
         )
       else
-        SettingsTile(
+        SettingsNavItem(
+          id: 'mobile-local',
+          label: '本机数据与同步',
           icon: Icons.phonelink_setup,
-          title: '本机数据与同步',
-          subtitle: '本机会话、上行队列、桌面连接',
-          onTap: () => _push(context, const MobileLocalSettingsPage()),
+          builder: (_) => const MobileLocalSettingsPage(),
         ),
-      SettingsTile(
+      SettingsNavItem(
+        id: 'pairing',
+        label: '远程访问与配对',
         icon: Icons.qr_code_2,
-        title: '远程访问与配对',
-        subtitle: '二维码、已授权设备、同步密钥',
-        onTap: () => _push(context, const PairingSettingsPage()),
+        builder: (_) => const PairingSettingsPage(),
       ),
-      SettingsTile(
+      SettingsNavItem(
+        id: 'ai-providers',
+        label: 'AI 模型与凭据',
         icon: Icons.smart_toy_outlined,
-        title: 'AI 模型与凭据',
-        subtitle: 'Provider、模型能力与 API Key',
-        onTap: () => _push(context, const AiProviderSettingsPage()),
+        builder: (_) => const AiProviderSettingsPage(),
       ),
-      // 工具权限与"模型与凭据"**不构成附属关系**，
-      // 入口位于设置首页，不放入模型页顶栏。
-      SettingsTile(
+      SettingsNavItem(
+        id: 'ai-tools',
+        label: 'AI 工具权限',
         icon: Icons.shield_outlined,
-        title: 'AI 工具权限',
-        subtitle: '读写白名单、批准方式、调用预算',
-        onTap: () => _push(context, const AiToolsSettingsPage()),
+        builder: (_) => const AiToolsSettingsPage(),
       ),
-      SettingsTile(
+      SettingsNavItem(
+        id: 'capture',
+        label: 'ComfyUI 自动捕获',
         icon: Icons.sync_alt,
-        title: 'ComfyUI 自动捕获',
-        subtitle: '地址、输出目录、轮询与目录导入',
-        onTap: () => _push(context, const ComfyCaptureSettingsPage()),
+        builder: (_) => const ComfyCaptureSettingsPage(),
       ),
-      SettingsTile(
+      SettingsNavItem(
+        id: 'interface',
+        label: '外观与布局',
         icon: Icons.palette_outlined,
-        title: '外观与布局',
-        subtitle: '明暗模式、取色档位、每页数量',
-        onTap: () => _push(context, const InterfaceSettingsPage()),
+        builder: (_) => const InterfaceSettingsPage(),
       ),
-      // 「数据目录」是**主设置菜单**中的一项，不放在「界面」子页内。
-      // 该页可查看当前位置、打开目录、更换位置（含迁移）。
-      //
-      // 副标题写 `<数据目录>\storage`（产物 / 附件 / AI 文件），不是运行根目录：
-      // 根目录是开发概念，源码树中运行时即仓库根。
+      SettingsNavItem(
+        id: 'preferences',
+        label: '偏好',
+        icon: Icons.tune,
+        builder: (_) => const PreferencesSettingsPage(),
+      ),
       if (isWindowsDesktop)
-        SettingsTile(
+        SettingsNavItem(
+          id: 'data-dir',
+          label: '数据目录',
           icon: Icons.folder_open_outlined,
-          title: '数据目录',
-          subtitle: launcher.dataDir == null
-              ? '未定位到数据目录'
-              : resolvedStorageDirOf(launcher.dataDir!),
-          onTap: () => _push(context, const DataDirSettingsPage()),
+          builder: (_) => const DataDirSettingsPage(),
         ),
-      if (isWindowsDesktop)
-        SettingsTile(
-          icon: Icons.save_alt,
-          title: '导出全部产物…',
-          subtitle: '按图片、视频、音频分目录导出',
-          onTap: () => showExportDialog(context),
-        ),
-    ];
-
-    // 状态区：响应式规则（判据是**可用内容宽度**）：
-    //   · 宽屏（≥1200）：NSFW 40% + 库统计 60%；
-    //   · 中等（≥820）：两个等宽面板；
-    //   · 窄：上下堆叠。
-    // 两栏时用 `IntrinsicHeight` + `SettingsSection.fill` 把下边缘拉齐。
-    final cacheCard = (!isWindowsDesktop && !kIsWeb)
-        ? SettingsSection(
-            title: '产物缓存（本机）',
-            id: 'cache',
-            child: MediaCacheCard(
-              stats: _cacheStats,
-              budgetMb: context.watch<SettingsStore>().mediaCacheOrigBudgetMb,
-              busy: _cacheBusy,
-              onBudgetChanged: _onBudgetChanged,
-              onClear: _clearCache,
-            ),
-          )
-        : null;
-
-    return [
-      // 第一组不带小标题：它就是"全部入口"。
-      SettingsSection(
-        title: '',
-        id: 'entries',
-        child: SettingsTileGrid(maxColumns: 4, tiles: entries),
-      ),
-      SettingsSection(
-        title: '',
-        id: 'nsfw',
-        child: _StatusArea(
-          nsfw: _nsfwCard(theme),
-          stats: _statsStrip(theme, store),
-        ),
-      ),
-      ?cacheCard,
     ];
   }
 
   /// 窄屏 / 手机首页：**保持分组入口行**（手机端排版保持不变，
   /// 电脑端窄屏恢复为手机端排版）。
   ///
-  /// ⚠ 这一支别再换成磁贴：磁贴是宽屏用来"利用横向空间"的；窄屏上它只会
-  /// 把三四个分组压成一长条，分类反而丢了。
-  List<SettingsSection> _narrowSections(
-    BuildContext context,
-    ThemeData theme,
-    LibraryStore store,
-    BackendLauncher launcher,
-    bool isWindowsDesktop,
-  ) {
+  /// ⚠ 这一支不要再改成桌面分类栏：窄屏上没有横向空间，分类栏会把入口压成
+  /// 一长条，分组反而丢了。
+  List<SettingsSection> _narrowSections(bool isWindowsDesktop) {
+    final dataDir = context.watch<BackendLauncher>().dataDir;
     return [
       SettingsSection(
         title: '服务',
@@ -364,23 +267,21 @@ class _SettingsPageState extends State<SettingsPage> {
         ),
       ),
       // NSFW 只有两个选项，而且从属关系要一眼看见 —— 留在首页。
-      SettingsSection(title: 'NSFW 内容', id: 'nsfw', child: _nsfwCard(theme)),
+      const SettingsSection(
+        title: 'NSFW 内容',
+        id: 'nsfw',
+        child: _NsfwSettingsCard(),
+      ),
       if (!isWindowsDesktop && !kIsWeb)
-        SettingsSection(
+        const SettingsSection(
           title: '产物缓存（本机）',
           id: 'cache',
-          child: MediaCacheCard(
-            stats: _cacheStats,
-            budgetMb: context.watch<SettingsStore>().mediaCacheOrigBudgetMb,
-            busy: _cacheBusy,
-            onBudgetChanged: _onBudgetChanged,
-            onClear: _clearCache,
-          ),
+          child: _MediaCacheCard(),
         ),
-      SettingsSection(
+      const SettingsSection(
         title: '库统计',
         id: 'stats',
-        child: _statsRows(theme, store),
+        child: _LibraryStatsRows(),
       ),
       // 「数据目录」是**主设置菜单**中的一项，不放在「界面」子页内。
       // 该页可查看当前位置、打开目录、更换位置（含迁移）。
@@ -395,43 +296,103 @@ class _SettingsPageState extends State<SettingsPage> {
           child: SettingsEntryTile(
             icon: Icons.folder_open_outlined,
             title: '数据目录',
-            subtitle: launcher.dataDir == null
+            subtitle: dataDir == null
                 ? '未定位到数据目录'
-                : resolvedStorageDirOf(launcher.dataDir!),
+                : resolvedStorageDirOf(dataDir),
             onTap: () => _push(context, const DataDirSettingsPage()),
           ),
         ),
       if (isWindowsDesktop)
-        SettingsSection(
+        const SettingsSection(
           title: '导出',
           id: 'export',
           estimatedHeight: 160,
-          child: Card(
-            clipBehavior: Clip.antiAlias,
-            child: ListTile(
-              contentPadding: const EdgeInsets.symmetric(
-                horizontal: 16,
-                vertical: 4,
-              ),
-              leading: const Icon(Icons.save_alt),
-              title: const Text('导出全部产物…'),
-              subtitle: const Text(
-                '按 图片 / 视频 / 音频 分目录，同一集合单独成夹，'
-                '工作流与提示词信息一起带走（可先在画廊多选只导一部分）',
-              ),
-              trailing: const Icon(Icons.chevron_right),
-              onTap: () => showExportDialog(context),
-            ),
-          ),
+          child: _ExportAllCard(),
         ),
     ];
   }
+}
 
-  /// 宽屏库统计：**2×2 的数字格**（状态区右侧那一栏）。
-  ///
-  /// 数字短、彼此独立，排成 2×2 既省高度也用上了宽度；四项都在**同一张卡**里，
-  /// 不存在"两列高低不一"的问题。窄屏 / 手机仍用 [_statsRows]。
-  Widget _statsStrip(ThemeData theme, LibraryStore store) {
+/// 桌面设置「偏好」：NSFW 与（手机端）产物缓存。
+///
+/// NSFW 不再混在「概览」里：概览只回答"库里有什么"，偏好才是改内容策略的地方。
+/// 这一页同时被设置搜索当作目标页使用（带返回键）。
+class PreferencesSettingsPage extends StatelessWidget {
+  /// 从搜索结果进入时定位到哪一节（`nsfw` / `cache`）。
+  final String? initialSectionId;
+
+  final bool showBack;
+
+  const PreferencesSettingsPage({
+    super.key,
+    this.initialSectionId,
+    this.showBack = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final isWindowsDesktop = isWindowsDesktopHost;
+    return SettingsScaffold(
+      title: '偏好',
+      showBack: showBack,
+      initialSectionId: initialSectionId,
+      sections: [
+        const SettingsSection(
+          title: 'NSFW 内容',
+          id: 'nsfw',
+          child: _NsfwSettingsCard(),
+        ),
+        if (!isWindowsDesktop && !kIsWeb)
+          const SettingsSection(
+            title: '产物缓存（本机）',
+            id: 'cache',
+            child: _MediaCacheCard(),
+          ),
+      ],
+    );
+  }
+}
+
+/// 桌面设置「概览」：库统计与导出。
+///
+/// 它挂在右侧分栏自己的 `Navigator` 里，不会因为 `SettingsPage` 重建而重建；
+/// 所以数据必须由**子树自己** `watch`，否则统计会停在打开那一刻。
+class _SettingsOverviewPane extends StatelessWidget {
+  const _SettingsOverviewPane();
+
+  @override
+  Widget build(BuildContext context) {
+    return SettingsScaffold(
+      title: '概览',
+      showBack: false,
+      sections: [
+        const SettingsSection(
+          title: '库统计',
+          id: 'stats',
+          child: _LibraryStatsStrip(),
+        ),
+        if (isWindowsDesktopHost)
+          const SettingsSection(
+            title: '导出',
+            id: 'export',
+            child: _ExportAllCard(),
+          ),
+      ],
+    );
+  }
+}
+
+/// 宽屏库统计：**2×2 的数字格**（「概览」正文）。
+///
+/// 数字短、彼此独立，排成 2×2 既省高度也用上了宽度；四项都在**同一张卡**里，
+/// 不存在"两列高低不一"的问题。窄屏 / 手机仍用 [_LibraryStatsRows]。
+class _LibraryStatsStrip extends StatelessWidget {
+  const _LibraryStatsStrip();
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final store = context.watch<LibraryStore>();
     final cells = <Widget>[
       _statCell(
         theme,
@@ -513,9 +474,16 @@ class _SettingsPageState extends State<SettingsPage> {
       ],
     );
   }
+}
 
-  /// 窄屏 / 手机库统计：保持 2026-11-05 的四行竖排（标签在左、数字在右）。
-  Widget _statsRows(ThemeData theme, LibraryStore store) {
+/// 窄屏 / 手机库统计：保持 2026-11-05 的四行竖排（标签在左、数字在右）。
+class _LibraryStatsRows extends StatelessWidget {
+  const _LibraryStatsRows();
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final store = context.watch<LibraryStore>();
     return Card(
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
@@ -580,30 +548,45 @@ class _SettingsPageState extends State<SettingsPage> {
       ],
     );
   }
+}
 
-  // -------------------------------------------------------------------------
-  //  NSFW 内容
-  //
-  //  两个选项**放在一起**。真源在后端的 `ai.nsfw`，这里只是读写通道：
-  //  ① 开关：开 = 系统提示词里注入那段"越狱"提示词，关 = 注入一句"本机没开"；
-  //  ② 模糊：开 = 预览图打码（点一下解开这一张），且**只有 ① 也开着才生效**。
-  // -------------------------------------------------------------------------
+// -------------------------------------------------------------------------
+//  NSFW 内容
+//
+//  两个选项**放在一起**。真源在后端的 `ai.nsfw`，这里只是读写通道：
+//  ① 开关：开 = 系统提示词里注入那段"越狱"提示词，关 = 注入一句"本机没开"；
+//  ② 模糊：开 = 预览图打码（点一下解开这一张），且**只有 ① 也开着才生效**。
+//
+//  自持 State 是为了能挂在桌面分栏的 Navigator 里：弹层里重建不会丢开关状态。
+// -------------------------------------------------------------------------
 
-  Widget _nsfwCard(ThemeData theme) {
+class _NsfwSettingsCard extends StatefulWidget {
+  const _NsfwSettingsCard();
+
+  @override
+  State<_NsfwSettingsCard> createState() => _NsfwSettingsCardState();
+}
+
+class _NsfwSettingsCardState extends State<_NsfwSettingsCard> {
+  bool _busy = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
     final nsfw = context.watch<NsfwStore>();
-    final busy = _nsfwBusy;
+    final busy = _busy;
     final enabled = nsfw.nsfwEnabled;
     final blur = nsfw.blurOptionEnabled;
 
     Future<void> apply({bool? nextEnabled, bool? nextBlur}) async {
-      setState(() => _nsfwBusy = true);
+      setState(() => _busy = true);
       final next = await nsfw.save(
         enabled: nextEnabled ?? enabled,
         // 关掉开关时模糊也一并落成"关"：不然下次再打开会莫名其妙地全糊
         blur: (nextEnabled == false) ? false : (nextBlur ?? blur),
       );
-      if (!mounted) return;
-      setState(() => _nsfwBusy = false);
+      if (!context.mounted) return;
+      setState(() => _busy = false);
       if (!next.ok) {
         ScaffoldMessenger.of(context)
             .showSnackBar(SnackBar(content: Text(next.message)));
@@ -664,61 +647,99 @@ class _SettingsPageState extends State<SettingsPage> {
   }
 }
 
-/// 设置首页的"状态区"：NSFW 开关 + 库统计。
+/// 手机端产物缓存（占用、预算、清空）。
 ///
-/// 响应式规则，判据是**可用内容宽度**（不是窗口宽度 ——
-/// 正文本身还有 1680 的上限）：
-///   · ≥1200：NSFW 40% + 库统计 60%；
-///   · ≥820：两个等宽面板；
-///   · 更窄：上下堆叠。
-///
-/// 两栏时两张卡的下边缘必须齐平：[IntrinsicHeight] 先量出这一行的高度，
-/// [SettingsSection.fill] 再把两张卡各自撑满 —— 不会再出现"一列长一列短"。
-class _StatusArea extends StatelessWidget {
-  final Widget nsfw;
-  final Widget stats;
+/// 独立持有统计状态：宽屏分栏把它挂在右侧 Navigator 里，父页面重建不会波及它。
+class _MediaCacheCard extends StatefulWidget {
+  const _MediaCacheCard();
 
-  const _StatusArea({required this.nsfw, required this.stats});
+  @override
+  State<_MediaCacheCard> createState() => _MediaCacheCardState();
+}
 
-  /// 4:6 不等宽的下限。
-  static const double wideMinWidth = 1200;
+class _MediaCacheCardState extends State<_MediaCacheCard> {
+  /// 产物缓存占用（null = 还没统计完）。
+  MediaCacheStats? _stats;
+  bool _busy = false;
 
-  /// 两个等宽面板的下限。
-  static const double evenMinWidth = 820;
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _loadStats());
+  }
+
+  Future<void> _loadStats() async {
+    final stats = await MediaCache.instance.stats();
+    if (!mounted) return;
+    setState(() => _stats = stats);
+  }
+
+  /// 换档位：写偏好（[SettingsStore] 会当场把新预算交给缓存并淘汰一次），
+  /// 再等一拍重新统计 —— 淘汰是异步的，紧接着读会读到淘汰前的数字。
+  Future<void> _onBudgetChanged(int mb) async {
+    final settings = context.read<SettingsStore>();
+    await settings.setMediaCacheOrigBudgetMb(mb);
+    await Future<void>.delayed(const Duration(milliseconds: 120));
+    await _loadStats();
+  }
+
+  Future<void> _clear() async {
+    setState(() => _busy = true);
+    final freed = await MediaCache.instance.clear();
+    final failures = MediaCache.instance.lastClearFailures;
+    final listError = MediaCache.instance.lastClearError;
+    final stats = await MediaCache.instance.stats();
+    if (!mounted) return;
+    setState(() {
+      _stats = stats;
+      _busy = false;
+    });
+    // **不把"没删掉"说成"清干净了"**：列目录失败 / 有文件删不掉都要如实写。
+    final String message;
+    if (listError != null) {
+      message = '没能列完缓存目录，只清掉了 ${formatSize(freed)}。';
+    } else if (failures > 0) {
+      message = '已清理 ${formatSize(freed)}，还有 $failures 个文件删不掉（可能正被播放器占用）。';
+    } else if (freed > 0) {
+      message = '已清理 ${formatSize(freed)}';
+    } else {
+      message = '缓存本来就是空的';
+    }
+    ScaffoldMessenger.of(context)
+        .showSnackBar(SnackBar(content: Text(message)));
+  }
 
   @override
   Widget build(BuildContext context) {
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final width = constraints.maxWidth;
-        if (width >= wideMinWidth) return _panels(4, 6);
-        if (width >= evenMinWidth) return _panels(1, 1);
-        return Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            SettingsSection(title: 'NSFW 内容', child: nsfw),
-            const SizedBox(height: 24),
-            SettingsSection(title: '库统计', child: stats),
-          ],
-        );
-      },
+    return MediaCacheCard(
+      stats: _stats,
+      budgetMb: context.watch<SettingsStore>().mediaCacheOrigBudgetMb,
+      busy: _busy,
+      onBudgetChanged: _onBudgetChanged,
+      onClear: _clear,
     );
   }
+}
 
-  Widget _panels(int leftFlex, int rightFlex) => IntrinsicHeight(
-    child: Row(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Expanded(
-          flex: leftFlex,
-          child: SettingsSection(fill: true, title: 'NSFW 内容', child: nsfw),
+/// 「导出全部产物…」入口（桌面端）。
+class _ExportAllCard extends StatelessWidget {
+  const _ExportAllCard();
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      clipBehavior: Clip.antiAlias,
+      child: ListTile(
+        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+        leading: const Icon(Icons.save_alt),
+        title: const Text('导出全部产物…'),
+        subtitle: const Text(
+          '按 图片 / 视频 / 音频 分目录，同一集合单独成夹，'
+          '工作流与提示词信息一起带走（可先在画廊多选只导一部分）',
         ),
-        const SizedBox(width: 24),
-        Expanded(
-          flex: rightFlex,
-          child: SettingsSection(fill: true, title: '库统计', child: stats),
-        ),
-      ],
-    ),
-  );
+        trailing: const Icon(Icons.chevron_right),
+        onTap: () => showExportDialog(context),
+      ),
+    );
+  }
 }

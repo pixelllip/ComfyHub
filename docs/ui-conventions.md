@@ -20,6 +20,7 @@
 | 卡片 | 宽了分列（见 §3） | 窄了退回单列，**360 宽不许溢出** |
 
 - **次级页的落点按宽度分**：`_ContentNavigator` —— 宽屏套一层内容区 `Navigator`，窄屏**不套**、让 `Navigator.of(context).push` 落到 `MaterialApp` 的根 Navigator 上。回归 `test\content_navigator_test.dart`（宽窄两组都在）。
+- **桌面设置的次级页落在右侧分栏自己的 `Navigator` 里**：左侧分类栏由 `SettingsDesktopShell` 持有，Provider 详情 / 逐工具权限这类页面只替换右边那一格，不许盖住分类栏。回归 `test\settings_desktop_shell_test.dart`。
 - **窗口最小宽度 360 逻辑像素**（`windows\runner\win32_window.cpp` 的 `kMinWindowWidthLogical`），按 DPI 换算。
 - **每个断点只有一份真源**：宽度阈值只有 `kWideLayoutMinWidth`，别再在页面里写 900 / 360。
 
@@ -105,3 +106,18 @@ App 文案本来就是中文，但文本框选择菜单、返回按钮 tooltip �
 ## 9. 流畅度
 
 改动落在"可能影响流畅度"的那几类时，必须在真跑起来的应用上量帧耗时，判据是长帧而不是平均帧率。工具、接线顺序与回落路径见 [`perf-measurement.md`](perf-measurement.md)。
+
+## 10. 分区底色（2026-11-14）
+
+**层次用底色深浅表达，不画分隔线、不用 elevation**。参照 AI 工作台的三栏：一级导航低一档、会话列表高一档、中间正文回到 surface、右侧卡片再高一档。
+
+- 四档角色只在 `lib/core/theme.dart` 的 `AppSurfaces` 里定义，页面不要再各写 `surfaceContainerX`：
+  - `navigation` —— 一级导航（`HomeShell` 侧边栏 / 手机底部导航）；
+  - `band` —— 正文顶部的工具条（搜索、页签、筛选芯片所在的整条）；
+  - `sidebar` —— 与正文并排的二级面板（会话列表、设置分类栏、集合详情）；
+  - `content` —— 正文底；卡片仍用主题的 `surfaceContainerHigh`。
+- **同一页里相邻两块必须不同档**；隔了一层的两块可以回到同一档。
+- **桌面设置**（`SettingsDesktopShell`）：左侧 264 宽的分类栏只有大项主标题（图标 + 一行字，没有副标题），用 `sidebar` 档；右侧正文 `content` 档。分类项高 44，比右侧 56 的 AppBar 矮一档；左栏顶部的「设置」直接复用 `appBarTheme.titleTextStyle`，与右侧页标题同字号。点分类只换右边；**设置搜索页也 push 进当前分类的右侧 Navigator**，不盖住分类栏，搜索结果同样只替换右边。次级页由右侧自己的 `Navigator` 承接。右侧正文按**自己这一格的宽度**排版（`MediaQuery` 改成 pane 宽度），窗口 900 宽时正文按窄版排，不硬撑宽版。
+- **NSFW 与产物缓存归「偏好」**：概览只回答"库里有什么"（库统计、导出），内容策略不在概览里摊开。
+- **画廊 / 预设 / 标签**的搜索 + 筛选条是 `band` 档；列表与网格回到 `content` 档；卡片 / 集合面板高一档。`PageBar` 本来就是低一档，不要再改。
+- 回归：`test/settings_layout_test.dart`（分类栏与正文两档底色、900 宽逐项不溢出）、`test/settings_desktop_shell_test.dart`（次级页留在右侧、切分类保留各自路由栈）。

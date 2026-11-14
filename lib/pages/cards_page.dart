@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 
 import '../core/ai_api_client.dart';
 import '../core/settings_store.dart';
+import '../core/theme.dart';
 import '../models/ai_models.dart';
 import '../models/models.dart';
 import '../state/library_store.dart';
@@ -233,48 +234,52 @@ class CardsViewState extends State<CardsView> {
 
   @override
   Widget build(BuildContext context) {
-    // 只有搜索栏 + 列表：页面骨架（AppBar / FAB / 页签）属于宿主
+    // 只有搜索栏 + 列表：页面骨架（AppBar / FAB / 页签）属于宿主。
+    // 搜索栏与常规预设那条工具条同属"操作带"，用同一档底色。
     return Column(
       children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
-          child: Row(
-            children: [
-              Expanded(
-                child: TextField(
-                  controller: _searchInput,
-                  decoration: InputDecoration(
-                    isDense: true,
-                    prefixIcon: const Icon(Icons.search, size: 18),
-                    hintText: _kind.searchHint,
-                    border: const OutlineInputBorder(),
-                    suffixIcon: _query.isEmpty
-                        ? null
-                        : IconButton(
-                            tooltip: '清除',
-                            icon: const Icon(Icons.close, size: 18),
-                            onPressed: () {
-                              _searchInput.clear();
-                              setState(() => _query = '');
-                              _reload();
-                            },
-                          ),
+        Material(
+          color: AppSurfaces.band(Theme.of(context).colorScheme),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+            child: Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _searchInput,
+                    decoration: InputDecoration(
+                      isDense: true,
+                      prefixIcon: const Icon(Icons.search, size: 18),
+                      hintText: _kind.searchHint,
+                      border: const OutlineInputBorder(),
+                      suffixIcon: _query.isEmpty
+                          ? null
+                          : IconButton(
+                              tooltip: '清除',
+                              icon: const Icon(Icons.close, size: 18),
+                              onPressed: () {
+                                _searchInput.clear();
+                                setState(() => _query = '');
+                                _reload();
+                              },
+                            ),
+                    ),
+                    onSubmitted: (v) {
+                      setState(() => _query = v.trim());
+                      _reload();
+                    },
                   ),
-                  onSubmitted: (v) {
-                    setState(() => _query = v.trim());
+                ),
+                const SizedBox(width: 8),
+                FilledButton(
+                  onPressed: () {
+                    setState(() => _query = _searchInput.text.trim());
                     _reload();
                   },
+                  child: const Text('搜索'),
                 ),
-              ),
-              const SizedBox(width: 8),
-              FilledButton(
-                onPressed: () {
-                  setState(() => _query = _searchInput.text.trim());
-                  _reload();
-                },
-                child: const Text('搜索'),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
         Expanded(child: _body()),

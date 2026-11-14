@@ -7,6 +7,7 @@ import 'package:provider/provider.dart';
 
 import '../core/layout_constants.dart';
 import '../core/settings_store.dart';
+import '../core/theme.dart';
 import '../models/models.dart';
 import '../state/library_store.dart';
 import '../widgets/collection_thumb.dart';
@@ -308,56 +309,64 @@ class _GalleryPageState extends State<GalleryPage> {
     final theme = Theme.of(context);
     final settings = context.watch<SettingsStore>();
     final collapsed = settings.galleryFiltersCollapsed;
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 12, 16, 6),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // 搜索栏 + **折叠按钮**（按钮位于搜索栏右侧）
-          Row(
-            children: [
-              Expanded(
-                child: TextField(
-                  controller: _searchController,
-                  decoration: InputDecoration(
-                    hintText: '搜索产物 / 关联提示词内容…',
-                    prefixIcon: const Icon(Icons.search),
-                    suffixIcon: _searchController.text.isEmpty
-                        ? null
-                        : IconButton(
-                            icon: const Icon(Icons.clear),
-                            onPressed: () {
-                              _searchController.clear();
-                              store.setMediaQuery('');
-                              setState(() {});
-                            },
-                          ),
+    // 搜索 + 筛选是**一条独立的操作带**：与正文（surface）、集合面板（高两档）
+    // 各用一档底色，不画分隔线（与 AI 工作台的分区方式一致，见 AppSurfaces）。
+    return Material(
+      color: AppSurfaces.band(theme.colorScheme),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 12, 16, 6),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // 搜索栏 + **折叠按钮**（按钮位于搜索栏右侧）
+            Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _searchController,
+                    decoration: InputDecoration(
+                      hintText: '搜索产物 / 关联提示词内容…',
+                      prefixIcon: const Icon(Icons.search),
+                      suffixIcon: _searchController.text.isEmpty
+                          ? null
+                          : IconButton(
+                              icon: const Icon(Icons.clear),
+                              onPressed: () {
+                                _searchController.clear();
+                                store.setMediaQuery('');
+                                setState(() {});
+                              },
+                            ),
+                    ),
+                    onChanged: (_) => setState(() {}),
+                    onSubmitted: store.setMediaQuery,
                   ),
-                  onChanged: (_) => setState(() {}),
-                  onSubmitted: store.setMediaQuery,
+                ),
+                const SizedBox(width: 4),
+                IconButton(
+                  tooltip: collapsed ? '展开筛选' : '收起筛选',
+                  icon: Icon(collapsed ? Icons.expand_more : Icons.expand_less),
+                  onPressed: () =>
+                      settings.setGalleryFiltersCollapsed(!collapsed),
+                ),
+              ],
+            ),
+            // 收起时**显示当前生效的筛选摘要** —— 否则无法判断处于筛选状态，
+            // 会误认为"图片数量减少"。
+            if (collapsed)
+              Padding(
+                padding: const EdgeInsets.only(top: 6),
+                child: _FilterSummary(
+                  text: _filterSummary(store),
+                  theme: theme,
                 ),
               ),
-              const SizedBox(width: 4),
-              IconButton(
-                tooltip: collapsed ? '展开筛选' : '收起筛选',
-                icon: Icon(collapsed ? Icons.expand_more : Icons.expand_less),
-                onPressed: () =>
-                    settings.setGalleryFiltersCollapsed(!collapsed),
-              ),
+            if (!collapsed) ...[
+              const SizedBox(height: 10),
+              _filterSections(context, store, theme),
             ],
-          ),
-          // 收起时**显示当前生效的筛选摘要** —— 否则无法判断处于筛选状态，
-          // 会误认为"图片数量减少"。
-          if (collapsed)
-            Padding(
-              padding: const EdgeInsets.only(top: 6),
-              child: _FilterSummary(text: _filterSummary(store), theme: theme),
-            ),
-          if (!collapsed) ...[
-            const SizedBox(height: 10),
-            _filterSections(context, store, theme),
           ],
-        ],
+        ),
       ),
     );
   }

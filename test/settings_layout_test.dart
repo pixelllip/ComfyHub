@@ -22,11 +22,11 @@ import 'package:viewer/core/backend_paths.dart';
 import 'package:viewer/core/settings_store.dart';
 import 'package:viewer/core/theme.dart';
 import 'package:viewer/pages/settings_page.dart';
+import 'package:viewer/pages/settings_search_page.dart';
 import 'package:viewer/state/library_store.dart';
 import 'package:viewer/state/nsfw_store.dart';
 import 'package:viewer/widgets/settings_scaffold.dart';
 import 'package:viewer/widgets/settings_switch_row.dart';
-import 'package:viewer/widgets/settings_tile.dart';
 
 MockClient _mockClient() {
   return MockClient((request) async {
@@ -141,30 +141,50 @@ Future<BackendLauncher> _pumpSettings(
 }
 
 void main() {
-  testWidgets('设置首页只放入口行；选项收进子页，开关行仍有内边距', (tester) async {
+  testWidgets('桌面设置：左侧只有大项主标题，点开后在右侧显示主体界面', (tester) async {
     tester.view.physicalSize = const Size(1700, 1200);
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
 
     await _pumpSettings(tester);
 
-    // 1) 选项 ≥ 3 的配置**不在首页摊开**：首页只有入口
+    final nav = find.byKey(const Key('settings-nav'));
+    Finder navLabel(String label) =>
+        find.descendant(of: nav, matching: find.text(label));
+
+    // 1) 分类栏只有九个**大项**，每项只有主标题，没有副标题。
     for (final entry in const [
-      '本地服务（后端 + 数据库）',
+      '概览',
+      '本地服务',
       '远程访问与配对',
       'AI 模型与凭据',
       'AI 工具权限',
       'ComfyUI 自动捕获',
       '外观与布局',
+      '偏好',
+      '数据目录',
     ]) {
-      expect(find.text(entry), findsOneWidget, reason: '首页应该有「$entry」入口');
+      expect(navLabel(entry), findsOneWidget, reason: '分类栏应该有「$entry」');
     }
-    expect(find.text('开启自动捕获'), findsNothing, reason: '自动捕获的配置属于子页');
-    expect(find.text('主题'), findsNothing, reason: '界面配置属于子页');
+    final navRows = tester.widgetList<ListTile>(
+      find.descendant(of: nav, matching: find.byType(ListTile)),
+    );
+    expect(navRows.length, 9);
+    expect(
+      navRows.every((row) => row.subtitle == null),
+      isTrue,
+      reason: '分类栏只放主标题，不放说明',
+    );
+    expect(
+      find.byType(SettingsEntryTile),
+      findsNothing,
+      reason: '桌面端用分类栏，不再用入口行',
+    );
 
-    // 2) 点进去才看到配置；开关行不顶到卡片边缘
-    await tester.tap(find.text('本地服务（后端 + 数据库）'));
+    // 2) 点进「本地服务」：正文在右侧，开关行不顶到卡片边缘。
+    await tester.tap(navLabel('本地服务'));
     await tester.pumpAndSettle();
+
     const switchTitle = '启动 App 时自动拉起服务';
     final row = find
         .ancestor(
@@ -196,7 +216,7 @@ void main() {
   // 打开后显示的是开发者的项目目录。
   // 现在它是「数据目录」子页的入口（副标题为数据目录），
   // 更换位置（含迁移）在子页中执行。
-  testWidgets('设置首页：目录卡是「数据目录」入口，副标题是当前数据目录', (tester) async {
+  testWidgets('设置：分类栏的「数据目录」点开后在右侧显示当前位置与迁移入口', (tester) async {
     tester.view.physicalSize = const Size(1700, 1200);
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
@@ -206,20 +226,24 @@ void main() {
       layout: const BackendLayout(root: r'D:\demo\viewer', exe: null),
     );
 
-    expect(find.text('数据目录'), findsOneWidget);
-    expect(find.text('打开项目目录'), findsNothing, reason: '不许再把运行根目录摆给用户');
+    final nav = find.byKey(const Key('settings-nav'));
     expect(
-      find.text(r'D:\demo\viewer\storage'),
+      find.descendant(of: nav, matching: find.text('数据目录')),
       findsOneWidget,
-      reason: '副标题写产物 / 附件 / AI 文件所在的那个目录',
+      reason: '分类栏只有主标题，路径放在右侧正文里',
+    );
+    expect(
+      find.descendant(of: nav, matching: find.byType(ListTile)),
+      findsNWidgets(9),
     );
 
-    // 点进去是子页：看当前位置、两个一键搬家的按钮
-    await tester.tap(find.text('数据目录'));
+    // 点进去是右侧正文：当前位置、两个一键搬家的按钮
+    await tester.tap(find.descendant(of: nav, matching: find.text('数据目录')));
     await tester.pumpAndSettle();
     expect(find.text('当前位置'), findsOneWidget);
     expect(find.text('搬到别处…'), findsOneWidget);
     expect(find.textContaining('原来文件夹中的内容不会被删除'), findsOneWidget);
+    expect(find.text(r'D:\demo\viewer'), findsOneWidget);
   });
 
   // 主题（浅色 / 深色）的排版：应在一行内完成。
@@ -237,7 +261,12 @@ void main() {
     addTearDown(tester.view.reset);
 
     await _pumpSettings(tester);
-    await tester.tap(find.text('外观与布局'));
+    await tester.tap(
+      find.descendant(
+        of: find.byKey(const Key('settings-nav')),
+        matching: find.text('外观与布局'),
+      ),
+    );
     await tester.pumpAndSettle();
 
     final title = tester.getRect(find.text('明暗模式'));
@@ -252,75 +281,167 @@ void main() {
     );
   });
 
-  // 宽窗口可多列排布；多列高度不一致会造成视觉失衡。
-  // 因此首页入口改为
-  // **等高磁贴**（同一行拉平）；状态区为 4:6 两栏，同样使用
-  // IntrinsicHeight 拉平下边缘。多列仅用于"同一行内等高"的位置。
-  testWidgets('设置首页：入口是等高磁贴，状态区 4:6 两栏等高', (tester) async {
+  // 桌面设置的层次**只用底色深浅表达**（与 AI 工作台同一做法）：
+  // 左侧分类栏高一档、右侧正文回到 surface、正文卡片再高一档；不画分隔线。
+  // 分类项竖排、同一列宽，选中项只有一个。
+  testWidgets('桌面设置：分类栏与正文分属两档底色，分类项竖排且只选中一个', (tester) async {
     tester.view.physicalSize = const Size(1700, 1200);
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
 
     await _pumpSettings(tester);
 
-    Rect tileRect(String title) => tester.getRect(
-      find.ancestor(of: find.text(title), matching: find.byType(Card)).first,
-    );
-
-    final local = tileRect('本地服务（后端 + 数据库）');
-    final pair = tileRect('远程访问与配对');
-    final model = tileRect('AI 模型与凭据');
-    final tools = tileRect('AI 工具权限');
-    final capture = tileRect('ComfyUI 自动捕获');
-
-    // 1700 宽窗 → 正文 ≈1668（上限 1680）→ 4 列：前四个一行、第五个换行。
-    expect(pair.top, closeTo(local.top, 0.5), reason: '第一行的磁贴顶边对齐');
-    expect(pair.height, closeTo(local.height, 0.5), reason: '同一行必须等高');
-    expect(model.top, closeTo(local.top, 0.5));
-    expect(model.height, closeTo(local.height, 0.5));
-    expect(tools.top, closeTo(local.top, 0.5), reason: '第四个还在第一行');
-    expect(capture.top, greaterThan(local.top + 20), reason: '第五个换到第二行');
-    expect(capture.left, closeTo(local.left, 0.5), reason: '换行后回到第一列');
-    expect(capture.width, closeTo(local.width, 0.5), reason: '每列宽度恒定');
-
-    // 状态区：宽屏 4:6 两栏 —— 两栏等高、左窄右宽。
-    Rect cardOf(String text) => tester.getRect(
-      find.ancestor(of: find.text(text), matching: find.byType(Card)).first,
-    );
-    final nsfwCard = cardOf('NSFW 模式');
-    final statsCard = cardOf('提示词');
-    expect(nsfwCard.top, closeTo(statsCard.top, 0.5), reason: '两栏顶边对齐');
-    expect(nsfwCard.height, closeTo(statsCard.height, 0.5), reason: '两栏必须等高');
+    final nav = find.byKey(const Key('settings-nav'));
+    final pane = find.byKey(const Key('settings-pane'));
+    final theme = Theme.of(tester.element(nav));
+    final scheme = theme.colorScheme;
     expect(
-      nsfwCard.width / statsCard.width,
-      closeTo(4 / 6, 0.01),
-      reason: 'NSFW 40% + 库统计 60%',
+      tester.widget<Material>(nav).color,
+      scheme.surfaceContainerHigh,
+      reason: '分类栏是二级面板那一档',
+    );
+    expect(
+      tester.widget<ColoredBox>(pane).color,
+      scheme.surface,
+      reason: '正文回到 surface',
     );
 
-    // 平级关系不变：工具权限与模型/凭据都是首页的入口磁贴。
-    expect(find.byType(SettingsTile), findsNWidgets(8));
+    // 左栏顶部的「设置」与右侧各分类的 AppBar 标题必须是同一套字级，
+    // 不能一边大一边小。
+    final settingsTitle = tester.widget<Text>(
+      find.descendant(of: nav, matching: find.text('设置')),
+    );
+    final titleStyle = theme.appBarTheme.titleTextStyle ?? theme.textTheme.titleLarge;
     expect(
-      find.byType(SettingsEntryTile),
+      settingsTitle.style?.fontSize,
+      titleStyle?.fontSize,
+      reason: '左栏标题与右侧 AppBar 标题同字号',
+    );
+    expect(
+      settingsTitle.style?.fontWeight,
+      titleStyle?.fontWeight,
+      reason: '左栏标题与右侧 AppBar 标题同字重',
+    );
+
+    final navRect = tester.getRect(nav);
+    final paneRect = tester.getRect(pane);
+    expect(
+      paneRect.left,
+      closeTo(navRect.right, 0.5),
+      reason: '正文紧挨分类栏，不再画一道线',
+    );
+    expect(navRect.width, closeTo(264, 0.5));
+    expect(paneRect.width, closeTo(1700 - 264, 0.5));
+
+    final rows = find.descendant(of: nav, matching: find.byType(ListTile));
+    expect(rows, findsNWidgets(9));
+    final first = tester.getRect(rows.at(0));
+    final second = tester.getRect(rows.at(1));
+    expect(second.left, closeTo(first.left, 0.5), reason: '分类项在同一列');
+    expect(second.top, greaterThan(first.top), reason: '分类项竖排，不是磁贴');
+    expect(second.width, closeTo(first.width, 0.5), reason: '每项同宽');
+    expect(
+      first.height,
+      closeTo(44, 1),
+      reason: '分类项比右侧 56 高的 AppBar 矮一档，不能比页头还大',
+    );
+    expect(tester.widget<ListTile>(rows.at(0)).selected, isTrue);
+    expect(tester.widget<ListTile>(rows.at(1)).selected, isFalse);
+    expect(
+      find.byType(BackButton),
       findsNothing,
-      reason: '宽屏不该再混进手机那套入口行',
+      reason: '分栏根页面没有上一页，不该出现返回箭头',
     );
   });
 
-  // 中等宽度（内容宽 820~1200）：两个**等宽**面板，仍然等高。
-  testWidgets('中等宽度：NSFW 与库统计等宽两栏、等高', (tester) async {
-    tester.view.physicalSize = const Size(1100, 1400);
+  // NSFW 属于「偏好」，不再混进「概览」：
+  // 概览只回答"库里有什么"，偏好才是改内容策略的地方。
+  testWidgets('概览不混入 NSFW；NSFW 只在偏好里', (tester) async {
+    tester.view.physicalSize = const Size(1700, 1200);
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
 
     await _pumpSettings(tester);
+    final nav = find.byKey(const Key('settings-nav'));
+    Finder navLabel(String label) =>
+        find.descendant(of: nav, matching: find.text(label));
 
-    Rect cardOf(String text) => tester.getRect(
-      find.ancestor(of: find.text(text), matching: find.byType(Card)).first,
-    );
-    final nsfwCard = cardOf('NSFW 模式');
-    final statsCard = cardOf('提示词');
-    expect(nsfwCard.width, closeTo(statsCard.width, 1), reason: '等宽两栏');
-    expect(nsfwCard.height, closeTo(statsCard.height, 0.5), reason: '两栏必须等高');
+    expect(find.text('NSFW 模式'), findsNothing, reason: '概览不该再放内容策略');
+    expect(find.text('库统计'), findsOneWidget);
+
+    await tester.tap(navLabel('偏好'));
+    await tester.pumpAndSettle();
+    expect(find.text('NSFW 模式'), findsOneWidget);
+    expect(find.text('NSFW 内容模糊显示'), findsOneWidget);
+    expect(find.text('库统计'), findsNothing, reason: '库统计留在概览');
+  });
+
+  // 分栏不是"窗口够宽就一定能放下"：900 宽时分类栏占掉 264，右侧正文只有 636。
+  // 这一档要逐项点过去，确认没有任何一页被挤到溢出（正文按自己那一格的宽度排版）。
+  testWidgets('窗口刚过 900：每个分类都能在右侧渲染，不横向溢出', (tester) async {
+    tester.view.physicalSize = const Size(900, 1200);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    await _pumpSettings(tester);
+    final nav = find.byKey(const Key('settings-nav'));
+    Finder navLabel(String label) =>
+        find.descendant(of: nav, matching: find.text(label));
+
+    for (final label in const [
+      '本地服务',
+      '远程访问与配对',
+      'AI 模型与凭据',
+      'AI 工具权限',
+      'ComfyUI 自动捕获',
+      '外观与布局',
+      '偏好',
+      '数据目录',
+    ]) {
+      await tester.tap(navLabel(label));
+      // 这一档不能用 pumpAndSettle：加载中的转圈是无限动画。
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(
+        tester.takeException(),
+        isNull,
+        reason: '900 宽下「$label」的正文不许 RenderFlex overflow',
+      );
+    }
+  });
+
+  // 从搜索点进「NSFW 内容」时，这一页是叠在搜索结果之上的独立路由。
+  // 分栏骨架自己没有 AppBar，必须在分类栏顶部补一个返回入口；
+  // 没有它，桌面上只能靠系统返回，等于"进去出不来"。
+  testWidgets('桌面设置：从搜索进入 NSFW 后有返回入口，返回回到搜索结果', (tester) async {
+    tester.view.physicalSize = const Size(1700, 1200);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    await _pumpSettings(tester);
+    await tester.tap(find.text('搜索设置'));
+    await tester.pumpAndSettle();
+    expect(find.byType(SettingsSearchPage), findsOneWidget);
+    // 搜索页在右侧这一格里打开，左侧分类栏仍然在。
+    expect(find.byKey(const Key('settings-desktop-shell')), findsOneWidget);
+    expect(find.byKey(const Key('settings-nav')), findsOneWidget);
+
+    await tester.enterText(find.byType(TextField), 'NSFW 模式');
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(ListTile, 'NSFW 模式'));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('settings-desktop-shell')), findsOneWidget);
+    expect(find.byType(PreferencesSettingsPage), findsOneWidget);
+    expect(find.byType(BackButton), findsOneWidget, reason: '叠在搜索结果上的设置页要能退回去');
+
+    await tester.tap(find.byType(BackButton));
+    await tester.pumpAndSettle();
+    expect(find.byType(SettingsSearchPage), findsOneWidget);
+    expect(find.byType(PreferencesSettingsPage), findsNothing);
+    // 退回的是右侧那一格，设置分栏与分类栏都还在。
+    expect(find.byKey(const Key('settings-desktop-shell')), findsOneWidget);
+    expect(find.byKey(const Key('settings-nav')), findsOneWidget);
   });
 
   // 手机端排版保持不变，电脑端窄屏恢复为手机端排版。
@@ -337,9 +458,9 @@ void main() {
     expect(find.text('AI'), findsOneWidget);
     expect(find.byType(SettingsEntryTile), findsWidgets);
     expect(
-      find.byType(SettingsTile),
+      find.byKey(const Key('settings-nav')),
       findsNothing,
-      reason: '窄屏不该出现宽屏的磁贴网格',
+      reason: '窄屏不该出现桌面端的分类栏',
     );
   });
 
@@ -351,6 +472,13 @@ void main() {
     addTearDown(tester.view.reset);
 
     await _pumpSettings(tester);
+    await tester.tap(
+      find.descendant(
+        of: find.byKey(const Key('settings-nav')),
+        matching: find.text('偏好'),
+      ),
+    );
+    await tester.pumpAndSettle();
 
     expect(find.text('NSFW 内容'), findsOneWidget);
     final master = find.ancestor(
@@ -433,7 +561,12 @@ void main() {
     addTearDown(tester.view.reset);
 
     await _pumpSettings(tester);
-    await tester.tap(find.text('本地服务（后端 + 数据库）'));
+    await tester.tap(
+      find.descendant(
+        of: find.byKey(const Key('settings-nav')),
+        matching: find.text('本地服务'),
+      ),
+    );
     await tester.pumpAndSettle();
 
     expect(find.text('允许手机 / 局域网设备连接'), findsOneWidget);
@@ -518,11 +651,7 @@ void main() {
       );
       expect(find.text('数据目录'), findsNothing, reason: '数据目录是桌面盘符的事');
       expect(find.text('导出全部产物…'), findsNothing, reason: '导出写的是桌面磁盘路径');
-      expect(
-        find.text('产物缓存（本机）'),
-        findsOneWidget,
-        reason: '手机专属的那一节要还在',
-      );
+      expect(find.text('产物缓存（本机）'), findsOneWidget, reason: '手机专属的那一节要还在');
     } finally {
       debugDefaultTargetPlatformOverride = null;
     }
