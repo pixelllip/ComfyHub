@@ -66,8 +66,8 @@ dependencies:
   # ⚠ Windows 端的 <experimental/coroutine> 逃生宏**仍然要留**（1.4.12 也没躲开），
   # 见 windows/CMakeLists.txt。**升级前必须跑 Windows 关窗回归**（AGENTS §9.1）；
   # 1.4.12 已在本机跑过：WM_CLOSE 后 System 日志 0 条 Application Popup（ID 26）。
-  webview_all: ^1.5.0
-  material_ui: ^1.11.0
+  webview_all: ^1.5.2
+  material_ui: ^1.11.1
 
 dev_dependencies:
   flutter_test:
